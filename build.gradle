@@ -26,4 +26,9 @@ dependencies {
 
     // Use JUnit test framework
     testImplementation 'junit:junit:4.12'
+    
+    // https://mvnrepository.com/artifact/com.gzoltar/com.gzoltar.cli
+	compile group: 'com.gzoltar', name: 'com.gzoltar.cli', version: '1.7.2'
+
+    
 }
