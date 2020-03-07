@@ -123,7 +123,7 @@ done
 
 
 java -cp $MVN_SRC_DIR:$MVN_TEST_DIR:$JUNIT_JAR:$HAMCREST_JAR:$GZOLTAR_CLI_JAR com.gzoltar.cli.Main \
-    listTestMethods $SUS_DIR \
+    listTestMethods $MVN_TEST_DIR \
     --outputFile "$UNIT_TESTS_FILE" \
     #--includes ${Class_NAME}${*} || die "Collection of unit test cases has failed!"
 [ -s "$UNIT_TESTS_FILE" ] || die "$UNIT_TESTS_FILE does not exist or it is empty!"
