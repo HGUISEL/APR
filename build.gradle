@@ -30,5 +30,7 @@ dependencies {
     // https://mvnrepository.com/artifact/com.gzoltar/com.gzoltar.cli
 	compile group: 'com.gzoltar', name: 'com.gzoltar.cli', version: '1.7.2'
 
+    // https://mvnrepository.com/artifact/org.eclipse.jdt/org.eclipse.jdt.core
+	compile group: 'org.eclipse.jdt', name: 'org.eclipse.jdt.core', version: '3.20.0'
     
 }
