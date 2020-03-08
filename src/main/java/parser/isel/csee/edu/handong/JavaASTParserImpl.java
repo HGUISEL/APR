@@ -59,7 +59,10 @@ public class JavaASTParserImpl implements JavaASTParser {
 		} catch (Exception e) {
 			System.out.println("\nError while executing compilation unit : " + e.toString());
 		}
-
+		
+		// I couldn't find solution to get the whole statement node at once. 
+		// There is a way to get statements by visiting all child kind of statement but it does not prove us the order because each visiting for the one kind of node executes once at a time.
+		// I might need more time to find solution for this problem.
 		
 		return cUnit;
 	}
