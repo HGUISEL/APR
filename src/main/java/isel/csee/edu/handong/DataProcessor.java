@@ -15,7 +15,7 @@ public class DataProcessor {
 	private ArrayList<String> methodNameList;
 	
 	public ArrayList<String> statements;
-	public ArrayList<String> scoreList;
+	public ArrayList<Double> scoreList;
 
 	//Methods
 	public DataProcessor(String csv) {
@@ -25,7 +25,11 @@ public class DataProcessor {
 	public void DataProcessorRunner() {
 
 	    csvContents = csvFileReader(); // csv file을 읽어온다
-	    // use StringParser() // 유효한 점수가 존재하는 항목들의 file path, method name, line number로 쪼개기 ; score는 statement에 붙어야 하기에 MethodParser에서 따로 가져온다.
+	    for(String line : csvContents){
+            filePathList.add(StringParser.parseFilePath(line));
+            methodNameList.add(StringParser.parseMethodName(line));
+
+        }// use StringParser() // 유효한 점수가 존재하는 항목들의 file path, method name, line number로 쪼개기 ; score는 statement에 붙어야 하기에 MethodParser에서 따로 가져온다.
 	    // use ASTParser() // statement 뽑아서 this.statements에 넣기, 문제 파일의 AST 만들고 반환 후 종료
 	    createInitialVariant(); // 지금까지 모은 것들로 Variant 생성.
 	    // 위에 호출된 메소드 안에서 MethodParser(method name) // Method별로 statement와 score 추출해서 statement line number대로 정렬된 score만 반환,
@@ -48,7 +52,7 @@ public class DataProcessor {
 	public ArrayList<String> getFileList(){
 		return filePathList;
 	}
-	public Variant createInitialVariant() {
+	public Variant createInitialVariant() { //need to implement Variant class
 		Variant newVariant = new Variant(); 
 	    newVariant.AST = JavaASTParser();
 	    newVariant.statements = this.statements
