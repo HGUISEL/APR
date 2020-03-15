@@ -13,13 +13,9 @@ import org.eclipse.jdt.core.JavaCore;
 
 public class JavaASTParserImpl implements JavaASTParser {
 	
-	CompilationUnit cUnit;
-	String source;
-	ArrayList<Statement> lstStatement = new ArrayList<Statement>();
+	private CompilationUnit cUnit;
 	
-	@Override
-	public CompilationUnit run(String source) {
-		// TODO Auto-generated method stub
+	JavaASTParserImpl(String source){
 		ASTParser parser = ASTParser.newParser(AST.JLS12);
 
 		parser.setKind(ASTParser.K_COMPILATION_UNIT);
@@ -41,21 +37,6 @@ public class JavaASTParserImpl implements JavaASTParser {
 		try {
 			final CompilationUnit unit = (CompilationUnit) parser.createAST(null);			
 			cUnit = unit;
-			try {
-				unit.accept(new ASTVisitor() {
-
-					public boolean visit(final Statement node) {
-						lstStatement.add(node);
-						//return super.visit(node);
-					}
-					
-				});
-			} catch (Exception e) {
-				System.out.println("Problem : " + e.toString());
-				e.printStackTrace();
-				System.exit(0);
-			}
-
 		} catch (Exception e) {
 			System.out.println("\nError while executing compilation unit : " + e.toString());
 		}
@@ -64,12 +45,45 @@ public class JavaASTParserImpl implements JavaASTParser {
 		// There is a way to get statements by visiting all child kind of statement but it does not prove us the order because each visiting for the one kind of node executes once at a time.
 		// I might need more time to find solution for this problem.
 		
+		// --> 2020.03.15. I might able to solve this problem. JC advise me to get all the statements first, and get their line number information by using the ast parser, but I found it is more convenient to collect method declaration first, and get all the body lines except single parenthesis or blank chrarcter. 
+	}
+	
+	@Override
+	public CompilationUnit run(String source) {
+		// TODO Auto-generated method stub
 		return cUnit;
 	}
 
 	@Override
 	public ArrayList<String> getStatements() {
 		// TODO Auto-generated method stub
+		ArrayList<MethodDeclaration> lstMethodDeclaration = new ArrayList<MethodDeclaration>();
+		// create visitor and get all the MethodDeclaration nodes
+		try {
+			cUnit.accept(new ASTVisitor() {
+				public boolean visit(final MethodDeclaration node) {
+					//System.out.println(node);
+					lstMethodDeclaration.add(node);
+					return super.visit(node);
+				}
+				
+			});
+		} catch (Exception e) {
+			System.out.println("Problem : " + e.toString());
+			e.printStackTrace();
+			System.exit(0);
+		}
+		
+		// After collecting MethodDeclaration nods, get each statement form the declaration and their body. we will skip if we have blank or single parenthesis in the line. 
+	
+		int cnt = 0;
+		
+		for (int i=0 ; i < lstMethodDeclaration.size() ; i++) {
+			String[]stmt = lstMethodDeclaration.get(i).toString().split("\n");
+			for (int j = 0 ; j < stmt.length ; j++) {
+				System.out.println(cnt++ + " " + stmt[j]);
+			}
+		}
 		return null;
 	}
 	
