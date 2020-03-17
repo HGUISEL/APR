@@ -4,6 +4,7 @@ package isel.csee.edu.handong;
 import java.util.ArrayList;
 import java.util.List;
 import java.io.*;
+import parser.isel.csee.edu.handong.*;
 
 
 public class DataProcessor {
@@ -26,8 +27,9 @@ public class DataProcessor {
 
 	    csvContents = csvFileReader(); // csv file을 읽어온다
 	    for(String line : csvContents){
-            filePathList.add(StringParser.parseFilePath(line));
-            methodNameList.add(StringParser.parseMethodName(line));
+			StringParser sp = new StringParser(line);
+            filePathList.add(sp.parseFilePath(line));
+            methodNameList.add(sp.parseMethodName(line));
 
         }// use StringParser() // 유효한 점수가 존재하는 항목들의 file path, method name, line number로 쪼개기 ; score는 statement에 붙어야 하기에 MethodParser에서 따로 가져온다.
 	    // use ASTParser() // statement 뽑아서 this.statements에 넣기, 문제 파일의 AST 만들고 반환 후 종료
