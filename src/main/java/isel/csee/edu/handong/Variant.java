@@ -15,7 +15,7 @@ public class Variant{
 
 
     //setters
-    public void setAST(ComlilationUnit newAST){
+    public void setAST(CompilationUnit newAST){
         this.fullAST = newAST;
     }
     public void setStamentList(ArrayList<String> statements){
