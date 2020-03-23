@@ -8,6 +8,7 @@ public class Variant{
     private CompilationUnit fullAST;
     private ArrayList<String> statementList;
     private ArrayList<Double> scoreList;
+    //AST의 타입을 아직 모르겠음
     
     public Variant(){
 

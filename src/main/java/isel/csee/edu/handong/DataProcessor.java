@@ -54,11 +54,12 @@ public class DataProcessor {
 			  ioe.printStackTrace();
 		   }
 	 }
+	 //여기서 csvContents에 접근하면 nullpointer 오류가 뜬다... 왜일까? 어쨋든 한 블록에 넣어서 실행하면 결과는 나온다. 코드자체에는 문제 없음. 다만 ArrayList를 필드로 주고 초기화 하는게 아직 제대로 모르는 것 같다.
 	
 	public ArrayList<String> getFileList(){
 		return filePathList;
 	}
-	
+
 	public Variant createInitialVariant() { //need to implement Variant class
 		Variant newVariant = new Variant(); 
 	    newVariant.AST = JavaASTParser();
