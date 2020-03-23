@@ -10,10 +10,10 @@ import parser.isel.csee.edu.handong.*;
 public class DataProcessor {
 	//fields
 	private String targetPath;
-	private String csvPath;
-	private ArrayList<String> csvContents;
-	private ArrayList<String> filePathList;
-	private ArrayList<String> methodNameList;
+	private static String csvPath;
+	private static ArrayList<String> csvContents;
+	private static ArrayList<String> filePathList;
+	private static ArrayList<String> methodNameList;
 	
 	public ArrayList<String> statements;
 	public ArrayList<Double> scoreList;
@@ -21,13 +21,16 @@ public class DataProcessor {
 	//Methods
 	public DataProcessor(String csv) {
 		csvPath = csv;
+		ArrayList<String> csvContents = new ArrayList<>();
+		ArrayList<String> filePathList = new ArrayList<>();
+		ArrayList<String> methodNameList = new ArrayList<>();
 	}
 	
 	public void DataProcessorRunner() {
 
-	    csvContents = csvFileReader(); // csv file을 읽어온다
+	    csvFileReader(); // csv file을 읽어온다
 	    for(String line : csvContents){
-			StringParser sp = new StringParser(line);
+			StringParser sp = new StringParser();
             filePathList.add(sp.parseFilePath(line));
             methodNameList.add(sp.parseMethodName(line));
 
@@ -37,27 +40,29 @@ public class DataProcessor {
 	    // 위에 호출된 메소드 안에서 MethodParser(method name) // Method별로 statement와 score 추출해서 statement line number대로 정렬된 score만 반환,
 	}
 	
-	private ArrayList<String> csvFileReader(){
-		//use csvPath, read line by line from csv, put it in a list.
-		BufferedReader in = new BufferedReader(new FileReader(csvPath));
-		String str;
-		while(true) {
-			str=in.readLine();
-			if(str==null) break;
-			
-			csvContents.add(str);
-		}//based on implementation of text file, not sure about csv file.
-		
-		in.close();
-	}
+	private static void csvFileReader() {
+		try {
+			File file = new File(csvPath);
+			FileReader fr = new FileReader(file);
+			BufferedReader br = new BufferedReader(fr);
+			String line = "";
+			while((line = br.readLine()) != null) {
+			  csvContents.add(line);
+		   }
+		   br.close();
+		   } catch(IOException ioe) {
+			  ioe.printStackTrace();
+		   }
+	 }
 	
 	public ArrayList<String> getFileList(){
 		return filePathList;
 	}
+	
 	public Variant createInitialVariant() { //need to implement Variant class
 		Variant newVariant = new Variant(); 
 	    newVariant.AST = JavaASTParser();
-	    newVariant.statements = this.statements
+	    newVariant.statementList = this.statements
 	    for (String name : methodNameList) {
 	    	Variant.scoreList.append(MethodParser(method name));
 	    }
