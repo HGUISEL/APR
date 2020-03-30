@@ -31,7 +31,7 @@ public class JavaASTParserImpl implements JavaASTParser {
 		parser.setEnvironment(classPaths, sources, null, true);
 		parser.setResolveBindings(false);
 		parser.setCompilerOptions(options);
-		parser.setIgnoreMethodBodies(false);
+		parser.setIgnoreMethodBodies(true);
 		parser.setStatementsRecovery(true);
 		
 		try {
@@ -55,15 +55,15 @@ public class JavaASTParserImpl implements JavaASTParser {
 	}
 
 	@Override
-	public ArrayList<String> getStatements() {
+	public ArrayList<String> getMethods() {
 		// TODO Auto-generated method stub
-		ArrayList<MethodDeclaration> lstMethodDeclaration = new ArrayList<MethodDeclaration>();
+		ArrayList<String> lstMethodDeclaration = new ArrayList<String>();
 		// create visitor and get all the MethodDeclaration nodes
 		try {
 			cUnit.accept(new ASTVisitor() {
 				public boolean visit(final MethodDeclaration node) {
-					//System.out.println(node);
-					lstMethodDeclaration.add(node);
+
+					lstMethodDeclaration.add(node.toString());
 					return super.visit(node);
 				}
 				
@@ -74,17 +74,19 @@ public class JavaASTParserImpl implements JavaASTParser {
 			System.exit(0);
 		}
 		
-		// After collecting MethodDeclaration nods, get each statement form the declaration and their body. we will skip if we have blank or single parenthesis in the line. 
 	
-		int cnt = 0;
-		
-		for (int i=0 ; i < lstMethodDeclaration.size() ; i++) {
-			String[]stmt = lstMethodDeclaration.get(i).toString().split("\n");
-			for (int j = 0 ; j < stmt.length ; j++) {
-				System.out.println(cnt++ + " " + stmt[j]);
-			}
+		return lstMethodDeclaration;
+	}
+	
+	public ArrayList<String> getStatements(){
+		// Make this method to read each method and get all the line numbers from csv file.
+		ArrayList<String> methods = getMethods();
+		ArrayList<String> lstStatement = new ArrayList<String>();
+		for (String m : methods) {
+			// I need csv file contents to read all the line numbers
+			System.out.println(m);
 		}
-		return null;
+		return lstStatement;
 	}
 	
 	@Override

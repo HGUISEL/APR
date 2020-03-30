@@ -8,6 +8,7 @@ import java.util.List;
 interface JavaASTParser {
 	List<String> fileReader(String filepath);
 	CompilationUnit run (String file);
+	ArrayList<String> getMethods();
 	ArrayList<String> getStatements();
-
+	
 }
