@@ -145,8 +145,8 @@ rm -rf $TARGET_DIR
 echo "The original classes are stored!"
 
   # Perform offline instrumentation
-java -cp $BUILD_BACKUP_DIR/classes:$BUILD_BACKUP_DIR/test-classes:$GZOLTAR_AGENT_RT_JAR:$GZOLTAR_CLI_JAR \
-com.gzoltar.cli.Main instrument \
+java -cp $BUILD_BACKUP_DIR/classes:$GZOLTAR_AGENT_RT_JAR:$GZOLTAR_CLI_JAR \
+com.gzoltar.cli.Main instrument $BUILD_BACKUP_DIR/classes \
 --outputDirectory "$TARGET_DIR" \
 $BUILD_BACKUP_DIR || die "Offline instrumentation has failed!"
 
