@@ -69,4 +69,33 @@ public class DataProcessor {
 	    }
 	}
 
+
+	public String getTargetPath() {
+		return targetPath;
+	}
+
+	public static String getCsvPath() {
+		return csvPath;
+	}
+
+	public static ArrayList<String> getCsvContents() {
+		return csvContents;
+	}
+
+	public static ArrayList<String> getFilePathList() {
+		return filePathList;
+	}
+
+	public static ArrayList<String> getMethodNameList() {
+		return methodNameList;
+	}
+
+	public ArrayList<String> getStatements() {
+		return statements;
+	}
+
+	public ArrayList<Double> getScoreList() {
+		return scoreList;
+	}
+
 }
