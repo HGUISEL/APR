@@ -6,19 +6,33 @@ public class CodePreprocessor {
 			this.file = file;
 		}
 		
-		// delete single and multi-line comments from given string
+		/* delete single and multi-line comments from given string */
 		public void deleteComments(){
 			file = file.replaceAll("//.*", ""); 
 			file = file.replaceAll("/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/", "");
 		}
 		
-		// delete annotations
+		/* delete annotations */
 		public void deleteAnnotations() {
 			file = file.replaceAll("(@).*\\s", "");
 		}
+		
+		/* delete single braces*/
+		public void deleteBraces(){
+			file = file.replaceAll("\\{", "");
+			file = file.replaceAll("\\}", "");
+		}
+		
+		/* delete empty new lines */
+		public void deleteNewlineSpaces() {
+			file = file.replaceAll("\n+", "");
+		}
+		
 		public String run() {
 			deleteComments();
-			deleteAnnotations();
+			//deleteAnnotations(); we are not going to use annotation processor in this project.
+			deleteBraces();
+			deleteNewlineSpaces();
 			return file;
 		}
 }
