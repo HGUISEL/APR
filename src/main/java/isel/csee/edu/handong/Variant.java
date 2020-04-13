@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.io.*;
 
+import org.eclipse.jdt.core.dom.*;
+
 public class Variant{
     private CompilationUnit fullAST;
     private ArrayList<String> statementList;

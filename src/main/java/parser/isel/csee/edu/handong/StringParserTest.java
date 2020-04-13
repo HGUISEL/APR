@@ -1,9 +1,9 @@
 package parser.isel.csee.edu.handong;
 
 //import java.io.File;
-import java.util.List;
+//import java.util.List;
 
-import util.isel.csee.edu.handong.*;
+//import util.isel.csee.edu.handong.*;
 
 public class StringParserTest {
 

@@ -59,6 +59,17 @@ public class StringParser {
         int lineNum = Integer.parseInt(src);
 
         return lineNum;
+    }
+    // 입력으로 들어온 스트링에서 라인넘버에 해당하는 값을 파싱해서 int형태로 반환한다.
 
+    
+    public double parseScore(String src){
+        StringTokenizer st1 = new StringTokenizer(src);
+        st1.nextToken(";");
+        src = st1.nextToken(";");
+        int score = Integer.parseInt(src);
 
-    }// 입력으로 들어온 스트링에서 라인넘버에 해당하는 값을 파싱해서 int형태로 반환한다.
+        return score;
+    }
+    
+    
