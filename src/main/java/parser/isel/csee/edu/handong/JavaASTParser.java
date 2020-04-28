@@ -1,20 +1,21 @@
 package parser.isel.csee.edu.handong;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.TreeSet;
 
+import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.dom.*;
 
 import isel.csee.edu.handong.DataProcessor;
 import util.isel.csee.edu.handong.CodePreprocessor;
-
-import org.eclipse.jdt.core.JavaCore;
 
 public class JavaASTParser {
 	
 	private CompilationUnit cUnit;
 	private String srcCode; // source code is in this variable.
 	
-	JavaASTParser(String source){
+	public JavaASTParser(String source){
 		this.srcCode = source;
 		ASTParser parser = ASTParser.newParser(AST.JLS12);
 		
@@ -44,7 +45,7 @@ public class JavaASTParser {
 		} 
 	}
 	
-	public CompilationUnit run(String source) {//왜 여기 또 source를 받는 거지?
+	public CompilationUnit run(String source) {//�솢 �뿬湲� �삉 source瑜� 諛쏅뒗 嫄곗�?
 		return cUnit;
 	}
 
