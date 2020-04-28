@@ -11,37 +11,36 @@ public class DataProcessor {
 	//fields
 	private String targetPath;
 	private String csvPath;
-	private ArrayList<String> csvContents;
-	private ArrayList<String> filePathList;
-	private ArrayList<String> methodNameList;
+	private ArrayList<String> csvContents = new ArrayList<String>() ;
+	private ArrayList<String> filePathList = new ArrayList<String>();
+	private ArrayList<String> methodNameList = new ArrayList<String>();
 	
-	public ArrayList<String> statements;
-	public ArrayList<Double> scoreList;
+	public ArrayList<String> statements = new ArrayList<String>();
+	public ArrayList<Double> scoreList = new ArrayList<Double>();
 
 	//Methods
 	public DataProcessor(String csv) {
 		csvPath = csv;
-		ArrayList<String> csvContents = new ArrayList<>();
-		ArrayList<String> filePathList = new ArrayList<>();
-		ArrayList<String> methodNameList = new ArrayList<>();
 	}
 	
 	public void DataProcessorRunner() {
 
-		csvFileReader(); // csv file을 읽어온다
+		csvFileReader(); // csv file�쓣 �씫�뼱�삩�떎
 		StringParser sp = new StringParser();
 	    for(String line : csvContents){
 			filePathList.add(sp.parseFilePath(line));
 			methodNameList.add(sp.parseMethodName(line));
 			scoreList.add(sp.parseScore(line));
-        }// use StringParser() // 유효한 점수가 존재하는 항목들의 file path, method name, line number로 쪼개기 ; score는 statement에 붙어야 하기에 MethodParser에서 따로 가져온다.
+        }// use StringParser() // �쑀�슚�븳 �젏�닔媛� 議댁옱�븯�뒗 �빆紐⑸뱾�쓽 file path, method name, line number濡� 履쇨컻湲� ; score�뒗 statement�뿉 遺숈뼱�빞 �븯湲곗뿉 MethodParser�뿉�꽌 �뵲濡� 媛��졇�삩�떎.
 		
-		// use ASTParser() // statement 뽑아서 this.statements에 넣기, 문제 파일의 AST 만들고 반환 후 종료
-	    createInitialVariant(); // 지금까지 모은 것들로 Variant 생성.
-	    // 위에 호출된 메소드 안에서 MethodParser(method name) // Method별로 statement와 score 추출해서 statement line number대로 정렬된 score만 반환,
+	    
+	    
+		// use ASTParser() // statement 戮묒븘�꽌 this.statements�뿉 �꽔湲�, 臾몄젣 �뙆�씪�쓽 AST 留뚮뱾怨� 諛섑솚 �썑 醫낅즺
+	    createInitialVariant(); // 吏�湲덇퉴吏� 紐⑥� 寃껊뱾濡� Variant �깮�꽦.
+	    // �쐞�뿉 �샇異쒕맂 硫붿냼�뱶 �븞�뿉�꽌 MethodParser(method name) // Method蹂꾨줈 statement�� score 異붿텧�빐�꽌 statement line number��濡� �젙�젹�맂 score留� 諛섑솚,
 	}
 	
-	private void csvFileReader() {
+	public void csvFileReader() {
 		try {
 			File file = new File(csvPath);
 			FileReader fr = new FileReader(file);
@@ -55,27 +54,25 @@ public class DataProcessor {
 			  ioe.printStackTrace();
 		   }
 	 }
-	 //여기서 csvContents에 접근하면 nullpointer 오류가 뜬다... 왜일까? 어쨋든 한 블록에 넣어서 실행하면 결과는 나온다. 코드자체에는 문제 없음. 다만 ArrayList를 필드로 주고 초기화 하는게 아직 제대로 모르는 것 같다.
+	 //�뿬湲곗꽌 csvContents�뿉 �젒洹쇳븯硫� nullpointer �삤瑜섍� �쑍�떎... �솢�씪源�? �뼱夷뗫뱺 �븳 釉붾줉�뿉 �꽔�뼱�꽌 �떎�뻾�븯硫� 寃곌낵�뒗 �굹�삩�떎. 肄붾뱶�옄泥댁뿉�뒗 臾몄젣 �뾾�쓬. �떎留� ArrayList瑜� �븘�뱶濡� 二쇨퀬 珥덇린�솕 �븯�뒗寃� �븘吏� �젣��濡� 紐⑤Ⅴ�뒗 寃� 媛숇떎.
 	
 	 public Variant createInitialVariant() { //need to implement Variant class
 		Variant newVariant = new Variant();
-		String faultyFilePath;//가상의 faulty file이 있다고 가정
+		String faultyFilePath = "";//change this into iterative way to find all the faulty files.
 		File faultyFile = new File(faultyFilePath);
 		JavaCode2String c2sParser = new JavaCode2String();
-		String faultyFileContents = c2sParser.FiletoString(faultyFile);//file을 String으로 변환
+		String faultyFileContents = c2sParser.FiletoString(faultyFile);//file�쓣 String�쑝濡� 蹂��솚
 
-		JavaASTParser AP = new JavaASTParser(faultyFileContents);//ASTParser 인스턴스를 위에서 만든 String으로 생성
+		JavaASTParser AP = new JavaASTParser(faultyFileContents);//ASTParser �씤�뒪�꽩�뒪瑜� �쐞�뿉�꽌 留뚮뱺 String�쑝濡� �깮�꽦
 
 		newVariant.setAST(AP.run(faultyFileContents));
-		newVariant.setStatementList(AP.getStatements());//AP에서 필요한 것들 뽑아냄
+		newVariant.setStatementList(AP.getStatements());//AP�뿉�꽌 �븘�슂�븳 寃껊뱾 戮묒븘�깂
 		
-		ArrayList<Double> scores = new ArrayList<>();
-		for (String name : methodNameList) {
-	    	scores.addAll(MethodParser(name)); //score 부분 어떻게 처리?, methodParser는 이제 버리는 건가?
-		}
-		newVariant.setScoreList(scores);
-		//or
-		//newVariant.setScoreList(scoreList);
+		//ArrayList<Double> scores = new ArrayList<>();
+		//for (String name : methodNameList) {
+	    //	scores.addAll(MethodParser(name)); //score 遺�遺� �뼱�뼸寃� 泥섎━?, methodParser�뒗 �씠�젣 踰꾨━�뒗 嫄닿�?
+		//}
+		newVariant.setScoreList(scoreList);
 
 		return newVariant;
 	    
