@@ -10,7 +10,7 @@ public class Variant{
     private CompilationUnit fullAST;
     private ArrayList<String> statementList;
     private ArrayList<Double> scoreList;
-    //AST의 타입을 아직 모르겠음
+    //AST�쓽 ���엯�쓣 �븘吏� 紐⑤Ⅴ寃좎쓬
     
     public Variant(){
 
@@ -21,7 +21,7 @@ public class Variant{
     public void setAST(CompilationUnit newAST){
         this.fullAST = newAST;
     }
-    public void setStamentList(ArrayList<String> statements){
+    public void setStatementList(ArrayList<String> statements){
         this.statementList = statements;
     }
     public void setStatement(int index, String newStatement){
