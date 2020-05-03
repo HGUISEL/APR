@@ -1,27 +1,32 @@
 package parser.isel.csee.edu.handong;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeSet;
 
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.dom.*;
 
-import isel.csee.edu.handong.DataProcessor;
 import util.isel.csee.edu.handong.CodePreprocessor;
 
 public class JavaASTParser {
 	
 	private CompilationUnit cUnit;
 	private String srcCode; // source code is in this variable.
+	private ArrayList<String> csvContents = new ArrayList<String>() ;
 	
-	public JavaASTParser(String source){
+	public JavaASTParser(String source, ArrayList<String> csvContents){
 		this.srcCode = source;
+		this.csvContents = csvContents;
+	}
+	
+	public CompilationUnit run() {//�솢 �뿬湲� �삉 source瑜� 諛쏅뒗 嫄곗�?
 		ASTParser parser = ASTParser.newParser(AST.JLS12);
 		
 		/* settings to create AST */
 		parser.setKind(ASTParser.K_COMPILATION_UNIT);
-		char[] content = source.toCharArray();
+		char[] content = srcCode.toCharArray();
 		parser.setSource(content);
 		Map<String, String> options = JavaCore.getOptions();
 		options.put(JavaCore.COMPILER_COMPLIANCE, JavaCore.VERSION_1_8);
@@ -43,9 +48,7 @@ public class JavaASTParser {
 		} catch (Exception e) {
 			System.out.println("\nError while executing compilation unit : " + e.toString());
 		} 
-	}
-	
-	public CompilationUnit run(String source) {//�솢 �뿬湲� �삉 source瑜� 諛쏅뒗 嫄곗�?
+		
 		return cUnit;
 	}
 
@@ -106,18 +109,20 @@ public class JavaASTParser {
 	
 	/* method to make list of statements in the file */
 	public ArrayList<String> getStatements(){
-		String fullClassName = getFullClassName(); // get full class name to search in csv
-		ArrayList<String> csvContent = DataProcessor.getCsvContents(); // we need to get csv contents to look up line numbers of given methods 
+		String fullClassName = getFullClassName(); // get full class name to search in csv 
 		ArrayList<String> lstStatement = new ArrayList<String>();
 		TreeSet<Integer> lineNumbers = new TreeSet<>();
+		HashMap<Integer, Double> scorePerLine = new HashMap<>();
 		
 		/* iterate all methods and read line number from csv content */ 
-		for (String csv : csvContent) {
+		for (String csv : csvContents) {
 			if(csv.contains(fullClassName)) {
 				int start = csv.indexOf(':');
 				int end =  csv.indexOf(';', start);
 				String lineNumber = csv.substring(start, end);
+				String score = csv.substring(end);
 				lineNumbers.add(Integer.parseInt(lineNumber));
+				scorePerLine.put(Integer.parseInt(lineNumber), Double.parseDouble(score));
 			}
 		}
 		
@@ -131,6 +136,37 @@ public class JavaASTParser {
 		}
 		
 		return lstStatement;
+	}
+	
+	public HashMap<Integer, Double> getScoreMap(){
+		String fullClassName = getFullClassName(); // get full class name to search in csv 
+		TreeSet<Integer> lineNumbers = new TreeSet<>();
+		HashMap<Integer, Double> scorePerLine = new HashMap<>();
+		
+		/* iterate all methods and read line number from csv content */ 
+		for (String csv : csvContents) {
+			if(csv.contains(fullClassName)) {
+				int start = csv.indexOf(':');
+				int end =  csv.indexOf(';', start);
+				String lineNumber = csv.substring(start, end);
+				String score = csv.substring(end);
+				lineNumbers.add(Integer.parseInt(lineNumber));
+				scorePerLine.put(Integer.parseInt(lineNumber), Double.parseDouble(score));
+			}
+		}
+		
+		return scorePerLine;
+	}
+	
+	public ArrayList<Double> getScoreList(int size, Map<Integer, Double> scoreMap){
+		ArrayList<Double> scoreList = new ArrayList<>();
+		
+		for(int i = 0 ; i < size; i++) {
+			if (scoreMap.get(i) != null) {
+				scoreList.add(scoreMap.get(i));
+			}
+		}
+		return scoreList;
 	}
 	
 }
