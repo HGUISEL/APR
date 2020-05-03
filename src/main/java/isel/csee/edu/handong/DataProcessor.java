@@ -2,6 +2,7 @@ package isel.csee.edu.handong;
 //import Variant
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.io.*;
 import parser.isel.csee.edu.handong.*;
@@ -11,9 +12,9 @@ public class DataProcessor {
 	//fields
 	private String targetPath;
 	private String csvPath;
-	private ArrayList<String> csvContents = new ArrayList<String>() ;
 	private ArrayList<String> filePathList = new ArrayList<String>();
 	private ArrayList<String> methodNameList = new ArrayList<String>();
+	private ArrayList<String> csvContents = new ArrayList<String>() ;
 	
 	public ArrayList<String> statements = new ArrayList<String>();
 	public ArrayList<Double> scoreList = new ArrayList<Double>();
@@ -63,16 +64,19 @@ public class DataProcessor {
 		JavaCode2String c2sParser = new JavaCode2String();
 		String faultyFileContents = c2sParser.FiletoString(faultyFile);//file�쓣 String�쑝濡� 蹂��솚
 
-		JavaASTParser AP = new JavaASTParser(faultyFileContents);//ASTParser �씤�뒪�꽩�뒪瑜� �쐞�뿉�꽌 留뚮뱺 String�쑝濡� �깮�꽦
+		JavaASTParser AP = new JavaASTParser(faultyFileContents, csvContents);//ASTParser �씤�뒪�꽩�뒪瑜� �쐞�뿉�꽌 留뚮뱺 String�쑝濡� �깮�꽦
 
-		newVariant.setAST(AP.run(faultyFileContents));
-		newVariant.setStatementList(AP.getStatements());//AP�뿉�꽌 �븘�슂�븳 寃껊뱾 戮묒븘�깂
+		newVariant.setAST(AP.run());
+		ArrayList<String> statementList = AP.getStatements();
+		newVariant.setStatementList(statementList);//AP�뿉�꽌 �븘�슂�븳 寃껊뱾 戮묒븘�깂
+		
+		
 		
 		//ArrayList<Double> scores = new ArrayList<>();
 		//for (String name : methodNameList) {
 	    //	scores.addAll(MethodParser(name)); //score 遺�遺� �뼱�뼸寃� 泥섎━?, methodParser�뒗 �씠�젣 踰꾨━�뒗 嫄닿�?
 		//}
-		newVariant.setScoreList(scoreList);
+		newVariant.setScoreList(AP.getScoreList(statementList.size(), AP.getScoreMap()));
 
 		return newVariant;
 	    
