@@ -21,7 +21,7 @@ public class JavaASTParser {
 		this.csvContents = csvContents;
 	}
 	
-	public CompilationUnit run() {//�솢 �뿬湲� �삉 source瑜� 諛쏅뒗 嫄곗�?
+	public CompilationUnit run() {
 		ASTParser parser = ASTParser.newParser(AST.JLS12);
 		
 		/* settings to create AST */
