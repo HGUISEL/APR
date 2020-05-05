@@ -2,9 +2,7 @@ package isel.csee.edu.handong;
 //import Variant
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.io.*;
 import parser.isel.csee.edu.handong.*;
 import util.isel.csee.edu.handong.*;
@@ -17,7 +15,7 @@ public class DataProcessor {
 	private ArrayList<String> methodNameList = new ArrayList<String>();
 	private ArrayList<String> csvContents = new ArrayList<String>() ;
 	private HashSet<String> faultyFileSet = new HashSet<String>();
-	
+	// TODO : add line number container
 	private ArrayList<String> statements = new ArrayList<String>();
 	private ArrayList<Double> scoreList = new ArrayList<Double>();
 	private ArrayList<Variant> variantList = new ArrayList<Variant>();
@@ -78,9 +76,9 @@ public class DataProcessor {
 		ArrayList<String> statementList = AP.getStatements();
 		newVariant.setStatementList(statementList);// extracted data needed from the AP
 		
-		
-		
+		/* Do not use JavaASTParser class to get score list. use score and line number list from String parser */
 		newVariant.setScoreList(AP.getScoreList(statementList.size(), AP.getScoreMap()));
+		 
 
 		return newVariant;
 	    
