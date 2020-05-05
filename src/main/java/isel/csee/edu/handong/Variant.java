@@ -10,7 +10,6 @@ public class Variant{
     private CompilationUnit fullAST;
     private ArrayList<String> statementList;
     private ArrayList<Double> scoreList;
-    //AST�쓽 ���엯�쓣 �븘吏� 紐⑤Ⅴ寃좎쓬
     
     public Variant(){
 
