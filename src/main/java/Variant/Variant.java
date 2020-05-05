@@ -1,4 +1,4 @@
-package isel.csee.edu.handong;
+package Variant;
 
 import java.util.ArrayList;
 import java.util.List;
