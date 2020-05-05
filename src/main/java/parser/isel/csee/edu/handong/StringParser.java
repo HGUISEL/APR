@@ -15,7 +15,8 @@ public class StringParser {
 
     public void stringParserRunner(){
 
-    }// 이 클래스에 전체적인 흐름을 잡아주는 메서드. csv파일을 한 줄씩 읽으면서 아래 메서드들을 실행한다.
+    }// method that controls the flow. read csv file line by line and runs the methods listed below.
+    // However, not used since we do this directly on DataProcessor.DataProcessorRuner()
     
     public String parseMethodName(String src){
         StringTokenizer st1 = new StringTokenizer(src);
@@ -27,7 +28,7 @@ public class StringParser {
 
         return src;
 
-    }// 입력으로 들어온 스트링에서 메서드 이름에 해당하는 부분을 파싱해서 스트링으로 반환한다.
+    }// parse the method name part from the input string.
     
     public String parseFilePath(String src){
         String filePath="";
@@ -48,7 +49,7 @@ public class StringParser {
 
         return filePath;
 
-    }// 입력으로 들어온 스트링에서 패키지이름,클래스이름을 파싱한 뒤, 두 문자열을 가공해서 클래스파일이 위치한 경로로 만들어 스트링 형태로 반환한다.
+    }// parse the package name and class name part from the input string, make it into a file path.
     
     public int parseLineNum(String src){
         StringTokenizer st1 = new StringTokenizer(src);
@@ -60,7 +61,7 @@ public class StringParser {
 
         return lineNum;
     }
-    // 입력으로 들어온 스트링에서 라인넘버에 해당하는 값을 파싱해서 int형태로 반환한다.
+    // parse the line number part from the input string and return it as integer.
 
     
     public double parseScore(String src){
@@ -71,6 +72,7 @@ public class StringParser {
 
         return score;
     }
+    // parse the score part from the input string and return it as double.
     
 }
     
