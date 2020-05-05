@@ -3,6 +3,7 @@ package isel.csee.edu.handong;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.io.*;
 import parser.isel.csee.edu.handong.*;
@@ -15,13 +16,16 @@ public class DataProcessor {
 	private ArrayList<String> filePathList = new ArrayList<String>();
 	private ArrayList<String> methodNameList = new ArrayList<String>();
 	private ArrayList<String> csvContents = new ArrayList<String>() ;
+	private HashSet<String> faultyFileSet = new HashSet<String>();
 	
-	public ArrayList<String> statements = new ArrayList<String>();
-	public ArrayList<Double> scoreList = new ArrayList<Double>();
+	private ArrayList<String> statements = new ArrayList<String>();
+	private ArrayList<Double> scoreList = new ArrayList<Double>();
+	private ArrayList<Variant> variantList = new ArrayList<Variant>();
 
 	//Methods
 	public DataProcessor(String csv) {
 		csvPath = csv;
+		DataProcessorRunner();
 	}
 	
 	public void DataProcessorRunner() {
@@ -29,15 +33,21 @@ public class DataProcessor {
 		csvFileReader(); // read the csv file
 		StringParser sp = new StringParser();
 	    for(String line : csvContents){
-			filePathList.add(sp.parseFilePath(line));
-			methodNameList.add(sp.parseMethodName(line));
-			scoreList.add(sp.parseScore(line));
+	    	if(sp.parseScore(line)>0){
+				filePathList.add(sp.parseFilePath(line));
+				faultyFileSet.add(sp.parseFilePath(line));
+				methodNameList.add(sp.parseMethodName(line));
+				scoreList.add(sp.parseScore(line));
+	    	}
         }// using StringParser. split the line with valid score into file path, method name, line number.
 		
 	    
 	    
 	    // use ASTParser() //  make AST and extract statements from the problematic file and put it in this.statements
-	    createInitialVariant(); 
+		for(String line : faultyFileSet) {
+			variantList.add(createInitialVariant(line)); 
+		}
+		
 	}
 	
 	public void csvFileReader() {
@@ -55,9 +65,9 @@ public class DataProcessor {
 		   }
 	 }
 	 
-	 public Variant createInitialVariant() { //need to implement Variant class
+	 public Variant createInitialVariant(String faultyFilePath) { //need to implement Variant class
 		Variant newVariant = new Variant();
-		String faultyFilePath = "";//change this into iterative way to find all the faulty files.
+		//faultyFilePath = "";//change this into iterative way to find all the faulty files.
 		File faultyFile = new File(faultyFilePath);
 		JavaCode2String c2sParser = new JavaCode2String();
 		String faultyFileContents = c2sParser.FiletoString(faultyFile);// convert the contents of file into a string.
@@ -106,6 +116,10 @@ public class DataProcessor {
 
 	public ArrayList<Double> getScoreList() {
 		return scoreList;
+	}
+	
+	public HashSet<String> getFaultyFileSet() {
+		return faultyFileSet;
 	}
 
 }

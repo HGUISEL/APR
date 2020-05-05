@@ -12,12 +12,14 @@ public class StringParserTest {
         
         StringParser sp = new StringParser();
                   
+        double score = sp.parseScore(sample);
         int lineNum = sp.parseLineNum(sample);
         String methodName = sp.parseMethodName(sample);
         String filePath = sp.parseFilePath(sample);
-        System.out.println(lineNum+" ");
-        System.out.println(methodName+" ");
-        System.out.println(filePath+" ");
+        System.out.println(score);
+        System.out.println(lineNum);
+        System.out.println(methodName);
+        System.out.println(filePath);
       }
     
 

@@ -31,7 +31,7 @@ public class StringParser {
     }// parse the method name part from the input string.
     
     public String parseFilePath(String src){
-        String filePath="";
+        String filePath=""; //target directory,the directory given as the source directory must be in here
         StringTokenizer st1 = new StringTokenizer(src);
 
         String dir = st1.nextToken("$");
@@ -45,7 +45,7 @@ public class StringParser {
         dir = st3.nextToken("#");
         filePath += dir;
 
-        filePath += ".class";
+        filePath += ".java"; //or class??
 
         return filePath;
 
@@ -68,7 +68,10 @@ public class StringParser {
         StringTokenizer st1 = new StringTokenizer(src);
         st1.nextToken(";");
         src = st1.nextToken(";");
-        int score = Integer.parseInt(src);
+        StringTokenizer st2 = new StringTokenizer(src);
+        src = st2.nextToken(",");
+        
+        double score = Double.parseDouble(src);
 
         return score;
     }
