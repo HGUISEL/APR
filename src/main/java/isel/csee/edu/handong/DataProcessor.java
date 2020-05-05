@@ -3,6 +3,9 @@ package isel.csee.edu.handong;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+
+import Variant.Variant;
+
 import java.io.*;
 import parser.isel.csee.edu.handong.*;
 import util.isel.csee.edu.handong.*;
@@ -15,7 +18,7 @@ public class DataProcessor {
 	private ArrayList<String> methodNameList = new ArrayList<String>();
 	private ArrayList<String> csvContents = new ArrayList<String>() ;
 	private HashSet<String> faultyFileSet = new HashSet<String>();
-	// TODO : add line number container
+	private ArrayList<Integer> lineNumberList = new ArrayList<Integer>();
 	private ArrayList<String> statements = new ArrayList<String>();
 	private ArrayList<Double> scoreList = new ArrayList<Double>();
 	private ArrayList<Variant> variantList = new ArrayList<Variant>();
@@ -31,17 +34,14 @@ public class DataProcessor {
 		csvFileReader(); // read the csv file
 		StringParser sp = new StringParser();
 	    for(String line : csvContents){
-	    	if(sp.parseScore(line)>0){
-				filePathList.add(sp.parseFilePath(line));
+			filePathList.add(sp.parseFilePath(line));
+			methodNameList.add(sp.parseMethodName(line));
+			scoreList.add(sp.parseScore(line));
+			lineNumberList.add(sp.parseLineNum(line));
+    	   	if(sp.parseScore(line)>0)				
 				faultyFileSet.add(sp.parseFilePath(line));
-				methodNameList.add(sp.parseMethodName(line));
-				scoreList.add(sp.parseScore(line));
-	    	}
         }// using StringParser. split the line with valid score into file path, method name, line number.
 		
-	    
-	    
-	    // use ASTParser() //  make AST and extract statements from the problematic file and put it in this.statements
 		for(String line : faultyFileSet) {
 			variantList.add(createInitialVariant(line)); 
 		}
