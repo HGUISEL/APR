@@ -10,7 +10,7 @@ public class StringParserTest {
 	public static void main(String[] args) {
         String sample = "org.apache.commons.math.distribution$NormalDistributionTest#testMath280():168;1.0";
         
-        StringParser sp = new StringParser();
+        StringParser sp = new StringParser("C:/Users/goodt/Documents/Workspace/APR/dataset/Math-issue-280");
                   
         double score = sp.parseScore(sample);
         int lineNum = sp.parseLineNum(sample);

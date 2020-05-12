@@ -24,15 +24,15 @@ public class DataProcessor {
 	private ArrayList<Variant> variantList = new ArrayList<Variant>();
 
 	//Methods
-	public DataProcessor(String csv) {
-		csvPath = csv;
-		DataProcessorRunner();
+	public DataProcessor(String target) {
+		targetPath = target; 
+		csvPath = targetPath + "/fl.results/ochiai.ranking.csv";
 	}
 	
 	public void DataProcessorRunner() {
 
 		csvFileReader(); // read the csv file
-		StringParser sp = new StringParser();
+		StringParser sp = new StringParser(targetPath);
 	    for(String line : csvContents){
 			filePathList.add(sp.parseFilePath(line));
 			methodNameList.add(sp.parseMethodName(line));

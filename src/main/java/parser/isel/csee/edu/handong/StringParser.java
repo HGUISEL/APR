@@ -7,10 +7,10 @@ import java.util.List;
 import java.util.StringTokenizer;
 
 public class StringParser {
+    private String targetPath;
     
-    
-    public StringParser(){
-        
+    public StringParser(String target){
+        targetPath = target;
     }
 
     public void stringParserRunner(){
@@ -45,7 +45,9 @@ public class StringParser {
         dir = st3.nextToken("#");
         filePath += dir;
 
-        filePath += ".java"; //or class??
+        filePath = targetPath + "/src/java/" + filePath + ".java"; //or class??
+        //filePath = targetPath + "/target/classes/" + filePath + ".class"; //or class??
+        
 
         return filePath;
 
