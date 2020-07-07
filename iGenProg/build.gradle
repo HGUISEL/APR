@@ -26,4 +26,14 @@ dependencies {
 
     // Use JUnit test framework
     testImplementation 'junit:junit:4.13'
+    
+    // https://mvnrepository.com/artifact/org.jacoco/org.jacoco.core
+	compile group: 'org.jacoco', name: 'org.jacoco.core', version: '0.8.5'
+	
+	// https://mvnrepository.com/artifact/junit/junit
+	testCompile group: 'junit', name: 'junit', version: '4.13'
+    
+    // https://mvnrepository.com/artifact/junit/junit-dep
+	testCompile group: 'junit', name: 'junit-dep', version: '4.11', ext: 'pom'
+    
 }
