@@ -1,0 +1,688 @@
+<start>
+diff --git a/src/java/org/apache/commons/lang/CharSetUtils.java b/src/java/org/apache/commons/lang/CharSetUtils.java
+index 71dbbcc..be7b372 100644
+--- a/src/java/org/apache/commons/lang/CharSetUtils.java
++++ b/src/java/org/apache/commons/lang/CharSetUtils.java
+@@ -63,7 +63,7 @@
+  *
+  * @author <a href="bayard@generationjava.com">Henri Yandell</a>
+  * @author <a href="mailto:scolebourne@joda.org">Stephen Colebourne</a>
+- * @version $Id: CharSetUtils.java,v 1.2 2002/07/21 20:14:14 bayard Exp $
++ * @version $Id: CharSetUtils.java,v 1.3 2002/07/21 20:19:50 bayard Exp $
+  */
+ public class CharSetUtils {
+ 
+@@ -160,15 +160,6 @@
+     }
+ 
+     /**
+-     * Deletes all whitespace from a String.
+-     *
+-     * @param str  String target to delete whitespace from
+-     */
+-    public static String deleteWhitespace(String str) {
+-        return delete(str, " \t\r\n\b" );
+-    }
+-
+-    /**
+      * Takes an argument in set-syntax, see evaluateSet,
+      * and deletes any of characters present in the specified string.
+      * An example would be:   delete("hello", {"c-f","o"}) returns "hll"
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/StringUtils.java b/src/java/org/apache/commons/lang/StringUtils.java
+index 40eef46..fdb9eed 100644
+--- a/src/java/org/apache/commons/lang/StringUtils.java
++++ b/src/java/org/apache/commons/lang/StringUtils.java
+@@ -73,7 +73,7 @@
+  * @author <a href="mailto:rand_mcneely@yahoo.com>Rand McNeely</a>
+  * @author <a href="mailto:scolebourne@joda.org>Stephen Colebourne</a>
+  * @author <a href="mailto:fredrik@westermarck.com>Fredrik Westermarck</a>
+- * @version $Id: StringUtils.java,v 1.14 2002/09/27 05:53:37 bayard Exp $
++ * @version $Id: StringUtils.java,v 1.15 2002/09/27 06:08:16 bayard Exp $
+  */
+ public class StringUtils {
+ 
+@@ -119,15 +119,35 @@
+     }
+ 
+     /**
++     * Deletes all 'space' characters from a String.
++     * Spaces are defined as {' ', '\t', '\r', '\n', '\b'}
++     * in line with the deprecated Character.isSpace
++     *
++     * @param str  String target to delete spaces from
++     * @return the text without spaces
++     * @throws NullPointerException
++     */
++    public static String deleteSpaces(String str) {
++        return CharSetUtils.delete(str, " \t\r\n\b");
++    }
++
++    /**
+      * Deletes all whitespace from a String.
+-     * Whitespace is defined as {' ', '\t', '\r', '\n', '\b'}
++     * Whitespace is defined by Character.isWhitespace
+      *
+      * @param str  String target to delete whitespace from
+      * @return the text without whitespace
+      * @throws NullPointerException
+      */
+     public static String deleteWhitespace(String str) {
+-        return CharSetUtils.delete(str, " \t\r\n\b");
++        StringBuffer buffer = new StringBuffer();
++        int sz = str.length();
++        for (int i=0; i<sz; i++) {
++            if(!Character.isWhitespace(str.charAt(i))) {
++                buffer.append(str.charAt(i));
++            }
++        }
++        return buffer.toString();
+     }
+ 
+     /**
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/StringUtils.java b/src/java/org/apache/commons/lang/StringUtils.java
+index a190d36..464fcd3 100644
+--- a/src/java/org/apache/commons/lang/StringUtils.java
++++ b/src/java/org/apache/commons/lang/StringUtils.java
+@@ -77,7 +77,7 @@
+  * @author <a href="mailto:alex@purpletech.com">Alexander Day Chaffee</a>
+  * @author <a href="mailto:hps@intermeta.de">Henning P. Schmiedehausen</a>
+  * @since 1.0
+- * @version $Id: StringUtils.java,v 1.34 2003/03/23 04:58:47 bayard Exp $
++ * @version $Id: StringUtils.java,v 1.35 2003/03/23 05:26:23 bayard Exp $
+  */
+ public class StringUtils {
+ 
+@@ -523,7 +523,7 @@
+      * @return the concatenated string.
+      */
+     public static String concatenate(Object[] array) {
+-        return join(array, "");
++        return join(array, null);
+     }
+     
+     /**
+@@ -538,12 +538,40 @@
+      * @return the joined String
+      */
+     public static String join(Object[] array, String separator) {
+-        if (separator == null) {
+-            separator = "";
+-        }
+         int arraySize = array.length;
+-        int bufSize = (arraySize == 0 ? 0 : (array[0].toString().length() +
+-                                 separator.length()) * arraySize);
++
++        // ArraySize ==  0: Len = 0
++        // ArraySize > 0:   Len = NofStrings *(len(firstString) + len(separator))
++        //           (Assuming that all strings are roughly equally long)
++        int bufSize 
++            = ((arraySize == 0) ? 0 
++                : arraySize * (array[0].toString().length() 
++                    + ((separator != null) ? separator.length(): 0)));
++
++        StringBuffer buf = new StringBuffer(bufSize);
++
++        for (int i = 0; i < arraySize; i++) {
++            if ((separator != null) && (i > 0)) {
++                buf.append(separator);
++         }
++            buf.append(array[i]);
++        }
++        return buf.toString();
++    }
++
++    /**
++     * <p>Joins the elements of the provided array into a single String
++     * containing the provided list of elements.</p>
++     *
++     * <p>No delimiter is added before or after the list. A
++     *
++     * @param array the array of values to join together
++     * @param separator the separator character to use
++     * @return the joined String
++     */
++    public static String join(Object[] array, char separator) {
++        int arraySize = array.length;
++        int bufSize = (arraySize == 0 ? 0 : (array[0].toString().length() + 1) * arraySize);
+         StringBuffer buf = new StringBuffer(bufSize);
+ 
+         for (int i = 0; i < arraySize; i++) {
+@@ -567,9 +595,27 @@
+      * @return the joined String
+      */
+     public static String join(Iterator iterator, String separator) {
+-        if (separator == null) {
+-            separator = "";
+-        }
++        StringBuffer buf = new StringBuffer(256);  // Java default is 16, probably too small
++        while (iterator.hasNext()) {
++            buf.append(iterator.next());
++            if ((separator != null) && iterator.hasNext()) {
++                buf.append(separator);
++            }
++         }
++        return buf.toString();
++    }
++
++    /**
++     * <p>Joins the elements of the provided <code>Iterator</code> into
++     * a single String containing the provided elements.</p>
++     *
++     * <p>No delimiter is added before or after the list. A
++     *
++     * @param iterator the <code>Iterator</code> of values to join together
++     * @param separator  the separator character to use
++     * @return the joined String
++     */
++    public static String join(Iterator iterator, char separator) {
+         StringBuffer buf = new StringBuffer(256);  // Java default is 16, probably too small
+         while (iterator.hasNext()) {
+             buf.append(iterator.next());
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/exception/NestableException.java b/src/java/org/apache/commons/lang/exception/NestableException.java
+index 0204227..f126c17 100644
+--- a/src/java/org/apache/commons/lang/exception/NestableException.java
++++ b/src/java/org/apache/commons/lang/exception/NestableException.java
+@@ -125,7 +125,7 @@
+  * @author <a href="mailto:dlr@collab.net">Daniel Rall</a>
+  * @author <a href="mailto:knielsen@apache.org">Kasper Nielsen</a>
+  * @author <a href="mailto:steven@caswell.name">Steven Caswell</a>
+- * @version $Id: NestableException.java,v 1.2 2002/07/26 20:30:10 stevencaswell Exp $
++ * @version $Id: NestableException.java,v 1.3 2002/08/25 13:20:59 stevencaswell Exp $
+  */
+ public class NestableException extends Exception implements Nestable
+ {
+@@ -193,14 +193,6 @@
+         return cause;
+     }
+ 
+-    /**
+-     * @deprecated replaced by {@link #getThrowableCount()}
+-     */
+-    public int getLength()
+-    {
+-        return delegate.getThrowableCount();
+-    }
+-    
+     public String getMessage()
+     {
+         StringBuffer msg = new StringBuffer();
+@@ -267,22 +259,6 @@
+         return delegate.indexOfThrowable(type, fromIndex);
+     }
+ 
+-    /**
+-     * @deprecated replaced by {@link #indexOfThrowable(Class, int)}
+-     */
+-    public int indexOfThrowable(int pos, Class type)
+-    {
+-        if(pos < 0)
+-        {
+-            pos = 0;
+-        }
+-        else if(pos >= this.getThrowableCount())
+-        {
+-            pos = this.getThrowableCount() - 1;
+-        }
+-        return delegate.indexOfThrowable(type, pos);
+-    }
+-    
+     public void printStackTrace()
+     {
+         delegate.printStackTrace();
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/exception/NestableException.java b/src/java/org/apache/commons/lang/exception/NestableException.java
+index 0204227..f126c17 100644
+--- a/src/java/org/apache/commons/lang/exception/NestableException.java
++++ b/src/java/org/apache/commons/lang/exception/NestableException.java
+@@ -125,7 +125,7 @@
+  * @author <a href="mailto:dlr@collab.net">Daniel Rall</a>
+  * @author <a href="mailto:knielsen@apache.org">Kasper Nielsen</a>
+  * @author <a href="mailto:steven@caswell.name">Steven Caswell</a>
+- * @version $Id: NestableException.java,v 1.2 2002/07/26 20:30:10 stevencaswell Exp $
++ * @version $Id: NestableException.java,v 1.3 2002/08/25 13:20:59 stevencaswell Exp $
+  */
+ public class NestableException extends Exception implements Nestable
+ {
+@@ -193,14 +193,6 @@
+         return cause;
+     }
+ 
+-    /**
+-     * @deprecated replaced by {@link #getThrowableCount()}
+-     */
+-    public int getLength()
+-    {
+-        return delegate.getThrowableCount();
+-    }
+-    
+     public String getMessage()
+     {
+         StringBuffer msg = new StringBuffer();
+@@ -267,22 +259,6 @@
+         return delegate.indexOfThrowable(type, fromIndex);
+     }
+ 
+-    /**
+-     * @deprecated replaced by {@link #indexOfThrowable(Class, int)}
+-     */
+-    public int indexOfThrowable(int pos, Class type)
+-    {
+-        if(pos < 0)
+-        {
+-            pos = 0;
+-        }
+-        else if(pos >= this.getThrowableCount())
+-        {
+-            pos = this.getThrowableCount() - 1;
+-        }
+-        return delegate.indexOfThrowable(type, pos);
+-    }
+-    
+     public void printStackTrace()
+     {
+         delegate.printStackTrace();
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java b/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java
+index 6efa5a3..a1fe906 100644
+--- a/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java
++++ b/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java
+@@ -71,7 +71,7 @@
+  * @author <a href="mailto:dlr@collab.net">Daniel Rall</a>
+  * @author <a href="mailto:knielsen@apache.org">Kasper Nielsen</a>
+  * @author <a href="mailto:steven@caswell.name">Steven Caswell</a>
+- * @version $Id: NestableRuntimeException.java,v 1.2 2002/07/26 20:30:10 stevencaswell Exp $
++ * @version $Id: NestableRuntimeException.java,v 1.3 2002/08/25 13:20:59 stevencaswell Exp $
+  */
+ public class NestableRuntimeException extends RuntimeException
+     implements Nestable
+@@ -140,14 +140,6 @@
+         return cause;
+     }
+ 
+-    /**
+-     * @deprecated replaced by {@link #getThrowableCount()}
+-     */
+-    public int getLength()
+-    {
+-        return delegate.getThrowableCount();
+-    }
+-    
+     public String getMessage()
+     {
+         StringBuffer msg = new StringBuffer();
+@@ -214,22 +206,6 @@
+         return delegate.indexOfThrowable(type, fromIndex);
+     }
+     
+-    /**
+-     * @deprecated replaced by {@link #indexOfThrowable(Class, int)}
+-     */
+-    public int indexOfThrowable(int pos, Class type)
+-    {
+-        if(pos < 0)
+-        {
+-            pos = 0;
+-        }
+-        else if(pos >= this.getThrowableCount())
+-        {
+-            pos = this.getThrowableCount() - 1;
+-        }
+-        return delegate.indexOfThrowable(type, pos);
+-    }
+-    
+     public void printStackTrace()
+     {
+         delegate.printStackTrace();
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java b/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java
+index 3c4a983..03959cc 100644
+--- a/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java
++++ b/src/java/org/apache/commons/lang/exception/NestableRuntimeException.java
+@@ -1,5 +1,3 @@
+-package org.apache.commons.lang.exception;
+-
+ /* ====================================================================
+  * The Apache Software License, Version 1.1
+  *
+@@ -53,6 +51,7 @@
+  * information on the Apache Software Foundation, please see
+  * <http://www.apache.org/>.
+  */
++package org.apache.commons.lang.exception;
+ 
+ import java.io.PrintStream;
+ import java.io.PrintWriter;
+@@ -66,11 +65,11 @@
+  * @author <a href="mailto:dlr@collab.net">Daniel Rall</a>
+  * @author <a href="mailto:knielsen@apache.org">Kasper Nielsen</a>
+  * @author <a href="mailto:steven@caswell.name">Steven Caswell</a>
+- * @version $Id: NestableRuntimeException.java,v 1.5 2002/09/29 08:20:52 bayard Exp $
++ * @since 1.0
++ * @version $Id: NestableRuntimeException.java,v 1.6 2002/12/23 00:15:19 scolebourne Exp $
+  */
+-public class NestableRuntimeException extends RuntimeException
+-    implements Nestable
+-{
++public class NestableRuntimeException extends RuntimeException implements Nestable {
++    
+     /**
+      * The helper instance which contains much of the code which we
+      * delegate to.
+@@ -87,8 +86,7 @@
+      * Constructs a new <code>NestableRuntimeException</code> without specified
+      * detail message.
+      */
+-    public NestableRuntimeException()
+-    {
++    public NestableRuntimeException() {
+         super();
+     }
+ 
+@@ -98,8 +96,7 @@
+      *
+      * @param msg the error message
+      */
+-    public NestableRuntimeException(String msg)
+-    {
++    public NestableRuntimeException(String msg) {
+         super(msg);
+     }
+ 
+@@ -110,8 +107,7 @@
+      * @param cause the exception or error that caused this exception to be
+      * thrown
+      */
+-    public NestableRuntimeException(Throwable cause)
+-    {
++    public NestableRuntimeException(Throwable cause) {
+         super();
+         this.cause = cause;
+     }
+@@ -124,82 +120,65 @@
+      * @param cause  the exception or error that caused this exception to be
+      * thrown
+      */
+-    public NestableRuntimeException(String msg, Throwable cause)
+-    {
++    public NestableRuntimeException(String msg, Throwable cause) {
+         super(msg);
+         this.cause = cause;
+     }
+ 
+-    public Throwable getCause()
+-    {
++    public Throwable getCause() {
+         return cause;
+     }
+ 
+-    public String getMessage()
+-    {
++    public String getMessage() {
+         return delegate.getMessage(super.getMessage());
+     }
+ 
+-    public String getMessage(int index)
+-    {
+-        if (index == 0)
+-        {
++    public String getMessage(int index) {
++        if (index == 0) {
+             return super.getMessage();
+-        }
+-        else
+-        {
++        } else {
+             return delegate.getMessage(index);
+         }
+     }
+-    
+-    public String[] getMessages()
+-    {
++
++    public String[] getMessages() {
+         return delegate.getMessages();
+     }
+-    
+-    public Throwable getThrowable(int index)
+-    {
++
++    public Throwable getThrowable(int index) {
+         return delegate.getThrowable(index);
+     }
+-    
+-    public int getThrowableCount()
+-    {
++
++    public int getThrowableCount() {
+         return delegate.getThrowableCount();
+     }
+-    
+-    public Throwable[] getThrowables()
+-    {
++
++    public Throwable[] getThrowables() {
+         return delegate.getThrowables();
+     }
+-    
+-    public int indexOfThrowable(Class type)
+-    {
++
++    public int indexOfThrowable(Class type) {
+         return delegate.indexOfThrowable(type, 0);
+     }
+ 
+-    public int indexOfThrowable(Class type, int fromIndex)
+-    {
++    public int indexOfThrowable(Class type, int fromIndex) {
+         return delegate.indexOfThrowable(type, fromIndex);
+     }
+-    
+-    public void printStackTrace()
+-    {
++
++    public void printStackTrace() {
+         delegate.printStackTrace();
+     }
+ 
+-    public void printStackTrace(PrintStream out)
+-    {
++    public void printStackTrace(PrintStream out) {
+         delegate.printStackTrace(out);
+     }
+ 
+-    public void printStackTrace(PrintWriter out)
+-    {
++    public void printStackTrace(PrintWriter out) {
+         delegate.printStackTrace(out);
+     }
+ 
+-    public final void printPartialStackTrace(PrintWriter out)
+-    {
++    public final void printPartialStackTrace(PrintWriter out) {
+         super.printStackTrace(out);
+     }
+-    
++
+ }
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/StringUtils.java b/src/java/org/apache/commons/lang/StringUtils.java
+index a519b57..525b895 100644
+--- a/src/java/org/apache/commons/lang/StringUtils.java
++++ b/src/java/org/apache/commons/lang/StringUtils.java
+@@ -81,7 +81,7 @@
+  * @author <a href="mailto:ed@apache.org">Ed Korthof</a>
+  * @author <a href="mailto:rand_mcneely@yahoo.com>Rand McNeely</a>
+  * @author <a href="mailto:scolebourne@joda.org>Stephen Colebourne</a>
+- * @version $Id: StringUtils.java,v 1.9 2002/08/31 11:07:08 scolebourne Exp $
++ * @version $Id: StringUtils.java,v 1.10 2002/08/31 19:05:32 bayard Exp $
+  */
+ public class StringUtils {
+ 
+@@ -1480,29 +1480,6 @@
+ 
+     // Misc
+     //--------------------------------------------------------------------------
+-    
+-    /**
+-     * Get the stack trace from a Throwable as a String.
+-     * <p>
+-     * This method uses printStackTrace() internally to obtain the stack trace.
+-     *
+-     * @see java.lang.Throwable#printStackTrace()
+-     * @param throwable  the throwable to extract a stack trace from
+-     * @return the extracted stack trace, or null if an error occurs
+-     */
+-    public static String stackTrace(Throwable throwable) {
+-        String trace = null;
+-        try {
+-            // And show the Error Screen.
+-            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+-            throwable.printStackTrace(new PrintWriter(buf, true));
+-            trace = buf.toString();
+-            
+-        } catch (Exception ex) {
+-            // ignore
+-        }
+-        return trace;
+-    }
+ 
+     /**
+      * Find the Levenshtein distance between two strings.
+@@ -1570,27 +1547,6 @@
+         return d[n][m];
+     }
+ 
+-    /**
+-     * Convenient method to retrieve the full stacktrace from a given exception.
+-     * 
+-     * @param t the exception to get the stacktrace from.
+-     * @return the stacktrace from the given exception.
+-     */
+-    public static String getStackTrace(Throwable t) {
+-        StringWriter sw = new StringWriter();
+-        PrintWriter pw = new PrintWriter(sw, true);
+-        t.printStackTrace(pw);
+-        pw.flush();
+-        pw.close();
+-        return sw.toString();
+-    }   
+-
+-// these are not really of use in the Java world. Only if you're a C afficionado
+-//    public static String sprintf(String format, Object[] list);
+-//    public static Object[] sscanf(String str, String format);
+-//    public static String pack(String[] strs, String format);
+-//    public static String[] unpack(String str, String format);
+-
+ }
+ 
+ 
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/exception/ExceptionUtils.java b/src/java/org/apache/commons/lang/exception/ExceptionUtils.java
+index f0dc750..4ab30bc 100644
+--- a/src/java/org/apache/commons/lang/exception/ExceptionUtils.java
++++ b/src/java/org/apache/commons/lang/exception/ExceptionUtils.java
+@@ -82,7 +82,8 @@
+         "getCause",
+         "getNextException",
+         "getTargetException",
+-        "getException"
++        "getException",
++        "getSourceException"
+     };
+ 
+     /**
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/lang/exception/NestableDelegate.java b/src/java/org/apache/commons/lang/exception/NestableDelegate.java
+index 8d9a74d..729092a 100644
+--- a/src/java/org/apache/commons/lang/exception/NestableDelegate.java
++++ b/src/java/org/apache/commons/lang/exception/NestableDelegate.java
+@@ -67,7 +67,7 @@
+  * @author <a href="mailto:dlr@collab.net">Daniel Rall</a>
+  * @author <a href="mailto:knielsen@apache.org">Kasper Nielsen</a>
+  * @author <a href="mailto:steven@caswell.name">Steven Caswell</a>
+- * @version $Id: NestableDelegate.java,v 1.4 2002/08/21 07:31:54 dlr Exp $
++ * @version $Id: NestableDelegate.java,v 1.5 2002/08/21 23:52:02 dlr Exp $
+  */
+ public class NestableDelegate
+ {
+@@ -217,16 +217,7 @@
+      */
+     int getThrowableCount() // package
+     {
+-        // Count the number of throwables
+-        int count = 1;
+-        String msg = null;
+-        Throwable t = ExceptionUtils.getCause(this.cause);
+-        while (t != null)
+-        {
+-            ++count;
+-            t = ExceptionUtils.getCause(t);
+-        }
+-        return count;
++        return ExceptionUtils.getThrowableCount(this.cause);
+     }
+     
+     /**
+@@ -238,21 +229,7 @@
+      */
+     Throwable[] getThrowables() // package
+     {
+-        int count = this.getThrowableCount();
+-        // Allocate an array to hold the messages
+-        Throwable[] throwables = new Throwable[count];
+-        count = 0;
+-        if(cause != null)
+-        {
+-            throwables[count++] = this.cause;
+-            Throwable t = ExceptionUtils.getCause(this.cause);
+-            while(t != null)
+-            {
+-                throwables[count++] = t;
+-                t = ExceptionUtils.getCause(t);
+-            }
+-        }
+-        return throwables;
++        return ExceptionUtils.getThrowables(this.cause);
+     }
+ 
+     /**
+@@ -272,25 +249,7 @@
+      */
+     int indexOfThrowable(Class type, int fromIndex) // package
+     {
+-        if(fromIndex < 0)
+-        {
+-            throw new IndexOutOfBoundsException("Throwable index out of range: "
+-                                                + fromIndex);
+-        }
+-        Throwable throwables[] = this.getThrowables();
+-        if(fromIndex >= throwables.length)
+-        {
+-            throw new IndexOutOfBoundsException("Throwable index out of range: "
+-                                                + fromIndex);
+-        }
+-        for(int i = fromIndex; i < throwables.length; i++)
+-        {
+-            if(throwables[i].getClass().equals(type))
+-            {
+-                return i;
+-            }
+-        }
+-        return -1;
++        return ExceptionUtils.indexOfThrowable(this.cause, type, fromIndex);
+     }
+     
+     /**
+<end>

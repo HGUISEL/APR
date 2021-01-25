@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="BranchesTreeState">
+    <expand>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="LOCAL_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="REMOTE_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+      <path>
+        <item name="ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="REMOTE_ROOT" type="e8cecc67:BranchNodeDescriptor" />
+        <item name="GROUP_NODE:origin" type="e8cecc67:BranchNodeDescriptor" />
+      </path>
+    </expand>
+    <select />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="fb04d6ff-f972-4ac2-a4ff-99907d03f4ff" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/distance_calculate.py" beforeDir="false" afterPath="$PROJECT_DIR$/distance_calculate.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectId" id="1cT0UAYV9mnQhbh6nzgElQdyWk3" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="ASKED_ADD_EXTERNAL_FILES" value="true" />
+    <property name="ASKED_SHARE_PROJECT_CONFIGURATION_FILES" value="true" />
+    <property name="RunOnceActivity.OpenProjectViewOnStart" value="true" />
+    <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$" />
+    <property name="settings.editor.selected.configurable" value="editor.preferences.fonts.default" />
+  </component>
+  <component name="ReadonlyStatusHandler">
+    <option name="SHOW_DIALOG" value="false" />
+  </component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Python.gv_ae">
+    <configuration name="gv_ae" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="PatchSuggestion" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/gv_ae.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="gv_lstm" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="PatchSuggestion" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/gv_lstm.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="string_lstm" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="PatchSuggestion" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/string_lstm.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.gv_ae" />
+        <item itemvalue="Python.string_lstm" />
+        <item itemvalue="Python.gv_lstm" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="SvnConfiguration">
+    <configuration />
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="fb04d6ff-f972-4ac2-a4ff-99907d03f4ff" name="Default Changelist" comment="" />
+      <created>1590537288511</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1590537288511</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+    <option name="oldMeFiltersMigrated" value="true" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="ADD_EXTERNAL_FILES_SILENTLY" value="true" />
+  </component>
+  <component name="WindowStateProjectService">
+    <state x="-1600" y="-217" key="#Plugins" timestamp="1596174858724">
+      <screen x="-1920" y="-335" width="1920" height="1080" />
+    </state>
+    <state x="-1600" y="-217" key="#Plugins/0.0.1440.900/-1920.-335.1920.1080@-1920.-335.1920.1080" timestamp="1596174858724" />
+    <state x="-1250" y="169" key="#com.intellij.fileTypes.FileTypeChooser" timestamp="1604399459139">
+      <screen x="-1920" y="-180" width="1920" height="1080" />
+    </state>
+    <state x="-1250" y="169" key="#com.intellij.fileTypes.FileTypeChooser/0.0.1440.900/-1920.-180.1920.1080@-1920.-180.1920.1080" timestamp="1604399459139" />
+    <state x="135" y="-1063" key="#com.intellij.openapi.updateSettings.impl.PluginUpdateInfoDialog" timestamp="1601996705429">
+      <screen x="-89" y="-1440" width="2560" height="1440" />
+    </state>
+    <state x="-1752" y="-52" key="#com.intellij.openapi.updateSettings.impl.PluginUpdateInfoDialog/0.0.1440.900/-1920.-335.1920.1080@-1920.-335.1920.1080" timestamp="1596174601949" />
+    <state x="135" y="-1063" key="#com.intellij.openapi.updateSettings.impl.PluginUpdateInfoDialog/0.0.1440.900/-89.-1440.2560.1440@-89.-1440.2560.1440" timestamp="1601996705429" />
+    <state width="1419" height="299" key="GridCell.Tab.0.bottom" timestamp="1597216257102">
+      <screen x="-1920" y="-180" width="1920" height="1080" />
+    </state>
+    <state width="1419" height="299" key="GridCell.Tab.0.bottom/0.0.1440.900/-1920.-180.1920.1080@-1920.-180.1920.1080" timestamp="1597216257102" />
+    <state width="1419" height="299" key="GridCell.Tab.0.bottom/0.0.1440.900@0.0.1440.900" timestamp="1597082419892" />
+    <state width="1419" height="299" key="GridCell.Tab.0.center" timestamp="1597216257101">
+      <screen x="-1920" y="-180" width="1920" height="1080" />
+    </state>
+    <state width="1419" height="299" key="GridCell.Tab.0.center/0.0.1440.900/-1920.-180.1920.1080@-1920.-180.1920.1080" timestamp="1597216257101" />
+    <state width="1419" height="299" key="GridCell.Tab.0.center/0.0.1440.900@0.0.1440.900" timestamp="1597082419891" />
+    <state width="1419" height="299" key="GridCell.Tab.0.left" timestamp="1597216257099">
+      <screen x="-1920" y="-180" width="1920" height="1080" />
+    </state>
+    <state width="1419" height="299" key="GridCell.Tab.0.left/0.0.1440.900/-1920.-180.1920.1080@-1920.-180.1920.1080" timestamp="1597216257099" />
+    <state width="1419" height="299" key="GridCell.Tab.0.left/0.0.1440.900@0.0.1440.900" timestamp="1597082419886" />
+    <state width="1419" height="299" key="GridCell.Tab.0.right" timestamp="1597216257101">
+      <screen x="-1920" y="-180" width="1920" height="1080" />
+    </state>
+    <state width="1419" height="299" key="GridCell.Tab.0.right/0.0.1440.900/-1920.-180.1920.1080@-1920.-180.1920.1080" timestamp="1597216257101" />
+    <state width="1419" height="299" key="GridCell.Tab.0.right/0.0.1440.900@0.0.1440.900" timestamp="1597082419891" />
+    <state x="1644" y="-799" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2" timestamp="1601999566081">
+      <screen x="-89" y="-1440" width="2560" height="1440" />
+    </state>
+    <state x="1644" y="-799" key="com.intellij.openapi.vcs.update.UpdateOrStatusOptionsDialogupdate-v2/0.0.1440.900/-89.-1440.2560.1440@-89.-1440.2560.1440" timestamp="1601999566081" />
+    <state x="-1180" y="84" width="758" height="588" key="find.popup" timestamp="1604293177555">
+      <screen x="-1920" y="-180" width="1920" height="1080" />
+    </state>
+    <state x="-1180" y="84" width="758" height="588" key="find.popup/0.0.1440.900/-1920.-180.1920.1080@-1920.-180.1920.1080" timestamp="1604293177555" />
+    <state x="555" y="220" width="568" height="490" key="find.popup/0.0.1440.900@0.0.1440.900" timestamp="1597069022584" />
+    <state x="-1295" y="61" width="671" height="677" key="search.everywhere.popup" timestamp="1604055890690">
+      <screen x="-1920" y="-180" width="1920" height="1080" />
+    </state>
+    <state x="-1295" y="61" width="671" height="677" key="search.everywhere.popup/0.0.1440.900/-1920.-180.1920.1080@-1920.-180.1920.1080" timestamp="1604055890690" />
+    <state x="469" y="201" width="503" height="564" key="search.everywhere.popup/0.0.1440.900@0.0.1440.900" timestamp="1597066364304" />
+  </component>
+</project>

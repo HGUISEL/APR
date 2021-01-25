@@ -1,0 +1,614 @@
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/service/CallableQueueService.java b/core/src/main/java/org/apache/oozie/service/CallableQueueService.java
+index dc9a099..a942600 100644
+--- a/core/src/main/java/org/apache/oozie/service/CallableQueueService.java
++++ b/core/src/main/java/org/apache/oozie/service/CallableQueueService.java
+@@ -86,7 +86,9 @@
+ 
+     public static final String CONF_QUEUE_SIZE = CONF_PREFIX + "queue.size";
+     public static final String CONF_THREADS = CONF_PREFIX + "threads";
+-    public static final String CONF_OLDIMPL = CONF_PREFIX + "queue.oldImpl";
++    public static final String CONF_NEWIMPL = CONF_PREFIX + "queue.newImpl";
++    public static final String CONF_QUEUE_AWAIT_TERMINATION_TIMEOUT_SECONDS =
++            CONF_PREFIX + "queue.awaitTermination.timeout.seconds";
+     public static final String CONF_DELAYED_CALLABLE_THREADS = CONF_PREFIX + "delayedcallable.threads";
+     public static final String CONF_CALLABLE_CONCURRENCY = CONF_PREFIX + "callable.concurrency";
+     public static final String CONF_CALLABLE_NEXT_ELIGIBLE = CONF_PREFIX + "callable.next.eligible";
+@@ -110,6 +112,8 @@
+ 
+     private int maxCallableConcurrency;
+ 
++    private int queueAwaitTerminationTimeoutSeconds;
++
+     private boolean callableBegin(XCallable<?> callable) {
+         synchronized (activeCallables) {
+             AtomicInteger counter = activeCallables.get(callable.getType());
+@@ -136,7 +140,7 @@
+             }
+         }
+ 
+-        if (!oldImpl) {
++        if (newImpl) {
+             asyncXCommandExecutor.commandFinished();
+             asyncXCommandExecutor.checkMaxConcurrency(callable.getType());
+         }
+@@ -441,7 +445,7 @@
+     private PriorityDelayQueue<CallableWrapper<?>> queue;
+     private ThreadPoolExecutor executor;
+     private Instrumentation instrumentation;
+-    private boolean oldImpl = false;
++    private boolean newImpl = false;
+     private AsyncXCommandExecutor asyncXCommandExecutor;
+ 
+     /**
+@@ -525,10 +529,24 @@
+ 
+         interruptMapMaxSize = ConfigurationService.getInt(conf, CONF_CALLABLE_INTERRUPT_MAP_MAX_SIZE);
+ 
+-        oldImpl = ConfigurationService.getBoolean(CONF_OLDIMPL, false);
+-        log.info("Using old queue implementation: [{0}]", oldImpl);
++        newImpl = ConfigurationService.getBoolean(CONF_NEWIMPL, true);
++        log.info("Using new queue implementation: [{0}]", newImpl);
++        queueAwaitTerminationTimeoutSeconds = ConfigurationService.getInt(conf, CONF_QUEUE_AWAIT_TERMINATION_TIMEOUT_SECONDS);
+ 
+-        if (oldImpl) {
++        if (newImpl) {
++            int delayedCallableThreads = ConfigurationService.getInt(CONF_DELAYED_CALLABLE_THREADS, 1);
++
++            asyncXCommandExecutor = new AsyncXCommandExecutor(threads,
++                    delayedCallableThreads,
++                    callableNextEligible,
++                    this,
++                    queueSize,
++                    MAX_CALLABLE_WAITTIME_MS,
++                    PRIORITIES,
++                    queueAwaitTerminationTimeoutSeconds);
++
++            executor = asyncXCommandExecutor.getExecutorService();
++        } else {
+             executor = new ThreadPoolExecutor(threads, threads, 10, TimeUnit.SECONDS, (BlockingQueue) queue,
+                     new NamedThreadFactory("CallableQueue")) {
+                 protected void beforeExecute(Thread t, Runnable r) {
+@@ -539,18 +557,6 @@
+                     return (RunnableFuture<T>)callable;
+                 }
+             };
+-        } else {
+-            int delayedCallableThreads = ConfigurationService.getInt(CONF_DELAYED_CALLABLE_THREADS, 1);
+-
+-            asyncXCommandExecutor = new AsyncXCommandExecutor(threads,
+-                    delayedCallableThreads,
+-                    callableNextEligible,
+-                    this,
+-                    queueSize,
+-                    MAX_CALLABLE_WAITTIME_MS,
+-                    PRIORITIES);
+-
+-            executor = asyncXCommandExecutor.getExecutorService();
+         }
+ 
+         // IMPORTANT: The ThreadPoolExecutor does not always the execute
+@@ -586,20 +592,22 @@
+     @Override
+     public void destroy() {
+         try {
+-            long limit = System.currentTimeMillis() + 30 * 1000;// 30 seconds
+-            executor.shutdown();
+             queue.clear();
+-            while (!executor.awaitTermination(1000, TimeUnit.MILLISECONDS)) {
+-                log.info("Waiting for executor to shutdown");
+-                if (System.currentTimeMillis() > limit) {
+-                    log.warn("Gave up, continuing without waiting for executor to shutdown");
+-                    break;
+-                }
+-            }
+-
+-            if (!oldImpl) {
++            if (newImpl) {
+                 asyncXCommandExecutor.shutdown();
+             }
++            else {
++                long limit = System.currentTimeMillis() + queueAwaitTerminationTimeoutSeconds * 1000;
++                executor.shutdown();
++                queue.clear();
++                while (!executor.awaitTermination(1000, TimeUnit.MILLISECONDS)) {
++                    log.info("Waiting for executor to shutdown");
++                    if (System.currentTimeMillis() > limit) {
++                        log.warn("Gave up, continuing without waiting for executor to shutdown");
++                        break;
++                    }
++                }
++            }
+         }
+         catch (InterruptedException ex) {
+             log.warn(ex);
+@@ -620,11 +628,18 @@
+      * @return int size of queue
+      */
+     public synchronized int queueSize() {
+-        return oldImpl ? queue.size() : asyncXCommandExecutor.getSize();
++        return newImpl ? asyncXCommandExecutor.getSize() : queue.size();
+     }
+ 
+     private synchronized boolean queue(CallableWrapper<?> wrapper, boolean ignoreQueueSize) {
+-        if (oldImpl) {
++        if (newImpl) {
++            if (asyncXCommandExecutor.isShutDown() || asyncXCommandExecutor.isTerminated()) {
++                log.warn("Async executor shutting down, ignoring queueing of [{0}]", wrapper.getElement().getKey());
++            }
++            else {
++                asyncXCommandExecutor.queue(wrapper, ignoreQueueSize);
++            }
++        } else {
+             if (!ignoreQueueSize && queue.size() >= queueSize) {
+                 log.warn("queue full, ignoring queuing for [{0}]", wrapper.getElement().getKey());
+                 return false;
+@@ -644,8 +659,6 @@
+             else {
+                 log.warn("Executor shutting down, ignoring queueing of [{0}]", wrapper.getElement().getKey());
+             }
+-        } else {
+-            asyncXCommandExecutor.queue(wrapper, ignoreQueueSize);
+         }
+ 
+         return true;
+@@ -820,7 +833,9 @@
+      * @return the list of string that representing each CallableWrapper
+      */
+     public List<String> getQueueDump() {
+-        if (oldImpl) {
++        if (newImpl) {
++            return asyncXCommandExecutor.getQueueDump();
++        } else {
+             List<String> list = new ArrayList<String>();
+             for (QueueElement<CallableWrapper<?>> qe : queue) {
+                 if (qe.toString() == null) {
+@@ -829,8 +844,6 @@
+                 list.add(qe.toString());
+             }
+             return list;
+-        } else {
+-            return asyncXCommandExecutor.getQueueDump();
+         }
+     }
+ 
+<end>
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/action/hadoop/MapReduceActionExecutor.java b/core/src/main/java/org/apache/oozie/action/hadoop/MapReduceActionExecutor.java
+index 7ebc909..a509e4d 100644
+--- a/core/src/main/java/org/apache/oozie/action/hadoop/MapReduceActionExecutor.java
++++ b/core/src/main/java/org/apache/oozie/action/hadoop/MapReduceActionExecutor.java
+@@ -30,11 +30,8 @@
+ import java.util.function.Predicate;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+-import com.google.common.base.Function;
+ import com.google.common.base.Preconditions;
+ import com.google.common.base.Strings;
+-import com.google.common.collect.Iterables;
+-import com.google.common.collect.Ordering;
+ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+@@ -606,16 +603,11 @@
+             Preconditions.checkNotNull(yarnApplications, "YARN application list should be filled");
+             Preconditions.checkArgument(!yarnApplications.isEmpty(), "no YARN applications in the list");
+ 
+-            final Iterable<String> unorderedApplicationIds =
+-                    Iterables.transform(yarnApplications, new Function<ApplicationReport, String>() {
+-                        @Override
+-                        public String apply(final ApplicationReport input) {
+-                            Preconditions.checkNotNull(input, "YARN application should be filled");
+-                            return input.getApplicationId().toString();
+-                        }
+-                    });
+-
+-            return Ordering.from(new YarnApplicationIdComparator()).max(unorderedApplicationIds);
++            return yarnApplications.stream().map(applicationReport -> {
++                    Preconditions.checkNotNull(applicationReport, "YARN application should be filled");
++                    return applicationReport.getApplicationId().toString();
++                }).max(new YarnApplicationIdComparator())
++                .get(); // this is not empty, as yarnApplications was not empty.
+         }
+ 
+         private boolean isHadoopJobId(final String jobIdCandidate) {
+<end>
+<start>
+diff --git a/sharelib/oozie/src/main/java/org/apache/oozie/action/hadoop/PrepareActionsHandler.java b/sharelib/oozie/src/main/java/org/apache/oozie/action/hadoop/PrepareActionsHandler.java
+index b9c4878..7b17fd5 100644
+--- a/sharelib/oozie/src/main/java/org/apache/oozie/action/hadoop/PrepareActionsHandler.java
++++ b/sharelib/oozie/src/main/java/org/apache/oozie/action/hadoop/PrepareActionsHandler.java
+@@ -39,7 +39,7 @@
+     private final LauncherURIHandlerFactory factory;
+ 
+     @VisibleForTesting
+-    PrepareActionsHandler(final LauncherURIHandlerFactory factory) {
++    public PrepareActionsHandler(final LauncherURIHandlerFactory factory) {
+         this.factory = factory;
+     }
+ 
+@@ -53,7 +53,8 @@
+      * @throws ParserConfigurationException if the parser is not well configured
+      * @throws LauncherException when accessing resource on uri fails
+      */
+-    void prepareAction(String prepareXML, Configuration conf)
++    @VisibleForTesting
++    public void prepareAction(String prepareXML, Configuration conf)
+             throws IOException, SAXException, ParserConfigurationException, LauncherException {
+         Document doc = getDocumentFromXML(prepareXML);
+         doc.getDocumentElement().normalize();
+<end>
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/action/ssh/SshActionExecutor.java b/core/src/main/java/org/apache/oozie/action/ssh/SshActionExecutor.java
+index 3e0e3c5..1e37e80 100644
+--- a/core/src/main/java/org/apache/oozie/action/ssh/SshActionExecutor.java
++++ b/core/src/main/java/org/apache/oozie/action/ssh/SshActionExecutor.java
+@@ -41,6 +41,7 @@
+ import org.apache.oozie.service.ConfigurationService;
+ import org.apache.oozie.servlet.CallbackServlet;
+ import org.apache.oozie.service.Services;
++import org.apache.oozie.util.BufferDrainer;
+ import org.apache.oozie.util.IOUtils;
+ import org.apache.oozie.util.PropertiesUtils;
+ import org.apache.oozie.util.XLog;
+@@ -146,11 +147,11 @@
+                 LOG.debug("Ssh command [{0}]", dataCommand);
+                 try {
+                     final Process process = Runtime.getRuntime().exec(dataCommand.split("\\s"));
+-
+-                    final StringBuffer outBuffer = new StringBuffer();
+-                    final StringBuffer errBuffer = new StringBuffer();
++                    final BufferDrainer bufferDrainer = new BufferDrainer(process, maxLen);
++                    bufferDrainer.drainBuffers();
++                    final StringBuffer outBuffer = bufferDrainer.getInputBuffer();
++                    final StringBuffer errBuffer = bufferDrainer.getErrorBuffer();
+                     boolean overflow = false;
+-                    drainBuffers(process, outBuffer, errBuffer, maxLen);
+                     LOG.trace("outBuffer={0}", outBuffer);
+                     LOG.trace("errBuffer={0}", errBuffer);
+                     if (outBuffer.length() > maxLen) {
+@@ -306,11 +307,11 @@
+         String outFile = getRemoteFileName(context, action, "pid", false, false);
+         String getOutputCmd = SSH_COMMAND_BASE + host + " cat " + outFile;
+         try {
+-            Process process = Runtime.getRuntime().exec(getOutputCmd.split("\\s"));
+-            StringBuffer buffer = new StringBuffer();
+-            drainBuffers(process, buffer, null, maxLen);
++            final Process process = Runtime.getRuntime().exec(getOutputCmd.split("\\s"));
++            final BufferDrainer bufferDrainer = new BufferDrainer(process, maxLen);
++            bufferDrainer.drainBuffers();
++            final StringBuffer buffer = bufferDrainer.getInputBuffer();
+             String pid = getFirstLine(buffer);
+-
+             if (Long.valueOf(pid) > 0) {
+                 return pid;
+             }
+@@ -358,8 +359,9 @@
+         Runtime runtime = Runtime.getRuntime();
+         Process p = runtime.exec(command.split("\\s"));
+ 
+-        StringBuffer errorBuffer = new StringBuffer();
+-        int exitValue = drainBuffers(p, null, errorBuffer, maxLen);
++        final BufferDrainer bufferDrainer = new BufferDrainer(p, maxLen);
++        final int exitValue = bufferDrainer.drainBuffers();
++        final StringBuffer errorBuffer = bufferDrainer.getErrorBuffer();
+ 
+         if (exitValue != 0) {
+             String error = getTruncatedString(errorBuffer);
+@@ -447,12 +449,11 @@
+         LOG.trace("Executing SSH command [finalCommand={0}]", Arrays.toString(finalCommand));
+         final Process p = runtime.exec(finalCommand);
+ 
+-        final StringBuffer inputBuffer = new StringBuffer();
+-        final StringBuffer errorBuffer = new StringBuffer();
+-        final int exitValue = drainBuffers(p, inputBuffer, errorBuffer, maxLen);
+-
++        BufferDrainer bufferDrainer = new BufferDrainer(p, maxLen);
++        final int exitValue = bufferDrainer.drainBuffers();
++        final StringBuffer inputBuffer = bufferDrainer.getInputBuffer();
++        final StringBuffer errorBuffer = bufferDrainer.getErrorBuffer();
+         final String pid = getFirstLine(inputBuffer);
+-
+         if (exitValue != 0) {
+             String error = getTruncatedString(errorBuffer);
+             throw new IOException(XLog.format("Not able to execute ssh-base.sh on {0}", host) + " | " + "ErrorStream: "
+@@ -504,7 +505,8 @@
+         Process ps = null;
+         try {
+             ps = Runtime.getRuntime().exec(command.split("\\s"));
+-            returnValue = drainBuffers(ps, null, null, 0);
++            final BufferDrainer bufferDrainer = new BufferDrainer(ps, 0);
++            returnValue = bufferDrainer.drainBuffers();
+         }
+         catch (IOException e) {
+             throw new ActionExecutorException(ActionExecutorException.ErrorType.ERROR, "FAILED_OPERATION", XLog.format(
+@@ -729,97 +731,6 @@
+     }
+ 
+     /**
+-     * Drains the inputStream and errorStream of the Process being executed. The contents of the streams are stored if a
+-     * buffer is provided for the stream.
+-     *
+-     * @param p The Process instance.
+-     * @param inputBuffer The buffer into which STDOUT is to be read. Can be null if only draining is required.
+-     * @param errorBuffer The buffer into which STDERR is to be read. Can be null if only draining is required.
+-     * @param maxLength The maximum data length to be stored in these buffers. This is an indicative value, and the
+-     * store content may exceed this length.
+-     * @return the exit value of the processSettings.
+-     * @throws IOException
+-     */
+-    private int drainBuffers(final Process p, final StringBuffer inputBuffer, final StringBuffer errorBuffer, final int maxLength)
+-            throws IOException {
+-        LOG.trace("drainBuffers() start");
+-
+-        int exitValue = -1;
+-
+-        int inBytesRead = 0;
+-        int errBytesRead = 0;
+-
+-        boolean processEnded = false;
+-
+-        try (final BufferedReader ir = new BufferedReader(new InputStreamReader(p.getInputStream(), Charsets.UTF_8));
+-             final BufferedReader er = new BufferedReader(new InputStreamReader(p.getErrorStream(), Charsets.UTF_8))) {
+-            // Here we do some kind of busy waiting, checking whether the process has finished by calling Process#exitValue().
+-            // If not yet finished, an IllegalThreadStateException is thrown and ignored, the progress on stdout and stderr read,
+-            // and retried until the process has ended.
+-            // Note that Process#waitFor() may block sometimes, that's why we do a polling mechanism using Process#exitValue()
+-            // instead. Until we extend unit and integration test coverage for SSH action, and we can introduce a more sophisticated
+-            // error handling based on the extended coverage, this solution should stay in place.
+-            while (!processEnded) {
+-                try {
+-                    // Doesn't block but throws IllegalThreadStateException if the process hasn't finished yet
+-                    exitValue = p.exitValue();
+-                    processEnded = true;
+-                }
+-                catch (final IllegalThreadStateException itse) {
+-                    // Continue to drain
+-                }
+-
+-                // Drain input and error streams
+-                inBytesRead += drainBuffer(ir, inputBuffer, maxLength, inBytesRead, processEnded);
+-                errBytesRead += drainBuffer(er, errorBuffer, maxLength, errBytesRead, processEnded);
+-
+-                // Necessary evil: sleep and retry
+-                if (!processEnded) {
+-                    try {
+-                        Thread.sleep(500);
+-                    }
+-                    catch (final InterruptedException ie) {
+-                        // Sleep a little, then check again
+-                    }
+-                }
+-            }
+-        }
+-
+-        LOG.trace("drainBuffers() end [exitValue={0}]", exitValue);
+-
+-        return exitValue;
+-    }
+-
+-    /**
+-     * Reads the contents of a stream and stores them into the provided buffer.
+-     *
+-     * @param br The stream to be read.
+-     * @param storageBuf The buffer into which the contents of the stream are to be stored.
+-     * @param maxLength The maximum number of bytes to be stored in the buffer. An indicative value and may be
+-     * exceeded.
+-     * @param bytesRead The number of bytes read from this stream to date.
+-     * @param readAll If true, the stream is drained while their is data available in it. Otherwise, only a single chunk
+-     * of data is read, irrespective of how much is available.
+-     * @return bReadSession returns drainBuffer for stream of contents
+-     * @throws IOException
+-     */
+-    private int drainBuffer(BufferedReader br, StringBuffer storageBuf, int maxLength, int bytesRead, boolean readAll)
+-            throws IOException {
+-        int bReadSession = 0;
+-        if (br.ready()) {
+-            char[] buf = new char[1024];
+-            do {
+-                int bReadCurrent = br.read(buf, 0, 1024);
+-                if (storageBuf != null && bytesRead < maxLength) {
+-                    storageBuf.append(buf, 0, bReadCurrent);
+-                }
+-                bReadSession += bReadCurrent;
+-            } while (br.ready() && readAll);
+-        }
+-        return bReadSession;
+-    }
+-
+-    /**
+      * Returns the first line from a StringBuffer, recognized by the new line character \n.
+      *
+      * @param buffer The StringBuffer from which the first line is required.
+<end>
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/action/hadoop/JavaActionExecutor.java b/core/src/main/java/org/apache/oozie/action/hadoop/JavaActionExecutor.java
+index 3b90268..231b38e 100644
+--- a/core/src/main/java/org/apache/oozie/action/hadoop/JavaActionExecutor.java
++++ b/core/src/main/java/org/apache/oozie/action/hadoop/JavaActionExecutor.java
+@@ -21,6 +21,7 @@
+ import com.google.common.annotations.VisibleForTesting;
+ import com.google.common.base.Strings;
+ import com.google.common.collect.ImmutableList;
++import com.google.common.collect.ImmutableSet;
+ import com.google.common.io.Closeables;
+ import com.google.common.primitives.Ints;
+ 
+@@ -166,7 +167,9 @@
+ 
+     private static final String JAVA_MAIN_CLASS_NAME = "org.apache.oozie.action.hadoop.JavaMain";
+     private static final String HADOOP_JOB_NAME = "mapred.job.name";
+-    static final Set<String> DISALLOWED_PROPERTIES = new HashSet<>();
++    static final Set<String> DISALLOWED_PROPERTIES = ImmutableSet.of(
++            OozieClient.USER_NAME, MRJobConfig.USER_NAME, HADOOP_NAME_NODE, HADOOP_YARN_RM
++    );
+     private static final String OOZIE_ACTION_NAME = "oozie.action.name";
+     private final static String ACTION_SHARELIB_FOR = "oozie.action.sharelib.for.";
+     public static final String OOZIE_ACTION_DEPENDENCY_DEDUPLICATE = "oozie.action.dependency.deduplicate";
+@@ -209,12 +212,6 @@
+ 
+     public XConfiguration workflowConf = null;
+ 
+-    static {
+-        DISALLOWED_PROPERTIES.addAll(PropertiesUtils.DEFAULT_DISALLOWED_PROPERTIES);
+-        DISALLOWED_PROPERTIES.add(HADOOP_NAME_NODE);
+-        DISALLOWED_PROPERTIES.add(HADOOP_YARN_RM);
+-    }
+-
+     public JavaActionExecutor() {
+         this("java");
+     }
+<end>
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/util/ConfigUtils.java b/core/src/main/java/org/apache/oozie/util/ConfigUtils.java
+index aa19cd3..af54145 100644
+--- a/core/src/main/java/org/apache/oozie/util/ConfigUtils.java
++++ b/core/src/main/java/org/apache/oozie/util/ConfigUtils.java
+@@ -151,8 +151,8 @@
+                                                                              final E toThrow,
+                                                                              final boolean performWrite) throws E {
+         Preconditions.checkNotNull(base, "base");
+-        Preconditions.checkNotNull(base, "newValue");
+-        Preconditions.checkNotNull(base, "toThrow");
++        Preconditions.checkNotNull(newValue, "newValue");
++        Preconditions.checkNotNull(toThrow, "toThrow");
+ 
+         for (final String defaultDisallowedProperty : PropertiesUtils.DEFAULT_DISALLOWED_PROPERTIES) {
+             checkAndSetConfigValue(base, defaultDisallowedProperty, newValue, toThrow, performWrite);
+<end>
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/coord/CoordELFunctions.java b/core/src/main/java/org/apache/oozie/coord/CoordELFunctions.java
+index e38f3d6..2761e44 100644
+--- a/core/src/main/java/org/apache/oozie/coord/CoordELFunctions.java
++++ b/core/src/main/java/org/apache/oozie/coord/CoordELFunctions.java
+@@ -19,8 +19,6 @@
+ package org.apache.oozie.coord;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+-import com.google.common.base.Preconditions;
+-import com.google.common.collect.Lists;
+ 
+ import org.apache.commons.lang3.StringUtils;
+ import org.apache.hadoop.conf.Configuration;
+@@ -44,9 +42,11 @@
+ import java.text.SimpleDateFormat;
+ import java.util.ArrayList;
+ import java.util.Calendar;
++import java.util.Collections;
+ import java.util.Date;
+ import java.util.GregorianCalendar;
+ import java.util.List;
++import java.util.Objects;
+ import java.util.TimeZone;
+ import java.util.concurrent.atomic.AtomicInteger;
+ 
+@@ -984,7 +984,7 @@
+                 }
+                 nominalInstanceCal.add(dsTimeUnit.getCalendarUnit(), datasetFrequency);
+             }
+-            instances = Lists.reverse(instances);
++            Collections.reverse(instances);
+             return StringUtils.join(instances, CoordELFunctions.INSTANCE_SEPARATOR);
+         }
+     }
+@@ -1847,7 +1847,7 @@
+          * @return -1 if no correct {@code source} was given, else the estimated occurrence count of a dataset
+          */
+         long convertMillis(final long millis, final TimeUnit source) {
+-            Preconditions.checkNotNull(source, "source has to be filled");
++            Objects.requireNonNull(source, "source has to be filled");
+ 
+             switch (source) {
+                 case YEAR:
+<end>
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/servlet/V1JobsServlet.java b/core/src/main/java/org/apache/oozie/servlet/V1JobsServlet.java
+index 8ffd441..3ca0ea8 100644
+--- a/core/src/main/java/org/apache/oozie/servlet/V1JobsServlet.java
++++ b/core/src/main/java/org/apache/oozie/servlet/V1JobsServlet.java
+@@ -35,6 +35,7 @@
+ 
+ import com.google.common.base.Strings;
+ import com.google.common.collect.Lists;
++import org.apache.commons.lang.StringUtils;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.FileSystem;
+@@ -148,9 +149,6 @@
+         if (!findAppPathsWithFileNames(appPath, "workflow.xml").isEmpty()) {
+             appPathsWithFileNames = findAppPathsWithFileNames(appPath, "workflow.xml");
+         }
+-        else if (!findAppPathsWithFileNames(conf.get(OozieClient.LIBPATH), "workflow.xml").isEmpty()) {
+-            appPathsWithFileNames = findAppPathsWithFileNames(conf.get(OozieClient.LIBPATH), "workflow.xml");
+-        }
+         else if (!findAppPathsWithFileNames(conf.get(OozieClient.COORDINATOR_APP_PATH), "coordinator.xml").isEmpty()) {
+             appPathsWithFileNames = findAppPathsWithFileNames(conf.get(OozieClient.COORDINATOR_APP_PATH), "coordinator.xml");
+         }
+@@ -166,14 +164,16 @@
+             }
+         }
+ 
++        final String sourceContent = conf.get(OozieClient.CONFIG_KEY_GENERATED_XML);
++        if (sourceContent == null) {
++            final String xmlFiles = StringUtils.join(appPathsWithFileNames, ",");
++            final String errorMessage = String.format("XML file [%s] does not exist and " +
++                            "app definition cannot be created because of missing config value [%s]",
++                    xmlFiles,  OozieClient.CONFIG_KEY_GENERATED_XML);
++            throw new XServletException(HttpServletResponse.SC_BAD_REQUEST, ErrorCode.E0307, errorMessage);
++        }
++
+         for (final String appPathWithFileName : appPathsWithFileNames) {
+-            final String sourceContent = conf.get(OozieClient.CONFIG_KEY_GENERATED_XML);
+-            if (sourceContent == null) {
+-                final String errorMessage = String.format("App directory [%s] does not exist and " +
+-                        "app definition cannot be created because of missing config value [%s]",
+-                        appPath,  OozieClient.CONFIG_KEY_GENERATED_XML);
+-                throw new XServletException(HttpServletResponse.SC_BAD_REQUEST, ErrorCode.E0307, errorMessage);
+-            }
+             if (tryCreateOnDFS(userName, appPathWithFileName, sourceContent)) {
+                 return;
+             }
+<end>
+<start>
+diff --git a/core/src/main/java/org/apache/oozie/command/NotificationXCommand.java b/core/src/main/java/org/apache/oozie/command/NotificationXCommand.java
+index 1258e38..904db72 100644
+--- a/core/src/main/java/org/apache/oozie/command/NotificationXCommand.java
++++ b/core/src/main/java/org/apache/oozie/command/NotificationXCommand.java
+@@ -125,7 +125,7 @@
+                 }
+             }
+             catch (IOException ex) {
+-                LOG.warn("Notification sending to URL [{0}] failed with exception [{1}]", url, ex.getMessage());
++                LOG.warn("Notification sending to URL [{0}] failed", url, ex);
+                 handleRetry();
+             }
+         }
+<end>
+<start>
+diff --git a/client/src/main/java/org/apache/oozie/client/AuthOozieClient.java b/client/src/main/java/org/apache/oozie/client/AuthOozieClient.java
+index 7f65854..cad9cf5 100644
+--- a/client/src/main/java/org/apache/oozie/client/AuthOozieClient.java
++++ b/client/src/main/java/org/apache/oozie/client/AuthOozieClient.java
+@@ -34,10 +34,11 @@
+ import java.nio.file.StandardCopyOption;
+ import java.util.HashMap;
+ import java.util.Map;
++import java.util.Base64;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+-import org.apache.commons.codec.binary.Base64;
++
+ import org.apache.commons.io.FilenameUtils;
+ import org.apache.hadoop.security.authentication.client.AuthenticatedURL;
+ import org.apache.hadoop.security.authentication.client.AuthenticationException;
+@@ -105,7 +106,7 @@
+ 
+     @VisibleForTesting
+     public String getAuthCacheFileName(String oozieUrl) {
+-        String encodeBase64OozieUrl = Base64.encodeBase64URLSafeString(oozieUrl.getBytes(StandardCharsets.UTF_8));
++        String encodeBase64OozieUrl = Base64.getEncoder().encodeToString(oozieUrl.getBytes(StandardCharsets.UTF_8));
+         String filename = ".oozie-auth-token-" + encodeBase64OozieUrl;
+         if (filename.length() >= AUTH_TOKEN_CACHE_FILENAME_MAXLENGTH) {
+             filename = filename.substring(0, AUTH_TOKEN_CACHE_FILENAME_MAXLENGTH);
+<end>

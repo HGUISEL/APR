@@ -1,0 +1,6 @@
+after load trainX.shape:  (155736, 15328)
+after load testX.shape:  (94, 15328)
+score: 8
+writing test on ./pool/outputs/simfin/test_gv_ae_kneighbors.txt complete!
+writing test on ./pool/outputs/simfin/test_gv_ae_predict.txt complete!
+run_predict complete!

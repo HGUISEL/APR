@@ -1,0 +1,199 @@
+<start>
+diff --git a/src/java/org/apache/commons/math/StoreUnivariateImpl.java b/src/java/org/apache/commons/math/StoreUnivariateImpl.java
+index d790084..21a60e7 100644
+--- a/src/java/org/apache/commons/math/StoreUnivariateImpl.java
++++ b/src/java/org/apache/commons/math/StoreUnivariateImpl.java
+@@ -91,7 +91,7 @@
+     /* (non-Javadoc)
+      * @see org.apache.commons.math.Univariate#getN()
+      */
+-    public double getN() {
++    public int getN() {
+         return eDA.getNumElements();
+     }
+ 
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java b/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java
+index d7766a3..5813b26 100644
+--- a/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java
++++ b/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java
+@@ -53,8 +53,8 @@
+  */
+ package org.apache.commons.math.stat;
+ 
+-import org.apache.commons.math.DoubleArray;
+-import org.apache.commons.math.ContractableDoubleArray;
++import org.apache.commons.math.util.ContractableDoubleArray;
++import org.apache.commons.math.util.DoubleArray;
+ 
+ /**
+  * @author <a href="mailto:tobrien@apache.org">Tim O'Brien</a>
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/UnivariateImpl.java b/src/java/org/apache/commons/math/stat/UnivariateImpl.java
+index 2534c6e..4121ccf 100644
+--- a/src/java/org/apache/commons/math/stat/UnivariateImpl.java
++++ b/src/java/org/apache/commons/math/stat/UnivariateImpl.java
+@@ -55,8 +55,8 @@
+ 
+ import java.io.Serializable;
+ 
+-import org.apache.commons.math.DoubleArray;
+-import org.apache.commons.math.FixedDoubleArray;
++import org.apache.commons.math.util.DoubleArray;
++import org.apache.commons.math.util.FixedDoubleArray;
+ 
+ /**
+  *
+@@ -71,7 +71,7 @@
+  * @author <a href="mailto:mdiggory@apache.org">Mark Diggory</a>
+  * @author Brent Worden
+  * @author <a href="mailto:HotFusionMan@Yahoo.com">Albert Davidson Chou</a>
+- * @version $Revision: 1.14 $ $Date: 2003/06/21 23:38:27 $
++ * @version $Revision: 1.15 $ $Date: 2003/06/22 03:57:55 $
+  *
+ */
+ public class UnivariateImpl implements Univariate, Serializable {
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/StatUtils.java b/src/java/org/apache/commons/math/stat/StatUtils.java
+index ca0849c..b601db6 100644
+--- a/src/java/org/apache/commons/math/stat/StatUtils.java
++++ b/src/java/org/apache/commons/math/stat/StatUtils.java
+@@ -180,7 +180,8 @@
+ 				accum += Math.pow((values[i] - mean), 2.0);
+                 accum2 += (values[i] - mean);
+ 			}
+-			variance = (accum - (Math.pow(accum2,2)/(double)values.length)) / (double)(values.length - 1);
++			variance = ((accum*(double)values.length) - Math.pow(accum2,2)) / 
++                (double)(values.length*(values.length - 1));
+ 		}
+ 		return variance;
+ 	}
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java b/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java
+index 5813b26..8fdce14 100644
+--- a/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java
++++ b/src/java/org/apache/commons/math/stat/StoreUnivariateImpl.java
+@@ -54,7 +54,6 @@
+ package org.apache.commons.math.stat;
+ 
+ import org.apache.commons.math.util.ContractableDoubleArray;
+-import org.apache.commons.math.util.DoubleArray;
+ 
+ /**
+  * @author <a href="mailto:tobrien@apache.org">Tim O'Brien</a>
+@@ -62,7 +61,7 @@
+ public class StoreUnivariateImpl extends AbstractStoreUnivariate {
+ 
+     // Use an internal double array
+-    DoubleArray eDA;
++    ContractableDoubleArray eDA;
+ 
+     // Store the windowSize
+     private int windowSize = Univariate.INFINITE_WINDOW;
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/univariate/moment/GeometricMean.java b/src/java/org/apache/commons/math/stat/univariate/moment/GeometricMean.java
+index c9159d0..e9f14b9 100644
+--- a/src/java/org/apache/commons/math/stat/univariate/moment/GeometricMean.java
++++ b/src/java/org/apache/commons/math/stat/univariate/moment/GeometricMean.java
+@@ -73,9 +73,7 @@
+      */
+     public double increment(double d) {
+         n++;
+-        sumLog.increment(d);
+-        value = Math.exp( sumLog.increment(d) / (double)n );
+-        return value;
++        return Math.exp( sumLog.increment(d) / (double)n );
+     }
+ 
+     /**
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/univariate/rank/Min.java b/src/java/org/apache/commons/math/stat/univariate/rank/Min.java
+index dcdf3d6..e3b84af 100644
+--- a/src/java/org/apache/commons/math/stat/univariate/rank/Min.java
++++ b/src/java/org/apache/commons/math/stat/univariate/rank/Min.java
+@@ -71,9 +71,8 @@
+     /**
+      * @see org.apache.commons.math.stat.univariate.StorelessUnivariateStatistic#increment(double)
+      */
+-    public double increment(double d) {
++    public void increment(double d) {
+         value = Double.isNaN(value) ? d : Math.min(value, d);
+-        return value;
+     }
+ 
+     /**
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/univariate/moment/Mean.java b/src/java/org/apache/commons/math/stat/univariate/moment/Mean.java
+index 945630e..7686dfd 100644
+--- a/src/java/org/apache/commons/math/stat/univariate/moment/Mean.java
++++ b/src/java/org/apache/commons/math/stat/univariate/moment/Mean.java
+@@ -84,12 +84,10 @@
+     /**
+      * @see org.apache.commons.math.stat.univariate.StorelessUnivariateStatistic#increment(double)
+      */
+-    public double increment(double d) {
++    public void increment(double d) {
+         if (incMoment) {
+             moment.increment(d);
+         }
+-
+-        return moment.m1;
+     }
+ 
+     /**
+<end>
+<start>
+diff --git a/src/java/org/apache/commons/math/stat/DescriptiveStatisticsImpl.java b/src/java/org/apache/commons/math/stat/DescriptiveStatisticsImpl.java
+index 0da0bb0..a35a688 100644
+--- a/src/java/org/apache/commons/math/stat/DescriptiveStatisticsImpl.java
++++ b/src/java/org/apache/commons/math/stat/DescriptiveStatisticsImpl.java
+@@ -53,13 +53,15 @@
+  */
+ package org.apache.commons.math.stat;
+ 
++import java.io.Serializable;
++
+ import org.apache.commons.math.stat.univariate.*;
+ import org.apache.commons.math.util.ContractableDoubleArray;
+ 
+ /**
+- * @version $Revision: 1.1 $ $Date: 2003/11/15 16:01:38 $
++ * @version $Revision: 1.2 $ $Date: 2003/11/19 03:28:23 $
+  */
+-public class DescriptiveStatisticsImpl extends AbstractDescriptiveStatistics {
++public class DescriptiveStatisticsImpl extends AbstractDescriptiveStatistics implements Serializable {
+ 
+     /** A contractable double array is used.  memory is reclaimed when 
+      * the storage of the array becomes too empty.
+<end>
+<start>
+diff --git a/src/test/java/org/apache/commons/math/stat/descriptive/ListUnivariateImpl.java b/src/test/java/org/apache/commons/math/stat/descriptive/ListUnivariateImpl.java
+index 4b505ce..c996217 100644
+--- a/src/test/java/org/apache/commons/math/stat/descriptive/ListUnivariateImpl.java
++++ b/src/test/java/org/apache/commons/math/stat/descriptive/ListUnivariateImpl.java
+@@ -20,7 +20,7 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import org.apache.commons.math.MathException;
++import org.apache.commons.math.exception.MathIllegalArgumentException;
+ import org.apache.commons.math.stat.descriptive.UnivariateStatistic;
+ import org.apache.commons.math.stat.descriptive.DescriptiveStatistics;
+ import org.apache.commons.math.util.DefaultTransformer;
+@@ -113,7 +113,7 @@
+ 
+         try {
+             value = transformer.transform(list.get(calcIndex));
+-        } catch (MathException e) {
++        } catch (MathIllegalArgumentException e) {
+             e.printStackTrace();
+         }
+ 
+<end>
