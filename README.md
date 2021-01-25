@@ -1,4 +1,4 @@
-# ConPatFix
+# ConPatFix (to be modified)
 Revision of ConFix with patch recommendation data instead of change pool
 
 Inspired by _**Automated Patch Generation with Context-based Change Application**_ <br>
