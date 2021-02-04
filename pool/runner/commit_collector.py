@@ -60,10 +60,11 @@ def main(argv):
                 #os.system("cd "+project+"-"+D4J_ID)
                 os.system("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" checkout "+buggy_sha)
                 
-                git_stream = os.popen("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" blame -L "+str(faulty_line)+","+str(faulty_line)+" "+faulty_file_path)
-                FIC_sha = str(git_stream.read()).split(' ')[0]
-                git_stream = os.popen("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" rev-parse "+FIC_sha)
-                FIC_sha = str(git_stream.read()).split('\n')[0]
+                git_stream = os.popen("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" blame -C -C -f -l -L "+str(faulty_line)+","+str(faulty_line)+" "+faulty_file_path)
+                foo = str(git_stream.read()).split(' ')
+                FIC_sha = foo[0]
+                faulty_file_path = foo[1]
+
                 git_stream = os.popen("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" rev-parse "+FIC_sha+"~1")
                 #print("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" rev-parse "+FIC_sha+"~1")
                 #return

@@ -1,12 +1,12 @@
 #!/bin/sh
-if [ "$#" -ne 1 ] || ! [ -d "$1" ]; then
+if [ "$#" -ne 2 ] ; then
   echo "Usage: $0 DIRECTORY" >&2
   exit 1
 fi
 CDIR=$(pwd)
 DIR=../../results
 PROP="confix.properties"
-echo "Create confix.properties for $1"
+echo "Create confix.properties for $CDIR"
 cp ../../properties/$PROP ./$PROP
 
 #Export properties
@@ -20,6 +20,9 @@ value=$(defects4j export -p cp.compile)
 echo "cp.compile=$value" >> $PROP
 value=$(defects4j export -p cp.test)
 echo "cp.test=$value" >> $PROP
+
+echo "projectName=${1}" >> $PROP
+echo "bugId=${2}" >> $PROP
 
 #Create test lists
 defects4j export -p tests.all > tests.all

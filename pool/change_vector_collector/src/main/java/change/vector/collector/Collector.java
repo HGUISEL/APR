@@ -164,7 +164,6 @@ public class Collector {
 		Iterable<CSVRecord> records = CSVFormat.RFC4180.parse(in);
 
 		// input csv columns [Project, D4J ID, Faulty file path, faulty line, FIC_sha, BFIC_sha]
-
 		int count=0;
 		for (CSVRecord record : records) {
 			if(count==0){
@@ -189,7 +188,7 @@ public class Collector {
 					shaBeforeBFC, shaBFC, key, project, label);
 			bbics.add(bbic);
 		}
-		//
+		
 		// by TE,
 		// to make test data
 
@@ -214,7 +213,7 @@ public class Collector {
 		// 	BeforeBIC bbic = new BeforeBIC(pathBeforeBIC, pathBIC, shaBeforeBIC, shaBIC, pathBeforeBFC, pathBFC,
 		// 			shaBeforeBFC, shaBFC, key, project, label);
 		// 	bbics.add(bbic);
-		
+		// }
 		// to make train data
 
 

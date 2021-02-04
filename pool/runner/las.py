@@ -19,7 +19,6 @@ def main(argv):
     LAS_input_csv = LAS_input.values
 
 
-
     with open(root+"/pool/outputs/las/LAS_output.csv", 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile, delimiter=',')
 
@@ -32,7 +31,6 @@ def main(argv):
                 continue
             ## 각 열에서 필요한 정보 읽어오기
             y_bic_sha = LAS_input_csv[i][0]
-            y_bic_path = LAS_input_csv[i][1]
             y_project = LAS_input_csv[i][2]
             y_bugId = LAS_input_csv[i][3]
             rank = LAS_input_csv[i][4]
@@ -46,6 +44,7 @@ def main(argv):
 
             buggy_sha = ""
             clean_sha = ""
+            buggy_path = ""
 
             ## commit-db도 읽기
             ## path is where the D4J framework exists
@@ -53,25 +52,38 @@ def main(argv):
                                     names=["ID","buggy","clean","num","path"])
             commit_db_csv = commit_db.values
 
+            orig_input = pd.read_csv(root+"/pool/commit_collector/inputs/"+y_project+".csv",
+                                     names=["DefectsfJ_ID","Faulty_file_path","faulty_line","buffer"])
+            orig_input_csv = orig_input.values
+
 
             for j in range(len(commit_db_csv)):
                 if int(commit_db_csv[j][0]) == int(LAS_input_csv[i][3]): # if the ID is same
                     buggy_sha = commit_db_csv[j][1] # get the buggy sha from commit-db
                     clean_sha = commit_db_csv[j][2] # get the clean sha from commit-db
                     break
-            
+                    
+            for j in range(len(orig_input_csv)):
+                if j == 0:
+                    continue
+                if int(orig_input_csv[j][0]) == int(LAS_input_csv[i][3]): # if the ID is same
+                    buggy_path = orig_input_csv[j][1]
+                    break
+
+            each_dir = code_dir+"/"+y_project+"-"+y_bugId
+            os.system("mkdir "+each_dir)
             orig_BIC_path = code_dir+"/"+y_project+"_"+y_bugId+"_orig_old.java"
             orig_BFC_path = code_dir+"/"+y_project+"_"+y_bugId+"_orig_new.java"
 
             os.system("cd "+root+"/pool/commit_collector/data/"+y_project+"/"+y_project+"-"+y_bugId+" ; "
                     + "git checkout -f "+buggy_sha+" ; "
-                    + "cp "+y_bic_path+" "+orig_BIC_path+" ; "
+                    + "cp "+buggy_path+" "+orig_BIC_path+" ; "
                     + "git checkout -f "+clean_sha+" ; "
-                    + "cp "+y_bic_path+" "+orig_BFC_path+" ; " )
+                    + "cp "+buggy_path+" "+orig_BFC_path+" ; " )
 
             ## check out the reccomended commit in the repository and copy the file into code_dir
-            rec_BIC_path = code_dir+"/"+y_project+"_"+y_bugId+"_rank-"+rank+"_old.java"
-            rec_BFC_path = code_dir+"/"+y_project+"_"+y_bugId+"_rank-"+rank+"_new.java"
+            rec_BIC_path = each_dir+"/"+y_project+"_"+y_bugId+"_rank-"+rank+"_old.java"
+            rec_BFC_path = each_dir+"/"+y_project+"_"+y_bugId+"_rank-"+rank+"_new.java"
 
             os.system("cd ~/APR_Projects/data/AllBIC/reference/repositories/"+yhat_project+" ; "
                     + "git checkout -f "+yhat_bic_sha+" ; "
@@ -94,6 +106,8 @@ def main(argv):
             # writing each row values (DFJ ID', 'Rank', 'orig change info', 'suggested change info')
             instance = [D4J_ID, rank, LAS_orig_result, LAS_rec_result] ## data in order of columns
             csv_writer.writerow(instance)
+
+            
 
         print('Finished ALL!!')
 

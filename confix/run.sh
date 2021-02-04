@@ -9,23 +9,23 @@ for i in {0..4} ; do
   j=1
   while [ $j -le ${PROJ_BUG_LIST[$i]} ]; do
 
-    defects4j checkout -p ${PROJ_NAME_LIST[$i]} -v ${j}b -w ${PROJ_LOWER_NAME_LIST[$i]}${j}b
+    defects4j checkout -p ${PROJ_NAME_LIST[$i]} -v ${j}b -w ${PROJ_NAME_LIST[$i]}-${j}
     echo "\n=========================\n"
     echo Finish defects4j checkout
     echo "\n=========================\n"
     
-    cp ../coverages/${PROJ_LOWER_NAME_LIST[$i]}/${PROJ_LOWER_NAME_LIST[$i]}${j}b/coverage-info.obj ${PROJ_LOWER_NAME_LIST[$i]}${j}b
+    cp ../coverages/${PROJ_LOWER_NAME_LIST[$i]}/${PROJ_LOWER_NAME_LIST[$i]}${j}b/coverage-info.obj ${PROJ_NAME_LIST[$i]}-${j}
 
 
 
-    cd ${PROJ_LOWER_NAME_LIST[$i]}${j}b
+    cd ${PROJ_NAME_LIST[$i]}-${j}
     defects4j compile
 
     echo "\n========================\n"
     echo Finish defects4j compile
     echo "\n========================\n"
 
-    ../../scripts/config.sh .
+    ../../scripts/config.sh ${PROJ_NAME_LIST[$i]} ${j}
     echo "\n================\n"
     echo Finish config.sh
     echo "\n================\n"
@@ -39,8 +39,8 @@ for i in {0..4} ; do
     echo "\n================\n"
     echo Copying Results...
     echo "\n================\n"
-    mkdir ../patches/${PROJ_LOWER_NAME_LIST[$i]}${j}b/
-    cp -r ./patches/* ../patches/${PROJ_LOWER_NAME_LIST[$i]}${j}b/
+    mkdir ../patches/${PROJ_NAME_LIST[$i]}-${j}/
+    cp -r ./patches/* ../patches/${PROJ_NAME_LIST[$i]}-${j}/
     echo "\n================\n"
     echo Done!
     echo "\n================\n"
@@ -51,11 +51,11 @@ for i in {0..4} ; do
     
     mkdir patch-logs
     
-    if [ -e ${PROJ_LOWER_NAME_LIST[$i]}${j}b/patch_info ];then
-        cp ${PROJ_LOWER_NAME_LIST[$i]}${j}b/patch_info patch-logs/${PROJ_LOWER_NAME_LIST[$i]}${j}b
+    if [ -e ${PROJ_NAME_LIST[$i]}-${j}/patch_info ];then
+        cp ${PROJ_NAME_LIST[$i]}-${j}/patch_info patch-logs/${PROJ_NAME_LIST[$i]}-${j}
     fi
     
-    rm -rf ${PROJ_LOWER_NAME_LIST[$i]}${j}b
+    rm -rf ${PROJ_NAME_LIST[$i]}-${j}
     
     #echo $j
     j=`expr $j + 1`

@@ -175,7 +175,7 @@ public class Gumtree {
 								int lineNumOfDescendant = cu_dst.getLineNumber(descendant.getPos());
 								if (Math.abs(lineNumOfBIC - lineNumOfDescendant) < 3) {
 									map.put(descendant.getHash(), true);
-									context_vec.add(descendant.getType() + 85 * 2 + 1);
+									context_vec.add(descendant.getType() + 85 * 4 + 1);
 								}
 							}
 						}
