@@ -31,3 +31,6 @@ hs_err_pid*
 
 # ignore outputs
 */pool/outputs/*
+
+# ignore confix outputs
+*/confix/results/*
