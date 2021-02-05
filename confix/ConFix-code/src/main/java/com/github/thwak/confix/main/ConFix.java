@@ -82,49 +82,15 @@ public class ConFix {
 	public static String pFaultyClass;
 
 	public static void main(String[] args) {
-		// Load necessary information.
-		loadProperties("confix.properties");
-		loadTests();
-		loadCoverage();
-		if (coverage == null || coverage.getNegCoveredClasses().size() == 0) {
-			System.out.println("No class/coverage information.");
-			return;
-		} else if (poolList.size() == 0) {
-			System.out.println("No change pool is specified.");
-			return;
-		}
-		long startTime = System.currentTimeMillis();
-		seed = seed == -1 ? new Random(startTime).nextInt(100) : seed;
-		Random r = new Random(seed);
-		System.out.println("Random Seed:" + seed);
 
-		// TE
-		// We load new Changepool for each run
-		ChangePoolGenerator changePoolGenerator = new ChangePoolGenerator();
-		changePoolGenerator.collect(cleanFiles, buggyFiles);
-		pool = changePoolGenerator.pool;
-		pool.poolName = "BeautyPool";
-		pool.maxLoadCount = maxPoolLoad;
-		System.out.println("Pool Generation Done.");
-		File ourPoolDir = new File("./pool");
-		pool.storeTo(ourPoolDir);
-
-		// For Loc Info collection.
 		String oldLocKey = "";
 		String currentLocKey = null;
 		Change oldApplied = null;
 		String locPoolPath = "";
 		StringBuffer sbLoc = new StringBuffer("Pool,CheckedLines,CheckedLoc,CheckedChange,AppliedChange");
-
 		int totalCompileError = 0;
 		int totalTestFailure = 0;
 		int totalCandidateNum = 0;
-
-		// TE
-		// loadChangePool(poolPath);
-		// locPoolPath = poolPath;
-
-		// Initialize patcher and strategies.
 		int candidateNum = 1;
 		int compileError = 0;
 		int testFailure = 0;
@@ -136,27 +102,41 @@ public class ConFix {
 		boolean terminate = false;
 		String targetClass = null;
 		Patcher patcher = null;
-		System.out.println("Preparing patch generation...");
 
+		// ======= STEP 0. Set Properties ======= //
+		System.out.println("// ======= STEP 0. Set Properties ======= //");
+		loadProperties("confix.properties");
+		loadTests();
+		loadCoverage();
+		checkCoverageValidity();
+		long startTime = setTimer();
+		Random randomSeed = setRandomSeed(startTime);
+
+		// ======= STEP 1. Generate Pool from SimFin Results ======= //
+		System.out.println("// ======= STEP 1. Generate Pool from SimFin Results ======= //");
+		setPoolFromSimFinResults();
+
+		// ======= STEP 1-2. Create Patch Strategy ======= //
+		System.out.println("// ======= STEP 1-2. Create Patch Strategy ======= //");
 		PatchStrategy pStrategy;
 		if (flMetric.compareTo("perfect") == 0) {
-			pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, r, flMetric, cStrategyKey,
-					sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
+			pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+					cStrategyKey, sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
 		} else {
-			pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, r, flMetric, cStrategyKey,
-					sourceDir, compileClassPathEntries);
+			pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+					cStrategyKey, sourceDir, compileClassPathEntries);
 		}
-
 		pStrategy.finishUpdate();
 		IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
-		System.out.println("Done.");
 
-		pool.poolName = "beautyPool";
-
-		// Generating patch candidates.
+		// ======= STEP 2. Generate Patch Candidates ======= //
+		System.out.println("// ======= STEP 2. Generate Patch Candidates ======= //");
 		while (candidateNum <= patchCount) {
 			int trial = 0;
 			int returnCode = -1;
+
+			// ======= STEP 2-1. Select Location to Fix ======= //
+			System.out.println("// ======= STEP 2-1. Select Location to Fix ======= //");
 			TargetLocation loc = pStrategy.selectLocation();
 			targetClass = loc == null ? "" : loc.className;
 			currentLocKey = pStrategy.getCurrentLocKey();
@@ -165,9 +145,15 @@ public class ConFix {
 				locNum++;
 				locChangeCount = 0;
 			}
+
+			// ======= STEP 2-2. Create Patcher ======= //
+			System.out.println("// ======= STEP 2-2. Create Patcher ======= //");
 			patcher = pStrategy.patcher();
 			if (patcher == null)
 				break;
+
+			// ======= STEP 2-3. Select Change Information ======= //
+			System.out.println("// ======= STEP 2-3. Select Change Information ======= //");
 			Change change = pStrategy.selectChange();
 			if (change != null) {
 				changeNum++;
@@ -177,6 +163,10 @@ public class ConFix {
 				pStrategy.nextLoc();
 				continue;
 			}
+
+			// ======= STEP 2-4. Apply Change Information to Create Patch Candidate =======
+			// //
+			System.out.println("// ======= STEP 2-4. Apply Change Information to Create Patch Candidate ======= //");
 			Set<String> candidates = new HashSet<>();
 			do {
 				PatchInfo info = new PatchInfo(targetClass, change, loc);
@@ -195,6 +185,7 @@ public class ConFix {
 					break;
 				}
 				trial++;
+
 				if (returnCode == Patcher.C_NOT_INST) {
 					break;
 				} else {
@@ -205,18 +196,20 @@ public class ConFix {
 							applied++;
 						}
 						String editText = PatchUtils.getEditText(info, pool);
-						// System.out.print(
-						// "\n================= 1. Edit Text (CandNum: " + candidateNum + ")
-						// ========\n");
-						// System.out.println(editText);
+						if (DEBUG) {
+							System.out.print(
+									"\n================= 1. Edit Text (Candidate #: " + candidateNum + ") ========\n");
+							System.out.println(editText);
 
-						// System.out.print(
-						// "\n================= 2. New Source (CandNum: " + candidateNum + ")
-						// =======\n");
+							System.out.print(
+									"\n================= 2. New Source (Candidate #: " + candidateNum + ") =======\n");
+						}
+
 						String newSource = patcher.getNewSource();
-
 						String candidateFileName = storeCandidate(newSource, editText, targetClass, change);
-						// IOUtils.delete(new File(tempDir));
+
+						// ======= STEP 2-5. Verify Patch Candidate ======= //
+						System.out.println("// ======= STEP 2-5. Verify Patch Candidate ======= //");
 						int result = verify(candidateFileName);
 						if (result == PASS) {
 							String patchFileName = storePatch(newSource, editText, targetClass, change);
@@ -226,25 +219,10 @@ public class ConFix {
 							totalCompileError += compileError;
 							totalTestFailure += testFailure;
 							totalCandidateNum += candidateNum;
-							StringBuffer sb = new StringBuffer();
-							sb.append("Seed:");
-							sb.append(seed);
-							sb.append("|Pool:");
-							sb.append("beautyPool");
-							sb.append("|PatchNum:");
-							sb.append(totalCandidateNum);
-							sb.append("|Time:");
-							sb.append(elapsedTime.trim());
-							sb.append("|CompileError:");
-							sb.append(totalCompileError);
-							sb.append("|TestFailure:");
-							sb.append(totalTestFailure);
-							sb.append("|Concretize:");
-							sb.append(info.getConcretize());
-							sb.append("\n");
-							sb.append(patchFileName);
-							sb.append("\n");
-							IOUtils.storeContent("patch_info", sb.toString(), true);
+
+							storePatchInfo(totalCandidateNum, totalCompileError, totalTestFailure, elapsedTime,
+									patchFileName, info);
+
 							success = true;
 							break;
 						} else {
@@ -265,16 +243,14 @@ public class ConFix {
 						break;
 					}
 				}
+
 				if (isTimeBudgetPassed(startTime)) {
 					terminate = true;
 					System.out.println("Time Budget is passed.");
 					break;
 				}
 			} while (trial < maxTrials);
-			// Reset.
-			change = null;
-			loc = null;
-			candidates = null;
+
 			if (success || terminate || returnCode == Patcher.C_NO_FIXLOC)
 				break;
 		}
@@ -301,12 +277,22 @@ public class ConFix {
 		IOUtils.storeContent("locinfo.csv", sbLoc.toString());
 	}
 
+	private static void checkCoverageValidity() {
+		if (coverage == null || coverage.getNegCoveredClasses().size() == 0) {
+			System.out.println("No class/coverage information.");
+			return;
+		} else if (poolList.size() == 0) {
+			System.out.println("No change pool is specified.");
+			return;
+		}
+	}
+
 	private static void printLocInfo(int lines, int locNum, int changeNum, int applied, String poolPath,
 			StringBuffer sb) {
-		// System.out.println("Checked Lines:" + lines);
-		// System.out.println("Checked Fix Locs:" + locNum);
-		// System.out.println("Checked Changes:" + changeNum);
-		// System.out.println("Applied Changes:" + applied);
+		System.out.println("Checked Lines:" + lines);
+		System.out.println("Checked Fix Locs:" + locNum);
+		System.out.println("Checked Changes:" + changeNum);
+		System.out.println("Applied Changes:" + applied);
 		sb.append("\n");
 		sb.append(poolPath);
 		sb.append(",");
@@ -317,6 +303,54 @@ public class ConFix {
 		sb.append(changeNum);
 		sb.append(",");
 		sb.append(applied);
+	}
+
+	private static long setTimer() {
+		long startTime = System.currentTimeMillis();
+		System.out.println("Random Seed:" + seed);
+
+		return startTime;
+	}
+
+	private static Random setRandomSeed(long startTime) {
+		seed = seed == -1 ? new Random(startTime).nextInt(100) : seed;
+		Random r = new Random(seed);
+
+		return r;
+	}
+
+	private static void setPoolFromSimFinResults() {
+		// TE
+		// We load new Changepool for each run
+		ChangePoolGenerator changePoolGenerator = new ChangePoolGenerator();
+		changePoolGenerator.collect(cleanFiles, buggyFiles);
+		pool = changePoolGenerator.pool;
+		pool.poolName = "SimFinPool";
+		pool.maxLoadCount = maxPoolLoad;
+		System.out.println("Pool Generation Done.");
+	}
+
+	private static void storePatchInfo(int totalCandidateNum, int totalCompileError, int totalTestFailure,
+			String elapsedTime, String patchFileName, PatchInfo info) {
+		StringBuffer sb = new StringBuffer();
+		sb.append("Seed:");
+		sb.append(seed);
+		sb.append("|Pool:");
+		sb.append("beautyPool");
+		sb.append("|PatchNum:");
+		sb.append(totalCandidateNum);
+		sb.append("|Time:");
+		sb.append(elapsedTime.trim());
+		sb.append("|CompileError:");
+		sb.append(totalCompileError);
+		sb.append("|TestFailure:");
+		sb.append(totalTestFailure);
+		sb.append("|Concretize:");
+		sb.append(info.getConcretize());
+		sb.append("\n");
+		sb.append(patchFileName);
+		sb.append("\n");
+		IOUtils.storeContent("patch_info", sb.toString(), true);
 	}
 
 	private static boolean isTimeBudgetPassed(long startTime) {
@@ -526,15 +560,6 @@ public class ConFix {
 		return filePath;
 	}
 
-	private static void loadChangePool(String poolPath) {
-		System.out.print("Loading Change Pool...");
-		pool = new ChangePool();
-		pool.loadFrom(new File(poolPath));
-		pool.maxLoadCount = maxPoolLoad;
-		System.out.println("Done.");
-		System.out.println("Pool:" + poolPath);
-	}
-
 	private static void loadProperties(String fileName) {
 		Properties props = new Properties();
 		File f = new File(fileName);
@@ -581,9 +606,9 @@ public class ConFix {
 		bugId = PatchUtils.getStringProperty(props, "bugId", "3");
 		pFaultyLine = Integer.parseInt(PatchUtils.getStringProperty(props, "pFaultyLine", "1"));
 		pFaultyClass = PatchUtils.getStringProperty(props, "pFaultyClass", "");
-		System.out.println("pFaultyClass as it is: "+pFaultyClass) ;
-		pFaultyClass = pFaultyClass.replace(sourceDir.replaceAll("/", ".")+".", "");
-		System.out.println("pFaultyClass after replacing is: "+pFaultyClass) ;
+		System.out.println("pFaultyClass as it is: " + pFaultyClass);
+		pFaultyClass = pFaultyClass.replace(sourceDir.replaceAll("/", ".") + ".", "");
+		System.out.println("pFaultyClass after replacing is: " + pFaultyClass);
 		createFileLists(projectName, bugId);
 	}
 
