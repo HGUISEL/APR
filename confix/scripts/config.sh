@@ -1,5 +1,5 @@
 #!/bin/sh
-if [ "$#" -ne 2 ] ; then
+if [ "$#" -ne 4 ] ; then
   echo "Usage: $0 DIRECTORY" >&2
   exit 1
 fi
@@ -23,6 +23,8 @@ echo "cp.test=$value" >> $PROP
 
 echo "projectName=${1}" >> $PROP
 echo "bugId=${2}" >> $PROP
+echo "pFaultyClass=${3}" >> $PROP
+echo "pFaultyLine=${4}" >> $PROP
 
 #Create test lists
 defects4j export -p tests.all > tests.all

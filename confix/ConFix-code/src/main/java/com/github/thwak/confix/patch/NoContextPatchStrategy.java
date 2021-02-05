@@ -15,6 +15,13 @@ public class NoContextPatchStrategy extends PatchStrategy {
 		super(manager, pool, collector, r, flMetric, cStrategyKey, sourceDir, compileClassPathEntries);
 	}
 
+	public NoContextPatchStrategy(CoverageManager manager, ChangePool pool, ContextIdentifier collector, Random r,
+			String flMetric, String cStrategyKey, String sourceDir, String[] compileClassPathEntries,
+			String pFaultyClass, int pFaultyLine) {
+		super(manager, pool, collector, r, flMetric, cStrategyKey, sourceDir, compileClassPathEntries, pFaultyClass,
+				pFaultyLine);
+	}
+
 	@Override
 	public boolean isTarget(TargetLocation loc) {
 		return true;
@@ -56,7 +63,7 @@ public class NoContextPatchStrategy extends PatchStrategy {
 	public Change selectChange() {
 		if (currLocIndex < locations.size()) {
 			LocEntry e = locations.get(currLocIndex);
-			System.out.println("change ids: " + (e.changeIds == null));
+			//System.out.println("change ids: " + (e.changeIds == null));
 			Change c = e.changeIds != null && e.changeIds.size() > 0 ? pool.getChange(e.changeIds.remove(0)) : null;
 			if (e.changeIds.size() == 0)
 				nextLoc();

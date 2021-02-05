@@ -770,7 +770,7 @@ public class NeighborFirstStrategy extends ConcretizationStrategy {
 					if (child.type == ASTNode.SINGLE_VARIABLE_DECLARATION) {
 						SingleVariableDeclaration svd = (SingleVariableDeclaration) child.astNode;
 						SimpleName param = svd.getName();
-						System.out.println("Extracted SimpleName: " + param);
+						//System.out.println("Extracted SimpleName: " + param);
 						IVariableBinding vb = (IVariableBinding) param.resolveBinding();
 						if (vb == null)
 							continue;
@@ -946,7 +946,14 @@ public class NeighborFirstStrategy extends ConcretizationStrategy {
 			@Override
 			public boolean visit(TypeDeclaration node) {
 				ITypeBinding b = node.resolveBinding();
+				//TE
+				// b가 null이면 그냥 리턴하게 하면 안되나?
+				if(b == null)
+					return false;
 				for (IVariableBinding vb : b.getDeclaredFields()) {
+					//vb가 null인지도 확인하기!
+					if(vb == null)
+						return false;
 					VariableType type = new VariableType(vb.getType());
 					String vName = Modifier.isStatic(vb.getModifiers()) ? b.getName() + "." + vb.getName()
 							: vb.getName();

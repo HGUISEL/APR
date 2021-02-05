@@ -1,12 +1,14 @@
 import logging
 import os #nope
 import sys
+import pandas as pd
 
 
 
 def main(argv):
     # pwd is confix/
     root = os.getcwd()
+    # currently, we are running confix in APR/confix directory
 
 #   target_bug_list = [name for name in os.listdir("../pool/las/data") ] if os.path.isdir(name)]
     subdir_list = [x[0] for x in os.walk("../pool/las/data")]
@@ -14,8 +16,24 @@ def main(argv):
     target_bug_list.sort()
 
     for target_bug in target_bug_list:
-        #target_bug="Closure-21"
+        #target_bug="Closure-3"
         target_project, target_id = target_bug.split('-')
+
+        perfect_info = pd.read_csv("../pool/commit_collector/inputs/"+target_project+".csv", 
+                            names=['D4J_ID','faulty_path','faulty_line','dummy'])
+        perfect_info_csv = perfect_info.values
+        perfect_faulty_path = ""
+        perfect_faulty_line = ""
+
+        for i in range(len(perfect_info_csv)):
+                if i==0:
+                        continue
+                if perfect_info_csv[i][0] == target_id:
+                        perfect_faulty_path = perfect_info_csv[i][1]
+                        perfect_faulty_line = perfect_info_csv[i][2]
+                        break
+        perfect_faulty_class, foo = perfect_faulty_path.split(".")
+        perfect_faulty_class = perfect_faulty_class.replace("/", ".")
 
         os.system("cd results ;" 
                 + "defects4j checkout -p "+target_project+" -v "+target_id+"b -w "+target_bug)
@@ -33,7 +51,7 @@ def main(argv):
         print("Finish defects4j compile!!")
 
         os.system("cd "+current_bug_dir+" ; "
-                +   root+"/scripts/config.sh "+target_project+" "+target_id)
+                +   root+"/scripts/config.sh "+target_project+" "+target_id + " " + perfect_faulty_class + " " + perfect_faulty_line)
         print("Finish config!!")
 
         
@@ -54,6 +72,7 @@ def main(argv):
         # fi
         
         # rm -rf ${PROJ_NAME_LIST[$i]}-${j}
+
 
         
 

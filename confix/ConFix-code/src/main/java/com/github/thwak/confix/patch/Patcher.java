@@ -109,10 +109,10 @@ public class Patcher {
 			return returnCode;
 		} catch (Exception e) {
 			e.printStackTrace();
-			System.out.println("Error occurred while applying change ");
-			System.out.println(change);
-			System.out.println("to");
-			System.out.println(loc);
+			//System.out.println("Error occurred while applying change ");
+			//System.out.println(change);
+			//System.out.println("to");
+			//System.out.println(loc);
 			return C_NOT_APPLIED;
 		}
 	}
@@ -180,11 +180,11 @@ public class Patcher {
 				}
 				break;
 			case Change.REPLACE:
-				System.out.println("\n\n======= Start Applying Replace operation ======");
+				//System.out.println("\n\n======= Start Applying Replace operation ======");
 				editHash = TreeUtils.getTypeHash(change.node);
 				locHash = TreeUtils.getTypeHash(loc.node);
-				System.out.println("	1. Edit Hash: " + editHash);
-				System.out.println("	2. Location Hash: " + locHash);
+				//System.out.println("	1. Edit Hash: " + editHash);
+				//System.out.println("	2. Location Hash: " + locHash);
 
 				// TE 여기 조지기!!!!!
 				// lalalalalalalala
@@ -197,7 +197,7 @@ public class Patcher {
 					// });
 
 					if (astNode == null) {
-						System.out.println("======= End Applying Replace operation with code C_NOT_INST\n\n");
+						//System.out.println("======= End Applying Replace operation with code C_NOT_INST\n\n");
 						return C_NOT_INST;
 					}
 
@@ -212,13 +212,13 @@ public class Patcher {
 				break;
 		}
 		if (returnCode == C_APPLIED) {
-			System.out.println("======= End Applying Replace operation with code C_APPLIED\n\n");
+			//System.out.println("======= End Applying Replace operation with code C_APPLIED\n\n");
 			addImportDecls(change);
 		} else if (returnCode == C_NOT_APPLIED) {
-			System.out.println("======= End Applying Replace operation with code C_NOT_APPLIED\n\n");
+			//System.out.println("======= End Applying Replace operation with code C_NOT_APPLIED\n\n");
 		}
 
-		System.out.println("======= End Applying Replace operation with code -1 ======\n\n");
+		//System.out.println("======= End Applying Replace operation with code -1 ======\n\n");
 		return returnCode;
 	}
 

@@ -1,12 +1,9 @@
+pFaultyClass as it is: src.main.java.org.apache.commons.math.analysis.solvers.BaseSecantSolver
+pFaultyClass after replacing is: srcmainjavaorgapachecommonsmathanalysissolversBaseSecantSolver
 Loading Coverage Information....Done.
-Random Seed:93
+Random Seed:83
 Pool Generation Done.
 Preparing patch generation...
-key: noctx
+Covered line added with class name: srcmainjavaorgapachecommonsmathanalysissolversBaseSecantSolver
 Done.
-Loading Class - org.apache.commons.math.analysis.solvers.BaseSecantSolver
-	1. Source Length : 0
-	2. Class Path : 
-		
-	3. Source Path : 
-		
+Loading Class - srcmainjavaorgapachecommonsmathanalysissolversBaseSecantSolver

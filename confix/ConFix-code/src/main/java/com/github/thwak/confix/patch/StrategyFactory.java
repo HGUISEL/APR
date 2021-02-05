@@ -40,6 +40,18 @@ public class StrategyFactory {
 		return strategy;
 	}
 
+	public static PatchStrategy getPatchStrategy(String key, CoverageManager coverage, ChangePool pool, Random r,
+			String flMetric, String cStrategyKey, String sourceDir, String[] compileClassPathEntries,
+			String pFaultyClass, int pFaultyLine) {
+		PatchStrategy strategy = null;
+		key = key.toLowerCase();
+
+		strategy = new NoContextPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
+				sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
+
+		return strategy;
+	}
+
 	public static ConcretizationStrategy getConcretizationStrategy(String key, CoverageManager coverage,
 			String className, String srcDir, Random r) {
 		ConcretizationStrategy strategy = null;

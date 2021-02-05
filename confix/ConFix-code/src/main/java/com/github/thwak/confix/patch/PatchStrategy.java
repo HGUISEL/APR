@@ -71,6 +71,30 @@ public class PatchStrategy {
 		prioritizeCoveredLines();
 	}
 
+	public PatchStrategy(CoverageManager manager, ChangePool pool, ContextIdentifier collector, Random r,
+			String flMetric, String cStrategyKey, String sourceDir, String[] compileClassPathEntries,
+			String pFaultyClass, int pFaultyLine) {
+		this.r = r;
+		this.manager = manager;
+		this.pool = pool;
+		this.collector = collector;
+		this.locations = new ArrayList<>();
+		coveredLines = new IndexMap<>();
+		lineLocMap = new HashMap<>();
+		patcherMap = new HashMap<>();
+		this.flMetric = flMetric;
+		this.cStrategyKey = cStrategyKey;
+		this.sourceDir = sourceDir;
+		this.compileClassPathEntries = compileClassPathEntries;
+		perfectFlTargetLine(pFaultyClass, pFaultyLine);
+	}
+
+	protected void perfectFlTargetLine(String pFaultyClass, int pFaultyLine) {
+		CoveredLine coveredline = new CoveredLine(pFaultyClass, pFaultyLine);
+		System.out.println("Covered line added with class name: "+ pFaultyClass) ;
+		this.coveredLines.add(coveredline);
+	}
+
 	protected void prioritizeCoveredLines() {
 		List<CoveredLine> lines = this.manager.computeScore(flMetric);
 		for (CoveredLine cl : lines) {

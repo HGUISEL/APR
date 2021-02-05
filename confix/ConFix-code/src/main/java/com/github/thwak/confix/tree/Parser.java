@@ -22,22 +22,22 @@ public class Parser {
 
 	public CompilationUnit parse(File f) {
 		String source = IOUtils.readFile(f);
-		System.out.println("===== Set ASTParser ====");
-		System.out.println("0. file : " + f.getName());
+		//System.out.println("===== Set ASTParser ====");
+		//System.out.println("0. file : " + f.getName());
 		return parse(source);
 	}
 
 	public CompilationUnit parse(String source) {
 
-		System.out.println("	1. Source Length : " + source.length());
-		System.out.println("	2. Class Path : ");
-		for (int i = 0; i < classPath.length; i++) {
-			System.out.println("		" + classPath[i]);
-		}
-		System.out.println("	3. Source Path : ");
-		for (int i = 0; i < sourcePath.length; i++) {
-			System.out.println("		" + sourcePath[i]);
-		}
+		//System.out.println("	1. Source Length : " + source.length());
+		//System.out.println("	2. Class Path : ");
+		//for (int i = 0; i < classPath.length; i++) {
+		//	System.out.println("		" + classPath[i]);
+		//}
+		//System.out.println("	3. Source Path : ");
+		//for (int i = 0; i < sourcePath.length; i++) {
+		//	System.out.println("		" + sourcePath[i]);
+		//}
 		ASTParser parser = ASTParser.newParser(AST.JLS8);
 
 		parser.setEnvironment(classPath, sourcePath, null, true);

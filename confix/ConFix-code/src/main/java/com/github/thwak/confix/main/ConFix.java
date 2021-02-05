@@ -72,11 +72,14 @@ public class ConFix {
 	public static int maxPoolLoad;
 	public static int maxChangeCount;
 
-	//TE
+	// TE
 	public static List<File> cleanFiles = new ArrayList<File>();
 	public static List<File> buggyFiles = new ArrayList<File>();
 	public static String projectName;
 	public static String bugId;
+
+	public static int pFaultyLine;
+	public static String pFaultyClass;
 
 	public static void main(String[] args) {
 		// Load necessary information.
@@ -95,16 +98,16 @@ public class ConFix {
 		Random r = new Random(seed);
 		System.out.println("Random Seed:" + seed);
 
-		//TE
-		//We load new Changepool for each run
+		// TE
+		// We load new Changepool for each run
 		ChangePoolGenerator changePoolGenerator = new ChangePoolGenerator();
 		changePoolGenerator.collect(cleanFiles, buggyFiles);
 		pool = changePoolGenerator.pool;
 		pool.poolName = "BeautyPool";
 		pool.maxLoadCount = maxPoolLoad;
 		System.out.println("Pool Generation Done.");
-		File ourPoolDir = new File("./pool") ;
-		pool.storeTo(ourPoolDir) ;
+		File ourPoolDir = new File("./pool");
+		pool.storeTo(ourPoolDir);
 
 		// For Loc Info collection.
 		String oldLocKey = "";
@@ -117,7 +120,7 @@ public class ConFix {
 		int totalTestFailure = 0;
 		int totalCandidateNum = 0;
 
-		//TE
+		// TE
 		// loadChangePool(poolPath);
 		// locPoolPath = poolPath;
 
@@ -134,8 +137,16 @@ public class ConFix {
 		String targetClass = null;
 		Patcher patcher = null;
 		System.out.println("Preparing patch generation...");
-		PatchStrategy pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, r, flMetric,
-				cStrategyKey, sourceDir, compileClassPathEntries);
+
+		PatchStrategy pStrategy;
+		if (flMetric.compareTo("perfect") == 0) {
+			pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, r, flMetric, cStrategyKey,
+					sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
+		} else {
+			pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, r, flMetric, cStrategyKey,
+					sourceDir, compileClassPathEntries);
+		}
+
 		pStrategy.finishUpdate();
 		IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
 		System.out.println("Done.");
@@ -195,13 +206,14 @@ public class ConFix {
 						}
 						String editText = PatchUtils.getEditText(info, pool);
 						// System.out.print(
-						// 		"\n================= 1. Edit Text (CandNum: " + candidateNum + ") ========\n");
+						// "\n================= 1. Edit Text (CandNum: " + candidateNum + ")
+						// ========\n");
 						// System.out.println(editText);
 
 						// System.out.print(
-						// 		"\n================= 2. New Source (CandNum: " + candidateNum + ") =======\n");
+						// "\n================= 2. New Source (CandNum: " + candidateNum + ")
+						// =======\n");
 						String newSource = patcher.getNewSource();
-
 
 						String candidateFileName = storeCandidate(newSource, editText, targetClass, change);
 						// IOUtils.delete(new File(tempDir));
@@ -266,19 +278,17 @@ public class ConFix {
 			if (success || terminate || returnCode == Patcher.C_NO_FIXLOC)
 				break;
 		}
-		
+
 		if (success || terminate) {
-			System.out
-					.println("Elapsed Time: " + PatchUtils.getElapsedTime(System.currentTimeMillis() - startTime));
+			System.out.println("Elapsed Time: " + PatchUtils.getElapsedTime(System.currentTimeMillis() - startTime));
 			printLocInfo(pStrategy.getCurrentLineIndex() + 1, locNum, changeNum, applied, locPoolPath, sbLoc);
 			System.out.println("Compile Errors:" + compileError);
 			System.out.println("Test Failures:" + testFailure);
 			IOUtils.storeContent("lines-" + pool.poolName + ".txt", pStrategy.getLocInfo());
-			
+
 		} else {
 			System.out.println("No patch found.");
-			System.out
-					.println("Elapsed Time: " + PatchUtils.getElapsedTime(System.currentTimeMillis() - startTime));
+			System.out.println("Elapsed Time: " + PatchUtils.getElapsedTime(System.currentTimeMillis() - startTime));
 			System.out.println("Compile Errors:" + compileError);
 			System.out.println("Test Failures:" + testFailure);
 			totalCompileError += compileError;
@@ -287,7 +297,7 @@ public class ConFix {
 			printLocInfo(pStrategy.getCurrentLineIndex() + 1, locNum, changeNum, applied, locPoolPath, sbLoc);
 			IOUtils.storeContent("lines-" + pool.poolName + ".txt", pStrategy.getLocInfo());
 		}
-	
+
 		IOUtils.storeContent("locinfo.csv", sbLoc.toString());
 	}
 
@@ -351,28 +361,28 @@ public class ConFix {
 
 	public static boolean compileCheck(String patchFileName) {
 		// System.out.print("\n================= 3. Compilation ===================\n");
-		// System.out.print("\n	================= 3-1. Compile Info ============\n");
-		// System.out.print("\n	1. patchFileName 	 : " + patchFileName);
-		// System.out.print("\n	2. tempDir 			 : " + tempDir);
-		// System.out.print("\n	3. compileClassPath  : " + compileClassPath);
-		// System.out.print("\n	4. Java version		 : " + version);
-		// System.out.print("\n	5. JVM				 : " + jvm);
-		// System.out.print("\n	6. System JVM		 : " + System.getProperty("java.version"));
-		// System.out.print("\n	================================================\n");
+		// System.out.print("\n ================= 3-1. Compile Info ============\n");
+		// System.out.print("\n 1. patchFileName : " + patchFileName);
+		// System.out.print("\n 2. tempDir : " + tempDir);
+		// System.out.print("\n 3. compileClassPath : " + compileClassPath);
+		// System.out.print("\n 4. Java version : " + version);
+		// System.out.print("\n 5. JVM : " + jvm);
+		// System.out.print("\n 6. System JVM : " + System.getProperty("java.version"));
+		// System.out.print("\n ================================================\n");
 
 		File patchFile = new File(patchFileName);
 		Compiler compiler = new Compiler();
 		try {
 			boolean error = compiler.compile(patchFile, tempDir, compileClassPath, version, version);
 			if (error) {
-				// System.out.println("	- no exception Compile error.");
+				System.out.println(" - no exception Compile error.");
 				// System.out.println("\n====================================================\n");
 				return false;
 			}
 		} catch (Exception e) {
 			// TE
 			// e.printStackTrace(System.out);
-			// System.out.println("	 - Compile error.");
+			System.out.println(" - Compile error.");
 			// System.out.println("\n====================================================\n");
 			return false;
 		}
@@ -400,12 +410,12 @@ public class ConFix {
 		String classPath = tempDir + File.pathSeparator + testClassPath;
 
 		// System.out.print("\n================= 4. Test ===================\n");
-		// System.out.print("\n	================= 4-1. Test Info ============\n");
-		// System.out.print("\n	1. tempDir 			 : " + tempDir);
-		// System.out.print("\n	2. ClassPath  		 : " + classPath);
-		// System.out.print("\n	3. JVM				 : " + jvm);
+		// System.out.print("\n ================= 4-1. Test Info ============\n");
+		// System.out.print("\n 1. tempDir : " + tempDir);
+		// System.out.print("\n 2. ClassPath : " + classPath);
+		// System.out.print("\n 3. JVM : " + jvm);
 
-		// System.out.print("\n	================================================\n");
+		// System.out.print("\n ================================================\n");
 
 		try {
 			result = tester.runTestsWithJUnitCore(triggerTests, classPath);
@@ -569,29 +579,36 @@ public class ConFix {
 		flMetric = PatchUtils.getStringProperty(props, "fl.metric", "ochiai");
 		projectName = PatchUtils.getStringProperty(props, "projectNmae", "Closure");
 		bugId = PatchUtils.getStringProperty(props, "bugId", "3");
-		createFileLists(projectName, bugId) ;
+		pFaultyLine = Integer.parseInt(PatchUtils.getStringProperty(props, "pFaultyLine", "1"));
+		pFaultyClass = PatchUtils.getStringProperty(props, "pFaultyClass", "");
+		System.out.println("pFaultyClass as it is: "+pFaultyClass) ;
+		pFaultyClass = pFaultyClass.replace(sourceDir.replaceAll("/", ".")+".", "");
+		System.out.println("pFaultyClass after replacing is: "+pFaultyClass) ;
+		createFileLists(projectName, bugId);
 	}
 
-	public static void createFileLists(String projectName, String bugId){
-		File dir = new File("../../../pool/las/data/"+projectName+"-"+bugId);
+	public static void createFileLists(String projectName, String bugId) {
+		File dir = new File("../../../pool/las/data/" + projectName + "-" + bugId);
 		// File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data");
 		File[] directoryListing = dir.listFiles();
 		if (directoryListing != null) {
 			for (File child : directoryListing) {
-				try{
-				String[] childPath = child.getCanonicalPath().split("data/") ; // "data/"" 뒤에는 파일 이름이 붙는다.
-				if(childPath[1].indexOf("new") > 0 ){
-					cleanFiles.add(child) ;
+				try {
+					String[] childPath = child.getCanonicalPath().split("data/"); // "data/"" 뒤에는 파일 이름이 붙는다.
+					if (childPath[1].indexOf("new") > 0) {
+						cleanFiles.add(child);
+					} else {
+						buggyFiles.add(child);
+					}
+				} catch (IOException e) {
+					e.printStackTrace();
 				}
-				else{
-					buggyFiles.add(child) ;
-				}
-				} catch( IOException e){e.printStackTrace();}
 
 			}
 		}
-		
+
 	}
+
 	private static void loadCoverage() {
 		System.out.print("Loading Coverage Information....");
 		coverage = (CoverageManager) IOUtils.readObject("coverage-info.obj");
