@@ -1,169 +1,339 @@
-package org.apache.lucene.analysis;
-
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+/*
+ * $Header: /home/cvs/jakarta-commons-sandbox/cli/src/java/org/apache/commons/cli/CommandLine.java,v 1.4 2002/06/06 22:32:37 bayard Exp $
+ * $Revision: 1.4 $
+ * $Date: 2002/06/06 22:32:37 $
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
  */
+package org.apache.commons.cli;
 
-import java.io.IOException;
-import java.io.Reader;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.LinkedList;
 import java.util.Map;
-import java.util.Random;
 
-import org.apache.lucene.util.LuceneTestCase;
-import org.apache.lucene.util.automaton.CharacterRunAutomaton;
-
-/**
- * Analyzer for testing
- * <p>
- * This analyzer is a replacement for Whitespace/Simple/KeywordAnalyzers
- * for unit tests. If you are testing a custom component such as a queryparser
- * or analyzer-wrapper that consumes analysis streams, its a great idea to test
- * it with this analyzer instead. MockAnalyzer has the following behavior:
- * <ul>
- *   <li>By default, the assertions in {@link MockTokenizer} are turned on for extra
- *       checks that the consumer is consuming properly. These checks can be disabled
- *       with {@link #setEnableChecks(boolean)}.
- *   <li>Payload data is randomly injected into the stream for more thorough testing
- *       of payloads.
- * </ul>
- * @see MockTokenizer
+/** 
+ * <p>Represents list of arguments parsed against
+ * a {@link Options} descriptor.<p>
+ *
+ * <p>It allows querying of a boolean {@link #hasOption(String opt)},
+ * in addition to retrieving the {@link #getOptionValue(String opt)}
+ * for options requiring arguments.</p>
+ *
+ * <p>Additionally, any left-over or unrecognized arguments,
+ * are available for further processing.</p>
+ *
+ * @author bob mcwhirter (bob @ werken.com)
+ * @author <a href="mailto:jstrachan@apache.org">James Strachan</a>
+ * @author John Keyes (john at integralsource.com)
  */
-public final class MockAnalyzer extends Analyzer { 
-  private final CharacterRunAutomaton runAutomaton;
-  private final boolean lowerCase;
-  private final CharacterRunAutomaton filter;
-  private final boolean enablePositionIncrements;
-  private int positionIncrementGap;
-  private final Random random;
-  private Map<String,Integer> previousMappings = new HashMap<String,Integer>();
-  private boolean enableChecks = true;
+public class CommandLine {
+    
+    /** the unrecognised options/arguments */
+    private List args    = new LinkedList();
 
-  /**
-   * Creates a new MockAnalyzer.
-   * 
-   * @param random Random for payloads behavior
-   * @param runAutomaton DFA describing how tokenization should happen (e.g. [a-zA-Z]+)
-   * @param lowerCase true if the tokenizer should lowercase terms
-   * @param filter DFA describing how terms should be filtered (set of stopwords, etc)
-   * @param enablePositionIncrements true if position increments should reflect filtered terms.
-   */
-  public MockAnalyzer(Random random, CharacterRunAutomaton runAutomaton, boolean lowerCase, CharacterRunAutomaton filter, boolean enablePositionIncrements) {
-    this.random = random;
-    this.runAutomaton = runAutomaton;
-    this.lowerCase = lowerCase;
-    this.filter = filter;
-    this.enablePositionIncrements = enablePositionIncrements;
-  }
+    /** the processed options */
+    private Map options = new HashMap();
 
-  /**
-   * Calls {@link #MockAnalyzer(Random, CharacterRunAutomaton, boolean, CharacterRunAutomaton, boolean) 
-   * MockAnalyzer(random, runAutomaton, lowerCase, MockTokenFilter.EMPTY_STOPSET, false}).
-   */
-  public MockAnalyzer(Random random, CharacterRunAutomaton runAutomaton, boolean lowerCase) {
-    this(random, runAutomaton, lowerCase, MockTokenFilter.EMPTY_STOPSET, false);
-  }
+    /** the option name map */
+    private Map names   = new HashMap();
 
-  /** 
-   * Create a Whitespace-lowercasing analyzer with no stopwords removal.
-   * <p>
-   * Calls {@link #MockAnalyzer(Random, CharacterRunAutomaton, boolean, CharacterRunAutomaton, boolean) 
-   * MockAnalyzer(random, MockTokenizer.WHITESPACE, true, MockTokenFilter.EMPTY_STOPSET, false}).
-   */
-  public MockAnalyzer(Random random) {
-    this(random, MockTokenizer.WHITESPACE, true);
-  }
+    /** Map of unique options for ease to get complete list of options */
+    private Map hashcodeMap = new HashMap();
 
-  @Override
-  public TokenStream tokenStream(String fieldName, Reader reader) {
-    MockTokenizer tokenizer = new MockTokenizer(reader, runAutomaton, lowerCase);
-    tokenizer.setEnableChecks(enableChecks);
-    TokenFilter filt = new MockTokenFilter(tokenizer, filter, enablePositionIncrements);
-    filt = maybePayload(filt, fieldName);
-    return filt;
-  }
+    /** the processed options */
+    private Option[] optionsArray;
 
-  private class SavedStreams {
-    MockTokenizer tokenizer;
-    TokenFilter filter;
-  }
-
-  @Override
-  public TokenStream reusableTokenStream(String fieldName, Reader reader)
-      throws IOException {
-    @SuppressWarnings("unchecked") Map<String,SavedStreams> map = (Map) getPreviousTokenStream();
-    if (map == null) {
-      map = new HashMap<String,SavedStreams>();
-      setPreviousTokenStream(map);
+    /**
+     * <p>Creates a command line.</p>
+     */
+    CommandLine() {
     }
     
-    SavedStreams saved = map.get(fieldName);
-    if (saved == null) {
-      saved = new SavedStreams();
-      saved.tokenizer = new MockTokenizer(reader, runAutomaton, lowerCase);
-      saved.tokenizer.setEnableChecks(enableChecks);
-      saved.filter = new MockTokenFilter(saved.tokenizer, filter, enablePositionIncrements);
-      saved.filter = maybePayload(saved.filter, fieldName);
-      map.put(fieldName, saved);
-      return saved.filter;
-    } else {
-      saved.tokenizer.reset(reader);
-      return saved.filter;
+    /** 
+     * <p>Query to see if an option has been set.</p>
+     *
+     * @param opt Short name of the option
+     * @return true if set, false if not
+     */
+    public boolean hasOption(String opt) {
+        return options.containsKey( opt );
     }
-  }
-  
-  private synchronized TokenFilter maybePayload(TokenFilter stream, String fieldName) {
-    Integer val = previousMappings.get(fieldName);
-    if (val == null) {
-      val = -1; // no payloads
-      if (LuceneTestCase.rarely(random)) {
-        switch(random.nextInt(3)) {
-          case 0: val = -1; // no payloads
-                  break;
-          case 1: val = Integer.MAX_VALUE; // variable length payload
-                  break;
-          case 2: val = random.nextInt(12); // fixed length payload
-                  break;
+
+    /** 
+     * <p>Query to see if an option has been set.</p>
+     *
+     * @param opt character name of the option
+     * @return true if set, false if not
+     */
+    public boolean hasOption( char opt ) {
+        return hasOption( String.valueOf( opt ) );
+    }
+
+    /**
+     * <p>Return the <code>Object</code> type of this <code>Option</code>.</p>
+     *
+     * @param opt the name of the option
+     * @return the type of this <code>Option</code>
+     */
+    public Object getOptionObject( String opt ) {
+        String res = getOptionValue( opt );
+        
+        Object type = ((Option)((List)options.get(opt)).iterator().next()).getType();
+        return res == null ? null : TypeHandler.createValue(res, type);
+    }
+
+    /**
+     * <p>Return the <code>Object</code> type of this <code>Option</code>.</p>
+     *
+     * @param opt the name of the option
+     * @return the type of opt
+     */
+    public Object getOptionObject( char opt ) {
+        return getOptionObject( String.valueOf( opt ) );
+    }
+
+    /** 
+     * <p>Retrieve the argument, if any, of this option.</p>
+     *
+     * @param opt the name of the option
+     * @return Value of the argument if option is set, and has an argument,
+     * otherwise null.
+     */
+    public String getOptionValue( String opt ) {
+        String[] values = getOptionValues(opt);
+        return (values == null) ? null : values[0];
+    }
+
+    /** 
+     * <p>Retrieve the argument, if any, of this option.</p>
+     *
+     * @param opt the character name of the option
+     * @return Value of the argument if option is set, and has an argument,
+     * otherwise null.
+     */
+    public String getOptionValue( char opt ) {
+        return getOptionValue( String.valueOf( opt ) );
+    }
+
+    /** 
+     * <p>Retrieves the array of values, if any, of an option.</p>
+     *
+     * @param opt string name of the option
+     * @return Values of the argument if option is set, and has an argument,
+     * otherwise null.
+     */
+    public String[] getOptionValues( String opt ) {
+        List values = new java.util.ArrayList();
+
+        String key = opt;
+        if( names.containsKey( opt ) ) {
+            key = (String)names.get( opt );
         }
-      }
-      previousMappings.put(fieldName, val); // save it so we are consistent for this field
+
+        if( options.containsKey( key ) ) {
+            List opts = (List)options.get( key );
+            Iterator iter = opts.iterator();
+
+            while( iter.hasNext() ) {
+                Option optt = (Option)iter.next();
+                values.addAll( optt.getValuesList() );
+            }
+        }
+        return (values.size() == 0) ? null : (String[])values.toArray(new String[]{});
+    }
+
+    /** 
+     * <p>Retrieves the array of values, if any, of an option.</p>
+     *
+     * @param opt character name of the option
+     * @return Values of the argument if option is set, and has an argument,
+     * otherwise null.
+     */
+    public String[] getOptionValues( char opt ) {
+        return getOptionValues( String.valueOf( opt ) );
     }
     
-    if (val == -1)
-      return stream;
-    else if (val == Integer.MAX_VALUE)
-      return new MockVariableLengthPayloadFilter(random, stream);
-    else
-      return new MockFixedLengthPayloadFilter(random, stream, val);
-  }
-  
-  public void setPositionIncrementGap(int positionIncrementGap){
-    this.positionIncrementGap = positionIncrementGap;
-  }
-  
-  @Override
-  public int getPositionIncrementGap(String fieldName){
-    return positionIncrementGap;
-  }
-  
-  /** 
-   * Toggle consumer workflow checking: if your test consumes tokenstreams normally you
-   * should leave this enabled.
-   */
-  public void setEnableChecks(boolean enableChecks) {
-    this.enableChecks = enableChecks;
-  }
+    /** 
+     * <p>Retrieve the argument, if any, of an option.</p>
+     *
+     * @param opt name of the option
+     * @param defaultValue is the default value to be returned if the option is not specified
+     * @return Value of the argument if option is set, and has an argument,
+     * otherwise <code>defaultValue</code>.
+     */
+    public String getOptionValue( String opt, String defaultValue ) {
+        String answer = getOptionValue( opt );
+        return ( answer != null ) ? answer : defaultValue;
+    }
+    
+    /** 
+     * <p>Retrieve the argument, if any, of an option.</p>
+     *
+     * @param opt character name of the option
+     * @param defaultValue is the default value to be returned if the option is not specified
+     * @return Value of the argument if option is set, and has an argument,
+     * otherwise <code>defaultValue</code>.
+     */
+    public String getOptionValue( char opt, String defaultValue ) {
+        return getOptionValue( String.valueOf( opt ), defaultValue );
+    }
+
+    /** 
+     * <p>Retrieve any left-over non-recognized options and arguments</p>
+     *
+     * @return remaining items passed in but not parsed as an array
+     */
+    public String[] getArgs() {
+        String[] answer = new String[ args.size() ];
+        args.toArray( answer );
+        return answer;
+    }
+    
+    /** 
+     * <p>Retrieve any left-over non-recognized options and arguments</p>
+     *
+     * @return remaining items passed in but not parsed as a <code>List</code>.
+     */
+    public List getArgList() {
+        return args;
+    }
+    
+    /** 
+     * jkeyes
+     * - commented out until it is implemented properly
+     * <p>Dump state, suitable for debugging.</p>
+     *
+     * @return Stringified form of this object
+     */
+    /*
+    public String toString() {
+        StringBuffer buf = new StringBuffer();
+        
+        buf.append( "[ CommandLine: [ options: " );
+        buf.append( options.toString() );
+        buf.append( " ] [ args: ");
+        buf.append( args.toString() );
+        buf.append( " ] ]" );
+        
+        return buf.toString();
+    }
+    */
+
+    /**
+     * <p>Add left-over unrecognized option/argument.</p>
+     *
+     * @param arg the unrecognised option/argument.
+     */
+    void addArg(String arg) {
+        args.add( arg );
+    }
+        
+    /**
+     * <p>Add an option to the command line.  The values of 
+     * the option are stored.</p>
+     *
+     * @param opt the processed option
+     */
+    void addOption( Option opt ) {
+        hashcodeMap.put( new Integer( opt.hashCode() ), opt );
+
+        String key = opt.getOpt();
+        if( " ".equals(key) ) {
+            key = opt.getLongOpt();
+        }
+        else {
+            names.put( opt.getLongOpt(), key );
+        }
+
+        if( options.get( key ) != null ) {
+            ((java.util.List)options.get( key )).add( opt );
+        }
+        else {
+            options.put( key, new java.util.ArrayList() );
+            ((java.util.List)options.get( key ) ).add( opt );
+        }
+    }
+
+    /**
+     * <p>Returns an iterator over the Option members of CommandLine.</p>
+     *
+     * @return an <code>Iterator</code> over the processed {@link Option} 
+     * members of this {@link CommandLine}
+     */
+    public Iterator iterator( ) {
+        return hashcodeMap.values().iterator();
+    }
+
+    /**
+     * <p>Returns an array of the processed {@link Option}s.</p>
+     *
+     * @return an array of the processed {@link Option}s.
+     */
+    public Option[] getOptions( ) {
+        Collection processed = hashcodeMap.values();
+
+        // reinitialise array
+        optionsArray = new Option[ processed.size() ];
+
+        // return the array
+        return (Option[]) processed.toArray( optionsArray );
+    }
+
 }

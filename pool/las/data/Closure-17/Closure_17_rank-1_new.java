@@ -1,133 +1,291 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.geode.management.internal.web.controllers.support;
+package com.fasterxml.jackson.databind.ser.std;
 
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.Map;
+import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
 
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
-import org.apache.logging.log4j.Logger;
-import org.springframework.web.servlet.handler.HandlerInterceptorAdapter;
-
-import org.apache.geode.cache.Cache;
-import org.apache.geode.distributed.internal.DistributionConfig;
-import org.apache.geode.internal.logging.LogService;
-import org.apache.geode.internal.security.IntegratedSecurityService;
-import org.apache.geode.internal.security.SecurityService;
-import org.apache.geode.management.internal.cli.multistep.CLIMultiStepHelper;
-import org.apache.geode.management.internal.security.ResourceConstants;
-import org.apache.geode.management.internal.web.util.UriUtils;
-import org.apache.geode.security.Authenticator;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitable;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
+import com.fasterxml.jackson.databind.jsonschema.SchemaAware;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.ser.FilterProvider;
+import com.fasterxml.jackson.databind.ser.PropertyFilter;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.Converter;
 
 /**
- * The GetEnvironmentHandlerInterceptor class handles extracting Gfsh environment variables encoded in the HTTP request
- * message as request parameters.
- * <p/>
- * @see javax.servlet.http.HttpServletRequest
- * @see javax.servlet.http.HttpServletResponse
- * @see org.springframework.web.servlet.handler.HandlerInterceptorAdapter
- * @since GemFire 8.0
+ * Base class used by all standard serializers, and can also
+ * be used for custom serializers (in fact, this is the recommended
+ * base class to use).
+ * Provides convenience methods for implementing {@link SchemaAware}
  */
-@SuppressWarnings("unused")
-public class LoginHandlerInterceptor extends HandlerInterceptorAdapter {
+public abstract class StdSerializer<T>
+    extends JsonSerializer<T>
+    implements JsonFormatVisitable, SchemaAware, java.io.Serializable
+{
+    private static final long serialVersionUID = 1L;
 
-  private static final Logger logger = LogService.getLogger();
+    /**
+     * Nominal type supported, usually declared type of
+     * property for which serializer is used.
+     */
+    protected final Class<T> _handledType;
 
-  private Cache cache;
+    /*
+    /**********************************************************
+    /* Life-cycle
+    /**********************************************************
+     */
+    
+    protected StdSerializer(Class<T> t) {
+        _handledType = t;
+    }
 
-  private Authenticator auth = null;
-
-  private SecurityService securityService = IntegratedSecurityService.getSecurityService();
-
-  private static final ThreadLocal<Map<String, String>> ENV = new ThreadLocal<Map<String, String>>() {
+    @SuppressWarnings("unchecked")
+    protected StdSerializer(JavaType type) {
+        _handledType = (Class<T>) type.getRawClass();
+    }
+    
+    /**
+     * Alternate constructor that is (alas!) needed to work
+     * around kinks of generic type handling
+     */
+    @SuppressWarnings("unchecked")
+    protected StdSerializer(Class<?> t, boolean dummy) {
+        _handledType = (Class<T>) t;
+    }
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
+     */
+    
     @Override
-    protected Map<String, String> initialValue() {
-      return Collections.emptyMap();
+    public Class<T> handledType() { return _handledType; }
+
+    /*
+    /**********************************************************
+    /* Serialization
+    /**********************************************************
+     */
+    
+    @Override
+    public abstract void serialize(T value, JsonGenerator jgen, SerializerProvider provider)
+        throws IOException, JsonGenerationException;
+
+    /*
+    /**********************************************************
+    /* Helper methods for JSON Schema generation
+    /**********************************************************
+     */
+    
+    /**
+     * Default implementation simply claims type is "string"; usually
+     * overriden by custom serializers.
+     */
+    @Override
+    public JsonNode getSchema(SerializerProvider provider, Type typeHint)
+        throws JsonMappingException
+    {
+        return createSchemaNode("string");
     }
-  };
-
-  protected static final String ENVIRONMENT_VARIABLE_REQUEST_PARAMETER_PREFIX = "vf.gf.env.";
-
-  protected static final String SECURITY_VARIABLE_REQUEST_HEADER_PREFIX = DistributionConfig.SECURITY_PREFIX_NAME;
-
-  public static Map<String, String> getEnvironment() {
-    return ENV.get();
-  }
-
-  @Override
-  public boolean preHandle(final HttpServletRequest request, final HttpServletResponse response, final Object handler)
-    throws Exception
-  {
-    final Map<String, String> requestParameterValues = new HashMap<String, String>();
-
-    for (Enumeration<String> requestParameters = request.getParameterNames(); requestParameters.hasMoreElements(); ) {
-      final String requestParameter = requestParameters.nextElement();
-      if (requestParameter.startsWith(ENVIRONMENT_VARIABLE_REQUEST_PARAMETER_PREFIX)) {
-        String requestValue = request.getParameter(requestParameter);
-        //GEODE-1469: since we enced stepArgs, we will need to decode it here. See #ClientHttpRequest
-        if(requestParameter.contains(CLIMultiStepHelper.STEP_ARGS)){
-          requestValue = UriUtils.decode(requestValue);
+    
+    /**
+     * Default implementation simply claims type is "string"; usually
+     * overriden by custom serializers.
+     */
+    @Override
+    public JsonNode getSchema(SerializerProvider provider, Type typeHint, boolean isOptional)
+        throws JsonMappingException
+    {
+    	ObjectNode schema = (ObjectNode) getSchema(provider, typeHint);
+    	if (!isOptional) {
+    		schema.put("required", !isOptional);
+    	}
+        return schema;
+    }
+    
+    protected ObjectNode createObjectNode() {
+        return JsonNodeFactory.instance.objectNode();
+    }
+    
+    protected ObjectNode createSchemaNode(String type)
+    {
+        ObjectNode schema = createObjectNode();
+        schema.put("type", type);
+        return schema;
+    }
+    
+    protected ObjectNode createSchemaNode(String type, boolean isOptional)
+    {
+        ObjectNode schema = createSchemaNode(type);
+        // as per [JACKSON-563]. Note that 'required' defaults to false
+        if (!isOptional) {
+            schema.put("required", !isOptional);
         }
-        requestParameterValues.put(requestParameter.substring(ENVIRONMENT_VARIABLE_REQUEST_PARAMETER_PREFIX.length()),
-          requestValue);
-      }
+        return schema;
+    }
+    
+    /**
+     * Default implementation specifies no format. This behavior is usually
+     * overriden by custom serializers.
+     */
+    @Override
+    public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint)
+        throws JsonMappingException
+    {
+        visitor.expectAnyFormat(typeHint);
+    }
+            
+    /*
+    /**********************************************************
+    /* Helper methods for exception handling
+    /**********************************************************
+     */
+    
+    /**
+     * Method that will modify caught exception (passed in as argument)
+     * as necessary to include reference information, and to ensure it
+     * is a subtype of {@link IOException}, or an unchecked exception.
+     *<p>
+     * Rules for wrapping and unwrapping are bit complicated; essentially:
+     *<ul>
+     * <li>Errors are to be passed as is (if uncovered via unwrapping)
+     * <li>"Plain" IOExceptions (ones that are not of type
+     *   {@link JsonMappingException} are to be passed as is
+     *</ul>
+     */
+    public void wrapAndThrow(SerializerProvider provider,
+            Throwable t, Object bean, String fieldName)
+        throws IOException
+    {
+        /* 05-Mar-2009, tatu: But one nasty edge is when we get
+         *   StackOverflow: usually due to infinite loop. But that
+         *   usually gets hidden within an InvocationTargetException...
+         */
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors and "plain" IOExceptions to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        // Ditto for IOExceptions... except for mapping exceptions!
+        boolean wrap = (provider == null) || provider.isEnabled(SerializationFeature.WRAP_EXCEPTIONS);
+        if (t instanceof IOException) {
+            if (!wrap || !(t instanceof JsonMappingException)) {
+                throw (IOException) t;
+            }
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        // [JACKSON-55] Need to add reference information
+        throw JsonMappingException.wrapWithPath(t, bean, fieldName);
     }
 
-
-
-    for (Enumeration<String> requestHeaders = request.getHeaderNames(); requestHeaders.hasMoreElements();) {
-
-      final String requestHeader = requestHeaders.nextElement();
-
-      if (requestHeader.startsWith(SECURITY_VARIABLE_REQUEST_HEADER_PREFIX)) {
-        requestParameterValues.put(requestHeader, request.getHeader(requestHeader));
-      }
-
+    public void wrapAndThrow(SerializerProvider provider,
+            Throwable t, Object bean, int index)
+        throws IOException
+    {
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors are to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        // Ditto for IOExceptions... except for mapping exceptions!
+        boolean wrap = (provider == null) || provider.isEnabled(SerializationFeature.WRAP_EXCEPTIONS);
+        if (t instanceof IOException) {
+            if (!wrap || !(t instanceof JsonMappingException)) {
+                throw (IOException) t;
+            }
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        // [JACKSON-55] Need to add reference information
+        throw JsonMappingException.wrapWithPath(t, bean, index);
     }
 
-    String username = requestParameterValues.get(ResourceConstants.USER_NAME);
-    String password = requestParameterValues.get(ResourceConstants.PASSWORD);
-    this.securityService.login(username, password);
+    /*
+    /**********************************************************
+    /* Helper methods, other
+    /**********************************************************
+     */
+    
+    /**
+     * Method that can be called to determine if given serializer is the default
+     * serializer Jackson uses; as opposed to a custom serializer installed by
+     * a module or calling application. Determination is done using
+     * {@link JacksonStdImpl} annotation on serializer class.
+     */
+    protected boolean isDefaultSerializer(JsonSerializer<?> serializer) {
+        return ClassUtil.isJacksonStdImpl(serializer);
+    }
 
-    ENV.set(requestParameterValues);
+    /**
+     * Helper method that can be used to see if specified property has annotation
+     * indicating that a converter is to be used for contained values (contents
+     * of structured types; array/List/Map values)
+     * 
+     * @param existingSerializer (optional) configured content
+     *    serializer if one already exists.
+     * 
+     * @since 2.2
+     */
+    protected JsonSerializer<?> findConvertingContentSerializer(SerializerProvider provider,
+            BeanProperty prop, JsonSerializer<?> existingSerializer)
+        throws JsonMappingException
+    {
+        /* 19-Oct-2014, tatu: As per [databind#357], need to avoid infinite loop
+         *   when applying contextual content converter; this is not ideal way,
+         *   but should work for most cases.
+         */
 
-    return true;
-  }
+        final AnnotationIntrospector intr = provider.getAnnotationIntrospector();
+        if (intr != null && prop != null) {
+            AnnotatedMember m = prop.getMember();
+            if (m != null) {
+                Object convDef = intr.findSerializationContentConverter(m);
+                if (convDef != null) {
+                    Converter<Object,Object> conv = provider.converterInstance(prop.getMember(), convDef);
+                    JavaType delegateType = conv.getOutputType(provider.getTypeFactory());
+                    if (existingSerializer == null) {
+                        existingSerializer = provider.findValueSerializer(delegateType);
+                    }
+                    return new StdDelegatingSerializer(conv, delegateType, existingSerializer);
+                }
+            }
+        }
+        return existingSerializer;
+    }
 
-
-  @Override
-  public void afterCompletion(final HttpServletRequest request,
-                              final HttpServletResponse response,
-                              final Object handler,
-                              final Exception ex)
-    throws Exception
-  {
-    afterConcurrentHandlingStarted(request, response, handler);
-    this.securityService.logout();
-  }
-
-  @Override
-  public void afterConcurrentHandlingStarted(
-    HttpServletRequest request, HttpServletResponse response, Object handler)
-    throws Exception {
-    ENV.remove();
-  }
+    /**
+     * Helper method used to locate filter that is needed, based on filter id
+     * this serializer was constructed with.
+     * 
+     * @since 2.3
+     */
+    protected PropertyFilter findPropertyFilter(SerializerProvider provider,
+            Object filterId, Object valueToFilter)
+        throws JsonMappingException
+    {
+        FilterProvider filters = provider.getFilterProvider();
+        // Not ok to miss the provider, if a filter is declared to be needed.
+        if (filters == null) {
+            throw new JsonMappingException("Can not resolve PropertyFilter with id '"+filterId+"'; no FilterProvider configured");
+        }
+        PropertyFilter filter = filters.findPropertyFilter(filterId, valueToFilter);
+        // But whether unknown ids are ok just depends on filter provider; if we get null that's fine
+        return filter;
+    }
 }

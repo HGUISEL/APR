@@ -1,11 +1,10 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -16,1971 +15,947 @@
  * limitations under the License.
  */
 
-package org.apache.cassandra.db;
+package org.apache.openejb.config;
 
-import java.io.*;
-import java.lang.management.ManagementFactory;
-import java.nio.ByteBuffer;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.regex.Pattern;
-import javax.management.MBeanServer;
-import javax.management.ObjectName;
+import org.apache.openejb.OpenEJBException;
+import org.apache.openejb.cdi.CompositeBeans;
+import org.apache.openejb.config.sys.JSonConfigReader;
+import org.apache.openejb.config.sys.JaxbOpenejb;
+import org.apache.openejb.config.sys.Resource;
+import org.apache.openejb.config.sys.Resources;
+import org.apache.openejb.core.ParentClassLoaderFinder;
+import org.apache.openejb.jee.ApplicationClient;
+import org.apache.openejb.jee.Beans;
+import org.apache.openejb.jee.Connector;
+import org.apache.openejb.jee.Connector10;
+import org.apache.openejb.jee.EjbJar;
+import org.apache.openejb.jee.FacesConfig;
+import org.apache.openejb.jee.HandlerChains;
+import org.apache.openejb.jee.JavaWsdlMapping;
+import org.apache.openejb.jee.JaxbJavaee;
+import org.apache.openejb.jee.Keyable;
+import org.apache.openejb.jee.Listener;
+import org.apache.openejb.jee.TldTaglib;
+import org.apache.openejb.jee.WebApp;
+import org.apache.openejb.jee.WebFragment;
+import org.apache.openejb.jee.Webservices;
+import org.apache.openejb.jee.bval.ValidationConfigType;
+import org.apache.openejb.jee.jpa.EntityMappings;
+import org.apache.openejb.jee.jpa.fragment.PersistenceFragment;
+import org.apache.openejb.jee.jpa.fragment.PersistenceUnitFragment;
+import org.apache.openejb.jee.jpa.unit.JaxbPersistenceFactory;
+import org.apache.openejb.jee.jpa.unit.Persistence;
+import org.apache.openejb.jee.jpa.unit.PersistenceUnit;
+import org.apache.openejb.jee.oejb2.GeronimoEjbJarType;
+import org.apache.openejb.jee.oejb2.JaxbOpenejbJar2;
+import org.apache.openejb.jee.oejb2.OpenejbJarType;
+import org.apache.openejb.jee.oejb3.JaxbOpenejbJar3;
+import org.apache.openejb.jee.oejb3.OpenejbJar;
+import org.apache.openejb.loader.IO;
+import org.apache.openejb.loader.SystemInstance;
+import org.apache.openejb.sxc.ApplicationClientXml;
+import org.apache.openejb.sxc.EjbJarXml;
+import org.apache.openejb.sxc.FacesConfigXml;
+import org.apache.openejb.sxc.HandlerChainsXml;
+import org.apache.openejb.sxc.TldTaglibXml;
+import org.apache.openejb.sxc.WebXml;
+import org.apache.openejb.sxc.WebservicesXml;
+import org.apache.openejb.util.LengthInputStream;
+import org.apache.openejb.util.LogCategory;
+import org.apache.openejb.util.Logger;
+import org.apache.openejb.util.Saxs;
+import org.apache.openejb.util.URLs;
+import org.xml.sax.Attributes;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
 
-import com.google.common.collect.Iterables;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import javax.xml.bind.JAXBElement;
+import javax.xml.bind.JAXBException;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.parsers.SAXParser;
+import javax.xml.parsers.SAXParserFactory;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
-import org.apache.cassandra.cache.*;
-import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutor;
-import org.apache.cassandra.concurrent.NamedThreadFactory;
-import org.apache.cassandra.concurrent.StageManager;
-import org.apache.cassandra.config.*;
-import org.apache.cassandra.db.columniterator.IColumnIterator;
-import org.apache.cassandra.db.commitlog.CommitLog;
-import org.apache.cassandra.db.commitlog.ReplayPosition;
-import org.apache.cassandra.db.compaction.AbstractCompactionStrategy;
-import org.apache.cassandra.db.compaction.CompactionManager;
-import org.apache.cassandra.db.compaction.LeveledCompactionStrategy;
-import org.apache.cassandra.db.filter.IFilter;
-import org.apache.cassandra.db.filter.QueryFilter;
-import org.apache.cassandra.db.filter.QueryPath;
-import org.apache.cassandra.db.filter.SliceQueryFilter;
-import org.apache.cassandra.db.index.SecondaryIndexManager;
-import org.apache.cassandra.db.marshal.AbstractType;
-import org.apache.cassandra.dht.*;
-import org.apache.cassandra.io.sstable.*;
-import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.thrift.IndexClause;
-import org.apache.cassandra.utils.*;
-import org.apache.cassandra.utils.IntervalTree.Interval;
-import org.cliffc.high_scale_lib.NonBlockingHashMap;
+public class ReadDescriptors implements DynamicDeployer {
+    private static final Logger logger = Logger.getInstance(LogCategory.OPENEJB_STARTUP, ReadDescriptors.class);
 
-public class ColumnFamilyStore implements ColumnFamilyStoreMBean
-{
-    private static Logger logger = LoggerFactory.getLogger(ColumnFamilyStore.class);
+    private static final boolean ROOT_URL_FROM_WEBINF = SystemInstance.get().getOptions().get("openejb.jpa.root-url-from-webinf", false);
 
-    /*
-     * maybeSwitchMemtable puts Memtable.getSortedContents on the writer executor.  When the write is complete,
-     * we turn the writer into an SSTableReader and add it to ssTables_ where it is available for reads.
-     *
-     * There are two other things that maybeSwitchMemtable does.
-     * First, it puts the Memtable into memtablesPendingFlush, where it stays until the flush is complete
-     * and it's been added as an SSTableReader to ssTables_.  Second, it adds an entry to commitLogUpdater
-     * that waits for the flush to complete, then calls onMemtableFlush.  This allows multiple flushes
-     * to happen simultaneously on multicore systems, while still calling onMF in the correct order,
-     * which is necessary for replay in case of a restart since CommitLog assumes that when onMF is
-     * called, all data up to the given context has been persisted to SSTables.
-     */
-    private static final ExecutorService flushWriter
-            = new JMXEnabledThreadPoolExecutor(DatabaseDescriptor.getFlushWriters(),
-                                               StageManager.KEEPALIVE,
-                                               TimeUnit.SECONDS,
-                                               new LinkedBlockingQueue<Runnable>(DatabaseDescriptor.getFlushQueueSize()),
-                                               new NamedThreadFactory("FlushWriter"),
-                                               "internal");
+    public static final TldTaglib SKIP_TAGLIB = new TldTaglib();
 
-    public static final ExecutorService postFlushExecutor = new JMXEnabledThreadPoolExecutor("MemtablePostFlusher");
+    @SuppressWarnings({"unchecked"})
+    public AppModule deploy(final AppModule appModule) throws OpenEJBException {
+        for (final EjbModule ejbModule : appModule.getEjbModules()) {
 
-    static
-    {
-        if (DatabaseDescriptor.estimatesRealMemtableSize())
-        {
-            logger.info("Global memtable threshold is enabled at {}MB", DatabaseDescriptor.getTotalMemtableSpaceInMB());
-            // (can block if flush queue fills up, so don't put on scheduledTasks)
-            StorageService.tasks.scheduleWithFixedDelay(new MeteredFlusher(), 1000, 1000, TimeUnit.MILLISECONDS);
-        }
-        else
-        {
-            logger.info("Global memtable threshold is disabled");
-        }
-    }
-
-    public final Table table;
-    public final String columnFamily;
-    public final CFMetaData metadata;
-    public final IPartitioner partitioner;
-    private final String mbeanName;
-    private boolean invalid = false;
-
-    /* Memtables and SSTables on disk for this column family */
-    private final DataTracker data;
-
-    private volatile int memtableSwitchCount = 0;
-
-    /* This is used to generate the next index for a SSTable */
-    private AtomicInteger fileIndexGenerator = new AtomicInteger(0);
-
-    public final SecondaryIndexManager indexManager;
-
-    private LatencyTracker readStats = new LatencyTracker();
-    private LatencyTracker writeStats = new LatencyTracker();
-
-    // counts of sstables accessed by reads
-    private final EstimatedHistogram recentSSTablesPerRead = new EstimatedHistogram(35);
-    private final EstimatedHistogram sstablesPerRead = new EstimatedHistogram(35);
-
-    private static final int INTERN_CUTOFF = 256;
-    public final ConcurrentMap<ByteBuffer, ByteBuffer> internedNames = new NonBlockingHashMap<ByteBuffer, ByteBuffer>();
-
-    /* These are locally held copies to be changed from the config during runtime */
-    private volatile DefaultInteger minCompactionThreshold;
-    private volatile DefaultInteger maxCompactionThreshold;
-    private volatile AbstractCompactionStrategy compactionStrategy;
-    private volatile DefaultInteger memsize;
-    private volatile DefaultDouble memops;
-    private volatile DefaultInteger rowCacheSaveInSeconds;
-    private volatile DefaultInteger keyCacheSaveInSeconds;
-    private volatile DefaultInteger rowCacheKeysToSave;
-
-    /** Lock to allow migrations to block all flushing, so we can be sure not to write orphaned data files */
-    public final Lock flushLock = new ReentrantLock();
-
-    public static enum CacheType
-    {
-        KEY_CACHE_TYPE("KeyCache"),
-        ROW_CACHE_TYPE("RowCache");
-
-        public final String name;
-
-        private CacheType(String name)
-        {
-            this.name = name;
-        }
-
-        @Override
-        public String toString()
-        {
-            return name;
-        }
-    }
-
-    public final AutoSavingCache<Pair<Descriptor,DecoratedKey>, Long> keyCache;
-    public final AutoSavingCache<DecoratedKey, ColumnFamily> rowCache;
-
-
-    /** ratio of in-memory memtable size, to serialized size */
-    volatile double liveRatio = 1.0;
-    /** ops count last time we computed liveRatio */
-    private final AtomicLong liveRatioComputedAt = new AtomicLong(32);
-
-    public void reload()
-    {
-        // metadata object has been mutated directly. make all the members jibe with new settings.
-
-        // only update these runtime-modifiable settings if they have not been modified.
-        if (!minCompactionThreshold.isModified())
-            for (ColumnFamilyStore cfs : concatWithIndexes())
-                cfs.minCompactionThreshold = new DefaultInteger(metadata.getMinCompactionThreshold());
-        if (!maxCompactionThreshold.isModified())
-            for (ColumnFamilyStore cfs : concatWithIndexes())
-                cfs.maxCompactionThreshold = new DefaultInteger(metadata.getMaxCompactionThreshold());
-        if (!memsize.isModified())
-            for (ColumnFamilyStore cfs : concatWithIndexes())
-                cfs.memsize = new DefaultInteger(metadata.getMemtableThroughputInMb());
-        if (!memops.isModified())
-            for (ColumnFamilyStore cfs : concatWithIndexes())
-                cfs.memops = new DefaultDouble(metadata.getMemtableOperationsInMillions());
-        if (!rowCacheSaveInSeconds.isModified())
-            rowCacheSaveInSeconds = new DefaultInteger(metadata.getRowCacheSavePeriodInSeconds());
-        if (!keyCacheSaveInSeconds.isModified())
-            keyCacheSaveInSeconds = new DefaultInteger(metadata.getKeyCacheSavePeriodInSeconds());
-        if (!rowCacheKeysToSave.isModified())
-            rowCacheKeysToSave = new DefaultInteger(metadata.getRowCacheKeysToSave());
-
-        compactionStrategy.shutdown();
-        compactionStrategy = metadata.createCompactionStrategyInstance(this);
-
-        updateCacheSizes();
-        scheduleCacheSaving(rowCacheSaveInSeconds.value(), keyCacheSaveInSeconds.value(), rowCacheKeysToSave.value());
-
-        indexManager.reload();
-    }
-
-    private ColumnFamilyStore(Table table, String columnFamilyName, IPartitioner partitioner, int generation, CFMetaData metadata)
-    {
-        assert metadata != null : "null metadata for " + table + ":" + columnFamilyName;
-        this.table = table;
-        columnFamily = columnFamilyName;
-        this.metadata = metadata;
-        this.minCompactionThreshold = new DefaultInteger(metadata.getMinCompactionThreshold());
-        this.maxCompactionThreshold = new DefaultInteger(metadata.getMaxCompactionThreshold());
-        this.memsize = new DefaultInteger(metadata.getMemtableThroughputInMb());
-        this.memops = new DefaultDouble(metadata.getMemtableOperationsInMillions());
-        this.rowCacheSaveInSeconds = new DefaultInteger(metadata.getRowCacheSavePeriodInSeconds());
-        this.keyCacheSaveInSeconds = new DefaultInteger(metadata.getKeyCacheSavePeriodInSeconds());
-        this.rowCacheKeysToSave = new DefaultInteger(metadata.getRowCacheKeysToSave());
-        this.partitioner = partitioner;
-        this.indexManager = new SecondaryIndexManager(this);
-        fileIndexGenerator.set(generation);
-
-        if (logger.isDebugEnabled())
-            logger.debug("Starting CFS {}", columnFamily);
-
-        ICache<Pair<Descriptor, DecoratedKey>, Long> kc = ConcurrentLinkedHashCache.create(0, table.name, columnFamilyName);
-        keyCache = new AutoSavingKeyCache<Pair<Descriptor, DecoratedKey>, Long>(kc, table.name, columnFamilyName);
-        ICache<DecoratedKey, ColumnFamily> rc = metadata.getRowCacheProvider().create(0, table.name, columnFamilyName);
-        rowCache = new AutoSavingRowCache<DecoratedKey, ColumnFamily>(rc, table.name, columnFamilyName);
-
-        // scan for sstables corresponding to this cf and load them
-        data = new DataTracker(this);
-        Set<DecoratedKey> savedKeys = keyCache.readSaved();
-        List<SSTableReader> sstables = new ArrayList<SSTableReader>();
-        for (Map.Entry<Descriptor,Set<Component>> sstableFiles : files(table.name, columnFamilyName, false, false).entrySet())
-        {
-            SSTableReader reader = openSSTableReader(sstableFiles, savedKeys, data, metadata, partitioner);
-
-            if (reader != null) // if == null, logger errors where already fired
-                sstables.add(reader);
-        }
-        data.addSSTables(sstables);
-
-        // compaction strategy should be created after the CFS has been prepared
-        this.compactionStrategy = metadata.createCompactionStrategyInstance(this);
-
-        // create the private ColumnFamilyStores for the secondary column indexes
-        for (ColumnDefinition info : metadata.getColumn_metadata().values())
-        {
-            if (info.getIndexType() != null)
-                indexManager.addIndexedColumn(info);
-        }
-
-        // register the mbean
-        String type = this.partitioner instanceof LocalPartitioner ? "IndexColumnFamilies" : "ColumnFamilies";
-        mbeanName = "org.apache.cassandra.db:type=" + type + ",keyspace=" + this.table.name + ",columnfamily=" + columnFamily;
-        try
-        {
-            MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-            ObjectName nameObj = new ObjectName(mbeanName);
-            mbs.registerMBean(this, nameObj);
-        }
-        catch (Exception e)
-        {
-            throw new RuntimeException(e);
-        }
-    }
-
-    // called when dropping or renaming a CF. Performs mbean housekeeping and invalidates CFS to other operations.
-    public void unregisterMBean()
-    {
-        try
-        {
-            invalid = true;   
-            MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-            ObjectName nameObj = new ObjectName(mbeanName);
-            if (mbs.isRegistered(nameObj))
-                mbs.unregisterMBean(nameObj);
-           
-            indexManager.unregisterMBeans();
-        }
-        catch (Exception e)
-        {
-            // this shouldn't block anything.
-            logger.warn(e.getMessage(), e);
-        }
-    }
-
-    public long getMinRowSize()
-    {
-        return data.getMinRowSize();
-    }
-
-    public long getMaxRowSize()
-    {
-        return data.getMaxRowSize();
-    }
-
-    public long getMeanRowSize()
-    {
-        return data.getMeanRowSize();
-    }
-
-    public int getMeanColumns()
-    {
-        return data.getMeanColumns();
-    }
-
-    public static ColumnFamilyStore createColumnFamilyStore(Table table, String columnFamily)
-    {
-        return createColumnFamilyStore(table, columnFamily, StorageService.getPartitioner(), Schema.instance.getCFMetaData(table.name, columnFamily));
-    }
-
-    public static synchronized ColumnFamilyStore createColumnFamilyStore(Table table, String columnFamily, IPartitioner partitioner, CFMetaData metadata)
-    {
-        // get the max generation number, to prevent generation conflicts
-        List<Integer> generations = new ArrayList<Integer>();
-        for (String path : DatabaseDescriptor.getAllDataFileLocationsForTable(table.name))
-        {
-            Iterable<Pair<Descriptor, Component>> pairs = files(new File(path), columnFamily);
-            File incrementalsPath = new File(path, "backups");
-            if (incrementalsPath.exists())
-                pairs = Iterables.concat(pairs, files(incrementalsPath, columnFamily));
-
-            for (Pair<Descriptor, Component> pair : pairs)
-            {
-                Descriptor desc = pair.left;
-                if (!desc.cfname.equals(columnFamily))
-                    continue;
-                generations.add(desc.generation);
-                if (desc.isFromTheFuture())
-                {
-                    throw new RuntimeException(String.format("Can't open sstables from the future! Current version %s, found file: %s",
-                                                             Descriptor.CURRENT_VERSION, desc));
-                }
-            }
-        }
-        Collections.sort(generations);
-        int value = (generations.size() > 0) ? (generations.get(generations.size() - 1)) : 0;
-
-        return new ColumnFamilyStore(table, columnFamily, partitioner, value, metadata);
-    }
-
-    /**
-     * Removes unnecessary files from the cf directory at startup: these include temp files, orphans, zero-length files
-     * and compacted sstables. Files that cannot be recognized will be ignored.
-     */
-    public static void scrubDataDirectories(String table, String columnFamily)
-    {
-        logger.info("Removing compacted SSTable files (see http://wiki.apache.org/cassandra/MemtableSSTable)");
-        for (Map.Entry<Descriptor,Set<Component>> sstableFiles : files(table, columnFamily, true, true).entrySet())
-        {
-            Descriptor desc = sstableFiles.getKey();
-            Set<Component> components = sstableFiles.getValue();
-
-            if (components.contains(Component.COMPACTED_MARKER) || desc.temporary)
-            {
-                try
-                {
-                    SSTable.delete(desc, components);
-                }
-                catch (IOException e)
-                {
-                    throw new IOError(e);
-                }
-                continue;
+            if (ejbModule.getEjbJar() == null) {
+                readEjbJar(ejbModule, appModule);
             }
 
-            File dataFile = new File(desc.filenameFor(Component.DATA));
-            if (components.contains(Component.DATA) && dataFile.length() > 0)
-                // everything appears to be in order... moving on.
-                continue;
-
-            // missing the DATA file! all components are orphaned
-            logger.warn("Removing orphans for {}: {}", desc, components);
-            for (Component component : components)
-            {
-                try
-                {
-                    FileUtils.deleteWithConfirm(desc.filenameFor(component));
-                }
-                catch (IOException e)
-                {
-                    throw new IOError(e);
-                }
+            if (ejbModule.getOpenejbJar() == null) {
+                readOpenejbJar(ejbModule);
             }
-        }
 
-        // cleanup incomplete saved caches
-        Pattern tmpCacheFilePattern = Pattern.compile(table + "-" + columnFamily + "-(Key|Row)Cache.*\\.tmp$");
-        File dir = new File(DatabaseDescriptor.getSavedCachesLocation());
-
-        if (dir.exists())
-        {
-            assert dir.isDirectory();
-            for (File file : dir.listFiles())
-                if (tmpCacheFilePattern.matcher(file.getName()).matches())
-                    if (!file.delete())
-                        logger.warn("could not delete " + file.getAbsolutePath());
-        }
-
-        // also clean out any index leftovers.
-        CFMetaData cfm = Schema.instance.getCFMetaData(table, columnFamily);
-        if (cfm != null) // secondary indexes aren't stored in DD.
-        {
-            for (ColumnDefinition def : cfm.getColumn_metadata().values())
-                scrubDataDirectories(table, cfm.indexColumnFamilyName(def));
-        }
-    }
-
-    // must be called after all sstables are loaded since row cache merges all row versions
-    public void initCaches()
-    {
-        long start = System.currentTimeMillis();
-        // results are sorted on read (via treeset) because there are few reads and many writes and reads only happen at startup
-        int cachedRowsRead = 0;
-        for (DecoratedKey key : rowCache.readSaved())
-        {
-            cacheRow(key);
-            if (cachedRowsRead++ > rowCache.getCapacity())
-            {
-                logger.debug(String.format("Stopped loading row cache after capacity %d was reached", rowCache.getCapacity()));
-                break;
+            if (ejbModule.getBeans() == null) {
+                readBeans(ejbModule);
             }
+
+            readValidationConfigType(ejbModule);
+            readCmpOrm(ejbModule);
+            readResourcesXml(ejbModule);
         }
-        if (rowCache.size() > 0)
-            logger.info(String.format("completed loading (%d ms; %d keys) row cache for %s.%s",
-                                      System.currentTimeMillis()-start,
-                                      rowCache.size(),
-                                      table.name,
-                                      columnFamily));
 
-        scheduleCacheSaving(metadata.getRowCacheSavePeriodInSeconds(), metadata.getKeyCacheSavePeriodInSeconds(), metadata.getRowCacheKeysToSave());
-    }
+        for (final ClientModule clientModule : appModule.getClientModules()) {
+            readAppClient(clientModule, appModule);
+            readValidationConfigType(clientModule);
+            readResourcesXml(clientModule);
+        }
 
-    public void scheduleCacheSaving(int rowCacheSavePeriodInSeconds, int keyCacheSavePeriodInSeconds, int rowCacheKeysToSave)
-    {
-        keyCache.scheduleSaving(keyCacheSavePeriodInSeconds, Integer.MAX_VALUE);
-        rowCache.scheduleSaving(rowCacheSavePeriodInSeconds, rowCacheKeysToSave);
-    }
+        for (final ConnectorModule connectorModule : appModule.getConnectorModules()) {
+            readConnector(connectorModule, appModule);
+            readValidationConfigType(connectorModule);
+            readResourcesXml(connectorModule);
+        }
 
-    public AutoSavingCache<Pair<Descriptor,DecoratedKey>, Long> getKeyCache()
-    {
-        return keyCache;
-    }
+        for (final WebModule webModule : appModule.getWebModules()) {
+            readWebApp(webModule, appModule);
+            readValidationConfigType(webModule);
+            readResourcesXml(webModule);
+        }
 
-    /**
-     * Collects a map of sstable components.
-     */
-    private static Map<Descriptor,Set<Component>> files(String keyspace, final String columnFamily, final boolean includeCompacted, final boolean includeTemporary)
-    {
-        final Map<Descriptor,Set<Component>> sstables = new HashMap<Descriptor,Set<Component>>();
-        for (String directory : DatabaseDescriptor.getAllDataFileLocationsForTable(keyspace))
-        {
-            for (Pair<Descriptor, Component> component : files(new File(directory), columnFamily))
-            {
-                if (component != null)
-                {
-                    if ((includeCompacted || !new File(component.left.filenameFor(Component.COMPACTED_MARKER)).exists())
-                     && (includeTemporary || !component.left.temporary))
-                    {
-                        Set<Component> components = sstables.get(component.left);
-                        if (components == null)
-                        {
-                            components = new HashSet<Component>();
-                            sstables.put(component.left, components);
+        final List<Object> persistenceUrls = (List<Object>) appModule.getAltDDs().get("persistence.xml");
+        if (persistenceUrls != null) {
+            for (final Object persistenceUrl : persistenceUrls) {
+                final boolean url = persistenceUrl instanceof URL;
+                final Source source = getSource(persistenceUrl);
+
+                final String moduleName;
+                final String path;
+                final String rootUrl;
+                if (url) {
+                    final URL pUrl = (URL) persistenceUrl;
+                    File file = URLs.toFile(pUrl);
+                    path = file.getAbsolutePath();
+
+                    if (file.getName().endsWith("persistence.xml")) {
+                        final File parentFile = file.getParentFile();
+                        final String parent = parentFile.getName();
+                        if (parent.equalsIgnoreCase("WEB-INF") || parent.equalsIgnoreCase("META-INF")) {
+                            file = parentFile.getParentFile();
+                        } else { // we don't really know so simply go back (users will often put persistence.xml in root resource folder with arquillian)
+                            file = file.getParentFile();
                         }
-                        components.add(component.right);
                     }
-                    else
-                        logger.debug("not including compacted sstable " + component.left.cfname + "-" + component.left.generation);
+                    moduleName = file.toURI().toString();
+
+                    String tmpRootUrl = moduleName;
+
+                    final String extForm = pUrl.toExternalForm();
+                    if (extForm.contains("WEB-INF/classes/META-INF/")) {
+                        if (!ROOT_URL_FROM_WEBINF) {
+                            tmpRootUrl = extForm.substring(0, extForm.indexOf("/META-INF"));
+                        } else {
+                            tmpRootUrl = extForm.substring(0, extForm.indexOf("/classes/META-INF"));
+                        }
+                    }
+                    if (tmpRootUrl.endsWith(".war")) {
+                        tmpRootUrl = tmpRootUrl.substring(0, tmpRootUrl.length() - ".war".length());
+                    }
+                    rootUrl = tmpRootUrl;
+                } else {
+                    moduleName = "";
+                    rootUrl = "";
+                    path = null;
+                }
+
+                try {
+                    final Persistence persistence = JaxbPersistenceFactory.getPersistence(Persistence.class, source.get());
+                    final PersistenceModule persistenceModule = new PersistenceModule(appModule, rootUrl, persistence);
+                    persistenceModule.getWatchedResources().add(moduleName);
+                    if (url && "file".equals(((URL) persistenceUrl).getProtocol())) {
+                        persistenceModule.getWatchedResources().add(path);
+                    }
+                    appModule.addPersistenceModule(persistenceModule);
+                } catch (final Exception e1) {
+                    DeploymentLoader.logger.error("Unable to load Persistence Unit from EAR: " + appModule.getJarLocation() + ", module: " + moduleName + ". Exception: " + e1.getMessage(), e1);
                 }
             }
         }
-        return sstables;
-    }
 
-    private static List<Pair<Descriptor, Component>> files(File path, final String columnFamilyName)
-    {
-        final List<Pair<Descriptor, Component>> sstables = new ArrayList<Pair<Descriptor, Component>>();
-        final String sstableFilePrefix = columnFamilyName + Component.separator;
+        final List<URL> persistenceFragmentUrls = (List<URL>) appModule.getAltDDs().get("persistence-fragment.xml");
+        if (persistenceFragmentUrls != null) {
+            for (final URL persistenceFragmentUrl : persistenceFragmentUrls) {
+                try {
+                    final PersistenceFragment persistenceFragment = JaxbPersistenceFactory.getPersistence(PersistenceFragment.class, persistenceFragmentUrl);
+                    // merging
+                    for (final PersistenceUnitFragment fragmentUnit : persistenceFragment.getPersistenceUnitFragment()) {
+                        for (final PersistenceModule persistenceModule : appModule.getPersistenceModules()) {
+                            final Persistence persistence = persistenceModule.getPersistence();
+                            for (final PersistenceUnit unit : persistence.getPersistenceUnit()) {
+                                if (!fragmentUnit.getName().equals(unit.getName())) {
+                                    continue;
+                                }
 
-        // NB: we never "accept" a file in the FilenameFilter sense: they are added to the sstable map
-        path.listFiles(new FileFilter()
-        {
-            public boolean accept(File file)
-            {
-                // we are only interested in the SSTable files that belong to the specific ColumnFamily
-                if (file.isDirectory() || !file.getName().startsWith(sstableFilePrefix))
-                    return false;
+                                if (!persistenceFragment.getVersion().equals(persistence.getVersion())) {
+                                    logger.error("persistence unit version and fragment version are different, fragment will be ignored");
+                                    continue;
+                                }
 
-                Pair<Descriptor, Component> pair = SSTable.tryComponentFromFilename(file.getParentFile(), file.getName());
+                                if ("file".equals(persistenceFragmentUrl.getProtocol())) {
+                                    persistenceModule.getWatchedResources().add(URLs.toFile(persistenceFragmentUrl).getAbsolutePath());
+                                }
 
-                if (pair != null)
-                    sstables.add(pair);
-
-                return false;
+                                for (final String clazz : fragmentUnit.getClazz()) {
+                                    if (!unit.getClazz().contains(clazz)) {
+                                        logger.info("Adding class " + clazz + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getClazz().add(clazz);
+                                    }
+                                }
+                                for (final String mappingFile : fragmentUnit.getMappingFile()) {
+                                    if (!unit.getMappingFile().contains(mappingFile)) {
+                                        logger.info("Adding mapping file " + mappingFile + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getMappingFile().add(mappingFile);
+                                    }
+                                }
+                                for (final String jarFile : fragmentUnit.getJarFile()) {
+                                    if (!unit.getJarFile().contains(jarFile)) {
+                                        logger.info("Adding jar file " + jarFile + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getJarFile().add(jarFile);
+                                    }
+                                }
+                                if (fragmentUnit.isExcludeUnlistedClasses()) {
+                                    unit.setExcludeUnlistedClasses(true);
+                                    logger.info("Excluding unlisted classes for persistence unit " + fragmentUnit.getName());
+                                } // else let the main persistence unit decide
+                            }
+                        }
+                    }
+                } catch (final Exception e1) {
+                    DeploymentLoader.logger.error("Unable to load Persistence Unit Fragment from EAR: " + appModule.getJarLocation() + ", fragment: " + persistenceFragmentUrl.toString() + ". Exception: " + e1.getMessage(), e1);
+                }
             }
-        });
-
-        return sstables;
-    }
-
-    /**
-     * See #{@code StorageService.loadNewSSTables(String, String)} for more info
-     *
-     * @param ksName The keyspace name
-     * @param cfName The columnFamily name
-     */
-    public static synchronized void loadNewSSTables(String ksName, String cfName)
-    {
-        /** ks/cf existence checks will be done by open and getCFS methods for us */
-        Table table = Table.open(ksName);
-        table.getColumnFamilyStore(cfName).loadNewSSTables();
-    }
-
-    /**
-     * #{@inheritDoc}
-     */
-    public synchronized void loadNewSSTables()
-    {
-        logger.info("Loading new SSTables for " + table.name + "/" + columnFamily + "...");
-
-        // current view over ColumnFamilyStore
-        DataTracker.View view = data.getView();
-        // descriptors of currently registered SSTables
-        Set<Descriptor> currentDescriptors = new HashSet<Descriptor>();
-        // going to hold new SSTable view of the CFS containing old and new SSTables
-        Set<SSTableReader> sstables = new HashSet<SSTableReader>();
-        Set<DecoratedKey> savedKeys = keyCache.readSaved();
-        // get the max generation number, to prevent generation conflicts
-        int generation = 0;
-
-        for (SSTableReader reader : view.sstables)
-        {
-            sstables.add(reader); // first of all, add old SSTables
-            currentDescriptors.add(reader.descriptor);
-
-            if (reader.descriptor.generation > generation)
-                generation = reader.descriptor.generation;
         }
 
-        SSTableReader reader;
-        // set to true if we have at least one new SSTable to load
-        boolean atLeastOneNew = false;
+        return appModule;
+    }
 
-        for (Map.Entry<Descriptor, Set<Component>> rawSSTable : files(table.name, columnFamily, false, false).entrySet())
-        {
-            Descriptor descriptor = rawSSTable.getKey();
+    public static void readResourcesXml(final Module module) {
+        { // xml
+            final Source url = getSource(module.getAltDDs().get("resources.xml"));
+            if (url != null) {
+                try {
+                    final Resources openejb = JaxbOpenejb.unmarshal(Resources.class, url.get());
+                    module.initResources(check(openejb));
+                } catch (final Exception e) {
+                    logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
+                }
+            }
+        }
+        { // json
+            final Source url = getSource(module.getAltDDs().get("resources.json"));
+            if (url != null) {
+                try {
+                    final Resources openejb = JSonConfigReader.read(Resources.class, url.get());
+                    module.initResources(check(openejb));
+                } catch (final Exception e) {
+                    logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
+                }
+            }
+        }
+    }
 
-            if (currentDescriptors.contains(descriptor))
-                continue; // old (initialized) SSTable found, skipping
+    public static Resources check(final Resources resources) {
+        final List<Resource> resourceList = resources.getResource();
+        for (final Resource resource : resourceList) {
+            if (resource.getClassName() != null) {
+                try {
+                    ParentClassLoaderFinder.Helper.get().loadClass(resource.getClassName());
+                    continue;
+                } catch (Exception e) {
+                    // ignore if this class is not found in the classloader
+                }
 
-            if (!descriptor.cfname.equals(columnFamily))
-                continue;
+                // if the resource class cannot be loaded,
+                // set the lazy property to true
+                // and the app classloader property to true
 
-            if (descriptor.isFromTheFuture())
-                throw new RuntimeException(String.format("Can't open sstables from the future! Current version %s, found file: %s",
-                                                         Descriptor.CURRENT_VERSION,
-                                                         descriptor));
+                final Boolean lazySpecified = Boolean.valueOf(resource.getProperties().getProperty("Lazy", "false"));
 
-            logger.info("Initializing new SSTable {}", rawSSTable);
-            reader = openSSTableReader(rawSSTable, savedKeys, data, metadata, partitioner);
+                resource.getProperties().setProperty("Lazy", "true");
+                resource.getProperties().setProperty("UseAppClassLoader", "true");
 
-            if (reader == null)
-                continue; // something wrong with SSTable, skipping
-
-            sstables.add(reader);
-
-            if (descriptor.generation > generation)
-                generation = descriptor.generation;
-
-            if (!atLeastOneNew) // set flag only once
-                atLeastOneNew = true;
+                if (!lazySpecified) {
+                    resource.getProperties().setProperty("InitializeAfterDeployment", "true");
+                }
+            }
         }
 
-        if (!atLeastOneNew)
-        {
-            logger.info("No new SSTables where found for " + table.name + "/" + columnFamily);
+        return resources;
+    }
+
+    private void readValidationConfigType(final Module module) throws OpenEJBException {
+        if (module.getValidationConfig() != null) {
             return;
         }
 
-        logger.info("Loading new SSTable Set for " + table.name + "/" + columnFamily + ": " + sstables);
-        data.addSSTables(sstables); // this will call updateCacheSizes() for us
-
-        logger.info("Requesting a full secondary index re-build for " + table.name + "/" + columnFamily);
-        indexManager.maybeBuildSecondaryIndexes(sstables, indexManager.getIndexedColumns());
-
-        logger.info("Setting up new generation: " + generation);
-        fileIndexGenerator.set(generation);
-
-        logger.info("Done loading load new SSTables for " + table.name + "/" + columnFamily);
+        final Source value = getSource(module.getAltDDs().get("validation.xml"));
+        if (value != null) {
+            try {
+                final ValidationConfigType validationConfigType = JaxbOpenejb.unmarshal(ValidationConfigType.class, value.get(), false);
+                module.setValidationConfig(validationConfigType);
+            } catch (final Exception e) {
+                logger.warning("can't read validation.xml to construct a validation factory, it will be ignored");
+            }
+        }
     }
 
-    /**
-     * @return the name of the column family
-     */
-    public String getColumnFamilyName()
-    {
-        return columnFamily;
-    }
+    private void readOpenejbJar(final EjbModule ejbModule) throws OpenEJBException {
+        final Source source = getSource(ejbModule.getAltDDs().get("openejb-jar.xml"));
 
-    /*
-     * @return a temporary file name for an sstable.
-     * When the sstable object is closed, it will be renamed to a non-temporary
-     * format, so incomplete sstables can be recognized and removed on startup.
-     */
-    public String getFlushPath(long estimatedSize, String version)
-    {
-        String location = table.getDataFileLocation(estimatedSize);
-        if (location == null)
-            throw new RuntimeException("Insufficient disk space to flush " + estimatedSize + " bytes");
-        return getTempSSTablePath(location, version);
-    }
+        if (source != null) {
+            try {
+                // Attempt to parse it first as a v3 descriptor
+                final OpenejbJar openejbJar = JaxbOpenejbJar3.unmarshal(OpenejbJar.class, source.get()).postRead();
+                ejbModule.setOpenejbJar(openejbJar);
+            } catch (final Exception v3ParsingException) {
+                // Attempt to parse it second as a v2 descriptor
+                final OpenejbJar openejbJar = new OpenejbJar();
+                ejbModule.setOpenejbJar(openejbJar);
 
-    public String getTempSSTablePath(String directory, String version)
-    {
-        Descriptor desc = new Descriptor(version,
-                                         new File(directory),
-                                         table.name,
-                                         columnFamily,
-                                         fileIndexGenerator.incrementAndGet(),
-                                         true);
-        return desc.filenameFor(Component.DATA);
-    }
+                try {
+                    final JAXBElement element = (JAXBElement) JaxbOpenejbJar2.unmarshal(OpenejbJarType.class, source.get());
+                    final OpenejbJarType o2 = (OpenejbJarType) element.getValue();
+                    ejbModule.getAltDDs().put("openejb-jar.xml", o2);
 
-    public String getTempSSTablePath(String directory)
-    {
-        return getTempSSTablePath(directory, Descriptor.CURRENT_VERSION);
-    }
+                    final GeronimoEjbJarType g2 = OpenEjb2Conversion.convertToGeronimoOpenejbXml(o2);
 
-    /** flush the given memtable and swap in a new one for its CFS, if it hasn't been frozen already.  threadsafe. */
-    public Future<?> maybeSwitchMemtable(Memtable oldMemtable, final boolean writeCommitLog)
-    {
-        if (oldMemtable.isFrozen())
-        {
-            logger.debug("memtable is already frozen; another thread must be flushing it");
-            return null;
+                    ejbModule.getAltDDs().put("geronimo-openejb.xml", g2);
+                } catch (final Exception v2ParsingException) {
+                    // Now we have to determine which error to throw; the v3 file exception or the fallback v2 file exception.
+                    final Exception[] realIssue = {v3ParsingException};
+
+                    try {
+                        final SAXParserFactory factory = Saxs.namespaceAwareFactory();
+                        final SAXParser parser = factory.newSAXParser();
+                        parser.parse(source.get(), new DefaultHandler() {
+                            public void startElement(final String uri, final String localName, final String qName, final Attributes attributes) throws SAXException {
+                                if (localName.equals("environment")) {
+                                    realIssue[0] = v2ParsingException;
+                                    throw new SAXException("Throw exception to stop parsing");
+                                }
+                                if (uri == null) {
+                                    return;
+                                }
+                                if (uri.contains("openejb-jar-2.") || uri.contains("geronimo.apache.org/xml/ns")) {
+                                    realIssue[0] = v2ParsingException;
+                                    throw new SAXException("Throw exception to stop parsing");
+                                }
+                            }
+                        });
+                    } catch (final Exception dontCare) {
+                        // no-op
+                    }
+
+                    String filePath = "<error: could not be written>";
+                    try {
+                        File tempFile;
+                        try {
+                            tempFile = File.createTempFile("openejb-jar-", ".xml");
+                        } catch (final Throwable e) {
+                            final File tmp = new File("tmp");
+                            if (!tmp.exists() && !tmp.mkdirs()) {
+                                throw new IOException("Failed to create local tmp directory: " + tmp.getAbsolutePath());
+                            }
+
+                            tempFile = File.createTempFile("openejb-jar-", ".xml", tmp);
+                        }
+                        try {
+                            IO.copy(source.get(), tempFile);
+                        } catch (final IOException e) {
+                            // no-op
+                        }
+                        filePath = tempFile.getAbsolutePath();
+                    } catch (final IOException e) {
+                        // no-op
+                    }
+
+                    final Exception e = realIssue[0];
+                    if (e instanceof SAXException) {
+                        throw new OpenEJBException("Cannot parse the openejb-jar.xml. Xml content written to: " + filePath, e);
+                    } else if (e instanceof JAXBException) {
+                        throw new OpenEJBException("Cannot unmarshall the openejb-jar.xml. Xml content written to: " + filePath, e);
+                    } else if (e instanceof IOException) {
+                        throw new OpenEJBException("Cannot read the openejb-jar.xml.", e);
+                    } else {
+                        throw new OpenEJBException("Encountered unknown error parsing the openejb-jar.xml.", e);
+                    }
+                }
+            }
         }
 
-        /*
-         * If we can get the writelock, that means no new updates can come in and
-         * all ongoing updates to memtables have completed. We can get the tail
-         * of the log and use it as the starting position for log replay on recovery.
-         *
-         * This is why we Table.flusherLock needs to be global instead of per-Table:
-         * we need to schedule discardCompletedSegments calls in the same order as their
-         * contexts (commitlog position) were read, even though the flush executor
-         * is multithreaded.
-         */
-        Table.switchLock.writeLock().lock();
-        try
-        {
-            if (oldMemtable.isFrozen())
-            {
-                logger.debug("memtable is already frozen; another thread must be flushing it");
-                return null;
-            }
-
-            assert getMemtableThreadSafe() == oldMemtable;
-            oldMemtable.freeze();
-            final ReplayPosition ctx = writeCommitLog ? CommitLog.instance.getContext() : ReplayPosition.NONE;
-            logger.debug("flush position is {}", ctx);
-
-            // submit the memtable for any indexed sub-cfses, and our own.
-            List<ColumnFamilyStore> icc = new ArrayList<ColumnFamilyStore>();
-            // don't assume that this.memtable is dirty; forceFlush can bring us here during index build even if it is not
-            for (ColumnFamilyStore cfs : concatWithIndexes())
-            {
-                if (!cfs.getMemtableThreadSafe().isClean())
-                    icc.add(cfs);
-            }
-            final CountDownLatch latch = new CountDownLatch(icc.size());
-            for (ColumnFamilyStore cfs : icc)
-            {
-                Memtable memtable = cfs.data.switchMemtable();
-                logger.info("Enqueuing flush of {}", memtable);
-                memtable.flushAndSignal(latch, flushWriter, ctx);
-            }
-
-            // we marked our memtable as frozen as part of the concurrency control,
-            // so even if there was nothing to flush we need to switch it out
-            if (!icc.contains(this))
-                data.renewMemtable();
-
-            if (memtableSwitchCount == Integer.MAX_VALUE)
-                memtableSwitchCount = 0;
-            memtableSwitchCount++;
-
-            // when all the memtables have been written, including for indexes, mark the flush in the commitlog header.
-            // a second executor makes sure the onMemtableFlushes get called in the right order,
-            // while keeping the wait-for-flush (future.get) out of anything latency-sensitive.
-            return postFlushExecutor.submit(new WrappedRunnable()
-            {
-                public void runMayThrow() throws InterruptedException, IOException
-                {
-                    latch.await();
-                    if (writeCommitLog)
-                    {
-                        // if we're not writing to the commit log, we are replaying the log, so marking
-                        // the log header with "you can discard anything written before the context" is not valid
-                        CommitLog.instance.discardCompletedSegments(metadata.cfId, ctx);
+        final Source source1 = getSource(ejbModule.getAltDDs().get("geronimo-openejb.xml"));
+        if (source1 != null) {
+            try {
+                GeronimoEjbJarType geronimoEjbJarType = null;
+                final Object o = JaxbOpenejbJar2.unmarshal(GeronimoEjbJarType.class, source1.get());
+                if (o instanceof GeronimoEjbJarType) {
+                    geronimoEjbJarType = (GeronimoEjbJarType) o;
+                } else if (o instanceof JAXBElement) {
+                    final JAXBElement element = (JAXBElement) o;
+                    geronimoEjbJarType = (GeronimoEjbJarType) element.getValue();
+                }
+                if (geronimoEjbJarType != null) {
+                    final Object nested = geronimoEjbJarType.getOpenejbJar();
+                    if (nested != null && nested instanceof OpenejbJar) {
+                        final OpenejbJar existingOpenejbJar = ejbModule.getOpenejbJar();
+                        if (existingOpenejbJar == null || existingOpenejbJar.getEjbDeploymentCount() <= 0) {
+                            final OpenejbJar openejbJar = (OpenejbJar) nested;
+                            ejbModule.getAltDDs().put("openejb-jar.xml", openejbJar);
+                            ejbModule.setOpenejbJar(openejbJar);
+                        }
                     }
+                    ejbModule.getAltDDs().put("geronimo-openejb.xml", geronimoEjbJarType);
+                }
+            } catch (final Exception e) {
+                throw new OpenEJBException("Failed parsing geronimo-openejb.xml", e);
+            }
+        }
+
+    }
+
+    private void readAppClient(final ClientModule clientModule, final AppModule appModule) throws OpenEJBException {
+        if (clientModule.getApplicationClient() != null) {
+            return;
+        }
+
+        final Object data = clientModule.getAltDDs().get("application-client.xml");
+        if (data instanceof ApplicationClient) {
+            clientModule.setApplicationClient((ApplicationClient) data);
+        } else if (data instanceof URL) {
+            final URL url = (URL) data;
+            final ApplicationClient applicationClient = readApplicationClient(url);
+            clientModule.setApplicationClient(applicationClient);
+        } else {
+            if (!clientModule.isEjbModuleGenerated()) {
+                DeploymentLoader.logger.debug("No application-client.xml found assuming annotations present: " + appModule.getJarLocation() + ", module: " + clientModule.getModuleId());
+                clientModule.setApplicationClient(new ApplicationClient());
+            }
+        }
+    }
+
+    public void readEjbJar(final EjbModule ejbModule, final AppModule appModule) throws OpenEJBException {
+        if (ejbModule.getEjbJar() != null) {
+            return;
+        }
+
+        final Source data = getSource(ejbModule.getAltDDs().get("ejb-jar.xml"));
+        if (data != null) {
+            try {
+                final EjbJar ejbJar = readEjbJar(data.get());
+                ejbModule.setEjbJar(ejbJar);
+            } catch (final IOException e) {
+                throw new OpenEJBException(e);
+            }
+        } else {
+            DeploymentLoader.logger.debug("No ejb-jar.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + ejbModule.getModuleId());
+            ejbModule.setEjbJar(new EjbJar());
+        }
+    }
+
+    private static void checkDuplicatedByBeansXml(final List<String> list, final List<String> duplicated) {
+        final Iterator<String> it = list.iterator();
+        while (it.hasNext()) {
+            final String str = it.next();
+            if (list.indexOf(str) != list.lastIndexOf(str)) {
+                duplicated.add(str);
+            }
+        }
+    }
+
+    public static void checkDuplicatedByBeansXml(final Beans beans, final Beans complete) {
+        checkDuplicatedByBeansXml(beans.getAlternativeClasses(), complete.getDuplicatedAlternatives().getClasses());
+        checkDuplicatedByBeansXml(beans.getAlternativeStereotypes(), complete.getDuplicatedAlternatives().getStereotypes());
+        checkDuplicatedByBeansXml(beans.getDecorators(), complete.getDuplicatedDecorators());
+        checkDuplicatedByBeansXml(beans.getInterceptors(), complete.getDuplicatedInterceptors());
+    }
+
+    private void readBeans(final EjbModule ejbModule) throws OpenEJBException {
+        if (ejbModule.getBeans() != null) {
+            return;
+        }
+
+        final Object raw = ejbModule.getAltDDs().get("beans.xml");
+        final Source data = getSource(raw);
+        if (data != null) {
+            try {
+                final Beans beans = readBeans(data.get());
+                checkDuplicatedByBeansXml(beans, beans);
+                if (UrlSource.class.isInstance(data)) {
+                    beans.setUri(UrlSource.class.cast(data).getUrl().toExternalForm());
+                } else {
+                    beans.setUri("jar:file://" + ejbModule.getModuleId() + "!/META-INF/beans.xml");
+                }
+                ejbModule.setBeans(beans);
+            } catch (final IOException e) {
+                throw new OpenEJBException(e);
+            }
+        } else if (raw instanceof Beans) {
+            ejbModule.setBeans((Beans) raw);
+        } else if (List.class.isInstance(raw)) {
+            final CompositeBeans compositeBeans = new CompositeBeans();
+            final List list = List.class.cast(raw);
+            if (!list.isEmpty()) {
+                for (final Object o : list) {
+                    try {
+                        final UrlSource urlSource = UrlSource.class.cast(o);
+                        mergeBeansXml(compositeBeans, readBeans(urlSource.get()), urlSource.getUrl());
+                    } catch (final IOException e) {
+                        throw new OpenEJBException(e);
+                    }
+                }
+                ejbModule.setBeans(compositeBeans);
+            }
+        }
+    }
+
+    private static Beans mergeBeansXml(final CompositeBeans current, final Beans beans, final URL url) {
+        current.mergeClasses(url, beans);
+        current.getScan().getExclude().addAll(beans.getScan().getExclude());
+
+        // check is done here since later we lost the data of the origin
+        ReadDescriptors.checkDuplicatedByBeansXml(beans, current);
+
+        final String beanDiscoveryMode = beans.getBeanDiscoveryMode();
+        current.getDiscoveryByUrl().put(url, beanDiscoveryMode == null ? "ALL" : beanDiscoveryMode);
+        return current;
+    }
+
+    // package scoped for testing
+    void readCmpOrm(final EjbModule ejbModule) throws OpenEJBException {
+        final Object data = ejbModule.getAltDDs().get("openejb-cmp-orm.xml");
+        if (data != null && !(data instanceof EntityMappings)) {
+            if (data instanceof URL) {
+                final URL url = (URL) data;
+                try {
+                    final EntityMappings entitymappings = (EntityMappings) JaxbJavaee.unmarshalJavaee(EntityMappings.class, IO.read(url));
+                    ejbModule.getAltDDs().put("openejb-cmp-orm.xml", entitymappings);
+                } catch (final SAXException e) {
+                    throw new OpenEJBException("Cannot parse the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+                } catch (final JAXBException e) {
+                    throw new OpenEJBException("Cannot unmarshall the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+                } catch (final IOException e) {
+                    throw new OpenEJBException("Cannot read the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+                } catch (final Exception e) {
+                    throw new OpenEJBException("Encountered unknown error parsing the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+                }
+            }
+        }
+    }
+
+    private void readConnector(final ConnectorModule connectorModule, final AppModule appModule) throws OpenEJBException {
+        if (connectorModule.getConnector() != null) {
+            return;
+        }
+
+        final Object data = connectorModule.getAltDDs().get("ra.xml");
+        if (data instanceof Connector) {
+            connectorModule.setConnector((Connector) data);
+        } else if (data instanceof URL) {
+            final URL url = (URL) data;
+            final Connector connector = readConnector(url);
+            connectorModule.setConnector(connector);
+        } else {
+            DeploymentLoader.logger.debug("No ra.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + connectorModule.getModuleId());
+            connectorModule.setConnector(new Connector());
+        }
+    }
+
+    private void readWebApp(final WebModule webModule, final AppModule appModule) throws OpenEJBException {
+        if (webModule.getWebApp() != null) {
+            mergeWebFragments(webModule);
+            return;
+        }
+
+        final Object data = webModule.getAltDDs().get("web.xml");
+        if (data instanceof WebApp) {
+            webModule.setWebApp((WebApp) data);
+        } else if (data instanceof URL) {
+            final URL url = (URL) data;
+            final WebApp webApp = readWebApp(url);
+            webModule.setWebApp(webApp);
+        } else {
+            DeploymentLoader.logger.debug("No web.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + webModule.getModuleId());
+            webModule.setWebApp(new WebApp());
+        }
+
+        mergeWebFragments(webModule);
+    }
+
+    private void mergeWebFragments(final WebModule webModule) {
+        // web-fragment.xml, to get jndi entries to merge, other stuff is done by tomcat ATM
+        final Collection<URL> urls = Collection.class.cast(webModule.getAltDDs().get("web-fragment.xml"));
+        if (urls != null) {
+            for (final URL rawUrl : urls) {
+                if (rawUrl != null) {
+                    final Source url = getSource(rawUrl);
+                    try {
+                        final WebFragment webFragment = WebFragment.class.cast(JaxbJavaee.unmarshal(WebFragment.class, url.get(), false));
+
+                        // in tomcat if the env entry is already don't override it
+                        mergeOnlyMissingEntries(webModule.getWebApp().getPersistenceContextRefMap(), webFragment.getPersistenceContextRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getPersistenceUnitRefMap(), webFragment.getPersistenceUnitRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getMessageDestinationRefMap(), webFragment.getMessageDestinationRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getDataSourceMap(), webFragment.getDataSource());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getJMSConnectionFactoriesMap(), webFragment.getJMSConnectionFactories());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getEjbLocalRefMap(), webFragment.getEjbLocalRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getEjbRefMap(), webFragment.getEjbRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getServiceRefMap(), webFragment.getServiceRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getEnvEntryMap(), webFragment.getEnvEntry());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getResourceEnvRefMap(), webFragment.getResourceEnvRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getResourceRefMap(), webFragment.getResourceRef());
+                    } catch (final Exception e) {
+                        logger.warning("can't read " + url.toString(), e);
+                    }
+                }
+            }
+        }
+    }
+
+    private static <A extends Keyable<String>> void mergeOnlyMissingEntries(final Map<String, A> existing, final Collection<A> news) {
+        for (final A entry : news) {
+            final String key = entry.getKey();
+            if (!existing.containsKey(key)) {
+                existing.put(key, entry);
+            }
+        }
+    }
+
+    public static ApplicationClient readApplicationClient(final URL url) throws OpenEJBException {
+        final ApplicationClient applicationClient;
+        try {
+            applicationClient = ApplicationClientXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the application-client.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the application-client.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the application-client.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the application-client.xml file: " + url.toExternalForm(), e);
+        }
+        return applicationClient;
+    }
+
+    public static EjbJar readEjbJar(final InputStream is) throws OpenEJBException {
+        try {
+            final String content = IO.slurp(is);
+            if (isEmptyEjbJar(new ByteArrayInputStream(content.getBytes()))) {
+                final String id = getId(new ByteArrayInputStream(content.getBytes()));
+                return new EjbJar(id);
+            }
+            return EjbJarXml.unmarshal(new ByteArrayInputStream(content.getBytes()));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered error parsing the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
+        }
+    }
+
+    public static Beans readBeans(final InputStream inputStream) throws OpenEJBException {
+        try {
+            final String content = IO.slurp(inputStream).trim();
+            if (content.length() == 0) { // otherwise we want to read <beans /> attributes
+                final Beans beans = new Beans();
+                beans.setBeanDiscoveryMode("ALL"); // backward compatibility
+                return beans;
+            }
+            return (Beans) JaxbJavaee.unmarshalJavaee(Beans.class, new ByteArrayInputStream(content.getBytes()));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the beans.xml", e);// file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            e.printStackTrace();
+            throw new OpenEJBException("Cannot unmarshall the beans.xml", e);// file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the beans.xml", e);// file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the beans.xml", e);// file: " + url.toExternalForm(), e);
+        }
+    }
+
+    private static boolean isEmptyEjbJar(final InputStream is) throws IOException, ParserConfigurationException, SAXException {
+        return isEmpty(is, "ejb-jar");
+    }
+
+    private static boolean isEmpty(final InputStream is, final String rootElement) throws IOException, ParserConfigurationException, SAXException {
+        final LengthInputStream in = new LengthInputStream(is);
+        final InputSource inputSource = new InputSource(in);
+
+        final SAXParser parser;
+
+        final Thread thread = Thread.currentThread();
+        final ClassLoader original = thread.getContextClassLoader();
+        thread.setContextClassLoader(Saxs.class.getClassLoader());
+        try {
+            parser = Saxs.namespaceAwareFactory().newSAXParser();
+        } finally {
+            thread.setContextClassLoader(original);
+        }
+
+        try {
+            parser.parse(inputSource, new DefaultHandler() {
+                public void startElement(final String uri, final String localName, final String qName, final Attributes att) throws SAXException {
+                    if (!localName.equals(rootElement)) {
+                        throw new SAXException(localName);
+                    }
+                }
+
+                public InputSource resolveEntity(final String publicId, final String systemId) throws IOException, SAXException {
+                    return new InputSource(new ByteArrayInputStream(new byte[0]));
                 }
             });
-        }
-        finally
-        {
-            Table.switchLock.writeLock().unlock();
-        }
-    }
-
-    public boolean isDropped()
-    {
-        return isIndex()
-               ? Schema.instance.getCFMetaData(table.name, getParentColumnfamily()) == null
-               : Schema.instance.getCFMetaData(metadata.cfId) == null;
-    }
-
-    public Future<?> forceFlush()
-    {
-        // during index build, 2ary index memtables can be dirty even if parent is not.  if so,
-        // we want flushLargestMemtables to flush the 2ary index ones too.
-        boolean clean = true;
-        for (ColumnFamilyStore cfs : concatWithIndexes())
-            clean &= cfs.getMemtableThreadSafe().isClean();
-
-        if (clean)
-        {
-            logger.debug("forceFlush requested but everything is clean");
-            return null;
-        }
-
-        return maybeSwitchMemtable(getMemtableThreadSafe(), true);
-    }
-
-    public void forceBlockingFlush() throws ExecutionException, InterruptedException
-    {
-        Future<?> future = forceFlush();
-        if (future != null)
-            future.get();
-    }
-
-    public void updateRowCache(DecoratedKey key, ColumnFamily columnFamily)
-    {
-        if (rowCache.isPutCopying())
-        {
-            invalidateCachedRow(key);
-        }
-        else
-        {
-            ColumnFamily cachedRow = getRawCachedRow(key);
-            if (cachedRow != null)
-                cachedRow.addAll(columnFamily, HeapAllocator.instance);
+            return true;
+        } catch (final SAXException e) {
+            return in.getLength() == 0;
         }
     }
 
-    /**
-     * Insert/Update the column family for this key.
-     * Caller is responsible for acquiring Table.flusherLock!
-     * param @ lock - lock that needs to be used.
-     * param @ key - key for update/insert
-     * param @ columnFamily - columnFamily changes
-     */
-    public Memtable apply(DecoratedKey key, ColumnFamily columnFamily)
-    {
-        long start = System.nanoTime();
+    private static String getId(final InputStream is) {
+        final String[] id = {null};
 
-        Memtable mt = getMemtableThreadSafe();
-        boolean flushRequested = mt.isThresholdViolated();
-        mt.put(key, columnFamily);
-        updateRowCache(key, columnFamily);
-        writeStats.addNano(System.nanoTime() - start);
+        try {
+            final LengthInputStream in = new LengthInputStream(is);
+            final InputSource inputSource = new InputSource(in);
 
-        if (DatabaseDescriptor.estimatesRealMemtableSize())
-        {
-            while (true)
-            {
-                long last = liveRatioComputedAt.get();
-                long operations = writeStats.getOpCount();
-                if (operations < 2 * last)
-                    break;
-                if (liveRatioComputedAt.compareAndSet(last, operations))
-                {
-                    logger.debug("computing liveRatio of {} at {} ops", this, operations);
-                    mt.updateLiveRatio();
+            final SAXParser parser = Saxs.namespaceAwareFactory().newSAXParser();
+
+            parser.parse(inputSource, new DefaultHandler() {
+                public void startElement(final String uri, final String localName, final String qName, final Attributes att) throws SAXException {
+                    id[0] = att.getValue("id");
                 }
-            }
-        }
 
-        return flushRequested ? mt : null;
-    }
-
-    public static ColumnFamily removeDeletedCF(ColumnFamily cf, int gcBefore)
-    {
-        // in case of a timestamp tie, tombstones get priority over non-tombstones.
-        // (we want this to be deterministic to avoid confusion.)
-        if (cf.getColumnCount() == 0 && cf.getLocalDeletionTime() <= gcBefore)
-            return null;
-
-        // If there is non deleted columns, we still need to reset the column family
-        // deletion times since gc_grace seconds had elapsed
-        cf.maybeResetDeletionTimes(gcBefore);
-        return cf;
-    }
-
-    /*
-     This is complicated because we need to preserve deleted columns, supercolumns, and columnfamilies
-     until they have been deleted for at least GC_GRACE_IN_SECONDS.  But, we do not need to preserve
-     their contents; just the object itself as a "tombstone" that can be used to repair other
-     replicas that do not know about the deletion.
-     */
-    public static ColumnFamily removeDeleted(ColumnFamily cf, int gcBefore)
-    {
-        if (cf == null)
-        {
-            return null;
-        }
-
-        removeDeletedColumnsOnly(cf, gcBefore);
-        return removeDeletedCF(cf, gcBefore);
-    }
-
-    public static void removeDeletedColumnsOnly(ColumnFamily cf, int gcBefore)
-    {
-        if (cf.isSuper())
-            removeDeletedSuper(cf, gcBefore);
-        else
-            removeDeletedStandard(cf, gcBefore);
-    }
-
-    private static void removeDeletedStandard(ColumnFamily cf, int gcBefore)
-    {
-        for (IColumn c : cf)
-        {
-            ByteBuffer cname = c.name();
-            // remove columns if
-            // (a) the column itself is tombstoned or
-            // (b) the CF is tombstoned and the column is not newer than it
-            if ((c.isMarkedForDelete() && c.getLocalDeletionTime() <= gcBefore)
-                || c.timestamp() <= cf.getMarkedForDeleteAt())
-            {
-                cf.remove(cname);
-            }
-        }
-    }
-
-    private static void removeDeletedSuper(ColumnFamily cf, int gcBefore)
-    {
-        // TODO assume deletion means "most are deleted?" and add to clone, instead of remove from original?
-        // this could be improved by having compaction, or possibly even removeDeleted, r/m the tombstone
-        // once gcBefore has passed, so if new stuff is added in it doesn't used the wrong algorithm forever
-        Iterator<IColumn> iter = cf.iterator();
-        while (iter.hasNext())
-        {
-            SuperColumn c = (SuperColumn)iter.next();
-            long minTimestamp = Math.max(c.getMarkedForDeleteAt(), cf.getMarkedForDeleteAt());
-            for (IColumn subColumn : c.getSubColumns())
-            {
-                // remove subcolumns if
-                // (a) the subcolumn itself is tombstoned or
-                // (b) the supercolumn is tombstoned and the subcolumn is not newer than it
-                if (subColumn.timestamp() <= minTimestamp
-                    || (subColumn.isMarkedForDelete() && subColumn.getLocalDeletionTime() <= gcBefore))
-                {
-                    c.remove(subColumn.name());
+                public InputSource resolveEntity(final String publicId, final String systemId) throws IOException, SAXException {
+                    return new InputSource(new ByteArrayInputStream(new byte[0]));
                 }
-            }
-            if (c.getSubColumns().isEmpty() && c.getLocalDeletionTime() <= gcBefore)
-            {
-                iter.remove();
-            }
-            else
-            {
-                // If there is non deleted columns, we still need to reset the column family
-                // deletion times since gc_grace seconds had elapsed
-                c.maybeResetDeletionTimes(gcBefore);
-            }
+            });
+        } catch (final Exception e) {
+            // no-op
+        }
+
+        return id[0];
+    }
+
+    public static Webservices readWebservices(final URL url) throws OpenEJBException {
+        try {
+            return WebservicesXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
         }
     }
 
-    /**
-     * Uses bloom filters to check if key may be present in any sstable in this
-     * ColumnFamilyStore, minus a set of provided ones.
-     *
-     * Because BFs are checked, negative returns ensure that the key is not
-     * present in the checked SSTables, but positive ones doesn't ensure key
-     * presence.
-     */
-    public boolean isKeyInRemainingSSTables(DecoratedKey key, Set<? extends SSTable> sstablesToIgnore)
-    {
-        // we don't need to acquire references here, since the bloom filter is safe to use even post-compaction
-        List<SSTableReader> filteredSSTables = data.getView().intervalTree.search(new Interval(key, key));
-        for (SSTableReader sstable : filteredSSTables)
-        {
-            if (!sstablesToIgnore.contains(sstable) && sstable.getBloomFilter().isPresent(key.key))
-                return true;
+    public static HandlerChains readHandlerChains(final URL url) throws OpenEJBException {
+        try {
+            return HandlerChainsXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
         }
-        return false;
     }
 
-    /*
-     * Called after a BinaryMemtable flushes its in-memory data, or we add a file
-     * via bootstrap. This information is cached in the ColumnFamilyStore.
-     * This is useful for reads because the ColumnFamilyStore first looks in
-     * the in-memory store and the into the disk to find the key. If invoked
-     * during recoveryMode the onMemtableFlush() need not be invoked.
-     *
-     * param @ filename - filename just flushed to disk
-     */
-    public void addSSTable(SSTableReader sstable)
-    {
-        assert sstable.getColumnFamilyName().equals(columnFamily);
-        data.addStreamedSSTable(sstable);
-        CompactionManager.instance.submitBackground(this);
-    }
-
-    /*
-     * Add up all the files sizes this is the worst case file
-     * size for compaction of all the list of files given.
-     */
-    public long getExpectedCompactedFileSize(Iterable<SSTableReader> sstables)
-    {
-        long expectedFileSize = 0;
-        for (SSTableReader sstable : sstables)
-        {
-            long size = sstable.length();
-            expectedFileSize = expectedFileSize + size;
+    public static JavaWsdlMapping readJaxrpcMapping(final URL url) throws OpenEJBException {
+        final JavaWsdlMapping wsdlMapping;
+        try {
+            wsdlMapping = (JavaWsdlMapping) JaxbJavaee.unmarshalJavaee(JavaWsdlMapping.class, IO.read(url));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the JaxRPC mapping file: " + url.toExternalForm(), e);
         }
-        return expectedFileSize;
+        return wsdlMapping;
     }
 
-    /*
-     *  Find the maximum size file in the list .
-     */
-    public SSTableReader getMaxSizeFile(Iterable<SSTableReader> sstables)
-    {
-        long maxSize = 0L;
-        SSTableReader maxFile = null;
-        for (SSTableReader sstable : sstables)
-        {
-            if (sstable.length() > maxSize)
-            {
-                maxSize = sstable.length();
-                maxFile = sstable;
+    public static Connector readConnector(final URL url) throws OpenEJBException {
+        Connector connector;
+        try {
+            connector = (Connector) JaxbJavaee.unmarshalJavaee(Connector.class, IO.read(url));
+        } catch (final JAXBException e) {
+            try {
+                final Connector10 connector10 = (Connector10) JaxbJavaee.unmarshalJavaee(Connector10.class, IO.read(url));
+                connector = Connector.newConnector(connector10);
+            } catch (final ParserConfigurationException | SAXException e1) {
+                throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
+            } catch (final JAXBException e1) {
+                throw new OpenEJBException("Cannot unmarshall the ra.xml file: " + url.toExternalForm(), e);
+            } catch (final IOException e1) {
+                throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
             }
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the ra.xml file: " + url.toExternalForm(), e);
         }
-        return maxFile;
+        return connector;
     }
 
-    public void forceCleanup(NodeId.OneShotRenewer renewer) throws ExecutionException, InterruptedException
-    {
-        CompactionManager.instance.performCleanup(ColumnFamilyStore.this, renewer);
+    public static WebApp readWebApp(final URL url) throws OpenEJBException {
+        final WebApp webApp;
+        try {
+            webApp = WebXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the web.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the web.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the web.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the web.xml file: " + url.toExternalForm(), e);
+        }
+        return webApp;
     }
 
-    public void scrub() throws ExecutionException, InterruptedException
-    {
-        snapshotWithoutFlush("pre-scrub-" + System.currentTimeMillis());
-        CompactionManager.instance.performScrub(ColumnFamilyStore.this);
+    public static TldTaglib readTldTaglib(final URL url) throws OpenEJBException {
+        // TOMEE-164 Optimization on reading built-in tld files
+        if (url.getPath().contains("jstl-1.2.jar") || (url.getPath().contains("taglibs-standard-") && url.getPath().contains(".jar!"))) {
+            return SKIP_TAGLIB;
+        }
+        if (url.getPath().contains("myfaces-impl")) { // we should return SKIP_TAGLIB too
+            final TldTaglib taglib = new TldTaglib();
+            final Listener listener = new Listener();
+            listener.setListenerClass("org.apache.myfaces.webapp.StartupServletContextListener");
+            taglib.getListener().add(listener);
+            return taglib;
+        }
+
+        try {
+            return TldTaglibXml.unmarshal(url);
+        } catch (final SAXException e) {
+            final String message = "Cannot parse the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        } catch (final JAXBException e) {
+            final String message = "Cannot unmarshall the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        } catch (final IOException e) {
+            final String message = "Cannot read the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        } catch (final Exception e) {
+            final String message = "Encountered unknown error parsing the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        }
+        return SKIP_TAGLIB;
     }
 
-    public void markCompacted(Collection<SSTableReader> sstables)
-    {
-        data.markCompacted(sstables);
-    }
-
-    public boolean isCompleteSSTables(Set<SSTableReader> sstables)
-    {
-        return data.getSSTables().equals(sstables);
-    }
-
-    public void replaceCompactedSSTables(Collection<SSTableReader> sstables, Iterable<SSTableReader> replacements)
-    {
-        data.replaceCompactedSSTables(sstables, replacements);
-    }
-
-    void replaceFlushed(Memtable memtable, SSTableReader sstable)
-    {
-        data.replaceFlushed(memtable, sstable);
-        CompactionManager.instance.submitBackground(this);
-    }
-
-    public boolean isInvalid()
-    {
-        return invalid;
-    }
-
-    public void removeAllSSTables()
-    {
-        data.removeAllSSTables();
-        indexManager.removeAllIndexes();
-    }
-
-    public long getMemtableColumnsCount()
-    {
-        return getMemtableThreadSafe().getOperations();
-    }
-
-    public long getMemtableDataSize()
-    {
-        return getMemtableThreadSafe().getLiveSize();
-    }
-
-    public long getTotalMemtableLiveSize()
-    {
-        long total = 0;
-        for (ColumnFamilyStore cfs : concatWithIndexes())
-            total += cfs.getMemtableThreadSafe().getLiveSize();
-        return total;
-    }
-
-    public int getMemtableSwitchCount()
-    {
-        return memtableSwitchCount;
-    }
-
-    /**
-     * get the current memtable in a threadsafe fashion.  note that simply "return memtable_" is
-     * incorrect; you need to lock to introduce a thread safe happens-before ordering.
-     *
-     * do NOT use this method to do either a put or get on the memtable object, since it could be
-     * flushed in the meantime (and its executor terminated).
-     *
-     * also do NOT make this method public or it will really get impossible to reason about these things.
-     * @return
-     */
-    private Memtable getMemtableThreadSafe()
-    {
-        return data.getMemtable();
-    }
-
-    /**
-     * Package protected for access from the CompactionManager.
-     */
-    public DataTracker getDataTracker()
-    {
-        return data;
-    }
-
-    public Collection<SSTableReader> getSSTables()
-    {
-        return data.getSSTables();
-    }
-
-    public long[] getRecentSSTablesPerReadHistogram()
-    {
-        return recentSSTablesPerRead.getBuckets(true);
-    }
-
-    public long[] getSSTablesPerReadHistogram()
-    {
-        return sstablesPerRead.getBuckets(false);
-    }
-
-    public long getReadCount()
-    {
-        return readStats.getOpCount();
-    }
-
-    public double getRecentReadLatencyMicros()
-    {
-        return readStats.getRecentLatencyMicros();
-    }
-
-    public long[] getLifetimeReadLatencyHistogramMicros()
-    {
-        return readStats.getTotalLatencyHistogramMicros();
-    }
-
-    public long[] getRecentReadLatencyHistogramMicros()
-    {
-        return readStats.getRecentLatencyHistogramMicros();
-    }
-
-    public long getTotalReadLatencyMicros()
-    {
-        return readStats.getTotalLatencyMicros();
-    }
-
-// TODO this actually isn't a good meature of pending tasks
-    public int getPendingTasks()
-    {
-        return Table.switchLock.getQueueLength();
-    }
-
-    public long getWriteCount()
-    {
-        return writeStats.getOpCount();
-    }
-
-    public long getTotalWriteLatencyMicros()
-    {
-        return writeStats.getTotalLatencyMicros();
-    }
-
-    public double getRecentWriteLatencyMicros()
-    {
-        return writeStats.getRecentLatencyMicros();
-    }
-
-    public long[] getLifetimeWriteLatencyHistogramMicros()
-    {
-        return writeStats.getTotalLatencyHistogramMicros();
-    }
-
-    public long[] getRecentWriteLatencyHistogramMicros()
-    {
-        return writeStats.getRecentLatencyHistogramMicros();
-    }
-
-    public ColumnFamily getColumnFamily(DecoratedKey key, QueryPath path, ByteBuffer start, ByteBuffer finish, boolean reversed, int limit)
-    {
-        return getColumnFamily(QueryFilter.getSliceFilter(key, path, start, finish, reversed, limit));
-    }
-
-    /**
-     * get a list of columns starting from a given column, in a specified order.
-     * only the latest version of a column is returned.
-     * @return null if there is no data and no tombstones; otherwise a ColumnFamily
-     */
-    public ColumnFamily getColumnFamily(QueryFilter filter)
-    {
-        return getColumnFamily(filter, gcBefore(), ThreadSafeSortedColumns.factory());
-    }
-
-    public ColumnFamily getColumnFamily(QueryFilter filter, ISortedColumns.Factory factory)
-    {
-        return getColumnFamily(filter, gcBefore(), factory);
-    }
-
-    public int gcBefore()
-    {
-        return (int) (System.currentTimeMillis() / 1000) - metadata.getGcGraceSeconds();
-    }
-
-    private ColumnFamily cacheRow(DecoratedKey key)
-    {
-        ColumnFamily cached;
-        if ((cached = rowCache.get(key)) == null)
-        {
-            // We force ThreadSafeSortedColumns because cached row will be accessed concurrently
-            cached = getTopLevelColumns(QueryFilter.getIdentityFilter(key, new QueryPath(columnFamily)), Integer.MIN_VALUE, ThreadSafeSortedColumns.factory());
-            if (cached == null)
-                return null;
-
-            if (!rowCache.isPutCopying())
-            {
-                // make a deep copy of column data so we don't keep references to direct buffers, which
-                // would prevent munmap post-compaction.
-                for (IColumn column : cached)
-                {
-                    cached.remove(column.name());
-                    cached.addColumn(column.localCopy(this));
-                }
+    public static FacesConfig readFacesConfig(final URL url) throws OpenEJBException {
+        try {
+            final Source src = getSource(url);
+            if (src == null) {
+                return new FacesConfig();
             }
 
-            // avoid keeping a permanent reference to the original key buffer
-            rowCache.put(new DecoratedKey(key.token, ByteBufferUtil.clone(key.key)), cached);
-        }
-        return cached;
-    }
-
-    private ColumnFamily getColumnFamily(QueryFilter filter, int gcBefore, ISortedColumns.Factory factory)
-    {
-        assert columnFamily.equals(filter.getColumnFamilyName()) : filter.getColumnFamilyName();
-
-        long start = System.nanoTime();
-        try
-        {
-            if (rowCache.getCapacity() == 0)
-            {
-                ColumnFamily cf = getTopLevelColumns(filter, gcBefore, factory);
-
-                if (cf == null)
-                    return null;
-
-                // TODO this is necessary because when we collate supercolumns together, we don't check
-                // their subcolumns for relevance, so we need to do a second prune post facto here.
-                return cf.isSuper() ? removeDeleted(cf, gcBefore) : removeDeletedCF(cf, gcBefore);
+            final String content = IO.slurp(src.get());
+            if (isEmpty(new ByteArrayInputStream(content.getBytes()), "faces-config")) {
+                return new FacesConfig();
             }
-
-            ColumnFamily cached = cacheRow(filter.key);
-            if (cached == null)
-                return null;
-
-            return filterColumnFamily(cached, filter, gcBefore);
-        }
-        finally
-        {
-            readStats.addNano(System.nanoTime() - start);
-        }
-    }
-
-    /** filter a cached row, which will not be modified by the filter, but may be modified by throwing out
-     *  tombstones that are no longer relevant. */
-    ColumnFamily filterColumnFamily(ColumnFamily cached, QueryFilter filter, int gcBefore)
-    {
-        // special case slicing the entire row:
-        // we can skip the filter step entirely, and we can help out removeDeleted by re-caching the result
-        // if any tombstones have aged out since last time.  (This means that the row cache will treat gcBefore as
-        // max(gcBefore, all previous gcBefore), which is fine for correctness.)
-        //
-        // But, if the filter is asking for less columns than we have cached, we fall back to the slow path
-        // since we have to copy out a subset.
-        if (filter.filter instanceof SliceQueryFilter)
-        {
-            SliceQueryFilter sliceFilter = (SliceQueryFilter) filter.filter;
-            if (sliceFilter.start.remaining() == 0 && sliceFilter.finish.remaining() == 0)
-            {
-                if (cached.isSuper() && filter.path.superColumnName != null)
-                {
-                    // subcolumns from named supercolumn
-                    IColumn sc = cached.getColumn(filter.path.superColumnName);
-                    if (sc == null || sliceFilter.count >= sc.getSubColumns().size())
-                    {
-                        ColumnFamily cf = cached.cloneMeShallow();
-                        if (sc != null)
-                            cf.addColumn(sc, HeapAllocator.instance);
-                        return removeDeleted(cf, gcBefore);
-                    }
-                }
-                else
-                {
-                    // top-level columns
-                    if (sliceFilter.count >= cached.getColumnCount())
-                    {
-                        removeDeletedColumnsOnly(cached, gcBefore);
-                        return removeDeletedCF(cached, gcBefore);
-                    }
-                }
-            }
-        }
-
-        IColumnIterator ci = filter.getMemtableColumnIterator(cached, null, getComparator());
-        ColumnFamily cf = ci.getColumnFamily().cloneMeShallow();
-        filter.collateColumns(cf, Collections.singletonList(ci), getComparator(), gcBefore);
-        // TODO this is necessary because when we collate supercolumns together, we don't check
-        // their subcolumns for relevance, so we need to do a second prune post facto here.
-        return cf.isSuper() ? removeDeleted(cf, gcBefore) : removeDeletedCF(cf, gcBefore);
-    }
-
-    /**
-     * Get the current view and acquires references on all its sstables.
-     * This is a bit tricky because we must ensure that between the time we
-     * get the current view and the time we acquire the references the set of
-     * sstables hasn't changed. Otherwise we could get a view for which an
-     * sstable have been deleted in the meantime.
-     *
-     * At the end of this method, a reference on all the sstables of the
-     * returned view will have been acquired and must thus be released when
-     * appropriate.
-     */
-    private DataTracker.View markCurrentViewReferenced()
-    {
-        while (true)
-        {
-            DataTracker.View currentView = data.getView();
-            if (SSTableReader.acquireReferences(currentView.sstables))
-                return currentView;
+            return FacesConfigXml.unmarshal(new ByteArrayInputStream(content.getBytes()));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the faces configuration file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the faces configuration file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the faces configuration file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the faces configuration file: " + url.toExternalForm(), e);
         }
     }
 
-    /**
-     * Get the current sstables, acquiring references on all of them.
-     * The caller is in charge of releasing the references on the sstables.
-     *
-     * See markCurrentViewReferenced() above.
-     */
-    public Collection<SSTableReader> markCurrentSSTablesReferenced()
-    {
-        return markCurrentViewReferenced().sstables;
-    }
-
-    /**
-     * @return a ViewFragment containing the sstables and memtables that may need to be merged
-     * for the given @param key, according to the interval tree
-     */
-    public ViewFragment markReferenced(DecoratedKey key)
-    {
-        assert !key.isEmpty();
-        DataTracker.View view;
-        List<SSTableReader> sstables;
-        while (true)
-        {
-            view = data.getView();
-            sstables = view.intervalTree.search(new Interval(key, key));
-            if (SSTableReader.acquireReferences(sstables))
-                break;
-            // retry w/ new view
-        }
-        return new ViewFragment(sstables, Iterables.concat(Collections.singleton(view.memtable), view.memtablesPendingFlush));
-    }
-
-    /**
-     * @return a ViewFragment containing the sstables and memtables that may need to be merged
-     * for rows between @param startWith and @param stopAt, inclusive, according to the interval tree
-     */
-    public ViewFragment markReferenced(DecoratedKey startWith, DecoratedKey stopAt)
-    {
-        DataTracker.View view;
-        List<SSTableReader> sstables;
-        while (true)
-        {
-            view = data.getView();
-            // startAt == minimum is ok, but stopAt == minimum is confusing because all IntervalTree deals with
-            // is Comparable, so it won't know to special-case that.
-            Comparable stopInTree = stopAt.isEmpty() ? view.intervalTree.max : stopAt;
-            sstables = view.intervalTree.search(new Interval(startWith, stopInTree));
-            if (SSTableReader.acquireReferences(sstables))
-                break;
-            // retry w/ new view
-        }
-        return new ViewFragment(sstables, Iterables.concat(Collections.singleton(view.memtable), view.memtablesPendingFlush));
-    }
-
-    private ColumnFamily getTopLevelColumns(QueryFilter filter, int gcBefore, ISortedColumns.Factory factory)
-    {
-        CollationController controller = new CollationController(this, factory, filter, gcBefore);
-        ColumnFamily columns = controller.getTopLevelColumns();
-        recentSSTablesPerRead.add(controller.getSstablesIterated());
-        sstablesPerRead.add(controller.getSstablesIterated());
-        return columns;
-    }
-
-    /**
-      * Fetch a range of rows and columns from memtables/sstables.
-      *
-      * @param superColumn optional SuperColumn to slice subcolumns of; null to slice top-level columns
-      * @param range Either a Bounds, which includes start key, or a Range, which does not.
-      * @param maxResults Maximum rows to return
-      * @param columnFilter description of the columns we're interested in for each row
-      * @return true if we found all keys we were looking for, otherwise false
-     */
-    public List<Row> getRangeSlice(ByteBuffer superColumn, final AbstractBounds range, int maxResults, IFilter columnFilter)
-    throws ExecutionException, InterruptedException
-    {
-        assert range instanceof Bounds
-               || (!((Range)range).isWrapAround() || range.right.equals(StorageService.getPartitioner().getMinimumToken()))
-               : range;
-
-        DecoratedKey startWith = new DecoratedKey(range.left, null);
-        DecoratedKey stopAt = new DecoratedKey(range.right, null);
-
-        QueryFilter filter = new QueryFilter(null, new QueryPath(columnFamily, superColumn, null), columnFilter);
-        int gcBefore = (int)(System.currentTimeMillis() / 1000) - metadata.getGcGraceSeconds();
-
-        List<Row> rows;
-        ViewFragment view = markReferenced(startWith, stopAt);
-        try
-        {
-            CloseableIterator<Row> iterator = RowIteratorFactory.getIterator(view.memtables, view.sstables, startWith, stopAt, filter, getComparator(), this);
-            rows = new ArrayList<Row>();
-
-            try
-            {
-                // pull rows out of the iterator
-                boolean first = true;
-                while (iterator.hasNext())
-                {
-                    Row current = iterator.next();
-                    DecoratedKey key = current.key;
-
-                    if (!stopAt.isEmpty() && stopAt.compareTo(key) < 0)
-                        return rows;
-
-                    // skip first one
-                    if (range instanceof Bounds || !first || !key.equals(startWith))
-                    {
-                        // TODO this is necessary because when we collate supercolumns together, we don't check
-                        // their subcolumns for relevance, so we need to do a second prune post facto here.
-                        rows.add(current.cf != null && current.cf.isSuper()
-                                 ? new Row(current.key, ColumnFamilyStore.removeDeleted(current.cf, gcBefore))
-                                 : current);
-                        if (logger.isDebugEnabled())
-                            logger.debug("scanned " + key);
-                    }
-                    first = false;
-
-                    if (rows.size() >= maxResults)
-                        return rows;
-                }
-            }
-            finally
-            {
-                try
-                {
-                    iterator.close();
-                }
-                catch (IOException e)
-                {
-                    throw new IOError(e);
-                }
-            }
-        }
-        finally
-        {
-            // separate finally block to release references in case getIterator() throws
-            SSTableReader.releaseReferences(view.sstables);
+    private static Source getSource(final Object o) {
+        if (o instanceof URL) {
+            return new UrlSource((URL) o);
         }
 
-        return rows;
+        if (o instanceof Source) {
+            return (Source) o;
+        }
+
+        if (o instanceof String) {
+            return new StringSource((String) o);
+        }
+
+        return null;
     }
 
-    public List<Row> search(IndexClause clause, AbstractBounds range, IFilter dataFilter)
-    {
-        return indexManager.search(clause, range, dataFilter);
+    public interface Source {
+        InputStream get() throws IOException;
     }
 
-    public AbstractType getComparator()
-    {
-        return metadata.comparator;
-    }
+    public static class UrlSource implements Source {
+        private final URL url;
 
-    private void snapshotWithoutFlush(String snapshotName)
-    {
-        for (ColumnFamilyStore cfs : concatWithIndexes())
-        {
-            DataTracker.View currentView = cfs.markCurrentViewReferenced();
-            try
-            {
-                for (SSTableReader ssTable : currentView.sstables)
-                {
-                    try
-                    {
-                        // mkdir
-                        File dataDirectory = ssTable.descriptor.directory.getParentFile();
-                        String snapshotDirectoryPath = Table.getSnapshotPath(dataDirectory.getAbsolutePath(), table.name, snapshotName);
-                        FileUtils.createDirectory(snapshotDirectoryPath);
+        public UrlSource(final URL url) {
+            this.url = url;
+        }
 
-                        // hard links
-                        ssTable.createLinks(snapshotDirectoryPath);
-                        if (logger.isDebugEnabled())
-                            logger.debug("Snapshot for " + table + " keyspace data file " + ssTable.getFilename() +
-                                    " created in " + snapshotDirectoryPath);
-                    }
-                    catch (IOException e)
-                    {
-                        throw new IOError(e);
-                    }
-                }
-            }
-            finally
-            {
-                SSTableReader.releaseReferences(currentView.sstables);
-            }
+        @Override
+        public InputStream get() throws IOException {
+            return IO.read(url);
+        }
+
+        public URL getUrl() {
+            return url;
+        }
+
+        @Override
+        public String toString() {
+            return "UrlSource{url=" + url + '}';
         }
     }
 
-    /**
-     * Take a snap shot of this columnfamily store.
-     *
-     * @param snapshotName the name of the associated with the snapshot
-     */
-    public void snapshot(String snapshotName)
-    {
-        try
-        {
-            forceBlockingFlush();
-        }
-        catch (ExecutionException e)
-        {
-            throw new RuntimeException(e);
-        }
-        catch (InterruptedException e)
-        {
-            throw new AssertionError(e);
+    public static class StringSource implements Source {
+        private final byte[] bytes;
+        private final String toString;
+
+        public StringSource(final String content) {
+            toString = content;
+            bytes = content.getBytes();
         }
 
-        snapshotWithoutFlush(snapshotName);
-    }
-
-    public boolean hasUnreclaimedSpace()
-    {
-        return data.getLiveSize() < data.getTotalSize();
-    }
-
-    public long getTotalDiskSpaceUsed()
-    {
-        return data.getTotalSize();
-    }
-
-    public long getLiveDiskSpaceUsed()
-    {
-        return data.getLiveSize();
-    }
-
-    public int getLiveSSTableCount()
-    {
-        return data.getSSTables().size();
-    }
-
-    /** raw cached row -- does not fetch the row if it is not present.  not counted in cache statistics.  */
-    public ColumnFamily getRawCachedRow(DecoratedKey key)
-    {
-        return rowCache.getCapacity() == 0 ? null : rowCache.getInternal(key);
-    }
-
-    public void invalidateCachedRow(DecoratedKey key)
-    {
-        rowCache.remove(key);
-    }
-
-    public void forceMajorCompaction() throws InterruptedException, ExecutionException
-    {
-        CompactionManager.instance.performMaximal(this);
-    }
-
-    public void invalidateRowCache()
-    {
-        rowCache.clear();
-    }
-
-    public void invalidateKeyCache()
-    {
-        keyCache.clear();
-    }
-
-    public int getRowCacheCapacity()
-    {
-        return rowCache.getCapacity();
-    }
-
-    public int getKeyCacheCapacity()
-    {
-        return keyCache.getCapacity();
-    }
-
-    public int getRowCacheSize()
-    {
-        return rowCache.size();
-    }
-
-    public int getKeyCacheSize()
-    {
-        return keyCache.size();
-    }
-
-    public static Iterable<ColumnFamilyStore> all()
-    {
-        Iterable<ColumnFamilyStore>[] stores = new Iterable[Schema.instance.getTables().size()];
-        int i = 0;
-        for (Table table : Table.all())
-        {
-            stores[i++] = table.getColumnFamilyStores();
-        }
-        return Iterables.concat(stores);
-    }
-
-    public Iterable<DecoratedKey> allKeySamples()
-    {
-        Collection<SSTableReader> sstables = getSSTables();
-        Iterable<DecoratedKey>[] samples = new Iterable[sstables.size()];
-        int i = 0;
-        for (SSTableReader sstable: sstables)
-        {
-            samples[i++] = sstable.getKeySamples();
-        }
-        return Iterables.concat(samples);
-    }
-
-    public Iterable<DecoratedKey> keySamples(Range range)
-    {
-        Collection<SSTableReader> sstables = getSSTables();
-        Iterable<DecoratedKey>[] samples = new Iterable[sstables.size()];
-        int i = 0;
-        for (SSTableReader sstable: sstables)
-        {
-            samples[i++] = sstable.getKeySamples(range);
-        }
-        return Iterables.concat(samples);
-    }
-
-    /**
-     * For testing.  no effort is made to clear historical memtables, nor for
-     * thread safety
-     */
-    void clearUnsafe()
-    {
-        data.init();
-    }
-
-    /**
-     * Waits for flushes started BEFORE THIS METHOD IS CALLED to finish.
-     * Does NOT guarantee that no flush is active when it returns.
-     */
-    private void waitForActiveFlushes()
-    {
-        Future<?> future;
-        Table.switchLock.writeLock().lock();
-        try
-        {
-            future = postFlushExecutor.submit(new Runnable() { public void run() { } });
-        }
-        finally
-        {
-            Table.switchLock.writeLock().unlock();
+        @Override
+        public InputStream get() throws IOException {
+            return new ByteArrayInputStream(bytes);
         }
 
-        try
-        {
-            future.get();
-        }
-        catch (InterruptedException e)
-        {
-            throw new AssertionError(e);
-        }
-        catch (ExecutionException e)
-        {
-            throw new AssertionError(e);
-        }
-    }
-
-    /**
-     * Truncate practically deletes the entire column family's data
-     * @return a Future to the delete operation. Call the future's get() to make
-     * sure the column family has been deleted
-     */
-    public Future<?> truncate() throws IOException
-    {
-        // We have two goals here:
-        // - truncate should delete everything written before truncate was invoked
-        // - but not delete anything that isn't part of the snapshot we create.
-        // We accomplish this by first flushing manually, then snapshotting, and
-        // recording the timestamp IN BETWEEN those actions. Any sstables created
-        // with this timestamp or greater time, will not be marked for delete.
-        //
-        // Bonus complication: since we store replay position in sstable metadata,
-        // truncating those sstables means we will replay any CL segments from the
-        // beginning if we restart before they are discarded for normal reasons
-        // post-truncate.  So we need to (a) force a new segment so the currently
-        // active one can be discarded, and (b) flush *all* CFs so that unflushed
-        // data in others don't keep any pre-truncate CL segments alive.
-        //
-        // Bonus bonus: simply forceFlush of all the CF is not enough, because if
-        // for a given column family the memtable is clean, forceFlush will return
-        // immediately, even though there could be a memtable being flush at the same
-        // time.  So to guarantee that all segments can be cleaned out, we need
-        // "waitForActiveFlushes" after the new segment has been created.
-        CommitLog.instance.forceNewSegment();
-        ReplayPosition position = CommitLog.instance.getContext();
-        for (ColumnFamilyStore cfs : ColumnFamilyStore.all())
-            cfs.forceFlush();
-        waitForActiveFlushes();
-        // if everything was clean, flush won't have called discard
-        CommitLog.instance.discardCompletedSegments(metadata.cfId, position);
-
-        // sleep a little to make sure that our truncatedAt comes after any sstable
-        // that was part of the flushed we forced; otherwise on a tie, it won't get deleted.
-        try
-        {
-            Thread.sleep(100);
-        }
-        catch (InterruptedException e)
-        {
-            throw new AssertionError(e);
-        }
-        long truncatedAt = System.currentTimeMillis();
-        snapshot(Table.getTimestampedSnapshotName("before-truncate"));
-
-        return CompactionManager.instance.submitTruncate(this, truncatedAt);
-    }
-
-    // if this errors out, we are in a world of hurt.
-    public void renameSSTables(String newCfName) throws IOException
-    {
-        // complete as much of the job as possible.  Don't let errors long the way prevent as much renaming as possible
-        // from happening.
-        IOException mostRecentProblem = null;
-        for (File existing : DefsTable.getFiles(table.name, columnFamily))
-        {
-            try
-            {
-                String newFileName = existing.getName().replaceFirst("\\w+-", newCfName + "-");
-                FileUtils.renameWithConfirm(existing, new File(existing.getParent(), newFileName));
-            }
-            catch (IOException ex)
-            {
-                mostRecentProblem = ex;
-            }
-        }
-        if (mostRecentProblem != null)
-            throw new IOException("One or more IOExceptions encountered while renaming files. Most recent problem is included.", mostRecentProblem);
-
-        indexManager.renameIndexes(newCfName);
-    }
-
-    public long getBloomFilterFalsePositives()
-    {
-        return data.getBloomFilterFalsePositives();
-    }
-
-    public long getRecentBloomFilterFalsePositives()
-    {
-        return data.getRecentBloomFilterFalsePositives();
-    }
-
-    public double getBloomFilterFalseRatio()
-    {
-        return data.getBloomFilterFalseRatio();
-    }
-
-    public double getRecentBloomFilterFalseRatio()
-    {
-        return data.getRecentBloomFilterFalseRatio();
-    }
-
-
-
-    @Override
-    public String toString()
-    {
-        return "ColumnFamilyStore(" +
-               "table='" + table.name + '\'' +
-               ", columnFamily='" + columnFamily + '\'' +
-               ')';
-    }
-
-    public void disableAutoCompaction()
-    {
-        minCompactionThreshold.set(0);
-        maxCompactionThreshold.set(0);
-    }
-
-    /*
-     JMX getters and setters for the Default<T>s.
-       - get/set minCompactionThreshold
-       - get/set maxCompactionThreshold
-       - get     memsize
-       - get     memops
-       - get/set memtime
-       - get/set rowCacheSavePeriodInSeconds
-       - get/set keyCacheSavePeriodInSeconds
-       - get/set rowCacheKeysToSave
-     */
-
-    public AbstractCompactionStrategy getCompactionStrategy()
-    {
-        return compactionStrategy;
-    }
-
-    public int getMinimumCompactionThreshold()
-    {
-        return minCompactionThreshold.value();
-    }
-
-    public void setMinimumCompactionThreshold(int minCompactionThreshold)
-    {
-        if ((minCompactionThreshold > this.maxCompactionThreshold.value()) && this.maxCompactionThreshold.value() != 0)
-        {
-            throw new RuntimeException("The min_compaction_threshold cannot be larger than the max.");
-        }
-        this.minCompactionThreshold.set(minCompactionThreshold);
-    }
-
-    public int getMaximumCompactionThreshold()
-    {
-        return maxCompactionThreshold.value();
-    }
-
-    public void setMaximumCompactionThreshold(int maxCompactionThreshold)
-    {
-        if (maxCompactionThreshold < this.minCompactionThreshold.value())
-        {
-            throw new RuntimeException("The max_compaction_threshold cannot be smaller than the min.");
-        }
-        this.maxCompactionThreshold.set(maxCompactionThreshold);
-    }
-
-    public boolean isCompactionDisabled()
-    {
-        return getMinimumCompactionThreshold() <= 0 || getMaximumCompactionThreshold() <= 0;
-    }
-
-    public int getMemtableThroughputInMB()
-    {
-        return memsize.value();
-    }
-    public void setMemtableThroughputInMB(int size) throws ConfigurationException
-    {
-        DatabaseDescriptor.validateMemtableThroughput(size);
-        memsize.set(size);
-    }
-
-    public double getMemtableOperationsInMillions()
-    {
-        return memops.value();
-    }
-    public void setMemtableOperationsInMillions(double ops) throws ConfigurationException
-    {
-        DatabaseDescriptor.validateMemtableOperations(ops);
-        memops.set(ops);
-    }
-
-    public int getRowCacheSavePeriodInSeconds()
-    {
-        return rowCacheSaveInSeconds.value();
-    }
-    public void setRowCacheSavePeriodInSeconds(int rcspis)
-    {
-        if (rcspis < 0)
-        {
-            throw new RuntimeException("RowCacheSavePeriodInSeconds must be non-negative.");
-        }
-        this.rowCacheSaveInSeconds.set(rcspis);
-        scheduleCacheSaving(rowCacheSaveInSeconds.value(), keyCacheSaveInSeconds.value(), rowCacheKeysToSave.value());
-    }
-
-    public int getKeyCacheSavePeriodInSeconds()
-    {
-        return keyCacheSaveInSeconds.value();
-    }
-    public void setKeyCacheSavePeriodInSeconds(int kcspis)
-    {
-        if (kcspis < 0)
-        {
-            throw new RuntimeException("KeyCacheSavePeriodInSeconds must be non-negative.");
-        }
-        this.keyCacheSaveInSeconds.set(kcspis);
-        scheduleCacheSaving(rowCacheSaveInSeconds.value(), keyCacheSaveInSeconds.value(), rowCacheKeysToSave.value());
-    }
-
-    public int getRowCacheKeysToSave()
-    {
-        return rowCacheKeysToSave.value();
-    }
-
-    public void setRowCacheKeysToSave(int keysToSave)
-    {
-        this.rowCacheKeysToSave.set(keysToSave);
-    }
-    // End JMX get/set.
-
-    public long estimateKeys()
-    {
-        return data.estimatedKeys();
-    }
-
-    /**
-     * Resizes the key and row caches based on the current key estimate.
-     */
-    public synchronized void updateCacheSizes()
-    {
-        long keys = estimateKeys();
-        keyCache.updateCacheSize(keys);
-        rowCache.updateCacheSize(keys);
-    }
-
-    public long[] getEstimatedRowSizeHistogram()
-    {
-        return data.getEstimatedRowSizeHistogram();
-    }
-
-    public long[] getEstimatedColumnCountHistogram()
-    {
-        return data.getEstimatedRowSizeHistogram();
-    }
-
-    /** true if this CFS contains secondary index data */
-    public boolean isIndex()
-    {
-        return partitioner instanceof LocalPartitioner;
-    }
-
-    private String getParentColumnfamily()
-    {
-        assert isIndex();
-        return columnFamily.split("\\.")[0];
-    }
-
-    /**
-     * sets each cache's maximum capacity to 75% of its current size
-     */
-    public void reduceCacheSizes()
-    {
-        rowCache.reduceCacheSize();
-        keyCache.reduceCacheSize();
-    }
-
-    private ByteBuffer intern(ByteBuffer name)
-    {
-        ByteBuffer internedName = internedNames.get(name);
-        if (internedName == null)
-        {
-            internedName = ByteBufferUtil.clone(name);
-            ByteBuffer concurrentName = internedNames.putIfAbsent(internedName, internedName);
-            if (concurrentName != null)
-                internedName = concurrentName;
-        }
-        return internedName;
-    }
-
-    public ByteBuffer internOrCopy(ByteBuffer name, Allocator allocator)
-    {
-        if (internedNames.size() >= INTERN_CUTOFF)
-            return allocator.clone(name);
-
-        return intern(name);
-    }
-
-    public ByteBuffer maybeIntern(ByteBuffer name)
-    {
-        if (internedNames.size() >= INTERN_CUTOFF)
-            return null;
-
-        return intern(name);
-    }
-
-    public SSTableWriter createFlushWriter(long estimatedRows, long estimatedSize, ReplayPosition context) throws IOException
-    {
-        SSTableMetadata.Collector sstableMetadataCollector = SSTableMetadata.createCollector().replayPosition(context);
-        return new SSTableWriter(getFlushPath(estimatedSize, Descriptor.CURRENT_VERSION),
-                                 estimatedRows,
-                                 metadata,
-                                 partitioner,
-                                 sstableMetadataCollector);
-    }
-
-    public SSTableWriter createCompactionWriter(long estimatedRows, String location, Collection<SSTableReader> sstables) throws IOException
-    {
-        ReplayPosition rp = ReplayPosition.getReplayPosition(sstables);
-        SSTableMetadata.Collector sstableMetadataCollector = SSTableMetadata.createCollector().replayPosition(rp);
-
-        // get the max timestamp of the precompacted sstables
-        for (SSTableReader sstable : sstables)
-            sstableMetadataCollector.updateMaxTimestamp(sstable.getMaxTimestamp());
-
-        return new SSTableWriter(getTempSSTablePath(location), estimatedRows, metadata, partitioner, sstableMetadataCollector);
-    }
-
-    public Iterable<ColumnFamilyStore> concatWithIndexes()
-    {
-        return Iterables.concat(indexManager.getIndexesBackedByCfs(), Collections.singleton(this));
-    }
-
-    public Set<Memtable> getMemtablesPendingFlush()
-    {
-        return data.getMemtablesPendingFlush();
-    }
-
-    public List<String> getBuiltIndexes()
-    {
-       return indexManager.getBuiltIndexes();
-    }
-
-    private static SSTableReader openSSTableReader(Map.Entry<Descriptor, Set<Component>> rawSSTable,
-                                                   Set<DecoratedKey> savedKeys,
-                                                   DataTracker tracker,
-                                                   CFMetaData metadata,
-                                                   IPartitioner partitioner)
-    {
-        SSTableReader reader = null;
-
-        try
-        {
-            reader = SSTableReader.open(rawSSTable.getKey(), rawSSTable.getValue(), savedKeys, tracker, metadata, partitioner);
-        }
-        catch (FileNotFoundException ex)
-        {
-            logger.error("Missing sstable component in " + rawSSTable + "; skipped because of " + ex.getMessage());
-        }
-        catch (IOException ex)
-        {
-            logger.error("Corrupt sstable " + rawSSTable + "; skipped", ex);
-        }
-
-        return reader;
-    }
-
-    public int getUnleveledSSTables()
-    {
-        return this.compactionStrategy instanceof LeveledCompactionStrategy
-               ? ((LeveledCompactionStrategy) this.compactionStrategy).getLevelSize(0)
-               : 0;
-    }
-
-    public static class ViewFragment
-    {
-        public final List<SSTableReader> sstables;
-        public final Iterable<Memtable> memtables;
-
-        public ViewFragment(List<SSTableReader> sstables, Iterable<Memtable> memtables)
-        {
-            this.sstables = sstables;
-            this.memtables = memtables;
+        @Override
+        public String toString() {
+            return "StringSource{content=" + toString + '}';
         }
     }
 }

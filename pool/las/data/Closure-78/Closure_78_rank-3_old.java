@@ -1,845 +1,1083 @@
 /*
-// Licensed to Julian Hyde under one or more contributor license
-// agreements. See the NOTICE file distributed with this work for
-// additional information regarding copyright ownership.
-//
-// Julian Hyde licenses this file to you under the Apache License,
-// Version 2.0 (the "License"); you may not use this file except in
-// compliance with the License. You may obtain a copy of the License at:
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-*/
-package org.eigenbase.sql;
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-import java.util.*;
+package org.apache.commons.dbcp2;
 
-import org.eigenbase.reltype.*;
-import org.eigenbase.resource.*;
-import org.eigenbase.sql.fun.*;
-import org.eigenbase.sql.parser.*;
-import org.eigenbase.sql.type.*;
-import org.eigenbase.sql.validate.*;
-import org.eigenbase.util.*;
-
+import java.sql.ResultSet;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.io.InputStream;
+import java.sql.SQLWarning;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.io.Reader;
+import java.sql.Statement;
+import java.util.Map;
+import java.sql.Connection;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
+/* JDBC_4_ANT_KEY_END */
 
 /**
- * A <code>SqlJdbcFunctionCall</code> is a node of a parse tree which represents
- * a JDBC function call. A JDBC call is of the form <code>{fn NAME(arg0, arg1,
- * ...)}</code>.
+ * A base delegating implementation of {@link ResultSet}.
+ * <p>
+ * All of the methods from the {@link ResultSet} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement result set tracking and
+ * logging of code which created the ResultSet. Tracking the
+ * ResultSet ensures that the Statment which created it can
+ * close any open ResultSet's on Statement close.
  *
- * <p>See <a href="http://java.sun.com/products/jdbc/driverdevs.html">Sun's
- * documentation for writers of JDBC drivers</a>.*
- *
- * <table>
- * <tr>
- * <th>Function Name</th>
- * <th>Function Returns</th>
- * </tr>
- * <tr>
- * <td colspan="2"><br/>
- *
- * <h3>NUMERIC FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>ABS(number)</td>
- * <td>Absolute value of number</td>
- * </tr>
- * <tr>
- * <td>ACOS(float)</td>
- * <td>Arccosine, in radians, of float</td>
- * </tr>
- * <tr>
- * <td>ASIN(float)</td>
- * <td>Arcsine, in radians, of float</td>
- * </tr>
- * <tr>
- * <td>ATAN(float)</td>
- * <td>Arctangent, in radians, of float</td>
- * </tr>
- * <tr>
- * <td>ATAN2(float1, float2)</td>
- * <td>Arctangent, in radians, of float2 / float1</td>
- * </tr>
- * <tr>
- * <td>CEILING(number)</td>
- * <td>Smallest integer &gt;= number</td>
- * </tr>
- * <tr>
- * <td>COS(float)</td>
- * <td>Cosine of float radians</td>
- * </tr>
- * <tr>
- * <td>COT(float)</td>
- * <td>Cotangent of float radians</td>
- * </tr>
- * <tr>
- * <td>DEGREES(number)</td>
- * <td>Degrees in number radians</td>
- * </tr>
- * <tr>
- * <td>EXP(float)</td>
- * <td>Exponential function of float</td>
- * </tr>
- * <tr>
- * <td>FLOOR(number)</td>
- * <td>Largest integer &lt;= number</td>
- * </tr>
- * <tr>
- * <td>LOG(float)</td>
- * <td>Base e logarithm of float</td>
- * </tr>
- * <tr>
- * <td>LOG10(float)</td>
- * <td>Base 10 logarithm of float</td>
- * </tr>
- * <tr>
- * <td>MOD(integer1, integer2)</td>
- * <td>Rh3ainder for integer1 / integer2</td>
- * </tr>
- * <tr>
- * <td>PI()</td>
- * <td>The constant pi</td>
- * </tr>
- * <tr>
- * <td>POWER(number, power)</td>
- * <td>number raised to (integer) power</td>
- * </tr>
- * <tr>
- * <td>RADIANS(number)</td>
- * <td>Radians in number degrees</td>
- * </tr>
- * <tr>
- * <td>RAND(integer)</td>
- * <td>Random floating point for seed integer</td>
- * </tr>
- * <tr>
- * <td>ROUND(number, places)</td>
- * <td>number rounded to places places</td>
- * </tr>
- * <tr>
- * <td>SIGN(number)</td>
- * <td>-1 to indicate number is &lt; 0; 0 to indicate number is = 0; 1 to
- * indicate number is &gt; 0</td>
- * </tr>
- * <tr>
- * <td>SIN(float)</td>
- * <td>Sine of float radians</td>
- * </tr>
- * <tr>
- * <td>SQRT(float)</td>
- * <td>Square root of float</td>
- * </tr>
- * <tr>
- * <td>TAN(float)</td>
- * <td>Tangent of float radians</td>
- * </tr>
- * <tr>
- * <td>TRUNCATE(number, places)</td>
- * <td>number truncated to places places</td>
- * </tr>
- * <tr>
- * <td colspan="2"><br/>
- *
- * <h3>STRING FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>ASCII(string)</td>
- * <td>Integer representing the ASCII code value of the leftmost character in
- * string</td>
- * </tr>
- * <tr>
- * <td>CHAR(code)</td>
- * <td>Character with ASCII code value code, where code is between 0 and
- * 255</td>
- * </tr>
- * <tr>
- * <td>CONCAT(string1, string2)</td>
- * <td>Character string formed by appending string2 to string1; if a string is
- * null, the result is DBMS-dependent</td>
- * </tr>
- * <tr>
- * <td>DIFFERENCE(string1, string2)</td>
- * <td>Integer indicating the difference between the values returned by the
- * function SOUNDEX for string1 and string2</td>
- * </tr>
- * <tr>
- * <td>INSERT(string1, start, length, string2)</td>
- * <td>A character string formed by deleting length characters from string1
- * beginning at start, and inserting string2 into string1 at start</td>
- * </tr>
- * <tr>
- * <td>LCASE(string)</td>
- * <td>Converts all uppercase characters in string to lowercase</td>
- * </tr>
- * <tr>
- * <td>LEFT(string, count)</td>
- * <td>The count leftmost characters from string</td>
- * </tr>
- * <tr>
- * <td>LENGTH(string)</td>
- * <td>Number of characters in string, excluding trailing blanks</td>
- * </tr>
- * <tr>
- * <td>LOCATE(string1, string2[, start])</td>
- * <td>Position in string2 of the first occurrence of string1, searching from
- * the beginning of string2; if start is specified, the search begins from
- * position start. 0 is returned if string2 does not contain string1. Position 1
- * is the first character in string2.</td>
- * </tr>
- * <tr>
- * <td>LTRIM(string)</td>
- * <td>Characters of string with leading blank spaces rh3oved</td>
- * </tr>
- * <tr>
- * <td>REPEAT(string, count)</td>
- * <td>A character string formed by repeating string count times</td>
- * </tr>
- * <tr>
- * <td>REPLACE(string1, string2, string3)</td>
- * <td>Replaces all occurrences of string2 in string1 with string3</td>
- * </tr>
- * <tr>
- * <td>RIGHT(string, count)</td>
- * <td>The count rightmost characters in string</td>
- * </tr>
- * <tr>
- * <td>RTRIM(string)</td>
- * <td>The characters of string with no trailing blanks</td>
- * </tr>
- * <tr>
- * <td>SOUNDEX(string)</td>
- * <td>A character string, which is data source-dependent, representing the
- * sound of the words in string; this could be a four-digit SOUNDEX code, a
- * phonetic representation of each word, etc.</td>
- * </tr>
- * <tr>
- * <td>SPACE(count)</td>
- * <td>A character string consisting of count spaces</td>
- * </tr>
- * <tr>
- * <td>SUBSTRING(string, start, length)</td>
- * <td>A character string formed by extracting length characters from string
- * beginning at start</td>
- * </tr>
- * <tr>
- * <td>UCASE(string)</td>
- * <td>Converts all lowercase characters in string to uppercase</td>
- * </tr>
- * <tr>
- * <td colspan="2"><br/>
- *
- * <h3>TIME and DATE FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>CURDATE()</td>
- * <td>The current date as a date value</td>
- * </tr>
- * <tr>
- * <td>CURTIME()</td>
- * <td>The current local time as a time value</td>
- * </tr>
- * <tr>
- * <td>DAYNAME(date)</td>
- * <td>A character string representing the day component of date; the name for
- * the day is specific to the data source</td>
- * </tr>
- * <tr>
- * <td>DAYOFMONTH(date)</td>
- * <td>An integer from 1 to 31 representing the day of the month in date</td>
- * </tr>
- * <tr>
- * <td>DAYOFWEEK(date)</td>
- * <td>An integer from 1 to 7 representing the day of the week in date; 1
- * represents Sunday</td>
- * </tr>
- * <tr>
- * <td>DAYOFYEAR(date)</td>
- * <td>An integer from 1 to 366 representing the day of the year in date</td>
- * </tr>
- * <tr>
- * <td>HOUR(time)</td>
- * <td>An integer from 0 to 23 representing the hour component of time</td>
- * </tr>
- * <tr>
- * <td>MINUTE(time)</td>
- * <td>An integer from 0 to 59 representing the minute component of time</td>
- * </tr>
- * <tr>
- * <td>MONTH(date)</td>
- * <td>An integer from 1 to 12 representing the month component of date</td>
- * </tr>
- * <tr>
- * <td>MONTHNAME(date)</td>
- * <td>A character string representing the month component of date; the name for
- * the month is specific to the data source</td>
- * </tr>
- * <tr>
- * <td>NOW()</td>
- * <td>A timestamp value representing the current date and time</td>
- * </tr>
- * <tr>
- * <td>QUARTER(date)</td>
- * <td>An integer from 1 to 4 representing the quarter in date; 1 represents
- * January 1 through March 31</td>
- * </tr>
- * <tr>
- * <td>SECOND(time)</td>
- * <td>An integer from 0 to 59 representing the second component of time</td>
- * </tr>
- * <tr>
- * <td>TIMESTAMPADD(interval,count, timestamp)</td>
- * <td>A timestamp calculated by adding count number of interval(s) to
- * timestamp; interval may be one of the following: SQL_TSI_FRAC_SECOND,
- * SQL_TSI_SECOND, SQL_TSI_MINUTE, SQL_TSI_HOUR, SQL_TSI_DAY, SQL_TSI_WEEK,
- * SQL_TSI_MONTH, SQL_TSI_QUARTER, or SQL_TSI_YEAR</td>
- * </tr>
- * <tr>
- * <td>TIMESTAMPDIFF(interval,timestamp1, timestamp2)</td>
- * <td>An integer representing the number of interval(s) by which timestamp2 is
- * greater than timestamp1; interval may be one of the following:
- * SQL_TSI_FRAC_SECOND, SQL_TSI_SECOND, SQL_TSI_MINUTE, SQL_TSI_HOUR,
- * SQL_TSI_DAY, SQL_TSI_WEEK, SQL_TSI_MONTH, SQL_TSI_QUARTER, or
- * SQL_TSI_YEAR</td>
- * </tr>
- * <tr>
- * <td>WEEK(date)</td>
- * <td>An integer from 1 to 53 representing the week of the year in date</td>
- * </tr>
- * <tr>
- * <td>YEAR(date)</td>
- * <td>An integer representing the year component of date</td>
- * </tr>
- * <tr>
- * <td colspan="2"><br/>
- *
- * <h3>SYSTEM FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>DATABASE()</td>
- * <td>Name of the database</td>
- * </tr>
- * <tr>
- * <td>IFNULL(expression, value)</td>
- * <td>value if expression is null; expression if expression is not null</td>
- * </tr>
- * <tr>
- * <td>USER()</td>
- * <td>User name in the DBMS
- *
- * <tr>
- * <td colspan="2"><br/>
- *
- * <h3>CONVERSION FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>CONVERT(value, SQLtype)</td>
- * <td>value converted to SQLtype where SQLtype may be one of the following SQL
- * types: BIGINT, BINARY, BIT, CHAR, DATE, DECIMAL, DOUBLE, FLOAT, INTEGER,
- * LONGVARBINARY, LONGVARCHAR, REAL, SMALLINT, TIME, TIMESTAMP, TINYINT,
- * VARBINARY, or VARCHAR</td>
- * </tr>
- * </table>
- *
- * @author Wael Chatila
- * @version $Id$
- * @since June 28, 2004
+ * @author Glenn L. Nielsen
+ * @author James House
+ * @author Dirk Verbeeck
+ * @version $Revision$ $Date$
  */
-public class SqlJdbcFunctionCall
-    extends SqlFunction
-{
-    //~ Static fields/initializers ---------------------------------------------
+public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
 
-    private static final String numericFunctions;
-    private static final String stringFunctions;
-    private static final String timeDateFunctions;
-    private static final String systemFunctions;
+    /** My delegate. **/
+    private ResultSet _res;
 
-    /**
-     * List of all numeric function names defined by JDBC.
-     */
-    private static final String [] allNumericFunctions =
-    {
-        "ABS", "ACOS", "ASIN", "ATAN", "ATAN2", "CEILING", "COS", "COT",
-        "DEGREES", "EXP", "FLOOR", "LOG", "LOG10", "MOD", "PI",
-        "POWER", "RADIANS", "RAND", "ROUND", "SIGN", "SIN", "SQRT",
-        "TAN", "TRUNCATE"
-    };
+    /** The Statement that created me, if any. **/
+    private Statement _stmt;
+
+    /** The Connection that created me, if any. **/
+    private Connection _conn;
 
     /**
-     * List of all string function names defined by JDBC.
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Statement which created it and the
+     * code which created it.
+     *
+     * @param stmt Statement which created this ResultSet
+     * @param res ResultSet to wrap
      */
-    private static final String [] allStringFunctions =
-    {
-        "ASCII", "CHAR", "CONCAT", "DIFFERENCE", "INSERT", "LCASE",
-        "LEFT", "LENGTH", "LOCATE", "LTRIM", "REPEAT", "REPLACE",
-        "RIGHT", "RTRIM", "SOUNDEX", "SPACE", "SUBSTRING", "UCASE"
-        // "ASCII", "CHAR", "DIFFERENCE", "LOWER",
-        // "LEFT", "TRIM", "REPEAT", "REPLACE",
-        // "RIGHT", "SPACE", "SUBSTRING", "UPPER", "INITCAP", "OVERLAY"
-    };
-
+    public DelegatingResultSet(Statement stmt, ResultSet res) {
+        super((AbandonedTrace)stmt);
+        this._stmt = stmt;
+        this._res = res;
+    }
+    
     /**
-     * List of all time/date function names defined by JDBC.
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Connection which created it (via, for
+     * example DatabaseMetadata, and the code which created it.
+     *
+     * @param conn Connection which created this ResultSet
+     * @param res ResultSet to wrap
      */
-    private static final String [] allTimeDateFunctions =
-    {
-        "CURDATE", "CURTIME", "DAYNAME", "DAYOFMONTH", "DAYOFWEEK",
-        "DAYOFYEAR", "HOUR", "MINUTE", "MONTH", "MONTHNAME", "NOW",
-        "QUARTER", "SECOND", "TIMESTAMPADD", "TIMESTAMPDIFF",
-        "WEEK", "YEAR"
-    };
-
-    /**
-     * List of all system function names defined by JDBC.
-     */
-    private static final String [] allSystemFunctions =
-    {
-        "DATABASE", "IFNULL", "USER"
-    };
-
-    static {
-        numericFunctions = constructFuncList(allNumericFunctions);
-        stringFunctions = constructFuncList(allStringFunctions);
-        timeDateFunctions = constructFuncList(allTimeDateFunctions);
-        systemFunctions = constructFuncList(allSystemFunctions);
+    public DelegatingResultSet(Connection conn, ResultSet res) {
+        super((AbandonedTrace)conn);
+        this._conn = conn;
+        this._res = res;
     }
-
-    //~ Instance fields --------------------------------------------------------
-
-    private final String jdbcName;
-    private final MakeCall lookupMakeCallObj;
-    private SqlCall lookupCall;
-
-    private SqlNode [] thisOperands;
-
-    //~ Constructors -----------------------------------------------------------
-
-    public SqlJdbcFunctionCall(String name)
-    {
-        super(
-            "{fn " + name + "}",
-            SqlKind.JDBC_FN,
-            null,
-            null,
-            SqlTypeStrategies.otcVariadic,
-            null);
-        jdbcName = name;
-        lookupMakeCallObj = JdbcToInternalLookupTable.instance.lookup(name);
-        lookupCall = null;
-    }
-
-    //~ Methods ----------------------------------------------------------------
-
-    private static String constructFuncList(String [] functionNames)
-    {
-        StringBuilder sb = new StringBuilder();
-        boolean first = true;
-        for (int i = 0; i < functionNames.length; ++i) {
-            String funcName = functionNames[i];
-            if (JdbcToInternalLookupTable.instance.lookup(funcName) == null) {
-                continue;
-            }
-            if (first) {
-                first = false;
-            } else {
-                sb.append(",");
-            }
-            sb.append(funcName);
+    
+    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
+        if(null == rset) {
+            return null;
+        } else {
+            return new DelegatingResultSet(stmt,rset);
         }
-        return sb.toString();
     }
 
-    public SqlCall createCall(
-        SqlLiteral functionQualifier,
-        SqlParserPos pos,
-        SqlNode ... operands)
-    {
-        thisOperands = operands;
-        return super.createCall(functionQualifier, pos, operands);
+    public static ResultSet wrapResultSet(Connection conn, ResultSet rset) {
+        if(null == rset) {
+            return null;
+        } else {
+            return new DelegatingResultSet(conn,rset);
+        }
     }
 
-    public SqlCall getLookupCall()
-    {
-        if (null == lookupCall) {
-            lookupCall =
-                lookupMakeCallObj.createCall(thisOperands, SqlParserPos.ZERO);
-        }
-        return lookupCall;
+    public ResultSet getDelegate() {
+        return _res;
     }
 
-    public String getAllowedSignatures()
-    {
-        return lookupMakeCallObj.operator.getAllowedSignatures(getName());
+    public boolean equals(Object obj) {
+    	if (this == obj) return true;
+        ResultSet delegate = getInnermostDelegate();
+        if (delegate == null) {
+            return false;
+        }
+        if (obj instanceof DelegatingResultSet) {
+            DelegatingResultSet s = (DelegatingResultSet) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
     }
 
-    public RelDataType deriveType(
-        SqlValidator validator,
-        SqlValidatorScope scope,
-        SqlCall call)
-    {
-        // Override SqlFunction.deriveType, because function-resolution is
-        // not relevant to a JDBC function call.
-        // REVIEW: jhyde, 2006/4/18: Should SqlJdbcFunctionCall even be a
-        // subclass of SqlFunction?
-        final SqlNode [] operands = call.operands;
-
-        for (int i = 0; i < operands.length; ++i) {
-            RelDataType nodeType = validator.deriveType(scope, operands[i]);
-            validator.setValidatedNodeType(operands[i], nodeType);
+    public int hashCode() {
+        Object obj = getInnermostDelegate();
+        if (obj == null) {
+            return 0;
         }
-        RelDataType type = validateOperands(validator, scope, call);
-        return type;
-    }
-
-    public RelDataType inferReturnType(
-        SqlOperatorBinding opBinding)
-    {
-        // only expected to come here if validator called this method
-        SqlCallBinding callBinding = (SqlCallBinding) opBinding;
-
-        if (null == lookupMakeCallObj) {
-            throw callBinding.newValidationError(
-                EigenbaseResource.instance().FunctionUndefined.ex(
-                    getName()));
-        }
-
-        if (!lookupMakeCallObj.checkNumberOfArg(
-                opBinding.getOperandCount()))
-        {
-            throw callBinding.newValidationError(
-                EigenbaseResource.instance().WrongNumberOfParam.ex(
-                    getName(),
-                    thisOperands.length,
-                    getArgCountMismatchMsg()));
-        }
-
-        if (!lookupMakeCallObj.operator.checkOperandTypes(
-                new SqlCallBinding(
-                    callBinding.getValidator(),
-                    callBinding.getScope(),
-                    getLookupCall()),
-                false))
-        {
-            throw callBinding.newValidationSignatureError();
-        }
-        return lookupMakeCallObj.operator.validateOperands(
-            callBinding.getValidator(),
-            callBinding.getScope(),
-            getLookupCall());
-    }
-
-    private String getArgCountMismatchMsg()
-    {
-        StringBuilder ret = new StringBuilder();
-        int [] possible = lookupMakeCallObj.getPossibleArgCounts();
-        for (int i = 0; i < possible.length; i++) {
-            if (i > 0) {
-                ret.append(" or ");
-            }
-            ret.append(possible[i]);
-        }
-        ret.append(" parameter(s)");
-        return ret.toString();
-    }
-
-    public void unparse(
-        SqlWriter writer,
-        SqlNode [] operands,
-        int leftPrec,
-        int rightPrec)
-    {
-        writer.print("{fn ");
-        writer.print(jdbcName);
-        final SqlWriter.Frame frame = writer.startList("(", ")");
-        for (int i = 0; i < operands.length; i++) {
-            writer.sep(",");
-            operands[i].unparse(writer, leftPrec, rightPrec);
-        }
-        writer.endList(frame);
-        writer.print("}");
+        return obj.hashCode();
     }
 
     /**
-     * @see java.sql.DatabaseMetaData#getNumericFunctions
+     * If my underlying {@link ResultSet} is not a
+     * <tt>DelegatingResultSet</tt>, returns it,
+     * otherwise recursively invokes this method on
+     * my delegate.
+     * <p>
+     * Hence this method will return the first
+     * delegate that is not a <tt>DelegatingResultSet</tt>,
+     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
+     * delegate can be found by transversing this chain.
+     * <p>
+     * This method is useful when you may have nested
+     * <tt>DelegatingResultSet</tt>s, and you want to make
+     * sure to obtain a "genuine" {@link ResultSet}.
      */
-    public static String getNumericFunctions()
-    {
-        return numericFunctions;
-    }
-
-    /**
-     * @see java.sql.DatabaseMetaData#getStringFunctions
-     */
-    public static String getStringFunctions()
-    {
-        return stringFunctions;
-    }
-
-    /**
-     * @see java.sql.DatabaseMetaData#getTimeDateFunctions
-     */
-    public static String getTimeDateFunctions()
-    {
-        return timeDateFunctions;
-    }
-
-    /**
-     * @see java.sql.DatabaseMetaData#getSystemFunctions
-     */
-    public static String getSystemFunctions()
-    {
-        return systemFunctions;
-    }
-
-    //~ Inner Classes ----------------------------------------------------------
-
-    /**
-     * Represent a Strategy Object to create a {@link SqlCall} by providing the
-     * feature of reording, adding/dropping operands.
-     */
-    private static class MakeCall
-    {
-        final SqlOperator operator;
-        final int [] order;
-
-        /**
-         * List of the possible numbers of operands this function can take.
-         */
-        final int [] argCounts;
-
-        private MakeCall(
-            SqlOperator operator,
-            int argCount)
-        {
-            this.operator = operator;
-            this.order = null;
-            this.argCounts = new int[] { argCount };
-        }
-
-        /**
-         * Creates a MakeCall strategy object with reordering of operands.
-         *
-         * <p>The reordering is specified by an int array where the value of
-         * element at position <code>i</code> indicates to which element in a
-         * new SqlNode[] array the operand goes.
-         *
-         * @param operator
-         * @param order
-         *
-         * @pre order != null
-         * @pre order[i] < order.length
-         * @pre order.length > 0
-         * @pre argCounts == order.length
-         */
-        MakeCall(
-            SqlOperator operator,
-            int argCount,
-            int [] order)
-        {
-            Util.pre(null != order, "null!=order");
-            Util.pre(order.length > 0, "order.length > 0");
-
-            // Currently operation overloading when reordering is necessary is
-            // NOT implemented
-            Util.pre(argCount == order.length, "argCounts==order.length");
-            this.operator = operator;
-            this.order = order;
-            this.argCounts = new int[] { order.length };
-
-            // sanity checking ...
-            for (int i = 0; i < order.length; i++) {
-                Util.pre(order[i] < order.length, "order[i] < order.length");
+    public ResultSet getInnermostDelegate() {
+        ResultSet r = _res;
+        while(r != null && r instanceof DelegatingResultSet) {
+            r = ((DelegatingResultSet)r).getDelegate();
+            if(this == r) {
+                return null;
             }
         }
+        return r;
+    }
+    
+    public Statement getStatement() throws SQLException {
+        return _stmt;
+    }
 
-        final int [] getPossibleArgCounts()
-        {
-            return this.argCounts;
-        }
-
-        /**
-         * Uses the data in {@link #order} to reorder a SqlNode[] array.
-         *
-         * @param operands
-         */
-        protected SqlNode [] reorder(SqlNode [] operands)
-        {
-            assert (operands.length == order.length);
-            SqlNode [] newOrder = new SqlNode[operands.length];
-            for (int i = 0; i < operands.length; i++) {
-                assert operands[i] != null;
-                int joyDivision = order[i];
-                assert newOrder[joyDivision] == null : "mapping is not 1:1";
-                newOrder[joyDivision] = operands[i];
+    /**
+     * Wrapper for close of ResultSet which removes this
+     * result set from being traced then calls close on
+     * the original ResultSet.
+     */
+    public void close() throws SQLException {
+        try {
+            if(_stmt != null) {
+                ((AbandonedTrace)_stmt).removeTrace(this);
+                _stmt = null;
             }
-            return newOrder;
-        }
-
-        /**
-         * Creates and return a {@link SqlCall}. If the MakeCall strategy object
-         * was created with a reording specified the call will be created with
-         * the operands reordered, otherwise no change of ordering is applied
-         *
-         * @param operands
-         */
-        SqlCall createCall(
-            SqlNode [] operands,
-            SqlParserPos pos)
-        {
-            if (null == order) {
-                return operator.createCall(pos, operands);
+            if(_conn != null) {
+                ((AbandonedTrace)_conn).removeTrace(this);
+                _conn = null;
             }
-            return operator.createCall(pos, reorder(operands));
+            _res.close();
         }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
 
-        /**
-         * Returns false if number of arguments are unexpected, otherwise true.
-         * This function is supposed to be called with an {@link SqlNode} array
-         * of operands direct from the oven, e.g no reording or adding/dropping
-         * of operands...else it would make much sense to have this methods
-         */
-        boolean checkNumberOfArg(int length)
-        {
-            for (int i = 0; i < argCounts.length; i++) {
-                if (argCounts[i] == length) {
-                    return true;
-                }
-            }
+    protected void handleException(SQLException e) throws SQLException {
+        if ((_stmt != null) && (_stmt instanceof DelegatingStatement)) {
+            ((DelegatingStatement)_stmt).handleException(e);
+        }
+        else if ((_conn != null) && (_conn instanceof DelegatingConnection)) {
+            ((DelegatingConnection)_conn).handleException(e);
+        }
+        else {
+            throw e;
+        }
+    }
+
+    public boolean next() throws SQLException 
+    { try { return _res.next(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean wasNull() throws SQLException
+    { try { return _res.wasNull(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public String getString(int columnIndex) throws SQLException
+    { try { return _res.getString(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(int columnIndex) throws SQLException
+    { try { return _res.getBoolean(columnIndex); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(int columnIndex) throws SQLException
+    { try { return _res.getByte(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(int columnIndex) throws SQLException
+    { try { return _res.getShort(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(int columnIndex) throws SQLException
+    { try { return _res.getInt(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(int columnIndex) throws SQLException
+    { try { return _res.getLong(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(int columnIndex) throws SQLException
+    { try { return _res.getFloat(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(int columnIndex) throws SQLException
+    { try { return _res.getDouble(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException
+    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(int columnIndex) throws SQLException
+    { try { return _res.getBytes(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int columnIndex) throws SQLException
+    { try { return _res.getDate(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int columnIndex) throws SQLException
+    { try { return _res.getTime(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int columnIndex) throws SQLException
+    { try { return _res.getTimestamp(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getAsciiStream(int columnIndex) throws SQLException
+    { try { return _res.getAsciiStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    /** @deprecated */
+    public InputStream getUnicodeStream(int columnIndex) throws SQLException
+    { try { return _res.getUnicodeStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getBinaryStream(int columnIndex) throws SQLException
+    { try { return _res.getBinaryStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public String getString(String columnName) throws SQLException
+    { try { return _res.getString(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(String columnName) throws SQLException
+    { try { return _res.getBoolean(columnName); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(String columnName) throws SQLException
+    { try { return _res.getByte(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(String columnName) throws SQLException
+    { try { return _res.getShort(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(String columnName) throws SQLException
+    { try { return _res.getInt(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(String columnName) throws SQLException
+    { try { return _res.getLong(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(String columnName) throws SQLException
+    { try { return _res.getFloat(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(String columnName) throws SQLException
+    { try { return _res.getDouble(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException
+    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(String columnName) throws SQLException
+    { try { return _res.getBytes(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String columnName) throws SQLException
+    { try { return _res.getDate(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String columnName) throws SQLException
+    { try { return _res.getTime(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String columnName) throws SQLException
+    { try { return _res.getTimestamp(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getAsciiStream(String columnName) throws SQLException
+    { try { return _res.getAsciiStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    /** @deprecated */
+    public InputStream getUnicodeStream(String columnName) throws SQLException
+    { try { return _res.getUnicodeStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getBinaryStream(String columnName) throws SQLException
+    { try { return _res.getBinaryStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public SQLWarning getWarnings() throws SQLException
+    { try { return _res.getWarnings(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void clearWarnings() throws SQLException
+    { try { _res.clearWarnings(); } catch (SQLException e) { handleException(e); } }
+
+    public String getCursorName() throws SQLException
+    { try { return _res.getCursorName(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public ResultSetMetaData getMetaData() throws SQLException
+    { try { return _res.getMetaData(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int columnIndex) throws SQLException
+    { try { return _res.getObject(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String columnName) throws SQLException
+    { try { return _res.getObject(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public int findColumn(String columnName) throws SQLException
+    { try { return _res.findColumn(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public Reader getCharacterStream(int columnIndex) throws SQLException
+    { try { return _res.getCharacterStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Reader getCharacterStream(String columnName) throws SQLException
+    { try { return _res.getCharacterStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(int columnIndex) throws SQLException
+    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(String columnName) throws SQLException
+    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean isBeforeFirst() throws SQLException
+    { try { return _res.isBeforeFirst(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isAfterLast() throws SQLException
+    { try { return _res.isAfterLast(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isFirst() throws SQLException
+    { try { return _res.isFirst(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isLast() throws SQLException
+    { try { return _res.isLast(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void beforeFirst() throws SQLException
+    { try { _res.beforeFirst(); } catch (SQLException e) { handleException(e); } }
+
+    public void afterLast() throws SQLException
+    { try { _res.afterLast(); } catch (SQLException e) { handleException(e); } }
+
+    public boolean first() throws SQLException
+    { try { return _res.first(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean last() throws SQLException
+    { try { return _res.last(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public int getRow() throws SQLException
+    { try { return _res.getRow(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public boolean absolute(int row) throws SQLException
+    { try { return _res.absolute(row); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean relative(int rows) throws SQLException
+    { try { return _res.relative(rows); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean previous() throws SQLException
+    { try { return _res.previous(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void setFetchDirection(int direction) throws SQLException
+    { try { _res.setFetchDirection(direction); } catch (SQLException e) { handleException(e); } }
+
+    public int getFetchDirection() throws SQLException
+    { try { return _res.getFetchDirection(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public void setFetchSize(int rows) throws SQLException
+    { try { _res.setFetchSize(rows); } catch (SQLException e) { handleException(e); } }
+
+    public int getFetchSize() throws SQLException
+    { try { return _res.getFetchSize(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getType() throws SQLException
+    { try { return _res.getType(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getConcurrency() throws SQLException
+    { try { return _res.getConcurrency(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public boolean rowUpdated() throws SQLException
+    { try { return _res.rowUpdated(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean rowInserted() throws SQLException
+    { try { return _res.rowInserted(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean rowDeleted() throws SQLException
+    { try { return _res.rowDeleted(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void updateNull(int columnIndex) throws SQLException
+    { try { _res.updateNull(columnIndex); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBoolean(int columnIndex, boolean x) throws SQLException
+    { try { _res.updateBoolean(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateByte(int columnIndex, byte x) throws SQLException
+    { try { _res.updateByte(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateShort(int columnIndex, short x) throws SQLException
+    { try { _res.updateShort(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateInt(int columnIndex, int x) throws SQLException
+    { try { _res.updateInt(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateLong(int columnIndex, long x) throws SQLException
+    { try { _res.updateLong(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateFloat(int columnIndex, float x) throws SQLException
+    { try { _res.updateFloat(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDouble(int columnIndex, double x) throws SQLException
+    { try { _res.updateDouble(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException
+    { try { _res.updateBigDecimal(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateString(int columnIndex, String x) throws SQLException
+    { try { _res.updateString(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBytes(int columnIndex, byte[] x) throws SQLException
+    { try { _res.updateBytes(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDate(int columnIndex, Date x) throws SQLException
+    { try { _res.updateDate(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTime(int columnIndex, Time x) throws SQLException
+    { try { _res.updateTime(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException
+    { try { _res.updateTimestamp(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException
+    { try { _res.updateAsciiStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException
+    { try { _res.updateBinaryStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException
+    { try { _res.updateCharacterStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(int columnIndex, Object x, int scale) throws SQLException
+    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(int columnIndex, Object x) throws SQLException
+    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateNull(String columnName) throws SQLException
+    { try { _res.updateNull(columnName); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBoolean(String columnName, boolean x) throws SQLException
+    { try { _res.updateBoolean(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateByte(String columnName, byte x) throws SQLException
+    { try { _res.updateByte(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateShort(String columnName, short x) throws SQLException
+    { try { _res.updateShort(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateInt(String columnName, int x) throws SQLException
+    { try { _res.updateInt(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateLong(String columnName, long x) throws SQLException
+    { try { _res.updateLong(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateFloat(String columnName, float x) throws SQLException
+    { try { _res.updateFloat(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDouble(String columnName, double x) throws SQLException
+    { try { _res.updateDouble(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException
+    { try { _res.updateBigDecimal(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateString(String columnName, String x) throws SQLException
+    { try { _res.updateString(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBytes(String columnName, byte[] x) throws SQLException
+    { try { _res.updateBytes(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDate(String columnName, Date x) throws SQLException
+    { try { _res.updateDate(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTime(String columnName, Time x) throws SQLException
+    { try { _res.updateTime(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTimestamp(String columnName, Timestamp x) throws SQLException
+    { try { _res.updateTimestamp(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException
+    { try { _res.updateAsciiStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException
+    { try { _res.updateBinaryStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException
+    { try { _res.updateCharacterStream(columnName, reader, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(String columnName, Object x, int scale) throws SQLException
+    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(String columnName, Object x) throws SQLException
+    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void insertRow() throws SQLException
+    { try { _res.insertRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void updateRow() throws SQLException
+    { try { _res.updateRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void deleteRow() throws SQLException
+    { try { _res.deleteRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void refreshRow() throws SQLException
+    { try { _res.refreshRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void cancelRowUpdates() throws SQLException
+    { try { _res.cancelRowUpdates(); } catch (SQLException e) { handleException(e); } }
+
+    public void moveToInsertRow() throws SQLException
+    { try { _res.moveToInsertRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void moveToCurrentRow() throws SQLException
+    { try { _res.moveToCurrentRow(); } catch (SQLException e) { handleException(e); } }
+
+    public Object getObject(int i, Map map) throws SQLException
+    { try { return _res.getObject(i, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(int i) throws SQLException
+    { try { return _res.getRef(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(int i) throws SQLException
+    { try { return _res.getBlob(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(int i) throws SQLException
+    { try { return _res.getClob(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(int i) throws SQLException
+    { try { return _res.getArray(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String colName, Map map) throws SQLException
+    { try { return _res.getObject(colName, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(String colName) throws SQLException
+    { try { return _res.getRef(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(String colName) throws SQLException
+    { try { return _res.getBlob(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(String colName) throws SQLException
+    { try { return _res.getClob(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(String colName) throws SQLException
+    { try { return _res.getArray(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getDate(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getDate(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getTime(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getTime(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getTimestamp(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getTimestamp(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+
+    public java.net.URL getURL(int columnIndex) throws SQLException
+    { try { return _res.getURL(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public java.net.URL getURL(String columnName) throws SQLException
+    { try { return _res.getURL(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void updateRef(int columnIndex, java.sql.Ref x) throws SQLException
+    { try { _res.updateRef(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateRef(String columnName, java.sql.Ref x) throws SQLException
+    { try { _res.updateRef(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBlob(int columnIndex, java.sql.Blob x) throws SQLException
+    { try { _res.updateBlob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBlob(String columnName, java.sql.Blob x) throws SQLException
+    { try { _res.updateBlob(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateClob(int columnIndex, java.sql.Clob x) throws SQLException
+    { try { _res.updateClob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateClob(String columnName, java.sql.Clob x) throws SQLException
+    { try { _res.updateClob(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateArray(int columnIndex, java.sql.Array x) throws SQLException
+    { try { _res.updateArray(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateArray(String columnName, java.sql.Array x) throws SQLException
+    { try { _res.updateArray(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+/* JDBC_4_ANT_KEY_BEGIN */
+
+    public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        return iface.isAssignableFrom(getClass()) || _res.isWrapperFor(iface);
+    }
+
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+        if (iface.isAssignableFrom(getClass())) {
+            return iface.cast(this);
+        } else if (iface.isAssignableFrom(_res.getClass())) {
+            return iface.cast(_res);
+        } else {
+            return _res.unwrap(iface);
+        }
+    }
+
+    public RowId getRowId(int columnIndex) throws SQLException {
+        try {
+            return _res.getRowId(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public RowId getRowId(String columnLabel) throws SQLException {
+        try {
+            return _res.getRowId(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateRowId(int columnIndex, RowId value) throws SQLException {
+        try {
+            _res.updateRowId(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateRowId(String columnLabel, RowId value) throws SQLException {
+        try {
+            _res.updateRowId(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public int getHoldability() throws SQLException {
+        try {
+            return _res.getHoldability();
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return 0;
+        }
+    }
+
+    public boolean isClosed() throws SQLException {
+        try {
+            return _res.isClosed();
+        }
+        catch (SQLException e) {
+            handleException(e);
             return false;
         }
     }
 
-    /**
-     * Lookup table between JDBC functions and internal representation
-     */
-    private static class JdbcToInternalLookupTable
-    {
-        /**
-         * The {@link org.eigenbase.util.Glossary#SingletonPattern singleton}
-         * instance.
-         */
-        static final JdbcToInternalLookupTable instance =
-            new JdbcToInternalLookupTable();
-        private final Map<String, MakeCall> map =
-            new HashMap<String, MakeCall>();
-
-        private JdbcToInternalLookupTable()
-        {
-            // A table of all functions can be found at
-            // http://java.sun.com/products/jdbc/driverdevs.html
-            // which is also provided in the javadoc for this class.
-            // See also SqlOperatorTests.testJdbcFn, which contains the list.
-            map.put(
-                "ABS",
-                new MakeCall(SqlStdOperatorTable.absFunc, 1));
-            map.put(
-                "EXP",
-                new MakeCall(SqlStdOperatorTable.expFunc, 1));
-            map.put(
-                "LOG",
-                new MakeCall(SqlStdOperatorTable.lnFunc, 1));
-            map.put(
-                "LOG10",
-                new MakeCall(SqlStdOperatorTable.log10Func, 1));
-            map.put(
-                "MOD",
-                new MakeCall(SqlStdOperatorTable.modFunc, 2));
-            map.put(
-                "POWER",
-                new MakeCall(SqlStdOperatorTable.powerFunc, 2));
-
-            map.put(
-                "CONCAT",
-                new MakeCall(SqlStdOperatorTable.concatOperator, 2));
-            map.put(
-                "INSERT",
-                new MakeCall(
-                    SqlStdOperatorTable.overlayFunc,
-                    4,
-                    new int[] { 0, 2, 3, 1 }));
-            map.put(
-                "LCASE",
-                new MakeCall(SqlStdOperatorTable.lowerFunc, 1));
-            map.put(
-                "LENGTH",
-                new MakeCall(SqlStdOperatorTable.characterLengthFunc, 1));
-            map.put(
-                "LOCATE",
-                new MakeCall(SqlStdOperatorTable.positionFunc, 2));
-            map.put(
-                "LTRIM",
-                new MakeCall(SqlStdOperatorTable.trimFunc, 1) {
-                    SqlCall createCall(SqlNode [] operands)
-                    {
-                        assert (null != operands);
-                        assert (1 == operands.length);
-                        SqlNode [] newOperands = new SqlNode[3];
-                        newOperands[0] =
-                            SqlLiteral.createSymbol(
-                                SqlTrimFunction.Flag.LEADING,
-                                null);
-                        newOperands[1] = SqlLiteral.createCharString(" ", null);
-                        newOperands[2] = operands[0];
-
-                        return super.createCall(newOperands, null);
-                    }
-                });
-            map.put(
-                "RTRIM",
-                new MakeCall(SqlStdOperatorTable.trimFunc, 1) {
-                    SqlCall createCall(SqlNode [] operands)
-                    {
-                        assert (null != operands);
-                        assert (1 == operands.length);
-                        SqlNode [] newOperands = new SqlNode[3];
-                        newOperands[0] =
-                            SqlLiteral.createSymbol(
-                                SqlTrimFunction.Flag.TRAILING,
-                                null);
-                        newOperands[1] = SqlLiteral.createCharString(" ", null);
-                        newOperands[2] = operands[0];
-
-                        return super.createCall(newOperands, null);
-                    }
-                });
-            map.put(
-                "SUBSTRING",
-                new MakeCall(SqlStdOperatorTable.substringFunc, 3));
-            map.put(
-                "UCASE",
-                new MakeCall(SqlStdOperatorTable.upperFunc, 1));
-
-            map.put(
-                "CURDATE",
-                new MakeCall(SqlStdOperatorTable.currentDateFunc, 0));
-            map.put(
-                "CURTIME",
-                new MakeCall(SqlStdOperatorTable.localTimeFunc, 0));
-            map.put(
-                "NOW",
-                new MakeCall(SqlStdOperatorTable.currentTimestampFunc, 0));
+    public void updateNString(int columnIndex, String value) throws SQLException {
+        try {
+            _res.updateNString(columnIndex, value);
         }
-
-        /**
-         * Tries to lookup a given function name JDBC to an internal
-         * representation. Returns null if no function defined.
-         */
-        public MakeCall lookup(String name)
-        {
-            return map.get(name);
+        catch (SQLException e) {
+            handleException(e);
         }
     }
-}
 
-// End SqlJdbcFunctionCall.java
+    public void updateNString(String columnLabel, String value) throws SQLException {
+        try {
+            _res.updateNString(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, NClob value) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, NClob value) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public NClob getNClob(int columnIndex) throws SQLException {
+        try {
+            return _res.getNClob(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public NClob getNClob(String columnLabel) throws SQLException {
+        try {
+            return _res.getNClob(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(int columnIndex) throws SQLException {
+        try {
+            return _res.getSQLXML(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(String columnLabel) throws SQLException {
+        try {
+            return _res.getSQLXML(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateSQLXML(int columnIndex, SQLXML value) throws SQLException {
+        try {
+            _res.updateSQLXML(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateSQLXML(String columnLabel, SQLXML value) throws SQLException {
+        try {
+            _res.updateSQLXML(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public String getNString(int columnIndex) throws SQLException {
+        try {
+            return _res.getNString(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(String columnLabel) throws SQLException {
+        try {
+            return _res.getNString(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(int columnIndex) throws SQLException {
+        try {
+            return _res.getNCharacterStream(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(String columnLabel) throws SQLException {
+        try {
+            return _res.getNCharacterStream(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateNCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBlob(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBlob(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateClob(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateClob(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBlob(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBlob(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateClob(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateClob(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+/* JDBC_4_ANT_KEY_END */
+}

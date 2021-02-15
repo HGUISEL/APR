@@ -1,448 +1,776 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package com.fasterxml.jackson.databind.introspect;
 
-package org.apache.commons.codec.binary;
+import java.util.*;
 
-import org.apache.commons.codec.BinaryDecoder;
-import org.apache.commons.codec.BinaryEncoder;
-import org.apache.commons.codec.DecoderException;
-import org.apache.commons.codec.EncoderException;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.util.EmptyIterator;
 
 /**
- * Abstract superclass for Base-N encoders and decoders.
- *
- * <p>
- * This class is thread-safe.
- * </p>
+ * Helper class used for aggregating information about a single
+ * potential POJO property.
  */
-public abstract class BaseNCodec implements BinaryEncoder, BinaryDecoder {
+public class POJOPropertyBuilder
+    extends BeanPropertyDefinition
+    implements Comparable<POJOPropertyBuilder>
+{
+    /**
+     * Whether property is being composed for serialization
+     * (true) or deserialization (false)
+     */
+    protected final boolean _forSerialization;
+
+    protected final AnnotationIntrospector _annotationIntrospector;
 
     /**
-     * Holds thread context so classes can be thread-safe.
-     * 
-     * This class is not itself thread-safe; each thread must allocate its own copy.
-     * 
-     * @since 1.7
+     * External name of logical property; may change with
+     * renaming (by new instance being constructed using
+     * a new name)
      */
-    static class Context {
-
-        /**
-         * Place holder for the bytes we're dealing with for our based logic. 
-         * Bitwise operations store and extract the encoding or decoding from this variable.
-         */
-        int ibitWorkArea;
-
-        /**
-         * Place holder for the bytes we're dealing with for our based logic. 
-         * Bitwise operations store and extract the encoding or decoding from this variable.
-         */
-        long lbitWorkArea;
-
-        /**
-         * Buffer for streaming.
-         */
-        byte[] buffer;
-
-        /**
-         * Position where next character should be written in the buffer.
-         */
-        int pos;
-
-        /**
-         * Position where next character should be read from the buffer.
-         */
-        int readPos;
-
-        /**
-         * Boolean flag to indicate the EOF has been reached. Once EOF has been reached, this object becomes useless,
-         * and must be thrown away.
-         */
-        boolean eof;
-
-        /**
-         * Variable tracks how many characters have been written to the current line. Only used when encoding. We use it to
-         * make sure each encoded line never goes beyond lineLength (if lineLength > 0).
-         */
-        int currentLinePos;
-
-        /**
-         * Writes to the buffer only occur after every 3/5 reads when encoding, and every 4/8 reads when decoding.
-         * This variable helps track that.
-         */
-        int modulus;
-
-        Context() {
-        }
-    }
+    protected final PropertyName _name;
 
     /**
-     * EOF
-     * 
-     * @since 1.7
+     * Original internal name, derived from accessor, of this
+     * property. Will not be changed by renaming.
      */
-    static final int EOF = -1;
+    protected final PropertyName _internalName;
 
-    /**
-     *  MIME chunk size per RFC 2045 section 6.8.
-     *
-     * <p>
-     * The {@value} character limit does not count the trailing CRLF, but counts all other characters, including any
-     * equal signs.
-     * </p>
-     *
-     * @see <a href="http://www.ietf.org/rfc/rfc2045.txt">RFC 2045 section 6.8</a>
-     */
-    public static final int MIME_CHUNK_SIZE = 76;
-
-    /**
-     * PEM chunk size per RFC 1421 section 4.3.2.4.
-     *
-     * <p>
-     * The {@value} character limit does not count the trailing CRLF, but counts all other characters, including any
-     * equal signs.
-     * </p>
-     *
-     * @see <a href="http://tools.ietf.org/html/rfc1421">RFC 1421 section 4.3.2.4</a>
-     */
-    public static final int PEM_CHUNK_SIZE = 64;
-
-    private static final int DEFAULT_BUFFER_RESIZE_FACTOR = 2;
-
-    /**
-     * Defines the default buffer size - currently {@value}
-     * - must be large enough for at least one encoded block+separator
-     */
-    private static final int DEFAULT_BUFFER_SIZE = 8192;
-
-    /** Mask used to extract 8 bits, used in decoding bytes */
-    protected static final int MASK_8BITS = 0xff;
-
-    /**
-     * Byte used to pad output.
-     */
-    protected static final byte PAD_DEFAULT = '='; // Allow static access to default
+    protected Linked<AnnotatedField> _fields;
     
-    protected final byte PAD = PAD_DEFAULT; // instance variable just in case it needs to vary later
-
-    /** Number of bytes in each full block of unencoded data, e.g. 4 for Base64 and 5 for Base32 */
-    private final int unencodedBlockSize;
-
-    /** Number of bytes in each full block of encoded data, e.g. 3 for Base64 and 8 for Base32 */
-    private final int encodedBlockSize;
-
-    /**
-     * Chunksize for encoding. Not used when decoding. 
-     * A value of zero or less implies no chunking of the encoded data.
-     * Rounded down to nearest multiple of encodedBlockSize.
-     */
-    protected final int lineLength;
+    protected Linked<AnnotatedParameter> _ctorParameters;
     
-    /**
-     * Size of chunk separator. Not used unless {@link #lineLength} > 0. 
-     */
-    private final int chunkSeparatorLength;
+    protected Linked<AnnotatedMethod> _getters;
 
-    /**
-     * Note <code>lineLength</code> is rounded down to the nearest multiple of {@link #encodedBlockSize}
-     * If <code>chunkSeparatorLength</code> is zero, then chunking is disabled.
-     * @param unencodedBlockSize the size of an unencoded block (e.g. Base64 = 3)
-     * @param encodedBlockSize the size of an encoded block (e.g. Base64 = 4)
-     * @param lineLength if &gt; 0, use chunking with a length <code>lineLength</code>
-     * @param chunkSeparatorLength the chunk separator length, if relevant
-     */
-    protected BaseNCodec(int unencodedBlockSize, int encodedBlockSize, int lineLength, int chunkSeparatorLength){
-        this.unencodedBlockSize = unencodedBlockSize;
-        this.encodedBlockSize = encodedBlockSize;
-        this.lineLength = (lineLength > 0  && chunkSeparatorLength > 0) ? (lineLength / encodedBlockSize) * encodedBlockSize : 0;
-        this.chunkSeparatorLength = chunkSeparatorLength;
+    protected Linked<AnnotatedMethod> _setters;
+
+    public POJOPropertyBuilder(PropertyName internalName, AnnotationIntrospector ai,
+            boolean forSerialization) {
+        this(internalName, internalName, ai, forSerialization);
     }
 
-    /**
-     * Returns true if this object has buffered data for reading.
-     *
-     * @param context the context to be used
-     * @return true if there is data still available for reading.
-     */
-    boolean hasData(Context context) {  // package protected for access from I/O streams
-        return context.buffer != null;
+    protected POJOPropertyBuilder(PropertyName internalName, PropertyName name,
+            AnnotationIntrospector annotationIntrospector, boolean forSerialization)
+    {
+        _internalName = internalName;
+        _name = name;
+        _annotationIntrospector = annotationIntrospector;
+        _forSerialization = forSerialization;
     }
 
-    /**
-     * Returns the amount of buffered data available for reading.
-     *
-     * @param context the context to be used
-     * @return The amount of buffered data available for reading.
+    public POJOPropertyBuilder(POJOPropertyBuilder src, PropertyName newName)
+    {
+        _internalName = src._internalName;
+        _name = newName;
+        _annotationIntrospector = src._annotationIntrospector;
+        _fields = src._fields;
+        _ctorParameters = src._ctorParameters;
+        _getters = src._getters;
+        _setters = src._setters;
+        _forSerialization = src._forSerialization;
+    }
+    
+    /*
+    /**********************************************************
+    /* Fluent factory methods
+    /**********************************************************
      */
-    int available(Context context) {  // package protected for access from I/O streams
-        return context.buffer != null ? context.pos - context.readPos : 0;
+
+    @Override
+    public POJOPropertyBuilder withName(PropertyName newName) {
+        return new POJOPropertyBuilder(this, newName);
     }
 
-    /**
-     * Get the default buffer size. Can be overridden.
-     *
-     * @return {@link #DEFAULT_BUFFER_SIZE}
-     */
-    protected int getDefaultBufferSize() {
-        return DEFAULT_BUFFER_SIZE;
+    @Override
+    public POJOPropertyBuilder withSimpleName(String newSimpleName)
+    {
+        PropertyName newName = _name.withSimpleName(newSimpleName);
+        return (newName == _name) ? this : new POJOPropertyBuilder(this, newName);
     }
-
-    /** 
-     * Increases our buffer by the {@link #DEFAULT_BUFFER_RESIZE_FACTOR}.
-     * @param context the context to be used
+    
+    /*
+    /**********************************************************
+    /* Comparable implementation: sort alphabetically, except
+    /* that properties with constructor parameters sorted
+    /* before other properties
+    /**********************************************************
      */
-    private void resizeBuffer(Context context) {
-        if (context.buffer == null) {
-            context.buffer = new byte[getDefaultBufferSize()];
-            context.pos = 0;
-            context.readPos = 0;
-        } else {
-            byte[] b = new byte[context.buffer.length * DEFAULT_BUFFER_RESIZE_FACTOR];
-            System.arraycopy(context.buffer, 0, b, 0, context.buffer.length);
-            context.buffer = b;
-        }
-    }
 
-    /**
-     * Ensure that the buffer has room for <code>size</code> bytes
-     *
-     * @param size minimum spare space required
-     * @param context the context to be used
-     */
-    protected void ensureBufferSize(int size, Context context){
-        if ((context.buffer == null) || (context.buffer.length < context.pos + size)){
-            resizeBuffer(context);
-        }
-    }
-
-    /**
-     * Extracts buffered data into the provided byte[] array, starting at position bPos, 
-     * up to a maximum of bAvail bytes. Returns how many bytes were actually extracted.
-     *
-     * @param b
-     *            byte[] array to extract the buffered data into.
-     * @param bPos
-     *            position in byte[] array to start extraction at.
-     * @param bAvail
-     *            amount of bytes we're allowed to extract. We may extract fewer (if fewer are available).
-     * @param context the context to be used
-     * @return The number of bytes successfully extracted into the provided byte[] array.
-     */
-    int readResults(byte[] b, int bPos, int bAvail, Context context) {  // package protected for access from I/O streams
-        if (context.buffer != null) {
-            int len = Math.min(available(context), bAvail);
-            System.arraycopy(context.buffer, context.readPos, b, bPos, len);
-            context.readPos += len;
-            if (context.readPos >= context.pos) {
-                context.buffer = null; // so hasData() will return false, and this method can return -1
+    @Override
+    public int compareTo(POJOPropertyBuilder other)
+    {
+        // first, if one has ctor params, that should come first:
+        if (_ctorParameters != null) {
+            if (other._ctorParameters == null) {
+                return -1;
             }
-            return len;
+        } else if (other._ctorParameters != null) {
+            return 1;
         }
-        return context.eof ? EOF : 0;
+        /* otherwise sort by external name (including sorting of
+         * ctor parameters)
+         */
+        return getName().compareTo(other.getName());
+    }
+
+    /*
+    /**********************************************************
+    /* BeanPropertyDefinition implementation, name/type
+    /**********************************************************
+     */
+
+    @Override
+    public String getName() {
+        return (_name == null) ? null : _name.getSimpleName();
+    }
+
+    @Override
+    public PropertyName getFullName() {
+        return _name;
+    }
+
+    @Override
+    public boolean hasName(PropertyName name) {
+        return _name.equals(name);
+    }
+
+    @Override
+    public String getInternalName() { return _internalName.getSimpleName(); }
+
+    @Override
+    public PropertyName getWrapperName() {
+        /* 13-Mar-2013, tatu: Accessing via primary member SHOULD work,
+         *   due to annotation merging. However, I have seen some problems
+         *   with this access (for other annotations)... so if this should
+         *   occur, try commenting out full traversal code
+         */
+        AnnotatedMember member = getPrimaryMember();
+        return (member == null || _annotationIntrospector == null) ? null
+                : _annotationIntrospector.findWrapperName(member);
+    	/*
+        return fromMemberAnnotations(new WithMember<PropertyName>() {
+            @Override
+            public PropertyName withMember(AnnotatedMember member) {
+                return _annotationIntrospector.findWrapperName(member);
+            }
+        });
+        */
+    }
+
+    @Override
+    public boolean isExplicitlyIncluded() {
+        return _anyExplicits(_fields)
+                || _anyExplicits(_getters)
+                || _anyExplicits(_setters)
+                || _anyExplicits(_ctorParameters)
+                ;
+    }
+
+    @Override
+    public boolean isExplicitlyNamed() {
+        return _anyExplicitNames(_fields)
+                || _anyExplicitNames(_getters)
+                || _anyExplicitNames(_setters)
+                || _anyExplicitNames(_ctorParameters)
+                ;
+    }
+    
+    /*
+    /**********************************************************
+    /* BeanPropertyDefinition implementation, accessor access
+    /**********************************************************
+     */
+
+    @Override
+    public boolean hasGetter() { return _getters != null; }
+
+    @Override
+    public boolean hasSetter() { return _setters != null; }
+
+    @Override
+    public boolean hasField() { return _fields != null; }
+
+    @Override
+    public boolean hasConstructorParameter() { return _ctorParameters != null; }
+
+    @Override
+    public boolean couldDeserialize() {
+        return (_ctorParameters != null) || (_setters != null) || (_fields != null);
+    }
+
+    @Override
+    public boolean couldSerialize() {
+        return (_getters != null) || (_fields != null);
+    }
+
+    @Override
+    public AnnotatedMethod getGetter()
+    {
+        // Easy with zero or one getters...
+        Linked<AnnotatedMethod> curr = _getters;
+        if (curr == null) {
+            return null;
+        }
+        Linked<AnnotatedMethod> next = curr.next;
+        if (next == null) {
+            return curr.value;
+        }
+        // But if multiple, verify that they do not conflict...
+        for (; next != null; next = next.next) {
+            /* [JACKSON-255] Allow masking, i.e. do not report exception if one
+             *   is in super-class from the other
+             */
+            Class<?> currClass = curr.value.getDeclaringClass();
+            Class<?> nextClass = next.value.getDeclaringClass();
+            if (currClass != nextClass) {
+                if (currClass.isAssignableFrom(nextClass)) { // next is more specific
+                    curr = next;
+                    continue;
+                }
+                if (nextClass.isAssignableFrom(currClass)) { // current more specific
+                    continue;
+                }
+            }
+            /* 30-May-2014, tatu: Three levels of precedence:
+             * 
+             * 1. Regular getters ("getX")
+             * 2. Is-getters ("isX")
+             * 3. Implicit, possible getters ("x")
+             */
+            int priNext = _getterPriority(next.value);
+            int priCurr = _getterPriority(curr.value);
+
+            if (priNext != priCurr) {
+                if (priNext < priCurr) {
+                    curr = next;
+                }
+                continue;
+            }
+            throw new IllegalArgumentException("Conflicting getter definitions for property \""+getName()+"\": "
+                    +curr.value.getFullName()+" vs "+next.value.getFullName());
+        }
+        // One more thing; to avoid having to do it again...
+        _getters = curr.withoutNext();
+        return curr.value;
+    }
+    
+    @Override
+    public AnnotatedMethod getSetter()
+    {
+        // Easy with zero or one getters...
+        Linked<AnnotatedMethod> curr = _setters;
+        if (curr == null) {
+            return null;
+        }
+        Linked<AnnotatedMethod> next = curr.next;
+        if (next == null) {
+            return curr.value;
+        }
+        // But if multiple, verify that they do not conflict...
+        for (; next != null; next = next.next) {
+            /* [JACKSON-255] Allow masking, i.e. do not report exception if one
+             *   is in super-class from the other
+             */
+            Class<?> currClass = curr.value.getDeclaringClass();
+            Class<?> nextClass = next.value.getDeclaringClass();
+            if (currClass != nextClass) {
+                if (currClass.isAssignableFrom(nextClass)) { // next is more specific
+                    curr = next;
+                    continue;
+                }
+                if (nextClass.isAssignableFrom(currClass)) { // current more specific
+                    continue;
+                }
+            }
+            /* 30-May-2014, tatu: Two levels of precedence:
+             * 
+             * 1. Regular setters ("setX(...)")
+             * 2. Implicit, possible setters ("x(...)")
+             */
+            int priNext = _setterPriority(next.value);
+            int priCurr = _setterPriority(curr.value);
+
+            if (priNext != priCurr) {
+                if (priNext < priCurr) {
+                    curr = next;
+                }
+                continue;
+            }
+            throw new IllegalArgumentException("Conflicting setter definitions for property \""+getName()+"\": "
+                    +curr.value.getFullName()+" vs "+next.value.getFullName());
+        }
+        // One more thing; to avoid having to do it again...
+        _setters = curr.withoutNext();
+        return curr.value;
+    }
+
+    @Override
+    public AnnotatedField getField()
+    {
+        if (_fields == null) {
+            return null;
+        }
+        // If multiple, verify that they do not conflict...
+        AnnotatedField field = _fields.value;
+        Linked<AnnotatedField> next = _fields.next;
+        for (; next != null; next = next.next) {
+            AnnotatedField nextField = next.value;
+            Class<?> fieldClass = field.getDeclaringClass();
+            Class<?> nextClass = nextField.getDeclaringClass();
+            if (fieldClass != nextClass) {
+                if (fieldClass.isAssignableFrom(nextClass)) { // next is more specific
+                    field = nextField;
+                    continue;
+                }
+                if (nextClass.isAssignableFrom(fieldClass)) { // getter more specific
+                    continue;
+                }
+            }
+            throw new IllegalArgumentException("Multiple fields representing property \""+getName()+"\": "
+                    +field.getFullName()+" vs "+nextField.getFullName());
+        }
+        return field;
+    }
+
+    @Override
+    public AnnotatedParameter getConstructorParameter()
+    {
+        if (_ctorParameters == null) {
+            return null;
+        }
+        /* Hmmh. Checking for constructor parameters is trickier; for one,
+         * we must allow creator and factory method annotations.
+         * If this is the case, constructor parameter has the precedence.
+         * 
+         * So, for now, just try finding the first constructor parameter;
+         * if none, first factory method. And don't check for dups, if we must,
+         * can start checking for them later on.
+         */
+        Linked<AnnotatedParameter> curr = _ctorParameters;
+        do {
+            if (curr.value.getOwner() instanceof AnnotatedConstructor) {
+                return curr.value;
+            }
+            curr = curr.next;
+        } while (curr != null);
+        return _ctorParameters.value;
+    }
+
+    @Override
+    public Iterator<AnnotatedParameter> getConstructorParameters() {
+        if (_ctorParameters == null) {
+            return EmptyIterator.instance();
+        }
+        return new MemberIterator<AnnotatedParameter>(_ctorParameters);
+    }
+    
+    @Override
+    public AnnotatedMember getAccessor()
+    {
+        AnnotatedMember m = getGetter();
+        if (m == null) {
+            m = getField();
+        }
+        return m;
+    }
+
+    @Override
+    public AnnotatedMember getMutator()
+    {
+        AnnotatedMember m = getConstructorParameter();
+        if (m == null) {
+            m = getSetter();
+            if (m == null) {
+                m = getField();
+            }
+        }
+        return m;
+    }
+
+    @Override
+    public AnnotatedMember getNonConstructorMutator() {
+        AnnotatedMember m = getSetter();
+        if (m == null) {
+            m = getField();
+        }
+        return m;
+    }
+
+    @Override
+    public AnnotatedMember getPrimaryMember() {
+        if (_forSerialization) {
+            return getAccessor();
+        }
+        return getMutator();
+    }
+
+    protected int _getterPriority(AnnotatedMethod m)
+    {
+        final String name = m.getName();
+        // [#238]: Also, regular getters have precedence over "is-getters"
+        if (name.startsWith("get") && name.length() > 3) {
+            // should we check capitalization?
+            return 1;
+        }
+        if (name.startsWith("is") && name.length() > 2) {
+            return 2;
+        }
+        return 3;
+    }
+
+    protected int _setterPriority(AnnotatedMethod m)
+    {
+        final String name = m.getName();
+        if (name.startsWith("set") && name.length() > 3) {
+            // should we check capitalization?
+            return 1;
+        }
+        return 2;
+    }
+    
+    /*
+    /**********************************************************
+    /* Implementations of refinement accessors
+    /**********************************************************
+     */
+
+    @Override
+    public Class<?>[] findViews() {
+        return fromMemberAnnotations(new WithMember<Class<?>[]>() {
+            @Override
+            public Class<?>[] withMember(AnnotatedMember member) {
+                return _annotationIntrospector.findViews(member);
+            }
+        });
+    }
+
+    @Override
+    public AnnotationIntrospector.ReferenceProperty findReferenceType() {
+        return fromMemberAnnotations(new WithMember<AnnotationIntrospector.ReferenceProperty>() {
+            @Override
+            public AnnotationIntrospector.ReferenceProperty withMember(AnnotatedMember member) {
+                return _annotationIntrospector.findReferenceType(member);
+            }
+        });
+    }
+
+    @Override
+    public boolean isTypeId() {
+        Boolean b = fromMemberAnnotations(new WithMember<Boolean>() {
+            @Override
+            public Boolean withMember(AnnotatedMember member) {
+                return _annotationIntrospector.isTypeId(member);
+            }
+        });
+        return (b != null) && b.booleanValue();
+    }
+
+    @Override
+    public PropertyMetadata getMetadata() {
+        final Boolean b = _findRequired();
+        final String desc = _findDescription();
+        final Integer idx = _findIndex();
+        final String def = _findDefaultValue();
+        if (b == null && idx == null && def == null) {
+            return (desc == null) ? PropertyMetadata.STD_REQUIRED_OR_OPTIONAL
+                    : PropertyMetadata.STD_REQUIRED_OR_OPTIONAL.withDescription(desc);
+        }
+        return PropertyMetadata.construct(b.booleanValue(), desc, idx, def);
+    }
+
+    protected Boolean _findRequired() {
+        Boolean b = fromMemberAnnotations(new WithMember<Boolean>() {
+            @Override
+            public Boolean withMember(AnnotatedMember member) {
+                return _annotationIntrospector.hasRequiredMarker(member);
+            }
+        });
+        return b;
+    }
+    
+    protected String _findDescription() {
+        return fromMemberAnnotations(new WithMember<String>() {
+            @Override
+            public String withMember(AnnotatedMember member) {
+                return _annotationIntrospector.findPropertyDescription(member);
+            }
+        });
+    }
+
+    protected Integer _findIndex() {
+        return fromMemberAnnotations(new WithMember<Integer>() {
+            @Override
+            public Integer withMember(AnnotatedMember member) {
+                return _annotationIntrospector.findPropertyIndex(member);
+            }
+        });
+    }
+
+    protected String _findDefaultValue() {
+        return fromMemberAnnotations(new WithMember<String>() {
+            @Override
+            public String withMember(AnnotatedMember member) {
+                return _annotationIntrospector.findPropertyDefaultValue(member);
+            }
+        });
+    }
+    
+    @Override
+    public ObjectIdInfo findObjectIdInfo() {
+        return fromMemberAnnotations(new WithMember<ObjectIdInfo>() {
+            @Override
+            public ObjectIdInfo withMember(AnnotatedMember member) {
+                ObjectIdInfo info = _annotationIntrospector.findObjectIdInfo(member);
+                if (info != null) {
+                    info = _annotationIntrospector.findObjectReferenceInfo(member, info);
+                }
+                return info;
+            }
+        });
+    }
+
+    @Override
+    public JsonInclude.Include findInclusion() {
+        if (_annotationIntrospector == null) {
+            return null;
+        }
+        AnnotatedMember am = getAccessor();
+        return _annotationIntrospector.findSerializationInclusion(am, null);
+    }
+
+    @Override
+    public JsonProperty.Access findAccess() {
+        return fromMemberAnnotationsExcept(new WithMember<JsonProperty.Access>() {
+            @Override
+            public JsonProperty.Access withMember(AnnotatedMember member) {
+                return _annotationIntrospector.findPropertyAccess(member);
+            }
+        }, JsonProperty.Access.AUTO);
+    }
+    
+    /*
+    /**********************************************************
+    /* Data aggregation
+    /**********************************************************
+     */
+    
+    public void addField(AnnotatedField a, PropertyName name, boolean explName, boolean visible, boolean ignored) {
+        _fields = new Linked<AnnotatedField>(a, _fields, name, explName, visible, ignored);
+    }
+
+    public void addCtor(AnnotatedParameter a, PropertyName name, boolean explName, boolean visible, boolean ignored) {
+        _ctorParameters = new Linked<AnnotatedParameter>(a, _ctorParameters, name, explName, visible, ignored);
+    }
+
+    public void addGetter(AnnotatedMethod a, PropertyName name, boolean explName, boolean visible, boolean ignored) {
+        _getters = new Linked<AnnotatedMethod>(a, _getters, name, explName, visible, ignored);
+    }
+
+    public void addSetter(AnnotatedMethod a, PropertyName name, boolean explName, boolean visible, boolean ignored) {
+        _setters = new Linked<AnnotatedMethod>(a, _setters, name, explName, visible, ignored);
     }
 
     /**
-     * Checks if a byte value is whitespace or not.
-     * Whitespace is taken to mean: space, tab, CR, LF
-     * @param byteToCheck
-     *            the byte to check
-     * @return true if byte is whitespace, false otherwise
+     * Method for adding all property members from specified collector into
+     * this collector.
      */
-    protected static boolean isWhiteSpace(byte byteToCheck) {
-        switch (byteToCheck) {
-            case ' ' :
-            case '\n' :
-            case '\r' :
-            case '\t' :
+    public void addAll(POJOPropertyBuilder src)
+    {
+        _fields = merge(_fields, src._fields);
+        _ctorParameters = merge(_ctorParameters, src._ctorParameters);
+        _getters= merge(_getters, src._getters);
+        _setters = merge(_setters, src._setters);
+    }
+
+    private static <T> Linked<T> merge(Linked<T> chain1, Linked<T> chain2)
+    {
+        if (chain1 == null) {
+            return chain2;
+        }
+        if (chain2 == null) {
+            return chain1;
+        }
+        return chain1.append(chain2);
+    }
+
+    /*
+    /**********************************************************
+    /* Modifications
+    /**********************************************************
+     */
+
+    /**
+     * Method called to remove all entries that are marked as
+     * ignored.
+     */
+    public void removeIgnored()
+    {
+        _fields = _removeIgnored(_fields);
+        _getters = _removeIgnored(_getters);
+        _setters = _removeIgnored(_setters);
+        _ctorParameters = _removeIgnored(_ctorParameters);
+    }
+
+    public void removeNonVisible(boolean force)
+    {
+        /* 21-Aug-2011, tatu: This is tricky part -- if and when allow
+         *   non-visible property elements to be "pulled in" by visible
+         *   counterparts?
+         *   For now, we will only do this to pull in setter or field used
+         *   as setter, if an explicit getter is found.
+         */
+        /*
+         * 28-Mar-2013, tatu: Also, as per [Issue#195], may force removal
+         *   if inferred properties are NOT supported.
+         */
+        _getters = _removeNonVisible(_getters);
+        _ctorParameters = _removeNonVisible(_ctorParameters);
+
+        if (force || (_getters == null)) {
+            _fields = _removeNonVisible(_fields);
+            _setters = _removeNonVisible(_setters);
+        }
+    }
+
+    /**
+     * Mutator that will simply drop any constructor parameters property may have.
+     * 
+     * @since 2.5
+     */
+    public void removeConstructors() {
+        _ctorParameters = null;
+    }
+    
+    /**
+     * Method called to trim unnecessary entries, such as implicit
+     * getter if there is an explict one available. This is important
+     * for later stages, to avoid unnecessary conflicts.
+     */
+    public void trimByVisibility()
+    {
+        _fields = _trimByVisibility(_fields);
+        _getters = _trimByVisibility(_getters);
+        _setters = _trimByVisibility(_setters);
+        _ctorParameters = _trimByVisibility(_ctorParameters);
+    }
+
+    @SuppressWarnings("unchecked")
+    public void mergeAnnotations(boolean forSerialization)
+    {
+        if (forSerialization) {
+            if (_getters != null) {
+                AnnotationMap ann = _mergeAnnotations(0, _getters, _fields, _ctorParameters, _setters);
+                _getters = _getters.withValue(_getters.value.withAnnotations(ann));
+            } else if (_fields != null) {
+                AnnotationMap ann = _mergeAnnotations(0, _fields, _ctorParameters, _setters);
+                _fields = _fields.withValue(_fields.value.withAnnotations(ann));
+            }
+        } else { // for deserialization
+            if (_ctorParameters != null) {
+                AnnotationMap ann = _mergeAnnotations(0, _ctorParameters, _setters, _fields, _getters);
+                _ctorParameters = _ctorParameters.withValue(_ctorParameters.value.withAnnotations(ann));
+            } else if (_setters != null) {
+                AnnotationMap ann = _mergeAnnotations(0, _setters, _fields, _getters);
+                _setters = _setters.withValue(_setters.value.withAnnotations(ann));
+            } else if (_fields != null) {
+                AnnotationMap ann = _mergeAnnotations(0, _fields, _getters);
+                _fields = _fields.withValue(_fields.value.withAnnotations(ann));
+            }
+        }
+    }
+
+    private AnnotationMap _mergeAnnotations(int index, Linked<? extends AnnotatedMember>... nodes)
+    {
+        AnnotationMap ann = nodes[index].value.getAllAnnotations();
+        ++index;
+        for (; index < nodes.length; ++index) {
+            if (nodes[index] != null) {
+              return AnnotationMap.merge(ann, _mergeAnnotations(index, nodes));
+            }
+        }
+        return ann;
+    }
+    
+    private <T> Linked<T> _removeIgnored(Linked<T> node)
+    {
+        if (node == null) {
+            return node;
+        }
+        return node.withoutIgnored();
+    }
+
+    private <T> Linked<T> _removeNonVisible(Linked<T> node)
+    {
+        if (node == null) {
+            return node;
+        }
+        return node.withoutNonVisible();
+    }
+
+    private <T> Linked<T> _trimByVisibility(Linked<T> node)
+    {
+        if (node == null) {
+            return node;
+        }
+        return node.trimByVisibility();
+    }
+        
+    /*
+    /**********************************************************
+    /* Accessors for aggregate information
+    /**********************************************************
+     */
+
+    private <T> boolean _anyExplicits(Linked<T> n)
+    {
+        for (; n != null; n = n.next) {
+            if (n.name != null && n.name.hasSimpleName()) {
                 return true;
-            default :
-                return false;
-        }
-    }
-
-    /**
-     * Encodes an Object using the Base-N algorithm. This method is provided in order to satisfy the requirements of the
-     * Encoder interface, and will throw an EncoderException if the supplied object is not of type byte[].
-     *
-     * @param obj
-     *            Object to encode
-     * @return An object (of type byte[]) containing the Base-N encoded data which corresponds to the byte[] supplied.
-     * @throws EncoderException
-     *             if the parameter supplied is not of type byte[]
-     */
-    public Object encode(Object obj) throws EncoderException {
-        if (!(obj instanceof byte[])) {
-            throw new EncoderException("Parameter supplied to Base-N encode is not a byte[]");
-        }
-        return encode((byte[]) obj);
-    }
-
-    /**
-     * Encodes a byte[] containing binary data, into a String containing characters in the Base-N alphabet.
-     *
-     * @param pArray
-     *            a byte array containing binary data
-     * @return A String containing only Base-N character data
-     */
-    public String encodeToString(byte[] pArray) {
-        return StringUtils.newStringUtf8(encode(pArray));
-    }
-
-    /**
-     * Decodes an Object using the Base-N algorithm. This method is provided in order to satisfy the requirements of the
-     * Decoder interface, and will throw a DecoderException if the supplied object is not of type byte[] or String.
-     *
-     * @param obj
-     *            Object to decode
-     * @return An object (of type byte[]) containing the binary data which corresponds to the byte[] or String supplied.
-     * @throws DecoderException
-     *             if the parameter supplied is not of type byte[]
-     */
-    public Object decode(Object obj) throws DecoderException {        
-        if (obj instanceof byte[]) {
-            return decode((byte[]) obj);
-        } else if (obj instanceof String) {
-            return decode((String) obj);
-        } else {
-            throw new DecoderException("Parameter supplied to Base-N decode is not a byte[] or a String");
-        }
-    }
-
-    /**
-     * Decodes a String containing characters in the Base-N alphabet.
-     *
-     * @param pArray
-     *            A String containing Base-N character data
-     * @return a byte array containing binary data
-     */
-    public byte[] decode(String pArray) {
-        return decode(StringUtils.getBytesUtf8(pArray));
-    }
-
-    /**
-     * Decodes a byte[] containing characters in the Base-N alphabet.
-     * 
-     * @param pArray
-     *            A byte array containing Base-N character data
-     * @return a byte array containing binary data
-     */
-    public byte[] decode(byte[] pArray) {
-        Context context = new Context();
-        if (pArray == null || pArray.length == 0) {
-            return pArray;
-        }
-        decode(pArray, 0, pArray.length, context);
-        decode(pArray, 0, EOF, context); // Notify decoder of EOF.
-        byte[] result = new byte[context.pos];
-        readResults(result, 0, result.length, context);
-        return result;
-    }
-
-    /**
-     * Encodes a byte[] containing binary data, into a byte[] containing characters in the alphabet.
-     *
-     * @param pArray
-     *            a byte array containing binary data
-     * @return A byte array containing only the basen alphabetic character data
-     */
-    public byte[] encode(byte[] pArray) {
-        Context context = new Context();
-        if (pArray == null || pArray.length == 0) {
-            return pArray;
-        }
-        encode(pArray, 0, pArray.length, context);
-        encode(pArray, 0, EOF, context); // Notify encoder of EOF.
-        byte[] buf = new byte[context.pos - context.readPos];
-        readResults(buf, 0, buf.length, context);
-        return buf;
-    }
-    
-    /**
-     * Encodes a byte[] containing binary data, into a String containing characters in the appropriate alphabet.
-     * Uses UTF8 encoding.
-     *
-     * @param pArray a byte array containing binary data
-     * @return String containing only character data in the appropriate alphabet.
-    */
-    public String encodeAsString(byte[] pArray){
-        return StringUtils.newStringUtf8(encode(pArray));
-    }
-
-    abstract void encode(byte[] pArray, int i, int length, Context context);  // package protected for access from I/O streams
-
-    abstract void decode(byte[] pArray, int i, int length, Context context); // package protected for access from I/O streams
-    
-    /**
-     * Returns whether or not the <code>octet</code> is in the current alphabet.
-     * Does not allow whitespace or pad.
-     *
-     * @param value The value to test
-     *
-     * @return {@code true} if the value is defined in the current alphabet, {@code false} otherwise.
-     */
-    protected abstract boolean isInAlphabet(byte value);
-    
-    /**
-     * Tests a given byte array to see if it contains only valid characters within the alphabet.
-     * The method optionally treats whitespace and pad as valid.
-     *
-     * @param arrayOctet byte array to test
-     * @param allowWSPad if {@code true}, then whitespace and PAD are also allowed
-     *
-     * @return {@code true} if all bytes are valid characters in the alphabet or if the byte array is empty;
-     *         {@code false}, otherwise
-     */    
-    public boolean isInAlphabet(byte[] arrayOctet, boolean allowWSPad) {
-        for (int i = 0; i < arrayOctet.length; i++) {
-            if (!isInAlphabet(arrayOctet[i]) &&
-                    (!allowWSPad || (arrayOctet[i] != PAD) && !isWhiteSpace(arrayOctet[i]))) {
-                return false;
             }
         }
-        return true;
+        return false;
     }
 
-    /**
-     * Tests a given String to see if it contains only valid characters within the alphabet. 
-     * The method treats whitespace and PAD as valid.
-     *
-     * @param basen String to test
-     * @return {@code true} if all characters in the String are valid characters in the alphabet or if
-     *         the String is empty; {@code false}, otherwise
-     * @see #isInAlphabet(byte[], boolean)
-     */
-    public boolean isInAlphabet(String basen) {
-        return isInAlphabet(StringUtils.getBytesUtf8(basen), true);
-    }
-
-    /**
-     * Tests a given byte array to see if it contains any characters within the alphabet or PAD.
-     *
-     * Intended for use in checking line-ending arrays
-     *
-     * @param arrayOctet
-     *            byte array to test
-     * @return {@code true} if any byte is a valid character in the alphabet or PAD; {@code false} otherwise
-     */
-    protected boolean containsAlphabetOrPad(byte[] arrayOctet) {
-        if (arrayOctet == null) {
-            return false;
+    private <T> boolean _anyExplicitNames(Linked<T> n)
+    {
+        for (; n != null; n = n.next) {
+            if (n.name != null && n.isNameExplicit) {
+                return true;
+            }
         }
-        for (byte element : arrayOctet) {
-            if (PAD == element || isInAlphabet(element)) {
+        return false;
+    }
+
+    public boolean anyVisible() {
+        return _anyVisible(_fields)
+            || _anyVisible(_getters)
+            || _anyVisible(_setters)
+            || _anyVisible(_ctorParameters)
+        ;
+    }
+
+    private <T> boolean _anyVisible(Linked<T> n)
+    {
+        for (; n != null; n = n.next) {
+            if (n.isVisible) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    public boolean anyIgnorals() {
+        return _anyIgnorals(_fields)
+            || _anyIgnorals(_getters)
+            || _anyIgnorals(_setters)
+            || _anyIgnorals(_ctorParameters)
+        ;
+    }
+
+    private <T> boolean _anyIgnorals(Linked<T> n)
+    {
+        for (; n != null; n = n.next) {
+            if (n.isMarkedIgnored) {
                 return true;
             }
         }
@@ -450,21 +778,347 @@ public abstract class BaseNCodec implements BinaryEncoder, BinaryDecoder {
     }
 
     /**
-     * Calculates the amount of space needed to encode the supplied array.
-     *
-     * @param pArray byte[] array which will later be encoded
-     *
-     * @return amount of space needed to encoded the supplied array.  
-     * Returns a long since a max-len array will require > Integer.MAX_VALUE
+     * Method called to find out set of explicit names for accessors
+     * bound together due to implicit name.
+     * 
+     * @since 2.4
      */
-    public long getEncodedLength(byte[] pArray) {
-        // Calculate non-chunked size - rounded up to allow for padding
-        // cast to long is needed to avoid possibility of overflow
-        long len = ((pArray.length + unencodedBlockSize-1)  / unencodedBlockSize) * (long) encodedBlockSize;
-        if (lineLength > 0) { // We're using chunking
-            // Round up to nearest multiple
-            len += ((len + lineLength-1) / lineLength) * chunkSeparatorLength;
+    public Set<PropertyName> findExplicitNames()
+    {
+        Set<PropertyName> renamed = null;
+        renamed = _findExplicitNames(_fields, renamed);
+        renamed = _findExplicitNames(_getters, renamed);
+        renamed = _findExplicitNames(_setters, renamed);
+        renamed = _findExplicitNames(_ctorParameters, renamed);
+        if (renamed == null) {
+            return Collections.emptySet();
         }
-        return len;
+        return renamed;
+    }
+
+    /**
+     * Method called when a previous call to {@link #findExplicitNames} found
+     * multiple distinct explicit names, and the property this builder represents
+     * basically needs to be broken apart and replaced by a set of more than
+     * one properties.
+     * 
+     * @since 2.4
+     */
+    public Collection<POJOPropertyBuilder> explode(Collection<PropertyName> newNames)
+    {
+        HashMap<PropertyName,POJOPropertyBuilder> props = new HashMap<PropertyName,POJOPropertyBuilder>();
+        _explode(newNames, props, _fields);
+        _explode(newNames, props, _getters);
+        _explode(newNames, props, _setters);
+        _explode(newNames, props, _ctorParameters);
+        return props.values();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void _explode(Collection<PropertyName> newNames,
+            Map<PropertyName,POJOPropertyBuilder> props,
+            Linked<?> accessors)
+    {
+        final Linked<?> firstAcc = accessors; // clumsy, part 1
+        for (Linked<?> node = accessors; node != null; node = node.next) {
+            PropertyName name = node.name;
+            if (!node.isNameExplicit || name == null) { // no explicit name -- problem!
+                // [Issue#541] ... but only as long as it's visible
+                if (!node.isVisible) {
+                    continue;
+                }
+                
+                throw new IllegalStateException("Conflicting/ambiguous property name definitions (implicit name '"
+                        +_name+"'): found multiple explicit names: "
+                        +newNames+", but also implicit accessor: "+node);
+            }
+            POJOPropertyBuilder prop = props.get(name);
+            if (prop == null) {
+                prop = new POJOPropertyBuilder(_internalName, name, _annotationIntrospector, _forSerialization);
+                props.put(name, prop);
+            }
+            // ultra-clumsy, part 2 -- lambdas would be nice here
+            if (firstAcc == _fields) {
+                Linked<AnnotatedField> n2 = (Linked<AnnotatedField>) node;
+                prop._fields = n2.withNext(prop._fields);
+            } else if (firstAcc == _getters) {
+                Linked<AnnotatedMethod> n2 = (Linked<AnnotatedMethod>) node;
+                prop._getters = n2.withNext(prop._getters);
+            } else if (firstAcc == _setters) {
+                Linked<AnnotatedMethod> n2 = (Linked<AnnotatedMethod>) node;
+                prop._setters = n2.withNext(prop._setters);
+            } else if (firstAcc == _ctorParameters) {
+                Linked<AnnotatedParameter> n2 = (Linked<AnnotatedParameter>) node;
+                prop._ctorParameters = n2.withNext(prop._ctorParameters);
+            } else {
+                throw new IllegalStateException("Internal error: mismatched accessors, property: "+this);
+            }
+        }
+    }
+    
+    private Set<PropertyName> _findExplicitNames(Linked<? extends AnnotatedMember> node,
+            Set<PropertyName> renamed)
+    {
+        for (; node != null; node = node.next) {
+            /* 30-Mar-2014, tatu: Second check should not be needed, but seems like
+             *   removing it can cause nasty exceptions with certain version
+             *   combinations (2.4 databind, an older module).
+             *   So leaving it in for now until this is resolved
+             *   (or version beyond 2.4)
+             */
+            if (!node.isNameExplicit || node.name == null) {
+                continue;
+            }
+            if (renamed == null) {
+                renamed = new HashSet<PropertyName>();
+            }
+            renamed.add(node.name);
+        }
+        return renamed;
+    }
+    
+    // For trouble-shooting
+    @Override
+    public String toString()
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[Property '").append(_name)
+          .append("'; ctors: ").append(_ctorParameters)
+          .append(", field(s): ").append(_fields)
+          .append(", getter(s): ").append(_getters)
+          .append(", setter(s): ").append(_setters)
+          ;
+        sb.append("]");
+        return sb.toString();
+    }
+    
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+
+    /**
+     * Helper method used for finding annotation values, from accessors
+     * relevant to current usage (deserialization, serialization)
+     */
+    protected <T> T fromMemberAnnotations(WithMember<T> func)
+    {
+        T result = null;
+        if (_annotationIntrospector != null) {
+            if (_forSerialization) {
+                if (_getters != null) {
+                    result = func.withMember(_getters.value);
+                }
+            } else {
+                if (_ctorParameters != null) {
+                    result = func.withMember(_ctorParameters.value);
+                }
+                if (result == null && _setters != null) {
+                    result = func.withMember(_setters.value);
+                }
+            }
+            if (result == null && _fields != null) {
+                result = func.withMember(_fields.value);
+            }
+        }
+        return result;
+    }
+
+    protected <T> T fromMemberAnnotationsExcept(WithMember<T> func, T defaultValue)
+    {
+        if (_annotationIntrospector != null) {
+            if (_forSerialization) {
+                if (_getters != null) {
+                    T result = func.withMember(_getters.value);
+                    if ((result != null) && (result != defaultValue)) {
+                        return result;
+                    }
+                }
+            } else {
+                if (_ctorParameters != null) {
+                    T result = func.withMember(_ctorParameters.value);
+                    if ((result != null) && (result != defaultValue)) {
+                        return result;
+                    }
+                }
+                if (_setters != null) {
+                    T result = func.withMember(_setters.value);
+                    if ((result != null) && (result != defaultValue)) {
+                        return result;
+                    }
+                }
+            }
+            if (_fields != null) {
+                T result = func.withMember(_fields.value);
+                if ((result != null) && (result != defaultValue)) {
+                    return result;
+                }
+            }
+        }
+        return null;
+    }
+    
+    /*
+    /**********************************************************
+    /* Helper classes
+    /**********************************************************
+     */
+
+    private interface WithMember<T> {
+        public T withMember(AnnotatedMember member);
+    }
+
+    /**
+     * @since 2.5
+     */
+    protected static class MemberIterator<T extends AnnotatedMember>
+        implements Iterator<T>
+    {
+        private Linked<T> next;
+        
+        public MemberIterator(Linked<T> first) {
+            next = first;
+        }
+        
+        @Override
+        public boolean hasNext() {
+            return (next != null);
+        }
+
+        @Override
+        public T next() {
+            if (next == null) throw new NoSuchElementException();
+            T result = next.value;
+            next = next.next;
+            return result;
+        }
+
+        @Override
+        public void remove() {
+            throw new UnsupportedOperationException();
+        }
+        
+    }
+    
+    /**
+     * Node used for creating simple linked lists to efficiently store small sets
+     * of things.
+     */
+    private final static class Linked<T>
+    {
+        public final T value;
+        public final Linked<T> next;
+
+        public final PropertyName name;
+        public final boolean isNameExplicit;
+        public final boolean isVisible;
+        public final boolean isMarkedIgnored;
+        
+        public Linked(T v, Linked<T> n,
+                PropertyName name, boolean explName, boolean visible, boolean ignored)
+        {
+            value = v;
+            next = n;
+            // ensure that we'll never have missing names
+            this.name = (name == null || name.isEmpty()) ? null : name;
+
+            if (explName) {
+                if (this.name == null) { // sanity check to catch internal problems
+                    throw new IllegalArgumentException("Can not pass true for 'explName' if name is null/empty");
+                }
+                // 03-Apr-2014, tatu: But how about name-space only override?
+                //   Probably should not be explicit? Or, need to merge somehow?
+                if (!name.hasSimpleName()) {
+                    explName = false;
+                }
+            }
+            
+            isNameExplicit = explName;
+            isVisible = visible;
+            isMarkedIgnored = ignored;
+        }
+
+        public Linked<T> withoutNext() {
+            if (next == null) {
+                return this;
+            }
+            return new Linked<T>(value, null, name, isNameExplicit, isVisible, isMarkedIgnored);
+        }
+        
+        public Linked<T> withValue(T newValue) {
+            if (newValue == value) {
+                return this;
+            }
+            return new Linked<T>(newValue, next, name, isNameExplicit, isVisible, isMarkedIgnored);
+        }
+        
+        public Linked<T> withNext(Linked<T> newNext) {
+            if (newNext == next) {
+                return this;
+            }
+            return new Linked<T>(value, newNext, name, isNameExplicit, isVisible, isMarkedIgnored);
+        }
+        
+        public Linked<T> withoutIgnored() {
+            if (isMarkedIgnored) {
+                return (next == null) ? null : next.withoutIgnored();
+            }
+            if (next != null) {
+                Linked<T> newNext = next.withoutIgnored();
+                if (newNext != next) {
+                    return withNext(newNext);
+                }
+            }
+            return this;
+        }
+        
+        public Linked<T> withoutNonVisible() {
+            Linked<T> newNext = (next == null) ? null : next.withoutNonVisible();
+            return isVisible ? withNext(newNext) : newNext;
+        }
+
+        /**
+         * Method called to append given node(s) at the end of this
+         * node chain.
+         */
+        protected Linked<T> append(Linked<T> appendable) {
+            if (next == null) {
+                return withNext(appendable);
+            }
+            return withNext(next.append(appendable));
+        }
+
+        public Linked<T> trimByVisibility() {
+            if (next == null) {
+                return this;
+            }
+            Linked<T> newNext = next.trimByVisibility();
+            if (name != null) { // this already has highest; how about next one?
+                if (newNext.name == null) { // next one not, drop it
+                    return withNext(null);
+                }
+                //  both have it, keep
+                return withNext(newNext);
+            }
+            if (newNext.name != null) { // next one has higher, return it...
+                return newNext;
+            }
+            // neither has explicit name; how about visibility?
+            if (isVisible == newNext.isVisible) { // same; keep both in current order
+                return withNext(newNext);
+            }
+            return isVisible ? withNext(null) : newNext;
+        }
+        
+        @Override
+        public String toString() {
+            String msg = value.toString()+"[visible="+isVisible+",ignore="+isMarkedIgnored
+                    +",explicitName="+isNameExplicit+"]";
+            if (next != null) {
+                msg = msg + ", "+next.toString();
+            }
+            return msg;
+        }
     }
 }

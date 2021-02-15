@@ -1,13 +1,12 @@
-package org.apache.maven.test;
-
 /*
- * Copyright 2001-2005 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,246 +15,389 @@ package org.apache.maven.test;
  * limitations under the License.
  */
 
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.artifact.repository.layout.ArtifactPathFormatException;
-import org.apache.maven.plugin.AbstractPlugin;
-import org.apache.maven.plugin.PluginExecutionException;
-import org.codehaus.surefire.SurefireBooter;
 
-import java.io.File;
+package opennlp.tools.postag;
+
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Iterator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.StringTokenizer;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import opennlp.tools.dictionary.Dictionary;
+import opennlp.tools.ml.EventModelSequenceTrainer;
+import opennlp.tools.ml.EventTrainer;
+import opennlp.tools.ml.SequenceTrainer;
+import opennlp.tools.ml.TrainerFactory;
+import opennlp.tools.ml.TrainerFactory.TrainerType;
+import opennlp.tools.ml.model.Event;
+import opennlp.tools.ml.model.MaxentModel;
+import opennlp.tools.ml.model.SequenceClassificationModel;
+import opennlp.tools.namefind.NameSampleSequenceStream;
+import opennlp.tools.ngram.NGramModel;
+import opennlp.tools.util.BeamSearch;
+import opennlp.tools.util.ObjectStream;
+import opennlp.tools.util.Sequence;
+import opennlp.tools.util.SequenceValidator;
+import opennlp.tools.util.StringList;
+import opennlp.tools.util.StringUtil;
+import opennlp.tools.util.TrainingParameters;
+import opennlp.tools.util.featuregen.StringPattern;
+import opennlp.tools.util.model.ModelType;
 
 /**
- * @author <a href="mailto:jason@maven.org">Jason van Zyl</a>
- * @version $Id$
- * @goal test
- * @description Run tests using surefire
- * @parameter name="basedir"
- * type="String"
- * required="true"
- * validator="validator"
- * expression="#basedir"
- * description=""
- * @parameter name="classesDirectory"
- * type="String"
- * required="true"
- * validator="validator"
- * expression="#project.build.outputDirectory"
- * description=""
- * @parameter name="testClassesDirectory"
- * type="String"
- * required="true"
- * validator="validator"
- * expression="#project.build.testOutputDirectory"
- * description=""
- * @parameter name="includes"
- * type="String"
- * required="false"
- * validator=""
- * description=""
- * expression=""
- * @parameter name="excludes"
- * type="String"
- * required="false"
- * validator=""
- * description=""
- * expression=""
- * @parameter name="classpathElements"
- * type="String[]"
- * required="true"
- * validator=""
- * expression="#project.testClasspathElements"
- * description=""
- * @parameter name="reportsDirectory"
- * type="String"
- * required="false"
- * validator=""
- * expression="#project.build.directory/surefire-reports"
- * description="Base directory where all reports are written to."
- * @parameter name="test"
- * type="String"
- * required="false"
- * validator=""
- * expression="#test"
- * description="Specify this parameter if you want to use the test regex notation to select tests to run."
- * @parameter name="localRepository" type="ArtifactRepository" required="true" validator="" expression="#localRepository" description=""
- * @todo make version of junit and surefire configurable
- * @todo make report to be produced configurable
+ * A part-of-speech tagger that uses maximum entropy.  Tries to predict whether
+ * words are nouns, verbs, or any of 70 other POS tags depending on their
+ * surrounding context.
+ *
  */
-public class SurefirePlugin
-    extends AbstractPlugin
-{
-    private String basedir;
+public class POSTaggerME implements POSTagger {
+  
+  /**
+   * The maximum entropy model to use to evaluate contexts.
+   */
+  protected MaxentModel posModel;
 
-    private String classesDirectory;
+  /**
+   * The feature context generator.
+   */
+  protected POSContextGenerator contextGen;
 
-    private String testClassesDirectory;
+  /**
+   * Tag dictionary used for restricting words to a fixed set of tags.
+   */
+  protected TagDictionary tagDictionary;
 
-    private List classpathElements;
+  protected Dictionary ngramDictionary;
 
-    private String reportsDirectory;
+  /**
+   * Says whether a filter should be used to check whether a tag assignment
+   * is to a word outside of a closed class.
+   */
+  protected boolean useClosedClassTagsFilter = false;
 
-    private String test;
+  public static final int DEFAULT_BEAM_SIZE = 3;
 
-    private List includes;
+  /**
+   * The size of the beam to be used in determining the best sequence of pos tags.
+   */
+  protected int size;
 
-    private List excludes;
+  private Sequence bestSequence;
 
-    private ArtifactRepository localRepository;
+  private SequenceClassificationModel<String> model;
 
-    public void execute()
-        throws PluginExecutionException
-    {
-        // ----------------------------------------------------------------------
-        // Setup the surefire booter
-        // ----------------------------------------------------------------------
+  private SequenceValidator<String> sequenceValidator;
+  
+  /**
+   * Initializes the current instance with the provided
+   * model and provided beam size.
+   *
+   * @param model
+   * @param beamSize
+   */
+  public POSTaggerME(POSModel model, int beamSize, int cacheSize) {
+    POSTaggerFactory factory = model.getFactory();
+    posModel = model.getPosModel();
+    contextGen = factory.getPOSContextGenerator(beamSize);
+    tagDictionary = factory.getTagDictionary();
+    size = beamSize;
+    
+    sequenceValidator = factory.getSequenceValidator();
+    
+    if (model.getPosModel() != null) {
+      this.model = new opennlp.tools.ml.BeamSearch<String>(beamSize,
+          model.getPosModel(), cacheSize);
+    }
+    else {
+      this.model = model.getPosSequenceModel();
+    }
+  }
+  
+  /**
+   * Initializes the current instance with the provided model
+   * and the default beam size of 3.
+   *
+   * @param model
+   */
+  public POSTaggerME(POSModel model) {
+    this(model, DEFAULT_BEAM_SIZE, 0);
+  }
 
-        SurefireBooter surefireBooter = new SurefireBooter();
+  /**
+   * Returns the number of different tags predicted by this model.
+   *
+   * @return the number of different tags predicted by this model.
+   */
+  public int getNumTags() {
+    return posModel.getNumOutcomes();
+  }
 
-        getLog().info( "Setting reports dir: " + reportsDirectory );
+  @Deprecated
+  public List<String> tag(List<String> sentence) {
+    bestSequence = model.bestSequence(sentence.toArray(new String[sentence.size()]), null, contextGen, sequenceValidator);
+    return bestSequence.getOutcomes();
+  }
 
-        surefireBooter.setReportsDirectory( reportsDirectory );
+  public String[] tag(String[] sentence) {
+    return this.tag(sentence, null);
+  }
 
-        // ----------------------------------------------------------------------
-        // Check to see if we are running a single test. The raw parameter will
-        // come through if it has not been set.
-        // ----------------------------------------------------------------------
+  public String[] tag(String[] sentence, Object[] additionaContext) {
+    bestSequence = model.bestSequence(sentence, additionaContext, contextGen, sequenceValidator);
+    List<String> t = bestSequence.getOutcomes();
+    return t.toArray(new String[t.size()]);
+  }
 
-        if ( test != null )
-        {
-            // FooTest -> **/FooTest.java
+  /**
+   * Returns at most the specified number of taggings for the specified sentence.
+   *
+   * @param numTaggings The number of tagging to be returned.
+   * @param sentence An array of tokens which make up a sentence.
+   *
+   * @return At most the specified number of taggings for the specified sentence.
+   */
+  public String[][] tag(int numTaggings, String[] sentence) {
+    Sequence[] bestSequences = model.bestSequences(numTaggings, sentence, null,
+        contextGen, sequenceValidator);
+    String[][] tags = new String[bestSequences.length][];
+    for (int si=0;si<tags.length;si++) {
+      List<String> t = bestSequences[si].getOutcomes();
+      tags[si] = t.toArray(new String[t.size()]);
+    }
+    return tags;
+  }
 
-            List includes = new ArrayList();
+  @Deprecated
+  public Sequence[] topKSequences(List<String> sentence) {
+    return model.bestSequences(size, sentence.toArray(new String[sentence.size()]), null,
+        contextGen, sequenceValidator);
+  }
 
-            List excludes = new ArrayList();
+  public Sequence[] topKSequences(String[] sentence) {
+    return this.topKSequences(sentence, null);
+  }
 
-            String[] testRegexes = split( test, ",", -1 );
+  public Sequence[] topKSequences(String[] sentence, Object[] additionaContext) {
+    return model.bestSequences(size, sentence, additionaContext, contextGen, sequenceValidator);
+  }
 
-            for ( int i = 0; i < testRegexes.length; i++ )
-            {
-                includes.add( "**/" + testRegexes[i] + ".java" );
+  /**
+   * Populates the specified array with the probabilities for each tag of the last tagged sentence.
+   *
+   * @param probs An array to put the probabilities into.
+   */
+  public void probs(double[] probs) {
+    bestSequence.getProbs(probs);
+  }
+
+  /**
+   * Returns an array with the probabilities for each tag of the last tagged sentence.
+   *
+   * @return an array with the probabilities for each tag of the last tagged sentence.
+   */
+  public double[] probs() {
+    return bestSequence.getProbs();
+  }
+
+  @Deprecated
+  public String tag(String sentence) {
+    List<String> toks = new ArrayList<String>();
+    StringTokenizer st = new StringTokenizer(sentence);
+    while (st.hasMoreTokens())
+      toks.add(st.nextToken());
+    List<String> tags = tag(toks);
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < tags.size(); i++)
+      sb.append(toks.get(i) + "/" + tags.get(i) + " ");
+    return sb.toString().trim();
+  }
+
+  public String[] getOrderedTags(List<String> words, List<String> tags, int index) {
+    return getOrderedTags(words,tags,index,null);
+  }
+
+  public String[] getOrderedTags(List<String> words, List<String> tags, int index,double[] tprobs) {
+    double[] probs = posModel.eval(contextGen.getContext(index,
+        words.toArray(new String[words.size()]),
+        tags.toArray(new String[tags.size()]),null));
+
+    String[] orderedTags = new String[probs.length];
+    for (int i = 0; i < probs.length; i++) {
+      int max = 0;
+      for (int ti = 1; ti < probs.length; ti++) {
+        if (probs[ti] > probs[max]) {
+          max = ti;
+        }
+      }
+      orderedTags[i] = posModel.getOutcome(max);
+      if (tprobs != null){
+        tprobs[i]=probs[max];
+      }
+      probs[max] = 0;
+    }
+    return orderedTags;
+    
+    
+  }
+  
+  public static POSModel train(String languageCode,
+      ObjectStream<POSSample> samples, TrainingParameters trainParams,
+      POSTaggerFactory posFactory) throws IOException {
+    
+    POSContextGenerator contextGenerator = posFactory.getPOSContextGenerator();
+    
+    Map<String, String> manifestInfoEntries = new HashMap<String, String>();
+    
+    TrainerType trainerType = TrainerFactory.getTrainerType(trainParams.getSettings());
+    
+    MaxentModel posModel = null;
+    SequenceClassificationModel<String> seqPosModel = null;
+    if (TrainerType.EVENT_MODEL_TRAINER.equals(trainerType)) {
+      ObjectStream<Event> es = new POSSampleEventStream(samples, contextGenerator);
+      
+      EventTrainer trainer = TrainerFactory.getEventTrainer(trainParams.getSettings(),
+          manifestInfoEntries);
+      posModel = trainer.train(es);
+    }
+    else if (TrainerType.EVENT_MODEL_SEQUENCE_TRAINER.equals(trainerType)) {
+      POSSampleSequenceStream ss = new POSSampleSequenceStream(samples, contextGenerator);
+      EventModelSequenceTrainer trainer = TrainerFactory.getEventModelSequenceTrainer(trainParams.getSettings(),
+          manifestInfoEntries);
+      posModel = trainer.train(ss);
+    }
+    else if (TrainerType.SEQUENCE_TRAINER.equals(trainerType)) {
+      SequenceTrainer trainer = TrainerFactory.getSequenceModelTrainer(
+          trainParams.getSettings(), manifestInfoEntries);
+      
+      // TODO: This will probably cause issue, since the feature generator uses the outcomes array
+      
+      POSSampleSequenceStream ss = new POSSampleSequenceStream(samples, contextGenerator);
+      seqPosModel = trainer.train(ss);
+    }
+    else {
+      throw new IllegalArgumentException("Trainer type is not supported: " + trainerType);  
+    }
+    
+    return new POSModel(languageCode, posModel, manifestInfoEntries, posFactory);
+  }
+
+  /**
+   * @deprecated use
+   *             {@link #train(String, ObjectStream, TrainingParameters, POSTaggerFactory)}
+   *             instead and pass in a {@link POSTaggerFactory}.
+   */
+  public static POSModel train(String languageCode, ObjectStream<POSSample> samples, TrainingParameters trainParams, 
+      POSDictionary tagDictionary, Dictionary ngramDictionary) throws IOException {
+    
+    return train(languageCode, samples, trainParams, new POSTaggerFactory(
+        ngramDictionary, tagDictionary));
+  }
+  
+  /**
+   * @deprecated use
+   *             {@link #train(String, ObjectStream, TrainingParameters, POSTaggerFactory)}
+   *             instead and pass in a {@link POSTaggerFactory} and a
+   *             {@link TrainingParameters}.
+   */
+  @Deprecated
+  public static POSModel train(String languageCode, ObjectStream<POSSample> samples, ModelType modelType, POSDictionary tagDictionary,
+      Dictionary ngramDictionary, int cutoff, int iterations) throws IOException {
+
+    TrainingParameters params = new TrainingParameters(); 
+    
+    params.put(TrainingParameters.ALGORITHM_PARAM, modelType.toString());
+    params.put(TrainingParameters.ITERATIONS_PARAM, Integer.toString(iterations));
+    params.put(TrainingParameters.CUTOFF_PARAM, Integer.toString(cutoff));
+    
+    return train(languageCode, samples, params, tagDictionary, ngramDictionary);
+  }
+  
+  public static Dictionary buildNGramDictionary(ObjectStream<POSSample> samples, int cutoff)
+      throws IOException {
+    
+    NGramModel ngramModel = new NGramModel();
+    
+    POSSample sample;
+    while((sample = samples.read()) != null) {
+      String[] words = sample.getSentence();
+      
+      if (words.length > 0)
+        ngramModel.add(new StringList(words), 1, 1);
+    }
+    
+    ngramModel.cutoff(cutoff, Integer.MAX_VALUE);
+    
+    return ngramModel.toDictionary(true);
+  }
+
+  public static void populatePOSDictionary(ObjectStream<POSSample> samples,
+      MutableTagDictionary dict, int cutoff) throws IOException {
+    System.out.println("Expanding POS Dictionary ...");
+    long start = System.nanoTime();
+
+    // the data structure will store the word, the tag, and the number of
+    // occurrences
+    Map<String, Map<String, AtomicInteger>> newEntries = new HashMap<String, Map<String, AtomicInteger>>();
+    POSSample sample;
+    while ((sample = samples.read()) != null) {
+      String[] words = sample.getSentence();
+      String[] tags = sample.getTags();
+
+      for (int i = 0; i < words.length; i++) {
+        // only store words
+        if (!StringPattern.recognize(words[i]).containsDigit()) {
+          String word;
+          if (dict.isCaseSensitive()) {
+            word = words[i];
+          } else {
+            word = StringUtil.toLowerCase(words[i]);
+          }
+
+          if (!newEntries.containsKey(word)) {
+            newEntries.put(word, new HashMap<String, AtomicInteger>());
+          }
+
+          String[] dictTags = dict.getTags(word);
+          if (dictTags != null) {
+            for (String tag : dictTags) {
+              // for this tags we start with the cutoff
+              Map<String, AtomicInteger> value = newEntries.get(word);
+              if (!value.containsKey(tag)) {
+                value.put(tag, new AtomicInteger(cutoff));
+              }
             }
+          }
 
-            surefireBooter.addBattery( "org.codehaus.surefire.battery.DirectoryBattery",
-                                       new Object[]{basedir, includes, excludes} );
+          if (!newEntries.get(word).containsKey(tags[i])) {
+            newEntries.get(word).put(tags[i], new AtomicInteger(1));
+          } else {
+            newEntries.get(word).get(tags[i]).incrementAndGet();
+          }
         }
-        else
-        {
-            // defaults here, qdox doesn't like the end javadoc value
-            if ( includes == null )
-            {
-                includes = new ArrayList();
-                includes.add( "**/*Test.java" );
-            }
-            if ( excludes == null )
-            {
-                excludes = new ArrayList();
-                excludes.add( "**/Abstract*Test.java" );
-            }
-
-            surefireBooter.addBattery( "org.codehaus.surefire.battery.DirectoryBattery",
-                                       new Object[]{basedir, includes, excludes} );
+      }
+    }
+    
+    // now we check if the word + tag pairs have enough occurrences, if yes we
+    // add it to the dictionary 
+    for (Entry<String, Map<String, AtomicInteger>> wordEntry : newEntries
+        .entrySet()) {
+      List<String> tagsForWord = new ArrayList<String>();
+      for (Entry<String, AtomicInteger> entry : wordEntry.getValue().entrySet()) {
+        if (entry.getValue().get() >= cutoff) {
+          tagsForWord.add(entry.getKey());
         }
-
-        // ----------------------------------------------------------------------
-        //
-        // ----------------------------------------------------------------------
-
-        System.setProperty( "basedir", basedir );
-
-        // TODO: we should really just trust the plugin classloader?
-        try
-        {
-            DefaultArtifact artifact = new DefaultArtifact( "junit", "junit", "3.8.1", "jar" );
-            File file = new File( localRepository.getBasedir(), localRepository.pathOf( artifact ) );
-            surefireBooter.addClassPathUrl( file.getAbsolutePath() );
-            artifact = new DefaultArtifact( "surefire", "surefire", "1.2", "jar" );
-            file = new File( localRepository.getBasedir(), localRepository.pathOf( artifact ) );
-            surefireBooter.addClassPathUrl( file.getAbsolutePath() );
-        }
-        catch ( ArtifactPathFormatException e )
-        {
-            throw new PluginExecutionException( "Error finding surefire JAR", e );
-        }
-
-        surefireBooter.addClassPathUrl( new File( classesDirectory ).getPath() );
-
-        surefireBooter.addClassPathUrl( new File( testClassesDirectory ).getPath() );
-
-        for ( Iterator i = classpathElements.iterator(); i.hasNext(); )
-        {
-            surefireBooter.addClassPathUrl( (String) i.next() );
-        }
-
-        surefireBooter.addReport( "org.codehaus.surefire.report.ConsoleReporter" );
-
-        surefireBooter.addReport( "org.codehaus.surefire.report.FileReporter" );
-
-        boolean success = false;
-        try
-        {
-            success = surefireBooter.run();
-        }
-        catch ( Exception e )
-        {
-            // TODO: better handling
-            throw new PluginExecutionException( "Error executing surefire", e );
-        }
-
-        if ( !success )
-        {
-            throw new PluginExecutionException( "There are some test failures." );
-        }
+      }
+      if (tagsForWord.size() > 0) {
+        dict.put(wordEntry.getKey(),
+            tagsForWord.toArray(new String[tagsForWord.size()]));
+      }
     }
 
-    protected String[] split( String str, String separator, int max )
-    {
-        StringTokenizer tok = null;
-        if ( separator == null )
-        {
-            // Null separator means we're using StringTokenizer's default
-            // delimiter, which comprises all whitespace characters.
-            tok = new StringTokenizer( str );
-        }
-        else
-        {
-            tok = new StringTokenizer( str, separator );
-        }
-
-        int listSize = tok.countTokens();
-        if ( max > 0 && listSize > max )
-        {
-            listSize = max;
-        }
-
-        String[] list = new String[listSize];
-        int i = 0;
-        int lastTokenBegin = 0;
-        int lastTokenEnd = 0;
-        while ( tok.hasMoreTokens() )
-        {
-            if ( max > 0 && i == listSize - 1 )
-            {
-                // In the situation where we hit the max yet have
-                // tokens left over in our input, the last list
-                // element gets all remaining text.
-                String endToken = tok.nextToken();
-                lastTokenBegin = str.indexOf( endToken, lastTokenEnd );
-                list[i] = str.substring( lastTokenBegin );
-                break;
-            }
-            else
-            {
-                list[i] = tok.nextToken();
-                lastTokenBegin = str.indexOf( list[i], lastTokenEnd );
-                lastTokenEnd = lastTokenBegin + list[i].length();
-            }
-            i++;
-        }
-        return list;
-    }
+    System.out.println("... finished expanding POS Dictionary. ["
+        + (System.nanoTime() - start) / 1000000 + "ms]");
+  }
 }

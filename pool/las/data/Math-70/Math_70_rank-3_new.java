@@ -1,131 +1,114 @@
-/*
- * $Id$
+/**
+ * Copyright 2007 The Apache Software Foundation
  *
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.struts2.config;
+package org.apache.hadoop.hbase;
 
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Set;
-
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.Text;
 
 /**
- * DelegatingSettings stores an internal list of {@link Settings} objects
- * to update settings or retrieve settings values.
- * <p>
- * Each time a Settings method is called (get, set, list, and so forth),
- * this class goes through the list of Settings objects
- * and calls that method for each delegate,
- * withholding any exception until all delegates have been called.
- *
+ * HConstants holds a bunch of HBase-related constants
  */
-class DelegatingSettings extends Settings {
+public interface HConstants {
+  
+  // Configuration parameters
+  
+  // TODO: URL for hbase master like hdfs URLs with host and port.
+  // Like jdbc URLs?  URLs could be used to refer to table cells?
+  // jdbc:mysql://[host][,failoverhost...][:port]/[database]
+  // jdbc:mysql://[host][,failoverhost...][:port]/[database][?propertyName1][=propertyValue1][&propertyName2][=propertyValue2]...
+  
+  // Key into HBaseConfiguration for the hbase.master address.
+  // TODO: Support 'local': i.e. default of all running in single
+  // process.  Same for regionserver. TODO: Is having HBase homed
+  // on port 60k OK?
+  
+  /** Parameter name for master address */
+  static final String MASTER_ADDRESS = "hbase.master";
+  
+  /** Default master address */
+  static final String DEFAULT_MASTER_ADDRESS = "localhost:60000";
 
-    /**
-     * The Settings objects.
-     */
-    Settings[] delegates;
+  /** Parameter name for hbase.regionserver address. */
+  static final String REGIONSERVER_ADDRESS = "hbase.regionserver";
+  
+  /** Default region server address */
+  static final String DEFAULT_REGIONSERVER_ADDRESS = "localhost:60010";
 
-    /**
-     * Creates a new DelegatingSettings object utilizing the list of {@link Settings} objects.
-     *
-     * @param delegates The Settings objects to use as delegates
-     */
-    public DelegatingSettings(Settings[] delegates) {
-        this.delegates = delegates;
-    }
+  /** Parameter name for how often threads should wake up */
+  static final String THREAD_WAKE_FREQUENCY = "hbase.server.thread.wakefrequency";
 
-    // See superclass for Javadoc
-    public void setImpl(String name, String value) throws IllegalArgumentException, UnsupportedOperationException {
-        IllegalArgumentException e = null;
+  /** Parameter name for HBase instance root directory */
+  static final String HBASE_DIR = "hbase.rootdir";
+  
+  /** Default HBase instance root directory */
+  static final String DEFAULT_HBASE_DIR = "/hbase";
+  
+  /** Used to construct the name of the directory in which a HRegion resides */
+  static final String HREGIONDIR_PREFIX = "hregion_";
+  
+  // TODO: Someone may try to name a column family 'log'.  If they
+  // do, it will clash with the HREGION log dir subdirectory. FIX.
+  
+  /** Used to construct the name of the log directory for a region server */
+  static final String HREGION_LOGDIR_NAME = "log";
 
-        for (Settings delegate : delegates) {
-            try {
-                delegate.getImpl(name); // Throws exception if not found
-                delegate.setImpl(name, value); // Found it
-                return; // Done
-            } catch (IllegalArgumentException ex) {
-                e = ex;
+  /** Name of old log file for reconstruction */
+  static final String HREGION_OLDLOGFILE_NAME = "oldlogfile.log";
+  
+  /** Default maximum file size */
+  static final long DEFAULT_MAX_FILE_SIZE = 128 * 1024 * 1024;        // 128MB
 
-                // Try next delegate
-            }
-        }
+  // Always store the location of the root table's HRegion.
+  // This HRegion is never split.
 
-        throw e;
-    }
+  // region name = table + startkey + regionid. This is the row key.
+  // each row in the root and meta tables describes exactly 1 region
+  // Do we ever need to know all the information that we are storing?
 
-    // See superclass for Javadoc
-    public String getImpl(String name) throws IllegalArgumentException {
+  /** The root table's name. */
+  static final Text ROOT_TABLE_NAME = new Text("--ROOT--");
 
-        IllegalArgumentException e = null;
+  /** The META table's name. */
+  static final Text META_TABLE_NAME = new Text("--META--");
 
-        for (Settings delegate : delegates) {
-            try {
-                return delegate.getImpl(name);  // Throws exception if not found
-            } catch (IllegalArgumentException ex) {
-                e = ex;
+  // Defines for the column names used in both ROOT and META HBase 'meta' tables.
+  
+  /** The ROOT and META column family */
+  static final Text COLUMN_FAMILY = new Text("info:");
+  
+  /** ROOT/META column family member - contains HRegionInfo */
+  static final Text COL_REGIONINFO = new Text(COLUMN_FAMILY + "regioninfo");
+  
+  /** ROOT/META column family member - contains HServerAddress.toString() */
+  static final Text COL_SERVER = new Text(COLUMN_FAMILY + "server");
+  
+  /** ROOT/META column family member - contains server start code (a long) */
+  static final Text COL_STARTCODE = new Text(COLUMN_FAMILY + "serverstartcode");
 
-                // Try next delegate
-            }
-        }
+  // Other constants
 
-        throw e;
-    }
+  /** When we encode strings, we always specify UTF8 encoding */
+  static final String UTF8_ENCODING = "UTF-8";
 
-    // See superclass for Javadoc
-    public boolean isSetImpl(String aName) {
-        for (Settings delegate : delegates) {
-            if (delegate.isSetImpl(aName)) {
-                return true;
-            }
-        }
+  /** Value stored for a deleted item */
+  static final BytesWritable DELETE_BYTES = 
+    new BytesWritable("HBASE::DELETEVAL".getBytes());
 
-        return false;
-    }
+  /** Value written to HLog on a complete cache flush */
+  static final BytesWritable COMPLETE_CACHEFLUSH =
+    new BytesWritable("HBASE::CACHEFLUSH".getBytes());
 
-    // See superclass for Javadoc
-    public Iterator listImpl() {
-        boolean workedAtAll = false;
-
-        Set<Object> settingList = new HashSet<Object>();
-        UnsupportedOperationException e = null;
-
-        for (Settings delegate : delegates) {
-            try {
-                Iterator list = delegate.listImpl();
-
-                while (list.hasNext()) {
-                    settingList.add(list.next());
-                }
-
-                workedAtAll = true;
-            } catch (UnsupportedOperationException ex) {
-                e = ex;
-
-                // Try next delegate
-            }
-        }
-
-        if (!workedAtAll) {
-            throw (e == null) ? new UnsupportedOperationException() : e;
-        } else {
-            return settingList.iterator();
-        }
-    }
 }

@@ -366,7 +366,7 @@ def run_predict(X_test, Y_test, Y_train, test, train):
 def main(argv):
     global K_NEIGHBORS
     global CUTOFF
-    train_name = 'train_all' #'train'
+    train_name = 'train_all' #'train_all' #'train'
     test_name = 'test'
 
     try:

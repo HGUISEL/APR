@@ -1,663 +1,390 @@
-package org.apache.maven.continuum;
-
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
+package org.apache.mahout.utils.vectors.lucene;
+
+import org.apache.commons.cli2.CommandLine;
+import org.apache.commons.cli2.Group;
+import org.apache.commons.cli2.Option;
+import org.apache.commons.cli2.OptionException;
+import org.apache.commons.cli2.builder.ArgumentBuilder;
+import org.apache.commons.cli2.builder.DefaultOptionBuilder;
+import org.apache.commons.cli2.builder.GroupBuilder;
+import org.apache.commons.cli2.commandline.Parser;
+import org.apache.lucene.document.FieldSelector;
+import org.apache.lucene.document.SetBasedFieldSelector;
+import org.apache.lucene.index.CorruptIndexException;
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.TermDocs;
+import org.apache.lucene.index.TermEnum;
+import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.OpenBitSet;
+import org.apache.mahout.common.CommandLineUtil;
+import org.apache.mahout.math.stats.LogLikelihood;
+import org.apache.mahout.utils.clustering.ClusterDumper;
+import org.apache.mahout.utils.vectors.TermEntry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.util.Collection;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-
-import org.apache.continuum.model.release.ContinuumReleaseResult;
-import org.apache.continuum.model.project.ProjectScmRoot;
-import org.apache.continuum.purge.ContinuumPurgeManager;
-import org.apache.continuum.purge.PurgeConfigurationService;
-import org.apache.continuum.repository.RepositoryService;
-import org.apache.continuum.taskqueue.manager.TaskQueueManager;
-import org.apache.maven.continuum.builddefinition.BuildDefinitionService;
-import org.apache.maven.continuum.buildqueue.BuildProjectTask;
-import org.apache.maven.continuum.configuration.ConfigurationService;
-import org.apache.maven.continuum.installation.InstallationService;
-import org.apache.maven.continuum.model.project.BuildDefinition;
-import org.apache.maven.continuum.model.project.BuildResult;
-import org.apache.maven.continuum.model.project.Project;
-import org.apache.maven.continuum.model.project.ProjectGroup;
-import org.apache.maven.continuum.model.project.ProjectNotifier;
-import org.apache.maven.continuum.model.project.Schedule;
-import org.apache.maven.continuum.model.scm.ChangeSet;
-import org.apache.maven.continuum.profile.ProfileService;
-import org.apache.maven.continuum.project.builder.ContinuumProjectBuildingResult;
-import org.apache.maven.continuum.release.ContinuumReleaseManager;
-import org.codehaus.plexus.taskqueue.execution.TaskQueueExecutor;
-import org.codehaus.plexus.util.dag.CycleDetectedException;
+import java.util.Set;
 
 /**
- * @author <a href="mailto:jason@maven.org">Jason van Zyl</a>
- * @author <a href="mailto:trygvis@inamo.no">Trygve Laugst&oslash;l</a>
- * @version $Id$
+ * Get labels for the cluster using Log Likelihood Ratio (LLR).
+ * <p/>
+ * "The most useful way to think of this (LLR) is as the percentage of in-cluster
+ * documents that have the feature (term) versus the percentage out, keeping in
+ * mind that both percentages are uncertain since we have only a sample of all
+ * possible documents." - Ted Dunning
+ * <p/>
+ * More about LLR can be found at :
+ * http://tdunning.blogspot.com/2008/03/surprise-and-coincidence.html
  */
-public interface Continuum
-{
-    String ROLE = Continuum.class.getName();
+public class ClusterLabels {
 
-    // ----------------------------------------------------------------------
-    // Project Groups
-    // ----------------------------------------------------------------------
+  class TermInfoClusterInOut implements Comparable<TermInfoClusterInOut> {
+    public final String term;
+    public final int inClusterDF;
+    public final int outClusterDF;
+    public double logLikelihoodRatio;
 
-    public static final String DEFAULT_PROJECT_GROUP_GROUP_ID = "default";
+    TermInfoClusterInOut(String term, int inClusterDF, int outClusterDF) {
+      this.term = term;
+      this.inClusterDF = inClusterDF;
+      this.outClusterDF = outClusterDF;
+    }
 
-    public ProjectGroup getProjectGroup( int projectGroupId )
-        throws ContinuumException;
+    @Override
+    public int compareTo(TermInfoClusterInOut that) {
+      int res = -Double.compare(logLikelihoodRatio, that.logLikelihoodRatio);
+      if (res == 0) {
+        res = term.compareTo(that.term);
+      }
+      return res;
+    }
+
+    public int getInClusterDiff() {
+      return this.inClusterDF - this.outClusterDF;
+    }
+  }
+
+  private static final Logger log = LoggerFactory.getLogger(ClusterLabels.class);
+  public static final int DEFAULT_MIN_IDS = 50;
+  public static final int DEFAULT_MAX_LABELS = 25;
+
+  private final String seqFileDir;
+  private final String pointsDir;
+  private final String indexDir;
+  private final String contentField;
+  private String idField;
+  private Map<String, List<String>> clusterIdToPoints = null;
+  private String output;
+  private int minNumIds = DEFAULT_MIN_IDS;
+  private int maxLabels = DEFAULT_MAX_LABELS;
+
+  public ClusterLabels(String seqFileDir, String pointsDir, String indexDir, String contentField, int minNumIds, int maxLabels) throws IOException {
+    this.seqFileDir = seqFileDir;
+    this.pointsDir = pointsDir;
+    this.indexDir = indexDir;
+    this.contentField = contentField;
+    this.minNumIds = minNumIds;
+    this.maxLabels = maxLabels;
+    init();
+  }
+
+  private void init() throws IOException {
+    ClusterDumper clusterDumper = new ClusterDumper(seqFileDir, pointsDir);
+    this.clusterIdToPoints = clusterDumper.getClusterIdToPoints();
+  }
+
+  public void getLabels() throws IOException {
+
+    Writer writer;
+    if (this.output != null) {
+      writer = new FileWriter(this.output);
+    } else {
+      writer = new OutputStreamWriter(System.out);
+    }
+
+    for (Map.Entry<String, List<String>> stringListEntry : clusterIdToPoints.entrySet()) {
+      List<String> ids = stringListEntry.getValue();
+      List<TermInfoClusterInOut> termInfos = getClusterLabels(stringListEntry.getKey(), ids);
+      if (termInfos != null) {
+        writer.write('\n');
+        writer.write("Top labels for Cluster " + stringListEntry.getKey() + " containing " + ids.size() + " vectors");
+        writer.write('\n');
+        writer.write("Term \t\t LLR \t\t In-ClusterDF \t\t Out-ClusterDF ");
+        writer.write('\n');
+        for (TermInfoClusterInOut termInfo : termInfos) {
+          writer.write(termInfo.term + "\t\t" + termInfo.logLikelihoodRatio + "\t\t" + termInfo.inClusterDF + "\t\t" + termInfo.outClusterDF);
+          writer.write('\n');
+        }
+      }
+    }
+    writer.flush();
+    if (this.output != null) {
+      writer.close();
+    }
+  }
+
+  /**
+   * Get the list of labels, sorted by best score.
+   *
+   * @param clusterID
+   * @param ids
+   * @return
+   * @throws CorruptIndexException
+   * @throws IOException
+   */
+  protected List<TermInfoClusterInOut> getClusterLabels(String clusterID, List<String> ids) throws IOException {
+
+    if (ids.size() < minNumIds) {
+      log.info("Skipping small cluster {} with size: {}", clusterID, ids.size());
+      return null;
+    }
+
+    log.info("Processing Cluster {} with {} documents", clusterID, ids.size());
+    Directory dir = FSDirectory.open(new File(this.indexDir));
+    IndexReader reader = IndexReader.open(dir, false);
+
+    log.info("# of documents in the index {}", reader.numDocs());
+
+    Set<String> idSet = new HashSet<String>();
+    idSet.addAll(ids);
+
+    int numDocs = reader.numDocs();
+
+    OpenBitSet clusterDocBitset = getClusterDocBitset(reader, idSet, this.idField);
+
+    log.info("Populating term infos from the index");
 
     /**
-     * Get all {@link ProjectGroup}s and their {@link Project}s
+     * This code is as that of CachedTermInfo, with one major change, which is to get the document frequency.
      *
-     * @return {@link Collection} &lt;{@link ProjectGroup}>
+     * Since we have deleted the documents out of the cluster, the document frequency for a term should 
+     * only include the in-cluster documents. The document frequency obtained from TermEnum reflects the 
+     * frequency in the entire index. To get the in-cluster frequency, we need to query the index to get
+     * the term frequencies in each document. The number of results of this call will be the in-cluster 
+     * document frequency.
      */
-    public Collection<ProjectGroup> getAllProjectGroupsWithProjects();
 
-    public List<ProjectGroup> getAllProjectGroupsWithBuildDetails();
+    TermEnum te = reader.terms(new Term(contentField, ""));
+    int count = 0;
+
+    Map<String, TermEntry> termEntryMap = new LinkedHashMap<String, TermEntry>();
+    do {
+      Term term = te.term();
+      if (term == null || term.field().equals(contentField) == false) {
+        break;
+      }
+      OpenBitSet termBitset = new OpenBitSet(reader.maxDoc());
+
+      // Generate bitset for the term
+      TermDocs termDocs = reader.termDocs(term);
+
+      while (termDocs.next()) {
+        termBitset.set(termDocs.doc());
+      }
+
+      // AND the term's bitset with cluster doc bitset to get the term's in-cluster frequency.
+      // This modifies the termBitset, but that's fine as we are not using it anywhere else.
+      termBitset.and(clusterDocBitset);
+      int inclusterDF = (int) termBitset.cardinality();
+
+      TermEntry entry = new TermEntry(term.text(), count++, inclusterDF);
+      termEntryMap.put(entry.term, entry);
+    } while (te.next());
+    te.close();
+
+    List<TermInfoClusterInOut> clusteredTermInfo = new LinkedList<TermInfoClusterInOut>();
+
+    int clusterSize = ids.size();
+    int corpusSize = numDocs;
+
+    for (TermEntry termEntry : termEntryMap.values()) {
+      int corpusDF = reader.terms(new Term(this.contentField, termEntry.term)).docFreq();
+      int outDF = corpusDF - termEntry.docFreq;
+      int inDF = termEntry.docFreq;
+      TermInfoClusterInOut termInfoCluster = new TermInfoClusterInOut(termEntry.term, inDF, outDF);
+      double llr = scoreDocumentFrequencies(inDF, outDF, clusterSize, corpusSize);
+      termInfoCluster.logLikelihoodRatio = llr;
+      clusteredTermInfo.add(termInfoCluster);
+    }
+
+    Collections.sort(clusteredTermInfo);
+    // Cleanup
+    reader.close();
+    termEntryMap.clear();
+
+    return clusteredTermInfo.subList(0, Math.min(clusteredTermInfo.size(), maxLabels));
+  }
+
+
+  private static OpenBitSet getClusterDocBitset(IndexReader reader, Set<String> idSet, String idField)
+      throws IOException {
+    int numDocs = reader.numDocs();
+
+    OpenBitSet bitset = new OpenBitSet(numDocs);
+
+    FieldSelector idFieldSelector = new SetBasedFieldSelector(Collections.singleton(idField), Collections.emptySet());
+
+    for (int i = 0; i < numDocs; i++) {
+      String id = null;
+      // Use Lucene's internal ID if idField is not specified. Else, get it from the document.
+      if (idField == null) {
+        id = Integer.toString(i);
+      } else {
+        id = reader.document(i, idFieldSelector).get(idField);
+      }
+      if (idSet.contains(id)) {
+        bitset.set(i);
+      }
+    }
+    log.info("Created bitset for in-cluster documents : {}", bitset.cardinality());
+    return bitset;
+  }
+
+  private static double scoreDocumentFrequencies(int inDF, int outDF, int clusterSize, int corpusSize) {
+    int k12 = clusterSize - inDF;
+    int k22 = corpusSize - clusterSize - outDF;
+
+    return LogLikelihood.logLikelihoodRatio(inDF, k12, outDF, k22);
+  }
+
+  public String getIdField() {
+    return idField;
+  }
+
+  public void setIdField(String idField) {
+    this.idField = idField;
+  }
+
+  public String getOutput() {
+    return output;
+  }
+
+  public void setOutput(String output) {
+    this.output = output;
+  }
+
+  public static void main(String[] args) {
+
+    DefaultOptionBuilder obuilder = new DefaultOptionBuilder();
+    ArgumentBuilder abuilder = new ArgumentBuilder();
+    GroupBuilder gbuilder = new GroupBuilder();
+
+    Option indexOpt = obuilder.withLongName("dir").withRequired(true).withArgument(
+            abuilder.withName("dir").withMinimum(1).withMaximum(1).create()).
+            withDescription("The Lucene index directory").withShortName("d").create();
+
+    Option outputOpt = obuilder.withLongName("output").withRequired(false).withArgument(
+            abuilder.withName("output").withMinimum(1).withMaximum(1).create()).
+            withDescription("The output file. If not specified, the result is printed on console.").withShortName("o").create();
+
+    Option fieldOpt = obuilder.withLongName("field").withRequired(true).withArgument(
+            abuilder.withName("field").withMinimum(1).withMaximum(1).create()).
+            withDescription("The content field in the index").withShortName("f").create();
+
+    Option idFieldOpt = obuilder.withLongName("idField").withRequired(false).withArgument(
+            abuilder.withName("idField").withMinimum(1).withMaximum(1).create()).
+            withDescription("The field for the document ID in the index.  If null, then the Lucene internal doc " +
+                    "id is used which is prone to error if the underlying index changes").withShortName("i").create();
+
+    Option seqOpt = obuilder.withLongName("seqFileDir").withRequired(true).withArgument(
+            abuilder.withName("seqFileDir").withMinimum(1).withMaximum(1).create()).
+            withDescription("The directory containing Sequence Files for the Clusters").withShortName("s").create();
+
+    Option pointsOpt = obuilder.withLongName("pointsDir").withRequired(true).withArgument(
+            abuilder.withName("pointsDir").withMinimum(1).withMaximum(1).create()).
+            withDescription("The directory containing points sequence files mapping input vectors to their cluster.  ").withShortName("p").create();
+    Option minClusterSizeOpt = obuilder.withLongName("minClusterSize").withRequired(false).withArgument(
+            abuilder.withName("minClusterSize").withMinimum(1).withMaximum(1).create()).
+            withDescription("The minimum number of points required in a cluster to print the labels for").withShortName("m").create();
+    Option maxLabelsOpt = obuilder.withLongName("maxLabels").withRequired(false).withArgument(
+            abuilder.withName("maxLabels").withMinimum(1).withMaximum(1).create()).
+            withDescription("The maximum number of labels to print per cluster").withShortName("x").create();
+    Option helpOpt = obuilder.withLongName("help").
+            withDescription("Print out help").withShortName("h").create();
+
+    Group group = gbuilder.withName("Options").withOption(indexOpt).withOption(idFieldOpt).withOption(outputOpt)
+            .withOption(fieldOpt).withOption(seqOpt).withOption(pointsOpt).withOption(helpOpt).withOption(maxLabelsOpt).withOption(minClusterSizeOpt).create();
+
+    try {
+      Parser parser = new Parser();
+      parser.setGroup(group);
+      CommandLine cmdLine = parser.parse(args);
+
+      if (cmdLine.hasOption(helpOpt)) {
+        CommandLineUtil.printHelp(group);
+        return;
+      }
+
+      String seqFileDir = cmdLine.getValue(seqOpt).toString();
+      String pointsDir = cmdLine.getValue(pointsOpt).toString();
+      String indexDir = cmdLine.getValue(indexOpt).toString();
+      String contentField = cmdLine.getValue(fieldOpt).toString();
+
+
+      String idField = null;
+
+      if (cmdLine.hasOption(idFieldOpt)) {
+        idField = cmdLine.getValue(idFieldOpt).toString();
+      }
+      String output = null;
+      if (cmdLine.hasOption(outputOpt)) {
+        output = cmdLine.getValue(outputOpt).toString();
+      }
+      int maxLabels = DEFAULT_MAX_LABELS;
+      if (cmdLine.hasOption(maxLabelsOpt)) {
+        maxLabels = Integer.parseInt(cmdLine.getValue(maxLabelsOpt).toString());
+      }
+      int minSize = DEFAULT_MIN_IDS;
+      if (cmdLine.hasOption(minClusterSizeOpt)) {
+        minSize = Integer.parseInt(cmdLine.getValue(minClusterSizeOpt).toString());
+      }
+      ClusterLabels clusterLabel = new ClusterLabels(seqFileDir, pointsDir, indexDir, contentField, minSize, maxLabels);
+
+      if (idField != null) {
+        clusterLabel.setIdField(idField);
+      }
+      if (output != null) {
+        clusterLabel.setOutput(output);
+      }
+
+      clusterLabel.getLabels();
+
+    } catch (OptionException e) {
+      log.error("Exception", e);
+      CommandLineUtil.printHelp(group);
+    } catch (IOException e) {
+      log.error("Exception", e);
+    }
+  }
 
-    public List<ProjectGroup> getAllProjectGroups();
-
-    public ProjectGroup getProjectGroupByProjectId( int projectId )
-        throws ContinuumException;
-
-    public Collection<Project> getProjectsInGroup( int projectGroupId )
-        throws ContinuumException;
-
-    public Collection<Project> getProjectsInGroupWithDependencies( int projectGroupId )
-        throws ContinuumException;
-
-    public void removeProjectGroup( int projectGroupId )
-        throws ContinuumException;
-
-    public void addProjectGroup( ProjectGroup projectGroup )
-        throws ContinuumException;
-
-    public ProjectGroup getProjectGroupWithProjects( int projectGroupId )
-        throws ContinuumException;
-
-    public ProjectGroup getProjectGroupWithBuildDetails( int projectGroupId )
-        throws ContinuumException;
-
-    public ProjectGroup getProjectGroupByGroupId( String groupId )
-        throws ContinuumException;
-
-    public ProjectGroup getProjectGroupByGroupIdWithBuildDetails( String groupId )
-        throws ContinuumException;
-
-    public List<ProjectGroup> getAllProjectGroupsWithRepository( int repositoryId );
-    
-    // ----------------------------------------------------------------------
-    // Project
-    // ----------------------------------------------------------------------
-
-    void removeProject( int projectId )
-        throws ContinuumException;
-
-    
-    /**
-     * @deprecated
-     * @param projectId
-     * @throws ContinuumException
-     */
-    void checkoutProject( int projectId )
-        throws ContinuumException;
-
-    Project getProject( int projectId )
-        throws ContinuumException;
-
-    Project getProjectWithBuildDetails( int projectId )
-        throws ContinuumException;
-
-    List<Project> getAllProjectsWithAllDetails( int start, int end );
-
-    Collection<Project> getAllProjects( int start, int end )
-        throws ContinuumException;
-
-    Collection<Project> getProjects()
-        throws ContinuumException;
-
-    Collection<Project> getProjectsWithDependencies()
-        throws ContinuumException;
-
-    BuildResult getLatestBuildResultForProject( int projectId );
-
-    Map<Integer, BuildResult> getLatestBuildResults( int projectGroupId );
-
-    Map<Integer, BuildResult> getLatestBuildResults();
-
-    Map<Integer, BuildResult> getBuildResultsInSuccess( int projectGroupId );
-
-    Map<Integer, BuildResult> getBuildResultsInSuccess();
-
-    // ----------------------------------------------------------------------
-    // Building
-    // ----------------------------------------------------------------------
-
-    List<Project> getProjectsInBuildOrder()
-        throws CycleDetectedException, ContinuumException;
-
-    /**
-     * take a collection of projects and sort for order
-     *
-     * @param projects
-     * @return
-     * @throws CycleDetectedException
-     */
-    List<Project> getProjectsInBuildOrder( Collection<Project> projects )
-        throws CycleDetectedException;
-
-    void buildProjects()
-        throws ContinuumException;
-
-    void buildProjectsWithBuildDefinition( int buildDefinitionId )
-        throws ContinuumException;
-
-    void buildProjects( int trigger )
-        throws ContinuumException;
-
-    void buildProjects( int trigger, int buildDefinitionId )
-        throws ContinuumException;
-
-    void buildProjects( Schedule schedule )
-        throws ContinuumException;
-
-    void buildProject( int projectId )
-        throws ContinuumException;
-
-    void buildProject( int projectId, int trigger )
-        throws ContinuumException;
-
-    void buildProjectWithBuildDefinition( int projectId, int buildDefinitionId )
-        throws ContinuumException;
-
-    void buildProject( int projectId, int buildDefinitionId, int trigger )
-        throws ContinuumException;
-
-    public void buildProjectGroup( int projectGroupId )
-        throws ContinuumException;
-
-    public void buildProjectGroupWithBuildDefinition( int projectGroupId, int buildDefinitionId )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Build information
-    // ----------------------------------------------------------------------
-
-    BuildResult getBuildResult( int buildId )
-        throws ContinuumException;
-
-    BuildResult getBuildResultByBuildNumber( int projectId, int buildNumber )
-        throws ContinuumException;
-
-    String getBuildOutput( int projectId, int buildId )
-        throws ContinuumException;
-
-    long getNbBuildResultsForProject( int projectId );
-
-    Collection<BuildResult> getBuildResultsForProject( int projectId )
-        throws ContinuumException;
-
-    List<ChangeSet> getChangesSinceLastSuccess( int projectId, int buildResultId )
-        throws ContinuumException;
-
-    void removeBuildResult( int buildId )
-        throws ContinuumException;
-
-    List<ChangeSet> getChangesSinceLastUpdate( int projectId )
-        throws ContinuumException;
-    
-    // ----------------------------------------------------------------------
-    // Projects
-    // ----------------------------------------------------------------------
-
-    /**
-     * Add a project to the list of building projects (ant, shell,...)
-     *
-     * @param project    the project to add
-     * @param executorId the id of an {@link org.apache.maven.continuum.execution.ContinuumBuildExecutor}, eg. <code>ant</code> or <code>shell</code>
-     * @return id of the project
-     * @throws ContinuumException
-     */
-    int addProject( Project project, String executorId )
-        throws ContinuumException;
-
-    /**
-     * Add a project to the list of building projects (ant, shell,...)
-     *
-     * @param project        the project to add
-     * @param executorId     the id of an {@link org.apache.maven.continuum.execution.ContinuumBuildExecutor}, eg. <code>ant</code> or <code>shell</code>
-     * @param projectGroupId
-     * @return id of the project
-     * @throws ContinuumException
-     */
-    int addProject( Project project, String executorId, int projectGroupId )
-        throws ContinuumException;
-
-    /**
-     * Add a project to the list of building projects (ant, shell,...)
-     *
-     * @param project        the project to add
-     * @param executorId     the id of an {@link org.apache.maven.continuum.execution.ContinuumBuildExecutor}, eg. <code>ant</code> or <code>shell</code>
-     * @param projectGroupId
-     * @return id of the project
-     * @throws ContinuumException
-     */
-    int addProject( Project project, String executorId, int projectGroupId, int buildDefintionTemplateId )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl url of the pom.xml
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenTwoProject( String metadataUrl )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl   url of the pom.xml
-     * @param checkProtocol check if the protocol is allowed, use false if the pom is uploaded
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenTwoProject( String metadataUrl, boolean checkProtocol )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl    url of the pom.xml
-     * @param projectGroupId id of the project group to use
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenTwoProject( String metadataUrl, int projectGroupId )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl    url of the pom.xml
-     * @param projectGroupId id of the project group to use
-     * @param checkProtocol  check if the protocol is allowed, use false if the pom is uploaded
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenTwoProject( String metadataUrl, int projectGroupId, boolean checkProtocol )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl         url of the pom.xml
-     * @param projectGroupId      id of the project group to use
-     * @param checkProtocol       check if the protocol is allowed, use false if the pom is uploaded
-     * @param useCredentialsCache whether to use cached scm account credentials or not
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenTwoProject( String metadataUrl, int projectGroupId, boolean checkProtocol,
-                                                       boolean useCredentialsCache )
-        throws ContinuumException;
-
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl           url of the pom.xml
-     * @param projectGroupId        id of the project group to use
-     * @param checkProtocol         check if the protocol is allowed, use false if the pom is uploaded
-     * @param useCredentialsCache   whether to use cached scm account credentials or not
-     * @param loadRecursiveProjects if multi modules project record all projects (if false only root project added)
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    public ContinuumProjectBuildingResult addMavenTwoProject( String metadataUrl, int projectGroupId,
-                                                              boolean checkProtocol, boolean useCredentialsCache,
-                                                              boolean loadRecursiveProjects )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl              url of the pom.xml
-     * @param projectGroupId           id of the project group to use
-     * @param checkProtocol            check if the protocol is allowed, use false if the pom is uploaded
-     * @param useCredentialsCache      whether to use cached scm account credentials or not
-     * @param loadRecursiveProjects    if multi modules project record all projects (if false only root project added)
-     * @param buildDefintionTemplateId buildDefintionTemplateId
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    public ContinuumProjectBuildingResult addMavenTwoProject( String metadataUrl, int projectGroupId,
-                                                              boolean checkProtocol, boolean useCredentialsCache,
-                                                              boolean loadRecursiveProjects,
-                                                              int buildDefintionTemplateId )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 1 project to the list of projects.
-     *
-     * @param metadataUrl url of the project.xml
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenOneProject( String metadataUrl )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 1 project to the list of projects.
-     *
-     * @param metadataUrl   url of the project.xml
-     * @param checkProtocol check if the protocol is allowed, use false if the pom is uploaded
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenOneProject( String metadataUrl, boolean checkProtocol )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 1 project to the list of projects.
-     *
-     * @param metadataUrl    url of the project.xml
-     * @param projectGroupId id of the project group to use
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenOneProject( String metadataUrl, int projectGroupId )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 1 project to the list of projects.
-     *
-     * @param metadataUrl    url of the project.xml
-     * @param projectGroupId id of the project group to use
-     * @param checkProtocol  check if the protocol is allowed, use false if the pom is uploaded
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenOneProject( String metadataUrl, int projectGroupId, boolean checkProtocol )
-        throws ContinuumException;
-
-    /**
-     * Add a Maven 2 project to the list of projects.
-     *
-     * @param metadataUrl         url of the pom.xml
-     * @param projectGroupId      id of the project group to use
-     * @param checkProtocol       check if the protocol is allowed, use false if the pom is uploaded
-     * @param useCredentialsCache whether to use cached scm account credentials or not
-     * @return a holder with the projects, project groups and errors occurred during the project adding
-     * @throws ContinuumException
-     */
-    ContinuumProjectBuildingResult addMavenOneProject( String metadataUrl, int projectGroupId, boolean checkProtocol,
-                                                       boolean useCredentialsCache )
-        throws ContinuumException;
-
-    ContinuumProjectBuildingResult addMavenOneProject( String metadataUrl, int projectGroupId, boolean checkProtocol,
-                                                       boolean useCredentialsCache, int buildDefintionTemplateId )
-        throws ContinuumException;
-
-    void updateProject( Project project )
-        throws ContinuumException;
-
-    void updateProjectGroup( ProjectGroup projectGroup )
-        throws ContinuumException;
-
-    Project getProjectWithCheckoutResult( int projectId )
-        throws ContinuumException;
-
-    Project getProjectWithAllDetails( int projectId )
-        throws ContinuumException;
-
-    Project getProjectWithBuilds( int projectId )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Notification
-    // ----------------------------------------------------------------------
-
-    ProjectNotifier getNotifier( int projectId, int notifierId )
-        throws ContinuumException;
-
-    ProjectNotifier updateNotifier( int projectId, ProjectNotifier notifier )
-        throws ContinuumException;
-
-    ProjectNotifier addNotifier( int projectId, ProjectNotifier notifier )
-        throws ContinuumException;
-
-    void removeNotifier( int projectId, int notifierId )
-        throws ContinuumException;
-
-    ProjectNotifier getGroupNotifier( int projectGroupId, int notifierId )
-        throws ContinuumException;
-
-    ProjectNotifier updateGroupNotifier( int projectGroupId, ProjectNotifier notifier )
-        throws ContinuumException;
-
-    ProjectNotifier addGroupNotifier( int projectGroupId, ProjectNotifier notifier )
-        throws ContinuumException;
-
-    void removeGroupNotifier( int projectGroupId, int notifierId )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Build Definition
-    // ----------------------------------------------------------------------
-
-    /**
-     * @deprecated
-     */
-    List<BuildDefinition> getBuildDefinitions( int projectId )
-        throws ContinuumException;
-
-    /**
-     * @deprecated
-     */
-    BuildDefinition getBuildDefinition( int projectId, int buildDefinitionId )
-        throws ContinuumException;
-
-    /**
-     * @deprecated
-     */
-    void removeBuildDefinition( int projectId, int buildDefinitionId )
-        throws ContinuumException;
-
-    /**
-     * returns the build definition from either the project or the project group it is a part of
-     *
-     * @param buildDefinitionId
-     * @return
-     */
-    BuildDefinition getBuildDefinition( int buildDefinitionId )
-        throws ContinuumException;
-
-    /**
-     * returns the default build definition for the project
-     * <p/>
-     * 1) if project has default build definition, return that
-     * 2) otherwise return default build definition for parent project group
-     *
-     * @param projectId
-     * @return
-     * @throws ContinuumException
-     */
-    BuildDefinition getDefaultBuildDefinition( int projectId )
-        throws ContinuumException;
-
-    public List<BuildDefinition> getDefaultBuildDefinitionsForProjectGroup( int projectGroupId )
-        throws ContinuumException;
-
-    BuildDefinition addBuildDefinitionToProject( int projectId, BuildDefinition buildDefinition )
-        throws ContinuumException;
-
-
-    BuildDefinition addBuildDefinitionToProjectGroup( int projectGroupId, BuildDefinition buildDefinition )
-        throws ContinuumException;
-
-    List<BuildDefinition> getBuildDefinitionsForProject( int projectId )
-        throws ContinuumException;
-
-    List<BuildDefinition> getBuildDefinitionsForProjectGroup( int projectGroupId )
-        throws ContinuumException;
-
-    void removeBuildDefinitionFromProject( int projectId, int buildDefinitionId )
-        throws ContinuumException;
-
-    void removeBuildDefinitionFromProjectGroup( int projectGroupId, int buildDefinitionId )
-        throws ContinuumException;
-
-    BuildDefinition updateBuildDefinitionForProject( int projectId, BuildDefinition buildDefinition )
-        throws ContinuumException;
-
-    BuildDefinition updateBuildDefinitionForProjectGroup( int projectGroupId, BuildDefinition buildDefinition )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Schedule
-    // ----------------------------------------------------------------------
-
-    Schedule getScheduleByName( String scheduleName )
-        throws ContinuumException;
-
-    Schedule getSchedule( int id )
-        throws ContinuumException;
-
-    Collection<Schedule> getSchedules()
-        throws ContinuumException;
-
-    void addSchedule( Schedule schedule )
-        throws ContinuumException;
-
-    void updateSchedule( Schedule schedule )
-        throws ContinuumException;
-
-    void updateSchedule( int scheduleId, Map<String, String> configuration )
-        throws ContinuumException;
-
-    void removeSchedule( int scheduleId )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Working copy
-    // ----------------------------------------------------------------------
-
-    File getWorkingDirectory( int projectId )
-        throws ContinuumException;
-
-    String getFileContent( int projectId, String directory, String filename )
-        throws ContinuumException;
-
-    List<File> getFiles( int projectId, String currentDirectory )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Configuration
-    // ----------------------------------------------------------------------
-
-    ConfigurationService getConfiguration();
-
-    void reloadConfiguration()
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Continuum Release
-    // ----------------------------------------------------------------------
-    ContinuumReleaseManager getReleaseManager();
-
-    // ----------------------------------------------------------------------
-    // Installation
-    // ----------------------------------------------------------------------    
-
-    InstallationService getInstallationService();
-
-    ProfileService getProfileService();
-
-    BuildDefinitionService getBuildDefinitionService();
-
-    // ----------------------------------------------------------------------
-    // Continuum Purge
-    // ----------------------------------------------------------------------
-    ContinuumPurgeManager getPurgeManager();
-
-    PurgeConfigurationService getPurgeConfigurationService();
-    
-    // ----------------------------------------------------------------------
-    // Repository Service
-    // ----------------------------------------------------------------------
-    RepositoryService getRepositoryService();
-
-    // ----------------------------------------------------------------------
-    //
-    // ----------------------------------------------------------------------
-    List<ProjectScmRoot> getProjectScmRootByProjectGroup( int projectGroupId );
-
-    ProjectScmRoot getProjectScmRoot( int projectScmRootId )
-        throws ContinuumException;
-
-    ProjectScmRoot getProjectScmRootByProject( int projectId )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    //
-    // ----------------------------------------------------------------------
-    Collection<Map<Integer, Integer>> getProjectsAndBuildDefinitions( Collection<Project> projects, 
-                                                             List<BuildDefinition> bds,
-                                                             boolean checkDefaultBuildDefinitionForProject )
-        throws ContinuumException;
-
-    Collection<Map<Integer, Integer>> getProjectsAndBuildDefinitions( Collection<Project> projects, 
-                                                             int buildDefinitionId )
-        throws ContinuumException;
-
-    void prepareBuildProjects( Collection<Map<Integer, Integer>> projectsAndBuildDefinitions, int trigger )
-        throws ContinuumException;
-
-    // ----------------------------------------------------------------------
-    // Task Queue Manager
-    // ----------------------------------------------------------------------
-    TaskQueueManager getTaskQueueManager();
-
-    public void startup()
-        throws ContinuumException;
-    
-    ContinuumReleaseResult addContinuumReleaseResult( ContinuumReleaseResult releaseResult )
-        throws ContinuumException;
-
-    void removeContinuumReleaseResult( int releaseResultId )
-        throws ContinuumException;
-
-    ContinuumReleaseResult getContinuumReleaseResult( int releaseResultId )
-        throws ContinuumException;
-
-    List<ContinuumReleaseResult> getContinuumReleaseResultsByProjectGroup( int projectGroupId );
-
-    List<ContinuumReleaseResult> getAllContinuumReleaseResults();
-
-    ContinuumReleaseResult getContinuumReleaseResult( int projectId, String releaseGoal, long startTime, long endTime )
-        throws ContinuumException;
-    
-    String getReleaseOutput( int releaseResultId )
-        throws ContinuumException;
 }

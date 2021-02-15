@@ -14,112 +14,286 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
-*/
-package org.apache.kylin.dict;
+ */
 
-import org.apache.kylin.common.util.ByteArray;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+package org.apache.flink.test.recovery;
 
-import java.util.ArrayList;
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.api.common.time.Deadline;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.java.ExecutionEnvironment;
+import org.apache.flink.api.java.io.DiscardingOutputFormat;
+import org.apache.flink.client.program.ClusterClient;
+import org.apache.flink.client.program.ProgramInvocationException;
+import org.apache.flink.client.program.rest.RestClusterClient;
+import org.apache.flink.configuration.AkkaOptions;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.runtime.client.JobStatusMessage;
+import org.apache.flink.runtime.concurrent.FutureUtils;
+import org.apache.flink.runtime.dispatcher.DispatcherGateway;
+import org.apache.flink.runtime.dispatcher.DispatcherId;
+import org.apache.flink.runtime.dispatcher.MemoryArchivedExecutionGraphStore;
+import org.apache.flink.runtime.entrypoint.component.DispatcherResourceManagerComponent;
+import org.apache.flink.runtime.entrypoint.component.SessionDispatcherResourceManagerComponentFactory;
+import org.apache.flink.runtime.heartbeat.HeartbeatServices;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils;
+import org.apache.flink.runtime.metrics.NoOpMetricRegistry;
+import org.apache.flink.runtime.resourcemanager.StandaloneResourceManagerFactory;
+import org.apache.flink.runtime.rpc.RpcService;
+import org.apache.flink.runtime.rpc.RpcUtils;
+import org.apache.flink.runtime.rpc.akka.AkkaRpcServiceUtils;
+import org.apache.flink.runtime.testingUtils.TestingUtils;
+import org.apache.flink.runtime.testutils.CommonTestUtils;
+import org.apache.flink.runtime.util.BlobServerResource;
+import org.apache.flink.runtime.util.LeaderConnectionInfo;
+import org.apache.flink.runtime.util.LeaderRetrievalUtils;
+import org.apache.flink.runtime.util.TestingFatalErrorHandler;
+import org.apache.flink.util.TestLogger;
+import org.apache.flink.util.function.CheckedSupplier;
 
+import org.junit.Rule;
+import org.junit.Test;
 
-public class TrieDictionaryForestBuilder<T> {
+import java.io.File;
+import java.io.StringWriter;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 
-    public static int MaxTrieTreeSize = 1024 * 1024;//1M
+import static org.apache.flink.runtime.testutils.CommonTestUtils.getCurrentClasspath;
+import static org.apache.flink.runtime.testutils.CommonTestUtils.getJavaCommandPath;
+import static org.hamcrest.Matchers.hasSize;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThat;
+import static org.junit.Assert.assertTrue;
 
-    private BytesConverter<T> bytesConverter;
+/**
+ * This test makes sure that jobs are canceled properly in cases where
+ * the task manager went down and did not respond to cancel messages.
+ */
+@SuppressWarnings("serial")
+public class ProcessFailureCancelingITCase extends TestLogger {
 
-    private int curTreeSize = 0;
+	@Rule
+	public final BlobServerResource blobServerResource = new BlobServerResource();
 
-    private TrieDictionaryBuilder<T> trieBuilder;
+	@Test
+	public void testCancelingOnProcessFailure() throws Exception {
+		final StringWriter processOutput = new StringWriter();
+		final Time timeout = Time.minutes(2L);
 
-    private ArrayList<TrieDictionary<T>> trees = new ArrayList<>();
+		RestClusterClient<String> clusterClient = null;
+		Process taskManagerProcess = null;
+		final TestingFatalErrorHandler fatalErrorHandler = new TestingFatalErrorHandler();
 
-    private ArrayList<ByteArray> valueDivide = new ArrayList<>(); //find tree
+		Configuration jmConfig = new Configuration();
+		jmConfig.setString(AkkaOptions.ASK_TIMEOUT, "100 s");
+		jmConfig.setString(JobManagerOptions.ADDRESS, "localhost");
+		jmConfig.setInteger(RestOptions.PORT, 0);
 
-    private ArrayList<Integer> accuOffset = new ArrayList<>();  //find tree
+		final RpcService rpcService = AkkaRpcServiceUtils.createRpcService("localhost", 0, jmConfig);
+		final int jobManagerPort = rpcService.getPort();
+		jmConfig.setInteger(JobManagerOptions.PORT, jobManagerPort);
 
-    private ByteArray previousValue = null;  //value use for remove duplicate
+		final SessionDispatcherResourceManagerComponentFactory resourceManagerComponentFactory = new SessionDispatcherResourceManagerComponentFactory(
+			StandaloneResourceManagerFactory.INSTANCE);
+		DispatcherResourceManagerComponent<?> dispatcherResourceManagerComponent = null;
 
-    private static final Logger logger = LoggerFactory.getLogger(TrieDictionaryForestBuilder.class);
+		try (final HighAvailabilityServices haServices = HighAvailabilityServicesUtils.createHighAvailabilityServices(
+				jmConfig,
+				TestingUtils.defaultExecutor(),
+				HighAvailabilityServicesUtils.AddressResolution.NO_ADDRESS_RESOLUTION)) {
 
-    private int baseId;
+			// check that we run this test only if the java command
+			// is available on this machine
+			String javaCommand = getJavaCommandPath();
+			if (javaCommand == null) {
+				System.out.println("---- Skipping Process Failure test : Could not find java executable ----");
+				return;
+			}
 
-    private int curOffset;
+			// create a logging file for the process
+			File tempLogFile = File.createTempFile(getClass().getSimpleName() + "-", "-log4j.properties");
+			tempLogFile.deleteOnExit();
+			CommonTestUtils.printLog4jDebugConfig(tempLogFile);
 
+			dispatcherResourceManagerComponent = resourceManagerComponentFactory.create(
+				jmConfig,
+				rpcService,
+				haServices,
+				blobServerResource.getBlobServer(),
+				new HeartbeatServices(100L, 1000L),
+				NoOpMetricRegistry.INSTANCE,
+				new MemoryArchivedExecutionGraphStore(),
+				fatalErrorHandler);
 
-    public TrieDictionaryForestBuilder(BytesConverter<T> bytesConverter) {
-        this(bytesConverter, 0);
-    }
+			// update the rest ports
+			final int restPort = dispatcherResourceManagerComponent
+				.getWebMonitorEndpoint()
+				.getServerAddress()
+				.getPort();
+			jmConfig.setInteger(RestOptions.PORT, restPort);
 
-    public TrieDictionaryForestBuilder(BytesConverter<T> bytesConverter, int baseId) {
-        this.bytesConverter = bytesConverter;
-        this.trieBuilder = new TrieDictionaryBuilder<T>(bytesConverter);
-        this.baseId = baseId;
-        curOffset = 0;
-        //stringComparator = new ByteComparator<>(new StringBytesConverter());
-    }
+			// the TaskManager java command
+			String[] command = new String[] {
+					javaCommand,
+					"-Dlog.level=DEBUG",
+					"-Dlog4j.configuration=file:" + tempLogFile.getAbsolutePath(),
+					"-Xms80m", "-Xmx80m",
+					"-classpath", getCurrentClasspath(),
+					AbstractTaskManagerProcessFailureRecoveryTest.TaskExecutorProcessEntryPoint.class.getName(),
+					String.valueOf(jobManagerPort)
+			};
 
-    public void addValue(T value) {
-        if (value == null) return;
-        byte[] valueBytes = bytesConverter.convertToBytes(value);
-        addValue(new ByteArray(valueBytes, 0, valueBytes.length));
-    }
+			// start the first two TaskManager processes
+			taskManagerProcess = new ProcessBuilder(command).start();
+			new CommonTestUtils.PipeForwarder(taskManagerProcess.getErrorStream(), processOutput);
 
-    public void addValue(byte[] value) {
-        if (value == null) return;
-        ByteArray array = new ByteArray(value, 0, value.length);
-        addValue(array);
-    }
+			final Throwable[] errorRef = new Throwable[1];
 
-    public void addValue(ByteArray value) {
-        //System.out.println("value length:"+value.length);
-        if (value == null) return;
-        if (previousValue == null) {
-            previousValue = value;
-        } else {
-            int comp = previousValue.compareTo(value);
-            if (comp == 0) return; //duplicate value
-            if (comp > 0) {
-                //logger.info("values not in ascending order");
-                //System.out.println(".");
-            }
-        }
-        this.trieBuilder.addValue(value.array());
-        previousValue = value;
-        this.curTreeSize += value.length();
-        if (curTreeSize >= MaxTrieTreeSize) {
-            TrieDictionary<T> tree = trieBuilder.build(0);
-            addTree(tree);
-            reset();
-        }
-    }
+			// start the test program, which infinitely blocks
+			Runnable programRunner = new Runnable() {
+				@Override
+				public void run() {
+					try {
+						ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment("localhost", restPort, new Configuration());
+						env.setParallelism(2);
+						env.setRestartStrategy(RestartStrategies.noRestart());
+						env.getConfig().disableSysoutLogging();
 
-    public TrieDictionaryForest<T> build() {
-        if (curTreeSize != 0) {  //last tree
-            TrieDictionary<T> tree = trieBuilder.build(0);
-            addTree(tree);
-            reset();
-        }
-        TrieDictionaryForest<T> forest = new TrieDictionaryForest<T>(this.trees,
-                this.valueDivide, this.accuOffset, this.bytesConverter, baseId);
-        return forest;
-    }
+						env.generateSequence(0, Long.MAX_VALUE)
 
-    private void addTree(TrieDictionary<T> tree) {
-        trees.add(tree);
-        int minId = tree.getMinId();
-        accuOffset.add(curOffset);
-        byte[] valueBytes = tree.getValueBytesFromId(minId);
-        valueDivide.add(new ByteArray(valueBytes, 0, valueBytes.length));
-        curOffset += (tree.getMaxId() + 1);
-        //System.out.println(" curOffset:"+ curOffset);
-    }
+								.map(new MapFunction<Long, Long>() {
 
-    private void reset() {
-        curTreeSize = 0;
-        trieBuilder = new TrieDictionaryBuilder<T>(bytesConverter);
-    }
+									@Override
+									public Long map(Long value) throws Exception {
+										synchronized (this) {
+											wait();
+										}
+										return 0L;
+									}
+								})
 
+								.output(new DiscardingOutputFormat<Long>());
+
+						env.execute();
+					}
+					catch (Throwable t) {
+						errorRef[0] = t;
+					}
+				}
+			};
+
+			Thread programThread = new Thread(programRunner);
+
+			// kill the TaskManager
+			programThread.start();
+
+			final LeaderConnectionInfo leaderConnectionInfo = LeaderRetrievalUtils.retrieveLeaderConnectionInfo(haServices.getDispatcherLeaderRetriever(), Time.seconds(10L));
+
+			final DispatcherGateway dispatcherGateway = rpcService.connect(
+				leaderConnectionInfo.getAddress(),
+				DispatcherId.fromUuid(leaderConnectionInfo.getLeaderSessionID()),
+				DispatcherGateway.class).get();
+
+			waitUntilAllSlotsAreUsed(dispatcherGateway, timeout);
+
+			clusterClient = new RestClusterClient<>(jmConfig, "standalone");
+
+			final Collection<JobID> jobIds = waitForRunningJobs(clusterClient, timeout);
+
+			assertThat(jobIds, hasSize(1));
+			final JobID jobId = jobIds.iterator().next();
+
+			// kill the TaskManager after the job started to run
+			taskManagerProcess.destroy();
+			taskManagerProcess = null;
+
+			// try to cancel the job
+			clusterClient.cancel(jobId);
+
+			// we should see a failure within reasonable time (10s is the ask timeout).
+			// since the CI environment is often slow, we conservatively give it up to 2 minutes,
+			// to fail, which is much lower than the failure time given by the heartbeats ( > 2000s)
+
+			programThread.join(120000);
+
+			assertFalse("The program did not cancel in time (2 minutes)", programThread.isAlive());
+
+			Throwable error = errorRef[0];
+			assertNotNull("The program did not fail properly", error);
+
+			assertTrue(error instanceof ProgramInvocationException);
+			// all seems well :-)
+		}
+		catch (Exception e) {
+			printProcessLog("TaskManager", processOutput.toString());
+			throw e;
+		}
+		catch (Error e) {
+			printProcessLog("TaskManager 1", processOutput.toString());
+			throw e;
+		}
+		finally {
+			if (taskManagerProcess != null) {
+				taskManagerProcess.destroy();
+			}
+			if (clusterClient != null) {
+				clusterClient.shutdown();
+			}
+			if (dispatcherResourceManagerComponent != null) {
+				dispatcherResourceManagerComponent.close();
+			}
+
+			fatalErrorHandler.rethrowError();
+
+			RpcUtils.terminateRpcService(rpcService, Time.seconds(10L));
+		}
+	}
+
+	private void waitUntilAllSlotsAreUsed(DispatcherGateway dispatcherGateway, Time timeout) throws ExecutionException, InterruptedException {
+		FutureUtils.retrySuccesfulWithDelay(
+			() -> dispatcherGateway.requestClusterOverview(timeout),
+			Time.milliseconds(50L),
+			Deadline.fromNow(Duration.ofMillis(timeout.toMilliseconds())),
+			clusterOverview -> clusterOverview.getNumTaskManagersConnected() >= 1 &&
+				clusterOverview.getNumSlotsAvailable() == 0 &&
+				clusterOverview.getNumSlotsTotal() == 2,
+			TestingUtils.defaultScheduledExecutor())
+			.get();
+	}
+
+	private Collection<JobID> waitForRunningJobs(ClusterClient<?> clusterClient, Time timeout) throws ExecutionException, InterruptedException {
+		return FutureUtils.retrySuccesfulWithDelay(
+				CheckedSupplier.unchecked(clusterClient::listJobs),
+				Time.milliseconds(50L),
+				Deadline.fromNow(Duration.ofMillis(timeout.toMilliseconds())),
+				jobs -> !jobs.isEmpty(),
+				TestingUtils.defaultScheduledExecutor())
+			.get()
+			.stream()
+			.map(JobStatusMessage::getJobId)
+			.collect(Collectors.toList());
+	}
+
+	private void printProcessLog(String processName, String log) {
+		if (log == null || log.length() == 0) {
+			return;
+		}
+
+		System.out.println("-----------------------------------------");
+		System.out.println(" BEGIN SPAWNED PROCESS LOG FOR " + processName);
+		System.out.println("-----------------------------------------");
+		System.out.println(log);
+		System.out.println("-----------------------------------------");
+		System.out.println("		END SPAWNED PROCESS LOG");
+		System.out.println("-----------------------------------------");
+	}
 }

@@ -1,901 +1,665 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
- * agreements. See the NOTICE file distributed with this work for additional information regarding
- * copyright ownership. The ASF licenses this file to You under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.geode.internal.cache;
 
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
+package org.apache.commons.dbcp2;
+
+import java.net.URL;
+import java.sql.CallableStatement;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+import java.io.InputStream;
+import java.io.Reader;
+import java.sql.SQLException;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
+/* JDBC_4_ANT_KEY_END */
 
-import org.apache.logging.log4j.Logger;
+/**
+ * A base delegating implementation of {@link CallableStatement}.
+ * <p>
+ * All of the methods from the {@link CallableStatement} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement Statement tracking and
+ * logging of code which created the Statement. Tracking the
+ * Statement ensures that the Connection which created it can
+ * close any open Statement's on Connection close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House
+ * @author Dirk Verbeeck
+ * @version $Revision$ $Date$
+ */
+public class DelegatingCallableStatement extends DelegatingPreparedStatement
+        implements CallableStatement {
 
-import org.apache.geode.GemFireException;
-import org.apache.geode.cache.Cache;
-import org.apache.geode.cache.CommitConflictException;
-import org.apache.geode.cache.EntryNotFoundException;
-import org.apache.geode.cache.Region.Entry;
-import org.apache.geode.cache.TransactionDataNotColocatedException;
-import org.apache.geode.cache.TransactionDataRebalancedException;
-import org.apache.geode.cache.TransactionException;
-import org.apache.geode.cache.TransactionId;
-import org.apache.geode.cache.UnsupportedOperationInTransactionException;
-import org.apache.geode.cache.client.internal.ServerRegionDataAccess;
-import org.apache.geode.distributed.DistributedMember;
-import org.apache.geode.distributed.internal.DistributionConfig;
-import org.apache.geode.distributed.internal.membership.InternalDistributedMember;
-import org.apache.geode.internal.cache.tier.sockets.ClientProxyMembershipID;
-import org.apache.geode.internal.cache.tier.sockets.VersionedObjectList;
-import org.apache.geode.internal.cache.tx.ClientTXStateStub;
-import org.apache.geode.internal.cache.tx.TransactionalOperation.ServerRegionOperation;
-import org.apache.geode.internal.i18n.LocalizedStrings;
-import org.apache.geode.internal.lang.SystemPropertyHelper;
-import org.apache.geode.internal.logging.LogService;
-import org.apache.geode.internal.logging.log4j.LocalizedMessage;
+    /**
+     * Create a wrapper for the Statement which traces this
+     * Statement to the Connection which created it and the
+     * code which created it.
+     *
+     * @param c the {@link DelegatingConnection} that created this statement
+     * @param s the {@link CallableStatement} to delegate all calls to
+     */
+    public DelegatingCallableStatement(DelegatingConnection c,
+                                       CallableStatement s) {
+        super(c, s);
+    }
 
-public class TXStateProxyImpl implements TXStateProxy {
-  private static final Logger logger = LogService.getLogger();
-
-  protected static final AtomicBoolean txDistributedClientWarningIssued = new AtomicBoolean();
-
-  private boolean isJTA;
-  private TXId txId;
-  protected final TXManagerImpl txMgr;
-  protected DistributedMember target;
-  private boolean commitRequestedByOwner;
-  private boolean isJCATransaction;
-
-  /**
-   * for client/server JTA transactions we need to have a single thread handle both beforeCompletion
-   * and afterCompletion so that beforeC can obtain locks for the afterC step. This is that thread
-   */
-  protected volatile TXSynchronizationRunnable synchRunnable;
-
-  private final ReentrantLock lock = new ReentrantLock();
-
-  /** number of operations in this transaction */
-  private int operationCount = 0;
-
-  /**
-   * tracks bucketIds of transactional operations so as to distinguish between
-   * TransactionDataNotColocated and TransactionDataRebalanced exceptions.
-   */
-  private Map<Integer, Boolean> buckets = new HashMap<Integer, Boolean>();
-
-  public void setSynchronizationRunnable(TXSynchronizationRunnable synch) {
-    this.synchRunnable = synch;
-  }
-
-  public TXSynchronizationRunnable getSynchronizationRunnable() {
-    return this.synchRunnable;
-  }
-
-  public ReentrantLock getLock() {
-    return this.lock;
-  }
-
-  boolean isJTA() {
-    return isJTA;
-  }
-
-  public TXId getTxId() {
-    return txId;
-  }
-
-  public TXManagerImpl getTxMgr() {
-    return txMgr;
-  }
-
-  protected volatile TXStateInterface realDeal;
-
-  protected boolean inProgress = true;
-
-  protected InternalDistributedMember onBehalfOfClientMember = null;
-
-  /**
-   * This returns either the TXState for the current transaction or a proxy for the state if it is
-   * held in another member. If no state currently exists, one is created
-   *
-   * @param key the key of the entry that is currently being modified
-   * @param r the region that is currently being modified
-   * @return the state or a proxy for the state
-   */
-  public TXStateInterface getRealDeal(KeyInfo key, LocalRegion r) {
-    if (this.realDeal == null) {
-      if (r == null) { // TODO: stop gap to get tests working
-        this.realDeal = new TXState(this, false);
-      } else {
-        // Code to keep going forward
-        if (r.hasServerProxy()) {
-          this.realDeal = new ClientTXStateStub(this, target, r);
-          if (r.scope.isDistributed()) {
-            if (txDistributedClientWarningIssued.compareAndSet(false, true)) {
-              logger.warn(LocalizedMessage.create(
-                  LocalizedStrings.TXStateProxyImpl_Distributed_Region_In_Client_TX,
-                  r.getFullPath()));
-            }
-          }
-        } else {
-          target = null;
-          // wait for the region to be initialized fixes bug 44652
-          r.waitOnInitialization(r.initializationLatchBeforeGetInitialImage);
-          target = r.getOwnerForKey(key);
-
-          if (target == null || target.equals(this.txMgr.getDM().getId())) {
-            this.realDeal = new TXState(this, false);
-          } else {
-            this.realDeal = new PeerTXStateStub(this, target, onBehalfOfClientMember);
-          }
+    public boolean equals(Object obj) {
+    	if (this == obj) return true;
+        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
+        if (delegate == null) {
+            return false;
         }
-      }
-      if (logger.isDebugEnabled()) {
-        logger.debug("Built a new TXState: {} me:{}", this.realDeal, this.txMgr.getDM().getId());
-      }
-    }
-    return this.realDeal;
-  }
-
-  public TXStateInterface getRealDeal(DistributedMember t) {
-    assert t != null;
-    if (this.realDeal == null) {
-      this.target = t;
-      if (target.equals(getCache().getDistributedSystem().getDistributedMember())) {
-        this.realDeal = new TXState(this, false);
-      } else {
-        /*
-         * txtodo: // what to do!! We don't know if this is client or server!!!
-         */
-        this.realDeal = new PeerTXStateStub(this, target, onBehalfOfClientMember);
-      }
-      if (logger.isDebugEnabled()) {
-        logger.debug("Built a new TXState: {} me:{}", this.realDeal, this.txMgr.getDM().getId());
-      }
-    }
-    return this.realDeal;
-  }
-
-  public TXStateProxyImpl(TXManagerImpl managerImpl, TXId id,
-      InternalDistributedMember clientMember) {
-    this.txMgr = managerImpl;
-    this.txId = id;
-    this.isJTA = false;
-    this.onBehalfOfClientMember = clientMember;
-  }
-
-  public TXStateProxyImpl(TXManagerImpl managerImpl, TXId id, boolean isjta) {
-    this.txMgr = managerImpl;
-    this.txId = id;
-    this.isJTA = isjta;
-  }
-
-  protected void setTXIDForReplay(TXId id) {
-    this.txId = id;
-  }
-
-  public boolean isOnBehalfOfClient() {
-    return this.onBehalfOfClientMember != null;
-  }
-
-  public void setIsJTA(boolean isJTA) {
-    this.isJTA = isJTA;
-  }
-
-  public void checkJTA(String errmsg) throws IllegalStateException {
-    if (isJTA()) {
-      throw new IllegalStateException(errmsg);
-    }
-  }
-
-  @Override
-  public void precommit()
-      throws CommitConflictException, UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.Dist_TX_PRECOMMIT_NOT_SUPPORTED_IN_A_TRANSACTION
-            .toLocalizedString("precommit"));
-  }
-
-  public void commit() throws CommitConflictException {
-    boolean preserveTx = false;
-    try {
-      getRealDeal(null, null).commit();
-    } catch (UnsupportedOperationInTransactionException e) {
-      // fix for #42490
-      preserveTx = true;
-      throw e;
-    } finally {
-      inProgress = preserveTx;
-      if (this.synchRunnable != null) {
-        this.synchRunnable.abort();
-      }
-    }
-  }
-
-  private TransactionException getTransactionException(KeyInfo keyInfo, GemFireException e) {
-    if (isRealDealLocal() && !buckets.isEmpty() && !buckets.containsKey(keyInfo.getBucketId())) {
-      TransactionException ex = new TransactionDataNotColocatedException(
-          LocalizedStrings.PartitionedRegion_KEY_0_NOT_COLOCATED_WITH_TRANSACTION
-              .toLocalizedString(keyInfo.getKey()));
-      ex.initCause(e.getCause());
-      return ex;
-    }
-    Throwable ex = e;
-    while (ex != null) {
-      if (ex instanceof PrimaryBucketException) {
-        return new TransactionDataRebalancedException(
-            LocalizedStrings.PartitionedRegion_TRANSACTIONAL_DATA_MOVED_DUE_TO_REBALANCING
-                .toLocalizedString());
-      }
-      ex = ex.getCause();
-    }
-    return (TransactionException) e;
-  }
-
-  public boolean containsValueForKey(KeyInfo keyInfo, LocalRegion region) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(keyInfo, region).containsValueForKey(keyInfo, region);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  private void trackBucketForTx(KeyInfo keyInfo) {
-    if (keyInfo.getBucketId() >= 0) {
-      if (logger.isDebugEnabled()) {
-        logger.debug("adding bucket:{} for tx:{}", keyInfo.getBucketId(), getTransactionId());
-      }
-    }
-    if (keyInfo.getBucketId() >= 0) {
-      buckets.put(keyInfo.getBucketId(), Boolean.TRUE);
-    }
-  }
-
-  public void destroyExistingEntry(EntryEventImpl event, boolean cacheWrite,
-      Object expectedOldValue) throws EntryNotFoundException {
-    try {
-      this.operationCount++;
-      getRealDeal(event.getKeyInfo(), event.getLocalRegion()).destroyExistingEntry(event,
-          cacheWrite, expectedOldValue);
-      trackBucketForTx(event.getKeyInfo());
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public long getBeginTime() {
-    return getRealDeal(null, null).getBeginTime();
-  }
-
-  public Cache getCache() {
-    return txMgr.getCache();
-  }
-
-  public int getChanges() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getChanges();
-  }
-
-  public Object getDeserializedValue(KeyInfo keyInfo, LocalRegion localRegion, boolean updateStats,
-      boolean disableCopyOnRead, boolean preferCD, EntryEventImpl clientEvent,
-      boolean returnTombstones, boolean retainResult) {
-    Object val = getRealDeal(keyInfo, localRegion).getDeserializedValue(keyInfo, localRegion,
-        updateStats, disableCopyOnRead, preferCD, null, false, retainResult);
-    if (val != null) {
-      // fixes bug 51057: TXStateStub on client always returns null, so do not increment
-      // the operation count it will be incremented in findObject()
-      this.operationCount++;
-    }
-    return val;
-  }
-
-  public Entry getEntry(KeyInfo keyInfo, LocalRegion region, boolean allowTombstones) {
-    try {
-      this.operationCount++;
-      Entry retVal = getRealDeal(keyInfo, region).getEntry(keyInfo, region, allowTombstones);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  public TXEvent getEvent() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getEvent();
-  }
-
-  public List getEvents() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getEvents();
-  }
-
-  public Collection<LocalRegion> getRegions() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getRegions();
-  }
-
-  public TransactionId getTransactionId() {
-    return txId;
-  }
-
-  public void invalidateExistingEntry(EntryEventImpl event, boolean invokeCallbacks,
-      boolean forceNewEntry) {
-    try {
-      this.operationCount++;
-      getRealDeal(event.getKeyInfo(), event.getLocalRegion()).invalidateExistingEntry(event,
-          invokeCallbacks, forceNewEntry);
-      trackBucketForTx(event.getKeyInfo());
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public boolean isInProgress() {
-    return inProgress;
-  }
-
-  @Override
-  public void setInProgress(boolean progress) {
-    this.inProgress = progress;
-  }
-
-  public boolean needsLargeModCount() {
-    assertBootstrapped();
-    return getRealDeal(null, null).needsLargeModCount();
-  }
-
-  public int nextModSerialNum() {
-    assertBootstrapped();
-    return getRealDeal(null, null).nextModSerialNum();
-  }
-
-  public TXRegionState readRegion(LocalRegion r) {
-    assertBootstrapped();
-    return getRealDeal(null, r).readRegion(r);
-  }
-
-  public void rmRegion(LocalRegion r) {
-    assertBootstrapped();
-    getRealDeal(null, r).rmRegion(r);
-  }
-
-  public void rollback() {
-    try {
-      getRealDeal(null, null).rollback();
-    } finally {
-      inProgress = false;
-      if (this.synchRunnable != null) {
-        this.synchRunnable.abort();
-      }
-    }
-  }
-
-  public boolean txPutEntry(EntryEventImpl event, boolean ifNew, boolean requireOldValue,
-      boolean checkResources, Object expectedOldValue) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(event.getKeyInfo(), (LocalRegion) event.getRegion())
-          .txPutEntry(event, ifNew, requireOldValue, checkResources, expectedOldValue);
-      trackBucketForTx(event.getKeyInfo());
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public TXEntryState txReadEntry(KeyInfo keyInfo, LocalRegion localRegion, boolean rememberRead,
-      boolean createTxEntryIfAbsent) {
-    try {
-      this.operationCount++;
-      TXEntryState retVal = getRealDeal(keyInfo, localRegion).txReadEntry(keyInfo, localRegion,
-          rememberRead, createTxEntryIfAbsent);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  public TXRegionState txReadRegion(LocalRegion localRegion) {
-    assertBootstrapped();
-    return getRealDeal(null, localRegion).txReadRegion(localRegion);
-  }
-
-  public TXRegionState txWriteRegion(LocalRegion localRegion, KeyInfo entryKey) {
-    return getRealDeal(entryKey, localRegion).txWriteRegion(localRegion, entryKey);
-  }
-
-  public TXRegionState writeRegion(LocalRegion r) {
-    assertBootstrapped();
-    return getRealDeal(null, r).writeRegion(r);
-  }
-
-  private void assertBootstrapped() {
-    assert realDeal != null;
-  }
-
-  public void afterCompletion(int status) {
-    assertBootstrapped();
-    try {
-      getRealDeal(null, null).afterCompletion(status);
-    } finally {
-      this.inProgress = false;
-      if (this.synchRunnable != null) {
-        this.synchRunnable.abort();
-      }
-    }
-  }
-
-  public void beforeCompletion() {
-    assertBootstrapped();
-    getRealDeal(null, null).beforeCompletion();
-  }
-
-  public boolean containsKey(KeyInfo keyInfo, LocalRegion localRegion) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(keyInfo, localRegion).containsKey(keyInfo, localRegion);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "UL_UNRELEASED_LOCK",
-      justification = "This method unlocks and then conditionally undoes the unlock in the finally-block. Review again at later time.")
-  public int entryCount(LocalRegion localRegion) {
-    // if size is the first operation in the transaction, then reset the txState
-    boolean resetTXState = this.realDeal == null;
-    TXStateProxy txp = null;
-    boolean txUnlocked = false;
-    if (resetTXState) {
-      txp = getTxMgr().pauseTransaction();
-    } else {
-      if (getLock().isHeldByCurrentThread()) {
-        txUnlocked = true; // bug #42945 - hang trying to compute size for PR
-        getLock().unlock();
-      }
-    }
-    try {
-      if (resetTXState) {
-        return localRegion.getSharedDataView().entryCount(localRegion);
-      }
-      return getRealDeal(null, localRegion).entryCount(localRegion);
-    } finally {
-      if (resetTXState) {
-        getTxMgr().unpauseTransaction(txp);
-      } else if (txUnlocked) {
-        getLock().lock();
-      }
-    }
-  }
-
-  public Object findObject(KeyInfo key, LocalRegion r, boolean isCreate, boolean generateCallbacks,
-      Object value, boolean disableCopyOnRead, boolean preferCD,
-      ClientProxyMembershipID requestingClient, EntryEventImpl clientEvent,
-      boolean returnTombstones) {
-    try {
-      this.operationCount++;
-      Object retVal = getRealDeal(key, r).findObject(key, r, isCreate, generateCallbacks, value,
-          disableCopyOnRead, preferCD, requestingClient, clientEvent, false);
-      trackBucketForTx(key);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(key, re);
-    }
-  }
-
-  public Set getAdditionalKeysForIterator(LocalRegion currRgn) {
-    if (this.realDeal == null) {
-      return null;
-    }
-    return getRealDeal(null, currRgn).getAdditionalKeysForIterator(currRgn);
-  }
-
-  protected final boolean restoreSetOperationTransactionBehavior =
-      SystemPropertyHelper.restoreSetOperationTransactionBehavior();
-
-  public Object getEntryForIterator(KeyInfo key, LocalRegion currRgn, boolean rememberReads,
-      boolean allowTombstones) {
-    boolean resetTxState = isTransactionInternalSuspendNeeded(currRgn);
-    TXStateProxy txp = null;
-    if (resetTxState) {
-      txp = getTxMgr().pauseTransaction();
-    }
-    try {
-      if (resetTxState) {
-        return currRgn.getSharedDataView().getEntry(key, currRgn, allowTombstones);
-      }
-      return getRealDeal(key, currRgn).getEntryForIterator(key, currRgn, rememberReads,
-          allowTombstones);
-    } finally {
-      if (resetTxState) {
-        getTxMgr().unpauseTransaction(txp);
-      }
-    }
-  }
-
-  private boolean isTransactionInternalSuspendNeeded(LocalRegion region) {
-    boolean resetTxState = this.realDeal == null
-        && (!region.canStoreDataLocally() || restoreSetOperationTransactionBehavior);
-    return resetTxState;
-  }
-
-  public Object getKeyForIterator(KeyInfo keyInfo, LocalRegion currRgn, boolean rememberReads,
-      boolean allowTombstones) {
-    boolean resetTxState = isTransactionInternalSuspendNeeded(currRgn);
-    TXStateProxy txp = null;
-    if (resetTxState) {
-      txp = getTxMgr().pauseTransaction();
-    }
-    try {
-      if (resetTxState) {
-        return currRgn.getSharedDataView().getKeyForIterator(keyInfo, currRgn, rememberReads,
-            allowTombstones);
-      }
-      return getRealDeal(keyInfo, currRgn).getKeyForIterator(keyInfo, currRgn, rememberReads,
-          allowTombstones);
-    } finally {
-      if (resetTxState) {
-        getTxMgr().unpauseTransaction(txp);
-      }
-    }
-  }
-
-  public Object getValueInVM(KeyInfo keyInfo, LocalRegion localRegion, boolean rememberRead) {
-    this.operationCount++;
-    return getRealDeal(keyInfo, localRegion).getValueInVM(keyInfo, localRegion, rememberRead);
-  }
-
-  public boolean isDeferredStats() {
-    assertBootstrapped();
-    return getRealDeal(null, null).isDeferredStats();
-  }
-
-  public boolean putEntry(EntryEventImpl event, boolean ifNew, boolean ifOld,
-      Object expectedOldValue, boolean requireOldValue, long lastModified,
-      boolean overwriteDestroyed) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(event.getKeyInfo(), event.getLocalRegion()).putEntry(event,
-          ifNew, ifOld, expectedOldValue, requireOldValue, lastModified, overwriteDestroyed);
-      trackBucketForTx(event.getKeyInfo());
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public boolean isInProgressAndSameAs(TXStateInterface otherState) {
-    return isInProgress() && otherState == this;
-  }
-
-  public void setLocalTXState(TXStateInterface state) {
-    this.realDeal = state;
-  }
-
-  public Object getSerializedValue(LocalRegion localRegion, KeyInfo key, boolean doNotLockEntry,
-      ClientProxyMembershipID requestingClient, EntryEventImpl clientEvent,
-      boolean returnTombstones) throws DataLocationException {
-    this.operationCount++;
-    return getRealDeal(key, localRegion).getSerializedValue(localRegion, key, doNotLockEntry,
-        requestingClient, clientEvent, returnTombstones);
-  }
-
-  public boolean putEntryOnRemote(EntryEventImpl event, boolean ifNew, boolean ifOld,
-      Object expectedOldValue, boolean requireOldValue, long lastModified,
-      boolean overwriteDestroyed) throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
-    assert (tx instanceof TXState) : tx.getClass().getSimpleName();
-    return tx.putEntryOnRemote(event, ifNew, ifOld, expectedOldValue, requireOldValue, lastModified,
-        overwriteDestroyed);
-  }
-
-  public boolean isFireCallbacks() {
-    return getRealDeal(null, null).isFireCallbacks();
-  }
-
-  public void destroyOnRemote(EntryEventImpl event, boolean cacheWrite, Object expectedOldValue)
-      throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
-    assert (tx instanceof TXState);
-    tx.destroyOnRemote(event, cacheWrite, expectedOldValue);
-  }
-
-  public void invalidateOnRemote(EntryEventImpl event, boolean invokeCallbacks,
-      boolean forceNewEntry) throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
-    assert (tx instanceof TXState);
-    tx.invalidateOnRemote(event, invokeCallbacks, forceNewEntry);
-  }
-
-  public void checkSupportsRegionDestroy() throws UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.TXState_REGION_DESTROY_NOT_SUPPORTED_IN_A_TRANSACTION.toLocalizedString());
-  }
-
-  public void checkSupportsRegionInvalidate() throws UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.TXState_REGION_INVALIDATE_NOT_SUPPORTED_IN_A_TRANSACTION
-            .toLocalizedString());
-  }
-
-  @Override
-  public void checkSupportsRegionClear() throws UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.TXState_REGION_CLEAR_NOT_SUPPORTED_IN_A_TRANSACTION.toLocalizedString());
-  }
-
-  public Set getBucketKeys(LocalRegion localRegion, int bucketId, boolean allowTombstones) {
-    boolean resetTxState = isTransactionInternalSuspendNeeded(localRegion);
-    TXStateProxy txp = null;
-    if (resetTxState) {
-      txp = getTxMgr().pauseTransaction();
-    }
-    try {
-      if (resetTxState) {
-        return localRegion.getSharedDataView().getBucketKeys(localRegion, bucketId, false);
-      }
-      return getRealDeal(null, localRegion).getBucketKeys(localRegion, bucketId, false);
-    } finally {
-      if (resetTxState) {
-        getTxMgr().unpauseTransaction(txp);
-      }
-    }
-  }
-
-  public Entry getEntryOnRemote(KeyInfo keyInfo, LocalRegion localRegion, boolean allowTombstones)
-      throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(keyInfo, localRegion);
-    assert (tx instanceof TXState);
-    return tx.getEntryOnRemote(keyInfo, localRegion, allowTombstones);
-  }
-
-  public void forceLocalBootstrap() {
-    getRealDeal(null, null);
-  }
-
-  public DistributedMember getTarget() {
-    return this.target;
-  }
-
-  public void setTarget(DistributedMember target) {
-    assert this.target == null;
-    getRealDeal(target);
-  }
-
-  public Collection<?> getRegionKeysForIteration(LocalRegion currRegion) {
-    if (currRegion.isUsedForPartitionedRegionBucket()) {
-      return currRegion.getRegionKeysForIteration();
-    } else {
-      boolean resetTxState = isTransactionInternalSuspendNeeded(currRegion);
-      TXStateProxy txp = null;
-      if (resetTxState) {
-        txp = getTxMgr().pauseTransaction();
-      }
-      try {
-        if (resetTxState) {
-          return currRegion.getSharedDataView().getRegionKeysForIteration(currRegion);
+        if (obj instanceof DelegatingCallableStatement) {
+            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
+            return delegate.equals(s.getInnermostDelegate());
         }
-        return getRealDeal(null, currRegion).getRegionKeysForIteration(currRegion);
-      } finally {
-        if (resetTxState) {
-          getTxMgr().unpauseTransaction(txp);
+        else {
+            return delegate.equals(obj);
         }
-      }
     }
-  }
 
-  public boolean isCommitOnBehalfOfRemoteStub() {
-    return this.commitRequestedByOwner;
-  }
-
-  public boolean setCommitOnBehalfOfRemoteStub(boolean requestedByOwner) {
-    return this.commitRequestedByOwner = requestedByOwner;
-  }
-
-  public boolean isRealDealLocal() {
-    if (this.realDeal != null) {
-      return this.realDeal.isRealDealLocal();
-    } else {
-      // no real deal
-      return false;
+    /** Sets my delegate. */
+    public void setDelegate(CallableStatement s) {
+        super.setDelegate(s);
+        _stmt = s;
     }
-  }
 
-  /** if there is local txstate, return it */
-  public TXState getLocalRealDeal() {
-    if (this.realDeal != null) {
-      if (this.realDeal.isRealDealLocal()) {
-        return (TXState) this.realDeal;
-      }
+    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
+
+    public boolean wasNull() throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public String getString(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int i, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public URL getURL(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void setURL(String parameterName, URL val) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setBoolean(String parameterName, boolean x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setByte(String parameterName, byte x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setShort(String parameterName, short x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setInt(String parameterName, int x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setLong(String parameterName, long x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setFloat(String parameterName, float x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDouble(String parameterName, double x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setString(String parameterName, String x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBytes(String parameterName, byte [] x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDate(String parameterName, Date x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
+    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
+
+    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public String getString(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public byte[] getBytes(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public URL getURL(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+/* JDBC_4_ANT_KEY_BEGIN */
+
+    public RowId getRowId(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
     }
-    return null;
-  }
 
-  public boolean hasRealDeal() {
-    return this.realDeal != null;
-  }
-
-  @Override
-  public String toString() {
-    StringBuilder builder = new StringBuilder();
-    builder.append("TXStateProxyImpl@").append(System.identityHashCode(this)).append(" txId:")
-        .append(this.txId).append(" realDeal:").append(this.realDeal).append(" isJTA:")
-        .append(isJTA);
-    return builder.toString();
-  }
-
-  public InternalDistributedMember getOriginatingMember() {
-    if (this.realDeal == null) {
-      return null;
-    } else {
-      return this.realDeal.getOriginatingMember();
+    public RowId getRowId(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
     }
-  }
 
-  public boolean isMemberIdForwardingRequired() {
-    if (this.realDeal == null) {
-      return false;
-    } else {
-      return this.realDeal.isMemberIdForwardingRequired();
+    public void setRowId(String parameterName, RowId value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setRowId(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-  }
 
-  public TXCommitMessage getCommitMessage() {
-    if (this.realDeal == null) {
-      return null;
-    } else {
-      return this.realDeal.getCommitMessage();
+    public void setNString(String parameterName, String value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNString(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-  }
 
-  public void postPutAll(DistributedPutAllOperation putallOp, VersionedObjectList successfulPuts,
-      LocalRegion region) {
-    if (putallOp.putAllData.length == 0) {
-      return;
+    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-    region.getCancelCriterion().checkCancelInProgress(null); // fix for bug #43651
-    Object key = null;
-    if (putallOp.putAllData[0] != null) {
-      key = putallOp.putAllData[0].key;
+
+    public void setNClob(String parameterName, NClob value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-    KeyInfo ki = new KeyInfo(key, null, null);
-    TXStateInterface tsi = getRealDeal(ki, region);
-    tsi.postPutAll(putallOp, successfulPuts, region);
-  }
 
-  @Override
-  public void postRemoveAll(DistributedRemoveAllOperation op, VersionedObjectList successfulOps,
-      LocalRegion region) {
-    if (op.removeAllData.length == 0) {
-      return;
+    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-    region.getCancelCriterion().checkCancelInProgress(null); // fix for bug #43651
-    Object key = null;
-    if (op.removeAllData[0] != null) {
-      key = op.removeAllData[0].key;
+
+    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-    KeyInfo ki = new KeyInfo(key, null, null);
-    TXStateInterface tsi = getRealDeal(ki, region);
-    tsi.postRemoveAll(op, successfulOps, region);
-  }
 
-  public boolean isJCATransaction() {
-    return this.isJCATransaction;
-  }
-
-
-  public void setJCATransaction() {
-    this.isJCATransaction = true;
-  }
-
-  public Entry accessEntry(KeyInfo keyInfo, LocalRegion region) {
-    try {
-      this.operationCount++;
-      Entry retVal = getRealDeal(keyInfo, region).accessEntry(keyInfo, region);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
+    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-  }
 
-  public void suspend() {
-    if (this.realDeal != null) {
-      getRealDeal(null, null).suspend();
+    public NClob getNClob(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
     }
-  }
 
-  public void resume() {
-    if (this.realDeal != null) {
-      getRealDeal(null, null).resume();
+    public NClob getNClob(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
     }
-  }
 
-  /** test hook - record a list of ops in the transaction */
-  public void recordTXOperation(ServerRegionDataAccess region, ServerRegionOperation op, Object key,
-      Object arguments[]) {
-    if (ClientTXStateStub.transactionRecordingEnabled()) {
-      getRealDeal(null, (LocalRegion) region.getRegion()).recordTXOperation(region, op, key,
-          arguments);
+    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
-  }
 
-  @Override
-  public int operationCount() {
-    return this.operationCount;
-  }
-
-  /**
-   * increments the operation count by 1
-   */
-  public void incOperationCount() {
-    this.operationCount++;
-  }
-
-  @Override
-  public void updateEntryVersion(EntryEventImpl event) throws EntryNotFoundException {
-    // Do nothing. Not applicable for transactions.
-  }
-
-  public void close() {
-    if (this.realDeal != null) {
-      this.realDeal.close();
+    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
     }
-  }
 
-  @Override
-  public boolean isTxState() {
-    return false;
-  }
-
-  @Override
-  public boolean isTxStateStub() {
-    return false;
-  }
-
-  @Override
-  public boolean isTxStateProxy() {
-    return true;
-  }
-
-  @Override
-  public boolean isDistTx() {
-    return false;
-  }
-
-  @Override
-  public boolean isCreatedOnDistTxCoordinator() {
-    return false;
-  }
-
-  @Override
-  public void updateProxyServer(InternalDistributedMember proxy) {
-    // only update in TXState if it has one
-    if (this.realDeal != null && this.realDeal.isRealDealLocal() && isOnBehalfOfClient()) {
-      ((TXState) this.realDeal).setProxyServer(proxy);
+    public SQLXML getSQLXML(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
     }
-  }
+
+    public String getNString(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setBlob(String parameterName, Blob blob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, blob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Clob clob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, clob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setNClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+/* JDBC_4_ANT_KEY_END */
 }

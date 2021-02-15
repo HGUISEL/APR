@@ -1,323 +1,363 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/*
+ * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//cli/src/java/org/apache/commons/cli/PosixParser.java,v 1.5 2002/08/04 23:04:52 jkeyes Exp $
+ * $Revision: 1.5 $
+ * $Date: 2002/08/04 23:04:52 $
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
  */
+package org.apache.commons.cli;
 
-package org.apache.hadoop.hive.ql.exec;
-
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.filecache.DistributedCache;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.ql.exec.HashTableSinkOperator.HashTableSinkObjectCtx;
-import org.apache.hadoop.hive.ql.exec.persistence.AbstractMapJoinKey;
-import org.apache.hadoop.hive.ql.exec.persistence.HashMapWrapper;
-import org.apache.hadoop.hive.ql.exec.persistence.MapJoinObjectValue;
-import org.apache.hadoop.hive.ql.exec.persistence.MapJoinRowContainer;
-import org.apache.hadoop.hive.ql.metadata.HiveException;
-import org.apache.hadoop.hive.ql.plan.MapJoinDesc;
-import org.apache.hadoop.hive.ql.plan.TableDesc;
-import org.apache.hadoop.hive.ql.plan.api.OperatorType;
-import org.apache.hadoop.hive.serde2.SerDe;
-import org.apache.hadoop.hive.serde2.SerDeException;
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils;
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils.ObjectInspectorCopyOption;
-import org.apache.hadoop.util.ReflectionUtils;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.ListIterator;
+import java.util.Iterator;
 
 /**
- * Map side Join operator implementation.
+ * PosixParser parses the command line arguments using the Posix style.
+ * For example, -buildfile can only be interpreted as the option
+ * 'b' with value 'uildfile' or it could be interpreted as the options
+ * 'b','u','i','l','d','f','i','l','e'.
+ *
+ * @author John Keyes (jbjk at mac.com)
  */
-public class MapJoinOperator extends AbstractMapJoinOperator<MapJoinDesc> implements Serializable {
-  private static final long serialVersionUID = 1L;
-  private static final Log LOG = LogFactory.getLog(MapJoinOperator.class.getName());
+public class PosixParser implements CommandLineParser {
 
+    /** current options instance */
+    private Options options;
 
-  protected transient Map<Byte, HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>> mapJoinTables;
+    /** convience member for the command line */
+    private CommandLine cmd;
 
-  private static final transient String[] FATAL_ERR_MSG = {
-      null, // counter value 0 means no error
-      "Mapside join size exceeds hive.mapjoin.maxsize. "
-          + "Please increase that or remove the mapjoin hint."};
+    /** required options subset of options */
+    private Collection requiredOptions;
 
-  protected transient Map<Byte, MapJoinRowContainer<ArrayList<Object>>> rowContainerMap;
-  transient int metadataKeyTag;
-  transient int[] metadataValueTag;
-  transient int maxMapJoinSize;
-  private int bigTableAlias;
-
-  public MapJoinOperator() {
-  }
-
-  public MapJoinOperator(AbstractMapJoinOperator<? extends MapJoinDesc> mjop) {
-    super(mjop);
-  }
-
-  @Override
-  protected void initializeOp(Configuration hconf) throws HiveException {
-
-    super.initializeOp(hconf);
-
-    maxMapJoinSize = HiveConf.getIntVar(hconf, HiveConf.ConfVars.HIVEMAXMAPJOINSIZE);
-
-    metadataValueTag = new int[numAliases];
-    for (int pos = 0; pos < numAliases; pos++) {
-      metadataValueTag[pos] = -1;
+    /**
+     * Parse the arguments according to the specified options.
+     *
+     * @param options the specified Options
+     * @param arguments the command line arguments
+     * @return the list of atomic option and value tokens
+     * @throws ParseException if there are any problems encountered
+     * while parsing the command line tokens.
+     */
+    public CommandLine parse( Options options, String[] arguments ) 
+    throws ParseException
+    {
+        return parse( options, arguments, false );
     }
 
-    metadataKeyTag = -1;
-    bigTableAlias = order[posBigTable];
+    /**
+     * Parse the arguments according to the specified options.
+     *
+     * @param opts the specified Options
+     * @param arguments the command line arguments
+     * @param stopAtNonOption specifies whether to continue parsing the
+     * arguments if a non option is encountered.
+     * @return the CommandLine
+     * @throws ParseException if there are any problems encountered
+     * while parsing the command line tokens.
+     */
+    public CommandLine parse( Options opts, String[] arguments, boolean stopAtNonOption ) 
+    throws ParseException
+    {
+        // set the member instances
+        options = opts;
+        cmd = new CommandLine();
+        requiredOptions = options.getRequiredOptions();
 
-    mapJoinTables = new HashMap<Byte, HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>>();
-    rowContainerMap = new HashMap<Byte, MapJoinRowContainer<ArrayList<Object>>>();
-    // initialize the hash tables for other tables
-    for (int pos = 0; pos < numAliases; pos++) {
-      if (pos == posBigTable) {
-        continue;
-      }
+        // an iterator for the command line tokens
+        ListIterator iter = Arrays.asList( arguments ).listIterator();
+        String token = null;
+        
+        // flag to indicate whether the remainder of the tokens should
+        // be added to the other arguments list
+        boolean eatTheRest = false;
+        
+        // process each command line token
+        while ( iter.hasNext() ) {
 
-      HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue> hashTable = new HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>();
-
-      mapJoinTables.put(Byte.valueOf((byte) pos), hashTable);
-      MapJoinRowContainer<ArrayList<Object>> rowContainer = new MapJoinRowContainer<ArrayList<Object>>();
-      rowContainerMap.put(Byte.valueOf((byte) pos), rowContainer);
-    }
-
-
-  }
-
-  @Override
-  protected void fatalErrorMessage(StringBuilder errMsg, long counterCode) {
-    errMsg.append("Operator " + getOperatorId() + " (id=" + id + "): "
-        + FATAL_ERR_MSG[(int) counterCode]);
-  }
-
-  public void generateMapMetaData() throws HiveException, SerDeException {
-    // generate the meta data for key
-    // index for key is -1
-    TableDesc keyTableDesc = conf.getKeyTblDesc();
-    SerDe keySerializer = (SerDe) ReflectionUtils.newInstance(keyTableDesc.getDeserializerClass(),
-        null);
-    keySerializer.initialize(null, keyTableDesc.getProperties());
-    MapJoinMetaData.put(Integer.valueOf(metadataKeyTag), new HashTableSinkObjectCtx(
-        ObjectInspectorUtils.getStandardObjectInspector(keySerializer.getObjectInspector(),
-            ObjectInspectorCopyOption.WRITABLE), keySerializer, keyTableDesc, hconf));
-
-    // index for values is just alias
-    for (int tag = 0; tag < order.length; tag++) {
-      int alias = (int) order[tag];
-
-      if (alias == this.bigTableAlias) {
-        continue;
-      }
-
-
-      TableDesc valueTableDesc = conf.getValueTblDescs().get(tag);
-      SerDe valueSerDe = (SerDe) ReflectionUtils.newInstance(valueTableDesc.getDeserializerClass(),
-          null);
-      valueSerDe.initialize(null, valueTableDesc.getProperties());
-
-      MapJoinMetaData.put(Integer.valueOf(alias), new HashTableSinkObjectCtx(ObjectInspectorUtils
-          .getStandardObjectInspector(valueSerDe.getObjectInspector(),
-              ObjectInspectorCopyOption.WRITABLE), valueSerDe, valueTableDesc, hconf));
-    }
-  }
-
-  private void loadHashTable() throws HiveException {
-    boolean localMode = HiveConf.getVar(hconf, HiveConf.ConfVars.HADOOPJT).equals("local");
-    String tmpURI = null;
-    HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue> hashtable;
-    Byte pos;
-
-    String currentInputFile = HiveConf.getVar(hconf, HiveConf.ConfVars.HADOOPMAPFILENAME);
-    LOG.info("******* Load from HashTable File: input : " + currentInputFile);
-
-    String currentFileName;
-
-    if (this.getExecContext().getLocalWork().getInputFileChangeSensitive()) {
-      currentFileName = this.getFileName(currentInputFile);
-    } else {
-      currentFileName = "-";
-    }
-
-    try {
-      if (localMode) {
-        LOG.info("******* Load from tmp file uri ***");
-        tmpURI = this.getExecContext().getLocalWork().getTmpFileURI();
-        for (Map.Entry<Byte, HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>> entry : mapJoinTables
-            .entrySet()) {
-          pos = entry.getKey();
-          hashtable = entry.getValue();
-          String filePath = Utilities.generatePath(tmpURI, pos, currentFileName);
-          Path path = new Path(filePath);
-          LOG.info("\tLoad back 1 hashtable file from tmp file uri:" + path.toString());
-
-          hashtable.initilizePersistentHash(path.toUri().getPath());
-        }
-      } else {
-
-        Path[] localFiles = DistributedCache.getLocalCacheFiles(this.hconf);
-
-        for (Map.Entry<Byte, HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>> entry : mapJoinTables
-            .entrySet()) {
-          pos = entry.getKey();
-          hashtable = entry.getValue();
-          String suffix = Utilities.generateFileName(pos, currentFileName);
-          LOG.info("Looking for hashtable file with suffix: " + suffix);
-
-          boolean found = false;
-          for (int i = 0; i < localFiles.length; i++) {
-            Path path = localFiles[i];
-
-            if (path.toString().endsWith(suffix)) {
-              LOG.info("Matching suffix with cached file:" + path.toString());
-              LOG.info("\tInitializing the hashtable by cached file:" + path.toString());
-              hashtable.initilizePersistentHash(path.toString());
-              found = true;
-              LOG.info("\tLoad back 1 hashtable file from distributed cache:" + path.toString());
-              break;
+            // get the next command line token
+            token = (String) iter.next();
+            
+            // Look for -- to indicate end-of-options, and
+            // just stuff it, along with everything past it
+            // into the returned list.
+            if ( token.equals("--") ) {
+                eatTheRest = true;
             }
-          }
-          if (!found) {
-            LOG.error("Load nothing from Distributed Cache");
-            throw new HiveException();
-          }
-        }
-
-      }
-    } catch (Exception e) {
-      e.printStackTrace();
-      LOG.error("Load Hash Table error");
-
-      throw new HiveException();
-    }
-
-
-  }
-
-  @Override
-  public void processOp(Object row, int tag) throws HiveException {
-
-    try {
-      if (firstRow) {
-        // generate the map metadata
-        generateMapMetaData();
-        firstRow = false;
-      }
-      if (this.getExecContext().inputFileChanged()) {
-        loadHashTable();
-      }
-
-      // get alias
-      alias = order[tag];
-      // alias = (byte)tag;
-
-      if ((lastAlias == null) || (!lastAlias.equals(alias))) {
-        nextSz = joinEmitInterval;
-      }
-
-      // compute keys and values as StandardObjects
-      AbstractMapJoinKey key = JoinUtil.computeMapJoinKeys(row, joinKeys.get(alias),
-          joinKeysObjectInspectors.get(alias));
-      ArrayList<Object> value = JoinUtil.computeValues(row, joinValues.get(alias),
-          joinValuesObjectInspectors.get(alias), joinFilters.get(alias), joinFilterObjectInspectors
-              .get(alias), noOuterJoin);
-
-
-      // Add the value to the ArrayList
-      storage.get((byte) tag).add(value);
-
-      for (Byte pos : order) {
-        if (pos.intValue() != tag) {
-
-          MapJoinObjectValue o = mapJoinTables.get(pos).get(key);
-          MapJoinRowContainer<ArrayList<Object>> rowContainer = rowContainerMap.get(pos);
-
-          // there is no join-value or join-key has all null elements
-          if (o == null || key.hasAnyNulls()) {
-            if (noOuterJoin) {
-              storage.put(pos, emptyList);
-            } else {
-              storage.put(pos, dummyObjVectors[pos.intValue()]);
+            else if ( token.startsWith("--") ) {
+                // process the long-option
+                processOption( token, iter );
             }
-          } else {
-            rowContainer.reset(o.getObj());
-            storage.put(pos, rowContainer);
-          }
+            else if ( token.startsWith("-") ) {
+                // it might be a short arg needing some bursting
+                if ( token.length() == 1) {
+                    // not an option, so just drop it on the argument list
+                    if ( stopAtNonOption ) {
+                        eatTheRest = true;
+                    }
+                    else {
+                        cmd.addArg( token );
+                    }
+                }
+                else if ( token.length() == 2 ) {
+                    processOption( token, iter );
+                }
+                else {
+                    // Needs bursting.  Figure out if we have multiple 
+                    // options, or maybe an option plus an arg, or some 
+                    // combination thereof.
+                    
+                    // iterate over each character in the token
+                    for ( int i = 1 ; i < token.length() ; ++i ) {
+
+                        // retrieve the associated option
+                        Option opt = (Option) options.getOption( 
+                            String.valueOf( token.charAt(i) ) );
+                        
+                        // if there is an associated option
+                        if ( opt != null ) {
+
+                            // if the option requires an argument value
+                            if ( opt.hasArg() ) {
+                                // consider the rest of the token
+                                // to be the argument value
+
+                                // if there is no argument value
+                                if( token.substring(i+1).length() == 0 ) {
+                                    throw new MissingArgumentException( "Missing argument value for " + opt.getOpt() );
+                                }
+
+                                String var = token.substring(i+1);
+                                char sep = opt.getValueSeparator();
+
+                                if( sep > 0 ) {
+                                    int findex;
+                                    while( ( findex = var.indexOf( sep ) ) != -1 ) {
+                                        String val = var.substring( 0, findex );
+                                        var = var.substring( findex + 1);
+                                        if( !opt.addValue( val ) ) {
+                                            cmd.addArg( val );
+                                        }
+                                    }
+                                    if( !opt.addValue( var ) ) {
+                                        cmd.addArg( var );
+                                    };
+                                }
+                                else {
+                                    // add the argument value
+                                    opt.addValue( token.substring(i+1) );
+                                }
+
+                                // set the option 
+                                cmd.setOpt( opt );
+
+                                // don't process any more characters
+                                break;
+                            }
+
+                            // if the option does not require an argument
+                            cmd.setOpt( opt );
+                        }
+                        // this is an unrecognized option
+                        else {
+                            throw new UnrecognizedOptionException( String.valueOf( token.charAt(i) ) );
+                        }
+                    }
+                }
+            }
+            else {
+                // It's just a normal non-option arg, so dump it into the 
+                // list of returned values.
+                cmd.addArg( token );
+                
+                if ( stopAtNonOption ) {
+                    eatTheRest = true;
+                }
+            }
+            
+            // add all unprocessed tokens to the arg list
+            if ( eatTheRest ) {
+                while ( iter.hasNext() ) {
+                    cmd.addArg( (String)iter.next() );
+                }
+            }
         }
-      }
+        
+        // see if all required options have been processed
+        checkRequiredOptions( );
 
-      // generate the output records
-      checkAndGenObject();
+        // return the CommandLine instance
+        return cmd;
+    }
 
-      // done with the row
-      storage.get((byte) tag).clear();
+    /**
+     * Process the option represented by <code>arg</code>.
+     * 
+     * @param arg the string representation of an option
+     * @param iter the command line token iterator
+     */
+    private void processOption( String arg, ListIterator iter ) 
+    throws ParseException
+    {
+        // get the option represented by arg
+        Option opt = (Option) options.getOption( arg );
 
-      for (Byte pos : order) {
-        if (pos.intValue() != tag) {
-          storage.put(pos, null);
+        // if there is no option throw an UnrecognisedOptionException
+        if( opt == null ) {
+            throw new UnrecognizedOptionException("Unrecognized option: " + arg);
         }
-      }
 
-    } catch (SerDeException e) {
-      e.printStackTrace();
-      throw new HiveException(e);
+        // if the option is a required option remove the option from
+        // the requiredOptions list
+        if ( opt.isRequired() ) {
+            requiredOptions.remove( opt );
+        }
+
+        // if the option is in an OptionGroup make that option the selected
+        // option of the group
+        if ( options.getOptionGroup( opt ) != null ) {
+            ( (OptionGroup)( options.getOptionGroup( opt ) ) ).setSelected( opt );
+        }
+
+        // if the option takes an argument value
+        if ( opt.hasArg() ) {
+            processArgs( opt, iter );
+        }
+
+        // set the option on the command line
+        cmd.setOpt( opt );
     }
-  }
 
-  private String getFileName(String path) {
-    if (path == null || path.length() == 0) {
-      return null;
+    /**
+     * It the option can accept multiple argument values then
+     * keep adding values until the next option token is encountered.
+     *
+     * @param opt the specified option
+     * @param iter the iterator over the command line tokens
+     */
+    public void processArgs( Option opt, ListIterator iter ) 
+    throws ParseException 
+    {
+        if( !iter.hasNext() ) {
+            throw new MissingArgumentException( "no argument for:" + opt.getOpt() );
+        }
+        // loop until an option is found
+        while( iter.hasNext() ) {
+            String var = (String)iter.next();
+
+            // its an option
+            if( !var.equals( "-" ) && var.startsWith( "-" ) ) {
+                // set the iterator pointer back a position
+                iter.previous();
+                break;
+            }
+            // its a value
+            else {
+                char sep = opt.getValueSeparator();
+                
+                if( sep > 0 ) {
+                    int findex;
+                    while( ( findex = var.indexOf( sep ) ) != -1 ) {
+                        String val = var.substring( 0, findex );
+                        var = var.substring( findex + 1);
+                        if( !opt.addValue( val ) ) {
+                            iter.previous();
+                            return;
+                        }
+                    }
+                    if( !opt.addValue( var ) ) {
+                        iter.previous();
+                        return;
+                    };
+                }
+                else if( !opt.addValue( var ) ) {
+                    iter.previous();
+                    return;
+                }
+            }
+        }
     }
 
-    int last_separator = path.lastIndexOf(Path.SEPARATOR) + 1;
-    String fileName = path.substring(last_separator);
-    return fileName;
+    /**
+     * Ensures that all required options are present.
+     *
+     * @throws ParseException if all of the required options
+     * are not present.
+     */
+    private void checkRequiredOptions( ) 
+    throws ParseException {
 
-  }
+        // if there are required options that have not been
+        // processsed
+        if( requiredOptions.size() > 0 ) {
+            Iterator iter = requiredOptions.iterator();
+            StringBuffer buff = new StringBuffer();
 
-  @Override
-  public void closeOp(boolean abort) throws HiveException {
+            // loop through the required options
+            while( iter.hasNext() ) {
+                Option missing = (Option)iter.next();
+                buff.append( "-" );
+                buff.append( missing.getOpt() );
+                buff.append( " " );
+                buff.append( missing.getDescription() );
+            }
 
-    if (mapJoinTables != null) {
-      for (HashMapWrapper hashTable : mapJoinTables.values()) {
-        hashTable.close();
-      }
+            // throw the MissingOptionException
+            throw new MissingOptionException( buff.toString() );
+        }
     }
-    super.closeOp(abort);
-  }
-
-  /**
-   * Implements the getName function for the Node Interface.
-   *
-   * @return the name of the operator
-   */
-  @Override
-  public String getName() {
-    return "MAPJOIN";
-  }
-
-  @Override
-  public int getType() {
-    return OperatorType.MAPJOIN;
-  }
 }

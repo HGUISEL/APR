@@ -1,1 +1,1 @@
-srcmainjavaorgapachecommonsmathanalysissolversBaseSecantSolver#187:-1.0000:0
+org.apache.commons.math.analysis.solvers.BaseSecantSolver#187:-1.0000:0

@@ -1,294 +1,225 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
- * agreements. See the NOTICE file distributed with this work for additional information regarding
- * copyright ownership. The ASF licenses this file to You under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at
+package org.jsoup.helper;
+
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.parser.Parser;
+
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.IllegalCharsetNameException;
+import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.Locale;
+
+/**
+ * Internal static utilities for handling data.
  *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
  */
-package org.apache.geode.internal.cache.versions;
+public final class DataUtil {
+    private static final Pattern charsetPattern = Pattern.compile("(?i)\\bcharset=\\s*(?:\"|')?([^\\s,;\"']*)");
+    static final String defaultCharset = "UTF-8"; // used if not found in header or meta charset
+    private static final int bufferSize = 0x20000; // ~130K.
+    private static final int UNICODE_BOM = 0xFEFF;
+    private static final char[] mimeBoundaryChars =
+            "-_1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
+    static final int boundaryLength = 32;
 
-import java.io.DataOutput;
-import java.io.IOException;
-import java.util.BitSet;
-import java.util.NoSuchElementException;
+    private DataUtil() {}
 
-import org.apache.geode.internal.InternalDataSerializer;
-
-public class RVVExceptionB extends RVVException {
-
-  /**
-   * received represents individual received versions that fall within this exception. position 0
-   * corresponds to version receivedBaseVersion.
-   */
-  BitSet received;
-  private long receivedBaseVersion;
-
-  public RVVExceptionB(long previousVersion, long nextVersion) {
-    super(previousVersion, nextVersion);
-  }
-
-
-  /**
-   * add a received version
-   */
-  public void add(long receivedVersion) {
-    // String me = this.toString();
-    // long oldv = this.nextVersion;
-    if (receivedVersion == this.previousVersion + 1) {
-      this.previousVersion = receivedVersion;
-      if (this.received != null) {
-        addReceived(receivedVersion);
-        consumeReceivedVersions();
-      }
-    } else if (receivedVersion == this.nextVersion - 1) {
-      this.nextVersion = receivedVersion;
-      if (this.received != null) {
-        addReceived(receivedVersion);
-        consumeReceivedVersions();
-      }
-    } else if (this.previousVersion < receivedVersion && receivedVersion < this.nextVersion) {
-      addReceived(receivedVersion);
-    }
-    // if (this.nextVersion == 29 && oldv != 29) {
-    // System.out.println("before=" + me + "\nafter=" + this + "\nadded "+receivedVersion);
-    // }
-  }
-
-
-  protected void addReceived(long rv) {
-    if (this.received == null) {
-      this.receivedBaseVersion = this.previousVersion + 1;
-      if (this.nextVersion > this.previousVersion) { // next version not known during
-                                                     // deserialization
-        long size = this.nextVersion - this.previousVersion;
-        this.received = new BitSet((int) size);
-      } else {
-        this.received = new BitSet();
-      }
-    }
-    // Assert.assertTrue(this.receivedBaseVersion > 0, "should not have a base version of zero. rv="
-    // + rv + " ex=" + this);
-    // Assert.assertTrue(rv >= this.receivedBaseVersion,
-    // "attempt to record a version not in this exception. version=" + rv + " exception=" + this);
-    this.received.set((int) (rv - this.receivedBaseVersion));
-  }
-
-  /**
-   * checks to see if any of the received versions can be merged into the start/end version numbers
-   */
-  private void consumeReceivedVersions() {
-    int idx = (int) (this.previousVersion - this.receivedBaseVersion + 1);
-    while (this.previousVersion < this.nextVersion && this.received.get(idx)) {
-      idx++;
-      this.previousVersion++;
-    }
-    if (this.previousVersion < this.nextVersion) {
-      idx = (int) (this.nextVersion - this.receivedBaseVersion) - 1;
-      while (this.previousVersion < this.nextVersion && this.received.get(idx)) {
-        idx--;
-        this.nextVersion--;
-      }
-    }
-  }
-
-
-  /*
-   * (non-Javadoc)
-   *
-   * @see java.lang.Comparable#compareTo(java.lang.Object)
-   */
-  public int compareTo(RVVException o) {
-    long thisVal = this.previousVersion;
-    long anotherVal = o.previousVersion;
-    return (thisVal < anotherVal ? -1 : (thisVal == anotherVal ? 0 : 1));
-  }
-
-  @Override
-  public RVVExceptionB clone() {
-    RVVExceptionB clone = new RVVExceptionB(previousVersion, nextVersion);
-    if (this.received != null) {
-      clone.received = (BitSet) this.received.clone();
-      clone.receivedBaseVersion = this.receivedBaseVersion;
-    }
-    return clone;
-  }
-
-  public void toData(DataOutput out) throws IOException {
-    InternalDataSerializer.writeUnsignedVL(this.previousVersion, out);
-    writeReceived(out);
-  }
-
-  protected void writeReceived(DataOutput out) throws IOException {
-    int size = 0;
-    long[] deltas = null;
-    long last = this.previousVersion;
-
-    // TODO - it would be better just to serialize the longs[] in the BitSet
-    // as is, rather than go through this delta encoding.
-    for (ReceivedVersionsIterator it = receivedVersionsIterator(); it.hasNext();) {
-      Long version = it.next();
-      long delta = version.longValue() - last;
-      if (deltas == null) {
-        deltas = new long[this.received.length()];
-      }
-      deltas[size++] = delta;
-      last = version.longValue();
-    }
-    InternalDataSerializer.writeUnsignedVL(size, out);
-
-    for (int i = 0; i < size; i++) {
-      InternalDataSerializer.writeUnsignedVL(deltas[i], out);
+    /**
+     * Loads a file to a Document.
+     * @param in file to load
+     * @param charsetName character set of input
+     * @param baseUri base URI of document, to resolve relative links against
+     * @return Document
+     * @throws IOException on IO error
+     */
+    public static Document load(File in, String charsetName, String baseUri) throws IOException {
+        ByteBuffer byteData = readFileToByteBuffer(in);
+        return parseByteData(byteData, charsetName, baseUri, Parser.htmlParser());
     }
 
-    // Write each version in the exception as a delta from the previous version
-    // this will likely be smaller than the absolute value, so it will
-    // be more likely to fit into a byte or a short.
-    long delta = this.nextVersion - last;
-    InternalDataSerializer.writeUnsignedVL(delta, out);
-  }
+    /**
+     * Parses a Document from an input steam.
+     * @param in input stream to parse. You will need to close it.
+     * @param charsetName character set of input
+     * @param baseUri base URI of document, to resolve relative links against
+     * @return Document
+     * @throws IOException on IO error
+     */
+    public static Document load(InputStream in, String charsetName, String baseUri) throws IOException {
+        ByteBuffer byteData = readToByteBuffer(in);
+        return parseByteData(byteData, charsetName, baseUri, Parser.htmlParser());
+    }
 
-  @Override
-  public String toString() {
-    if (this.received != null) {
-      StringBuilder sb = new StringBuilder();
-      sb.append("e(n=").append(this.nextVersion).append("; p=").append(this.previousVersion);
-      if (this.receivedBaseVersion != this.previousVersion + 1) {
-        sb.append("; b=").append(this.receivedBaseVersion);
-      }
-      int lastBit = (int) (this.nextVersion - this.receivedBaseVersion);
-      sb.append("; rb=[");
-      int i = this.received.nextSetBit((int) (this.previousVersion - this.receivedBaseVersion + 1));
-      if (i >= 0) {
-        sb.append(i);
-        for (i = this.received.nextSetBit(i + 1); (0 < i) && (i < lastBit); i =
-            this.received.nextSetBit(i + 1)) {
-          sb.append(',').append(i);
+    /**
+     * Parses a Document from an input steam, using the provided Parser.
+     * @param in input stream to parse. You will need to close it.
+     * @param charsetName character set of input
+     * @param baseUri base URI of document, to resolve relative links against
+     * @param parser alternate {@link Parser#xmlParser() parser} to use.
+     * @return Document
+     * @throws IOException on IO error
+     */
+    public static Document load(InputStream in, String charsetName, String baseUri, Parser parser) throws IOException {
+        ByteBuffer byteData = readToByteBuffer(in);
+        return parseByteData(byteData, charsetName, baseUri, parser);
+    }
+
+    /**
+     * Writes the input stream to the output stream. Doesn't close them.
+     * @param in input stream to read from
+     * @param out output stream to write to
+     * @throws IOException on IO error
+     */
+    static void crossStreams(final InputStream in, final OutputStream out) throws IOException {
+        final byte[] buffer = new byte[bufferSize];
+        int len;
+        while ((len = in.read(buffer)) != -1) {
+            out.write(buffer, 0, len);
         }
-      }
-      sb.append(']');
-      return sb.toString();
-    }
-    return "e(n=" + this.nextVersion + " p=" + this.previousVersion + "; rb=[])";
-  }
-
-  // @Override
-  // public int hashCode() {
-  // final int prime = 31;
-  // int result = 1;
-  // result = prime * result + (int) (nextVersion ^ (nextVersion >>> 32));
-  // result = prime * result
-  // + (int) (previousVersion ^ (previousVersion >>> 32));
-  // result = prime * result + ((this.received == null) ? 0 : this.received.hashCode());
-  // return result;
-  // }
-
-  /**
-   * For test purposes only. This isn't quite accurate, because I think two RVVs that have
-   * effectively same exceptions may represent the exceptions differently. This method is testing
-   * for an exact match of exception format.
-   */
-  @Override
-  public boolean sameAs(RVVException ex) {
-    if (ex instanceof RVVExceptionT) {
-      return ((RVVExceptionT) ex).sameAs(this);
-    }
-    if (!super.sameAs(ex)) {
-      return false;
-    }
-    RVVExceptionB other = (RVVExceptionB) ex;
-    if (this.received == null) {
-      if (other.received != null && !other.received.isEmpty()) {
-        return false;
-      }
-    } else if (!this.received.equals(other.received))
-      return false;
-    return true;
-  }
-
-  /** has the given version been recorded as having been received? */
-  public boolean contains(long version) {
-    if (version <= this.previousVersion) {
-      return false;
-    }
-    return (this.received != null && this.received.get((int) (version - this.receivedBaseVersion)));
-  }
-
-  /** return false if any revisions have been recorded in the range of this exception */
-  public boolean isEmpty() {
-    return (this.received == null) || (this.received.isEmpty());
-  }
-
-  public ReceivedVersionsIterator receivedVersionsIterator() {
-    ReceivedVersionsIteratorB result = new ReceivedVersionsIteratorB();
-    result.initForForwardIteration();
-    return result;
-  }
-
-  @Override
-  public long getHighestReceivedVersion() {
-    if (isEmpty()) {
-      return this.previousVersion;
-    } else {
-      // Note, the "length" of the bitset is the highest set bit + 1,
-      // see the javadocs. That's why this works to return the highest
-      // received version
-      return receivedBaseVersion + received.length() - 1;
     }
 
-  }
+    // reads bytes first into a buffer, then decodes with the appropriate charset. done this way to support
+    // switching the chartset midstream when a meta http-equiv tag defines the charset.
+    // todo - this is getting gnarly. needs a rewrite.
+    static Document parseByteData(ByteBuffer byteData, String charsetName, String baseUri, Parser parser) {
+        String docData;
+        Document doc = null;
+        if (charsetName == null) { // determine from meta. safe parse as UTF-8
+            // look for <meta http-equiv="Content-Type" content="text/html;charset=gb2312"> or HTML5 <meta charset="gb2312">
+            docData = Charset.forName(defaultCharset).decode(byteData).toString();
+            doc = parser.parseInput(docData, baseUri);
+            Element meta = doc.select("meta[http-equiv=content-type], meta[charset]").first();
+            if (meta != null) { // if not found, will keep utf-8 as best attempt
+                String foundCharset = null;
+                if (meta.hasAttr("http-equiv")) {
+                    foundCharset = getCharsetFromContentType(meta.attr("content"));
+                }
+                if (foundCharset == null && meta.hasAttr("charset")) {
+                    try {
+                        if (Charset.isSupported(meta.attr("charset"))) {
+                            foundCharset = meta.attr("charset");
+                        }
+                    } catch (IllegalCharsetNameException e) {
+                        foundCharset = null;
+                    }
+                }
 
-
-
-  /** it's a shame that BitSet has no iterator */
-  protected class ReceivedVersionsIteratorB extends ReceivedVersionsIterator {
-    int index;
-    int nextIndex;
-
-    void initForForwardIteration() {
-      this.index = -1;
-      if (received == null) {
-        this.nextIndex = -1;
-      } else {
-        this.nextIndex = received.nextSetBit((int) (previousVersion - receivedBaseVersion + 1));
-        if (this.nextIndex + receivedBaseVersion >= nextVersion) {
-          this.nextIndex = -1;
+                if (foundCharset != null && foundCharset.length() != 0 && !foundCharset.equals(defaultCharset)) { // need to re-decode
+                    foundCharset = foundCharset.trim().replaceAll("[\"']", "");
+                    charsetName = foundCharset;
+                    byteData.rewind();
+                    docData = Charset.forName(foundCharset).decode(byteData).toString();
+                    doc = null;
+                }
+            }
+        } else { // specified by content type header (or by user on file load)
+            Validate.notEmpty(charsetName, "Must set charset arg to character set of file to parse. Set to null to attempt to detect from HTML");
+            docData = Charset.forName(charsetName).decode(byteData).toString();
         }
-      }
+        // UTF-8 BOM indicator. takes precedence over everything else. rarely used. re-decodes incase above decoded incorrectly
+        if (docData.length() > 0 && docData.charAt(0) == UNICODE_BOM) {
+            byteData.rewind();
+            docData = Charset.forName(defaultCharset).decode(byteData).toString();
+            docData = docData.substring(1);
+            charsetName = defaultCharset;
+            doc = null;
+        }
+        if (doc == null) {
+            doc = parser.parseInput(docData, baseUri);
+            doc.outputSettings().charset(charsetName);
+        }
+        return doc;
     }
 
-    boolean hasNext() {
-      return this.nextIndex >= 0;
+    /**
+     * Read the input stream into a byte buffer.
+     * @param inStream the input stream to read from
+     * @param maxSize the maximum size in bytes to read from the stream. Set to 0 to be unlimited.
+     * @return the filled byte buffer
+     * @throws IOException if an exception occurs whilst reading from the input stream.
+     */
+    static ByteBuffer readToByteBuffer(InputStream inStream, int maxSize) throws IOException {
+        Validate.isTrue(maxSize >= 0, "maxSize must be 0 (unlimited) or larger");
+        final boolean capped = maxSize > 0;
+        byte[] buffer = new byte[bufferSize];
+        ByteArrayOutputStream outStream = new ByteArrayOutputStream(bufferSize);
+        int read;
+        int remaining = maxSize;
+
+        while (true) {
+            read = inStream.read(buffer);
+            if (read == -1) break;
+            if (capped) {
+                if (read > remaining) {
+                    outStream.write(buffer, 0, remaining);
+                    break;
+                }
+                remaining -= read;
+            }
+            outStream.write(buffer, 0, read);
+        }
+        return ByteBuffer.wrap(outStream.toByteArray());
     }
 
-    long next() {
-      this.index = this.nextIndex;
-      if (this.index < 0) {
-        throw new NoSuchElementException("no more elements available");
-      }
-      advance();
-      return this.index + receivedBaseVersion;
+    static ByteBuffer readToByteBuffer(InputStream inStream) throws IOException {
+        return readToByteBuffer(inStream, 0);
     }
 
-    void remove() {
-      if (this.index < 0) {
-        throw new NoSuchElementException("no more elements available");
-      }
-      received.clear(this.index);
+    static ByteBuffer readFileToByteBuffer(File file) throws IOException {
+        RandomAccessFile randomAccessFile = null;
+        try {
+            randomAccessFile = new RandomAccessFile(file, "r");
+            byte[] bytes = new byte[(int) randomAccessFile.length()];
+            randomAccessFile.readFully(bytes);
+            return ByteBuffer.wrap(bytes);
+        } finally {
+            if (randomAccessFile != null)
+                randomAccessFile.close();
+        }
     }
 
-    private void advance() {
-      this.nextIndex = received.nextSetBit(this.index + 1);
-      if ((this.nextIndex + receivedBaseVersion) >= nextVersion) {
-        this.nextIndex = -1;
-      }
+    static ByteBuffer emptyByteBuffer() {
+        return ByteBuffer.allocate(0);
     }
 
-  }
+    /**
+     * Parse out a charset from a content type header. If the charset is not supported, returns null (so the default
+     * will kick in.)
+     * @param contentType e.g. "text/html; charset=EUC-JP"
+     * @return "EUC-JP", or null if not found. Charset is trimmed and uppercased.
+     */
+    static String getCharsetFromContentType(String contentType) {
+        if (contentType == null) return null;
+        Matcher m = charsetPattern.matcher(contentType);
+        if (m.find()) {
+            String charset = m.group(1).trim();
+            charset = charset.replace("charset=", "");
+            if (charset.length() == 0) return null;
+            try {
+                if (Charset.isSupported(charset)) return charset;
+                charset = charset.toUpperCase(Locale.ENGLISH);
+                if (Charset.isSupported(charset)) return charset;
+            } catch (IllegalCharsetNameException e) {
+                // if our advanced charset matching fails.... we just take the default
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Creates a random string, suitable for use as a mime boundary
+     */
+    static String mimeBoundary() {
+        final StringBuilder mime = new StringBuilder(boundaryLength);
+        final Random rand = new Random();
+        for (int i = 0; i < boundaryLength; i++) {
+            mime.append(mimeBoundaryChars[rand.nextInt(mimeBoundaryChars.length)]);
+        }
+        return mime.toString();
+    }
 }

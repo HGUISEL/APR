@@ -1,352 +1,159 @@
 /*
- * Copyright 2001-2004 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License")
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2007 Mockito contributors
+ * This program is made available under the terms of the MIT License.
  */
+package org.mockito.internal.stubbing.defaultanswers;
 
-package org.apache.commons.configuration;
+import static org.mockito.Mockito.withSettings;
 
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Vector;
+import java.io.IOException;
+import java.io.Serializable;
+import org.mockito.MockSettings;
+import org.mockito.Mockito;
+import org.mockito.internal.InternalMockHandler;
+import org.mockito.internal.MockitoCore;
+import org.mockito.internal.creation.settings.CreationSettings;
+import org.mockito.internal.stubbing.InvocationContainerImpl;
+import org.mockito.internal.stubbing.StubbedInvocationMatcher;
+import org.mockito.internal.util.MockUtil;
+import org.mockito.internal.util.reflection.GenericMetadataSupport;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
 /**
- * This Configuration class allows you to add multiple different types of Configuration
- * to this CompositeConfiguration.  If you add Configuration1, and then Configuration2,
- * any properties shared will mean that Configuration1 will be returned.
- * You can add multiple different types or the same type of properties file.
- * If Configuration1 doesn't have the property, then Configuration2 will be checked.
+ * Returning deep stub implementation.
  *
- * @author <a href="mailto:epugh@upstate.com">Eric Pugh</a>
- * @author <a href="mailto:hps@intermeta.de">Henning P. Schmiedehausen</a>
- * @version $Id: CompositeConfiguration.java,v 1.18 2004/09/19 22:01:50 henning Exp $
+ * Will return previously created mock if the invocation matches.
+ *
+ * <p>Supports nested generic information, with this answer you can write code like this :
+ *
+ * <pre class="code"><code class="java">
+ *     interface GenericsNest&lt;K extends Comparable&lt;K&gt; & Cloneable&gt; extends Map&lt;K, Set&lt;Number&gt;&gt; {}
+ *
+ *     GenericsNest&lt;?&gt; mock = mock(GenericsNest.class, new ReturnsGenericDeepStubs());
+ *     Number number = mock.entrySet().iterator().next().getValue().iterator().next();
+ * </code></pre>
+ * </p>
+ *
+ * @see org.mockito.Mockito#RETURNS_DEEP_STUBS
+ * @see org.mockito.Answers#RETURNS_DEEP_STUBS
  */
-public class CompositeConfiguration extends AbstractConfiguration
-{
-    /** List holding all the configuration */
-    private List configList = new LinkedList();
+public class ReturnsDeepStubs implements Answer<Object>, Serializable {
+    
+    private static final long serialVersionUID = -7105341425736035847L;
 
-    /**
-     * Configuration that holds in memory stuff.  Inserted as first so any
-     * setProperty() override anything else added.
-     */
-    private Configuration inMemoryConfiguration;
+    public Object answer(InvocationOnMock invocation) throws Throwable {
+        GenericMetadataSupport returnTypeGenericMetadata =
+                actualParameterizedType(invocation.getMock()).resolveGenericReturnType(invocation.getMethod());
 
-    /**
-     * Creates an empty CompositeConfiguration object which can then
-     * be added some other Configuration files
-     */
-    public CompositeConfiguration()
-    {
-        clear();
+        Class<?> rawType = returnTypeGenericMetadata.rawType();
+        if (!mockitoCore().isTypeMockable(rawType)) {
+            return delegate().returnValueFor(rawType);
+        }
+
+        return makeDeepMock(invocation, returnTypeGenericMetadata);
+    }
+
+	private void instantiateFieldsIfNeeded() {
+		if (mockitoCore == null) {
+			mockitoCore = new MockitoCore();
+		}
+		if (delegate == null) {
+			delegate = new ReturnsEmptyValues();
+		}
+	}
+
+	private Object getMock(InvocationOnMock invocation, GenericMetadataSupport returnTypeGenericMetadata) throws Throwable {
+    	InternalMockHandler<Object> handler = new MockUtil().getMockHandler(invocation.getMock());
+    	InvocationContainerImpl container = (InvocationContainerImpl) handler.getInvocationContainer();
+
+        // matches invocation for verification
+        for (StubbedInvocationMatcher stubbedInvocationMatcher : container.getStubbedInvocations()) {
+    		if(container.getInvocationForStubbing().matches(stubbedInvocationMatcher.getInvocation())) {
+    			return stubbedInvocationMatcher.answer(invocation);
+    		}
+		}
+
+        // deep stub
+        return recordDeepStubMock(createNewDeepStubMock(returnTypeGenericMetadata), container);
     }
 
     /**
-     * Creates an CompositeConfiguration object with a specified InMemory
-     * configuration. This configuration will store any changes made to
-     * the CompositeConfiguration.
+     * Creates a mock using the Generics Metadata.
      *
-     * @param inMemoryConfiguration the in memory configuration to use
+     * <li>Finally as we want to mock the actual type, but we want to pass along the contextual generics meta-data
+     * that was resolved for the current return type, for this to happen we associate to the mock an new instance of
+     * {@link ReturnsDeepStubs} answer in which we will store the returned type generic metadata.
+     *
+     * @param returnTypeGenericMetadata The metadata to use to create the new mock.
+     * @return The mock
      */
-    public CompositeConfiguration(Configuration inMemoryConfiguration)
-    {
-        configList.clear();
-        this.inMemoryConfiguration = inMemoryConfiguration;
-        configList.add(inMemoryConfiguration);
+    private Object createNewDeepStubMock(GenericMetadataSupport returnTypeGenericMetadata) {
+        return mockitoCore().mock(
+                returnTypeGenericMetadata.rawType(),
+                withSettingsUsing(returnTypeGenericMetadata)
+        );
     }
 
-    /**
-     * Add a configuration.
-     *
-     * @param config the configuration to add
-     */
-    public void addConfiguration(Configuration config)
-    {
-        if (!configList.contains(config))
-        {
-            // As the inMemoryConfiguration contains all manually added keys,
-            // we must make sure that it is always last. "Normal", non composed
-            // configuration add their keys at the end of the configuration and
-            // we want to mimic this behaviour.
-            configList.add(configList.indexOf(inMemoryConfiguration), config);
+    private MockSettings withSettingsUsing(GenericMetadataSupport returnTypeGenericMetadata) {
+        MockSettings mockSettings =
+                returnTypeGenericMetadata.rawExtraInterfaces().length > 0 ?
+                withSettings().extraInterfaces(returnTypeGenericMetadata.rawExtraInterfaces())
+                : withSettings();
 
-            if (config instanceof AbstractConfiguration)
-            {
-                ((AbstractConfiguration) config).setThrowExceptionOnMissing(isThrowExceptionOnMissing());
+        return mockSettings
+		        .serializable()
+                .defaultAnswer(returnsDeepStubsAnswerUsing(returnTypeGenericMetadata));
+    }
+
+    private ReturnsDeepStubs returnsDeepStubsAnswerUsing(final GenericMetadataSupport returnTypeGenericMetadata) {
+        return new NotSerializableGenericsAwareReturnsDeepStubs(returnTypeGenericMetadata);
+    }
+
+    private Object recordDeepStubMock(final Object mock, InvocationContainerImpl container) throws Throwable {
+        container.addAnswer(new SerializableAnswer() {
+            public Object answer(InvocationOnMock invocation) throws Throwable {
+                return mock;
             }
+        }, false);
+        return mock;
+    }
+
+    private static class NotSerializableGenericsAwareReturnsDeepStubs extends ReturnsDeepStubs implements Serializable {
+        private final GenericMetadataSupport returnTypeGenericMetadata;
+
+        public NotSerializableGenericsAwareReturnsDeepStubs(GenericMetadataSupport returnTypeGenericMetadata) {
+            this.returnTypeGenericMetadata = returnTypeGenericMetadata;
+        }
+
+        @Override
+        protected GenericMetadataSupport actualParameterizedType(Object mock) {
+            return returnTypeGenericMetadata;
+        }
+
+        private Object writeReplace() throws IOException {
+            return Mockito.RETURNS_DEEP_STUBS;
         }
     }
 
-    /**
-     * Remove a configuration. The in memory configuration cannot be removed.
-     *
-     * @param config The configuration to remove
-     */
-    public void removeConfiguration(Configuration config)
-    {
-        // Make sure that you can't remove the inMemoryConfiguration from
-        // the CompositeConfiguration object
-        if (!config.equals(inMemoryConfiguration))
-        {
-            configList.remove(config);
-        }
+    abstract class SerializableAnswer implements Answer<Object>, Serializable {
+	}
+	
+
+    protected GenericMetadataSupport actualParameterizedType(Object mock) {
+        CreationSettings mockSettings = (CreationSettings) new MockUtil().getMockHandler(mock).getMockSettings();
+        return GenericMetadataSupport.inferFrom(mockSettings.getTypeToMock());
     }
 
-    /**
-     * Return the number of configurations.
-     *
-     * @return the number of configuration
-     */
-    public int getNumberOfConfigurations()
-    {
-        return configList.size();
+
+    private static MockitoCore mockitoCore() {
+        return LazyHolder.MOCKITO_CORE;
     }
-
-    /**
-     * Remove all configuration reinitialize the in memory configuration.
-     */
-    public void clear()
-    {
-        configList.clear();
-        // recreate the in memory configuration
-        inMemoryConfiguration = new BaseConfiguration();
-        ((BaseConfiguration) inMemoryConfiguration).setThrowExceptionOnMissing(isThrowExceptionOnMissing());
-        configList.add(inMemoryConfiguration);
+    private static ReturnsEmptyValues delegate() {
+        return LazyHolder.DELEGATE;
     }
-
-    /**
-     * Add this property to the inmemory Configuration.
-     *
-     * @param key The Key to add the property to.
-     * @param token The Value to add.
-     */
-    protected void addPropertyDirect(String key, Object token)
-    {
-        inMemoryConfiguration.addProperty(key, token);
-    }
-
-    /**
-     * Read property from underlying composite
-     *
-     * @param key key to use for mapping
-     *
-     * @return object associated with the given configuration key.
-     */
-    protected Object getPropertyDirect(String key)
-    {
-        Configuration firstMatchingConfiguration = null;
-        for (Iterator i = configList.iterator(); i.hasNext();)
-        {
-            Configuration config = (Configuration) i.next();
-            if (config.containsKey(key))
-            {
-                firstMatchingConfiguration = config;
-                break;
-            }
-        }
-
-        if (firstMatchingConfiguration != null)
-        {
-            return firstMatchingConfiguration.getProperty(key);
-        }
-        else
-        {
-            return null;
-        }
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public Iterator getKeys()
-    {
-        List keys = new ArrayList();
-        for (Iterator i = configList.iterator(); i.hasNext();)
-        {
-            Configuration config = (Configuration) i.next();
-
-            Iterator j = config.getKeys();
-            while (j.hasNext())
-            {
-                String key = (String) j.next();
-                if (!keys.contains(key))
-                {
-                    keys.add(key);
-                }
-            }
-        }
-
-        return keys.iterator();
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public Iterator getKeys(String key)
-    {
-        List keys = new ArrayList();
-        for (Iterator i = configList.iterator(); i.hasNext();)
-        {
-            Configuration config = (Configuration) i.next();
-
-            Iterator j = config.getKeys(key);
-            while (j.hasNext())
-            {
-                String newKey = (String) j.next();
-                if (!keys.contains(newKey))
-                {
-                    keys.add(newKey);
-                }
-            }
-        }
-
-        return keys.iterator();
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public boolean isEmpty()
-    {
-        boolean isEmpty = true;
-        for (Iterator i = configList.iterator(); i.hasNext();)
-        {
-            Configuration config = (Configuration) i.next();
-            if (!config.isEmpty())
-            {
-                return false;
-            }
-        }
-
-        return isEmpty;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public Object getProperty(String key)
-    {
-        return getPropertyDirect(key);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public void setProperty(String key, Object value)
-    {
-        clearProperty(key);
-        addProperty(key, value);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public void clearProperty(String key)
-    {
-        for (Iterator i = configList.iterator(); i.hasNext();)
-        {
-            Configuration config = (Configuration) i.next();
-            config.clearProperty(key);
-        }
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public boolean containsKey(String key)
-    {
-        for (Iterator i = configList.iterator(); i.hasNext();)
-        {
-            Configuration config = (Configuration) i.next();
-            if (config.containsKey(key))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public List getList(String key, List defaultValue)
-    {
-        List list = new ArrayList();
-
-        // add all elements from the first configuration containing the requested key
-        Iterator it = configList.iterator();
-        while (it.hasNext() && list.isEmpty())
-        {
-            Configuration config = (Configuration) it.next();
-            if (config != inMemoryConfiguration && config.containsKey(key))
-            {
-                list.addAll(config.getList(key));
-            }
-        }
-
-        // add all elements from the in memory configuration
-        list.addAll(inMemoryConfiguration.getList(key));
-
-        if (list.isEmpty())
-        {
-            return defaultValue;
-        }
-
-        return list;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public Vector getVector(String key, Vector defaultValue)
-    {
-        List list = getList(key, defaultValue);
-        Vector vector = new Vector(list.size());
-
-        for (Iterator it = list.iterator(); it.hasNext();)
-        {
-            vector.add(it.next());
-        }
-
-        return vector;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public String[] getStringArray(String key)
-    {
-        List list = getList(key);
-        return (String []) list.toArray(new String [0]);
-    }
-
-    /**
-     * Return the configuration at the specified index.
-     *
-     * @param index The index of the configuration to retrieve
-     */
-    public Configuration getConfiguration(int index)
-    {
-        return (Configuration) configList.get(index);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public Configuration getInMemoryConfiguration()
-    {
-        return inMemoryConfiguration;
+    private static class LazyHolder {
+        private static final MockitoCore MOCKITO_CORE = new MockitoCore();
+        private static final ReturnsEmptyValues DELEGATE = new ReturnsEmptyValues();
     }
 }

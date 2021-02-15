@@ -1,547 +1,381 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/*
+ * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//dbcp/src/java/org/apache/commons/dbcp/DelegatingResultSet.java,v 1.8 2003/08/11 23:54:59 dirkv Exp $
+ * $Revision: 1.8 $
+ * $Date: 2003/08/11 23:54:59 $
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
  */
-package org.apache.crunch.lib;
+package org.apache.commons.dbcp;
 
-import java.util.Arrays;
-import java.util.BitSet;
-import java.util.List;
-import java.util.UUID;
-
-import org.apache.avro.Schema;
-import org.apache.avro.Schema.Type;
-import org.apache.avro.io.BinaryData;
-import org.apache.avro.reflect.ReflectData;
-import org.apache.hadoop.conf.Configurable;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.Configured;
-import org.apache.hadoop.io.RawComparator;
-import org.apache.hadoop.io.Writable;
-import org.apache.hadoop.io.WritableComparable;
-import org.apache.hadoop.io.WritableComparator;
-import org.apache.hadoop.mapred.JobConf;
-
-import org.apache.crunch.DoFn;
-import org.apache.crunch.Emitter;
-import org.apache.crunch.GroupingOptions;
-import org.apache.crunch.GroupingOptions.Builder;
-import org.apache.crunch.PCollection;
-import org.apache.crunch.PTable;
-import org.apache.crunch.Pair;
-import org.apache.crunch.Tuple3;
-import org.apache.crunch.Tuple4;
-import org.apache.crunch.TupleN;
-import org.apache.crunch.types.PTableType;
-import org.apache.crunch.types.PType;
-import org.apache.crunch.types.PTypeFamily;
-import org.apache.crunch.types.avro.AvroType;
-import org.apache.crunch.types.avro.AvroTypeFamily;
-import org.apache.crunch.types.writable.TupleWritable;
-import org.apache.crunch.types.writable.WritableTypeFamily;
-import com.google.common.base.Function;
-import com.google.common.base.Joiner;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
+import java.sql.ResultSet;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.io.InputStream;
+import java.sql.SQLWarning;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.io.Reader;
+import java.sql.Statement;
+import java.util.Map;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
 
 /**
- * Utilities for sorting {@code PCollection} instances.
+ * A base delegating implementation of {@link ResultSet}.
+ * <p>
+ * All of the methods from the {@link ResultSet} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement result set tracking and
+ * logging of code which created the ResultSet. Tracking the
+ * ResultSet ensures that the Statment which created it can
+ * close any open ResultSet's on Statement close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House (<a href="mailto:james@interobjective.com">james@interobjective.com</a>)
  */
-public class Sort {
-  
-  public enum Order {
-    ASCENDING, DESCENDING, IGNORE
-  }
-  
-  /**
-   * To sort by column 2 ascending then column 1 descending, you would use:
-   * <code>
-   * sortPairs(coll, by(2, ASCENDING), by(1, DESCENDING))
-   * </code>
-   * Column numbering is 1-based.
-   */
-  public static class ColumnOrder {
-    int column;
-    Order order;
-    public ColumnOrder(int column, Order order) {
-      this.column = column;
-      this.order = order;
-    }
-    public static ColumnOrder by(int column, Order order) {
-      return new ColumnOrder(column, order);
+public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
+
+    /** My delegate. **/
+    private ResultSet _res;
+
+    /** The Statement that created me, if any. **/
+    private Statement _stmt;
+
+    /**
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Statement which created it and the
+     * code which created it.
+     *
+     * @param Statement stmt which create this ResultSet
+     * @param ResultSet to wrap
+     */
+    public DelegatingResultSet(Statement stmt, ResultSet res) {
+        super((AbandonedTrace)stmt);
+        this._stmt = stmt;
+        this._res = res;
     }
     
-    @Override
-    public String toString() {
-      return"ColumnOrder: column:" + column + ", Order: " + order;
-    }
-  }
-  
-  /**
-   * Sorts the {@link PCollection} using the natural ordering of its elements.
-   * 
-   * @return a {@link PCollection} representing the sorted collection.
-   */
-  public static <T> PCollection<T> sort(PCollection<T> collection) {
-    return sort(collection, Order.ASCENDING);
-  }
-  
-  /**
-   * Sorts the {@link PCollection} using the natural ordering of its elements
-   * in the order specified.
-   * 
-   * @return a {@link PCollection} representing the sorted collection.
-   */
-  public static <T> PCollection<T> sort(PCollection<T> collection, Order order) {
-    PTypeFamily tf = collection.getTypeFamily();
-    PTableType<T, Void> type = tf.tableOf(collection.getPType(), tf.nulls());
-    Configuration conf = collection.getPipeline().getConfiguration();
-    GroupingOptions options = buildGroupingOptions(conf, tf,
-        collection.getPType(), order);
-    PTable<T, Void> pt =
-      collection.parallelDo("sort-pre", new DoFn<T, Pair<T, Void>>() {
-        @Override
-        public void process(T input,
-            Emitter<Pair<T, Void>> emitter) {
-          emitter.emit(Pair.of(input, (Void) null));
-        }
-      }, type);
-    PTable<T, Void> sortedPt = pt.groupByKey(options).ungroup();
-    return sortedPt.parallelDo("sort-post", new DoFn<Pair<T, Void>, T>() {
-      @Override
-      public void process(Pair<T, Void> input, Emitter<T> emitter) {
-        emitter.emit(input.first());
-      }
-    }, collection.getPType());
-  }
-  
-
-  /**
-   * Sorts the {@link PTable} using the natural ordering of its keys.
-   * 
-   * @return a {@link PTable} representing the sorted table.
-   */
-  public static <K, V> PTable<K, V> sort(PTable<K, V> table) {
-    return sort(table, Order.ASCENDING);
-  }
-
-  /**
-   * Sorts the {@link PTable} using the natural ordering of its keys
-   * in the order specified.
-   * 
-   * @return a {@link PTable} representing the sorted collection.
-   */
-  public static <K, V> PTable<K, V> sort(PTable<K, V> table, Order key) {
-    PTypeFamily tf = table.getTypeFamily();
-    Configuration conf = table.getPipeline().getConfiguration();
-    GroupingOptions options = buildGroupingOptions(conf, tf, table.getKeyType(), key);
-    return table.groupByKey(options).ungroup();
-  }
-  
-  /**
-   * Sorts the {@link PCollection} of {@link Pair}s using the specified column
-   * ordering.
-   * 
-   * @return a {@link PCollection} representing the sorted collection.
-   */
-  public static <U, V> PCollection<Pair<U, V>> sortPairs(
-      PCollection<Pair<U, V>> collection, ColumnOrder... columnOrders) {
-    // put U and V into a pair/tuple in the key so we can do grouping and sorting
-    PTypeFamily tf = collection.getTypeFamily();
-    PType<Pair<U, V>> pType = collection.getPType();
-    @SuppressWarnings("unchecked")
-    PTableType<Pair<U, V>, Void> type = tf.tableOf(
-        tf.pairs(pType.getSubTypes().get(0), pType.getSubTypes().get(1)),
-        tf.nulls());
-    PTable<Pair<U, V>, Void> pt =
-      collection.parallelDo(new DoFn<Pair<U, V>, Pair<Pair<U, V>, Void>>() {
-        @Override
-        public void process(Pair<U, V> input,
-            Emitter<Pair<Pair<U, V>, Void>> emitter) {
-          emitter.emit(Pair.of(input, (Void) null));
-        }
-      }, type);
-    Configuration conf = collection.getPipeline().getConfiguration();
-    GroupingOptions options = buildGroupingOptions(conf, tf, pType, columnOrders);
-    PTable<Pair<U, V>, Void> sortedPt = pt.groupByKey(options).ungroup();
-    return sortedPt.parallelDo(new DoFn<Pair<Pair<U, V>,Void>, Pair<U, V>>() {
-      @Override
-      public void process(Pair<Pair<U, V>, Void> input,
-          Emitter<Pair<U, V>> emitter) {
-        emitter.emit(input.first());
-      }
-    }, collection.getPType());
-  }
-
-  /**
-   * Sorts the {@link PCollection} of {@link Tuple3}s using the specified column
-   * ordering.
-   * 
-   * @return a {@link PCollection} representing the sorted collection.
-   */
-  public static <V1, V2, V3> PCollection<Tuple3<V1, V2, V3>> sortTriples(
-      PCollection<Tuple3<V1, V2, V3>> collection, ColumnOrder... columnOrders) {
-    PTypeFamily tf = collection.getTypeFamily();
-    PType<Tuple3<V1, V2, V3>> pType = collection.getPType();
-    @SuppressWarnings("unchecked")
-    PTableType<Tuple3<V1, V2, V3>, Void> type = tf.tableOf(
-        tf.triples(pType.getSubTypes().get(0), pType.getSubTypes().get(1), pType.getSubTypes().get(2)),
-        tf.nulls());
-    PTable<Tuple3<V1, V2, V3>, Void> pt =
-      collection.parallelDo(new DoFn<Tuple3<V1, V2, V3>, Pair<Tuple3<V1, V2, V3>, Void>>() {
-        @Override
-        public void process(Tuple3<V1, V2, V3> input,
-            Emitter<Pair<Tuple3<V1, V2, V3>, Void>> emitter) {
-          emitter.emit(Pair.of(input, (Void) null));
-        }
-      }, type);
-    Configuration conf = collection.getPipeline().getConfiguration();
-    GroupingOptions options = buildGroupingOptions(conf, tf, pType, columnOrders);
-    PTable<Tuple3<V1, V2, V3>, Void> sortedPt = pt.groupByKey(options).ungroup();
-    return sortedPt.parallelDo(new DoFn<Pair<Tuple3<V1, V2, V3>,Void>, Tuple3<V1, V2, V3>>() {
-      @Override
-      public void process(Pair<Tuple3<V1, V2, V3>, Void> input,
-          Emitter<Tuple3<V1, V2, V3>> emitter) {
-        emitter.emit(input.first());
-      }
-    }, collection.getPType());
-  }
-
-  /**
-   * Sorts the {@link PCollection} of {@link Tuple4}s using the specified column
-   * ordering.
-   * 
-   * @return a {@link PCollection} representing the sorted collection.
-   */
-  public static <V1, V2, V3, V4> PCollection<Tuple4<V1, V2, V3, V4>> sortQuads(
-      PCollection<Tuple4<V1, V2, V3, V4>> collection, ColumnOrder... columnOrders) {
-    PTypeFamily tf = collection.getTypeFamily();
-    PType<Tuple4<V1, V2, V3, V4>> pType = collection.getPType();
-    @SuppressWarnings("unchecked")
-    PTableType<Tuple4<V1, V2, V3, V4>, Void> type = tf.tableOf(
-        tf.quads(pType.getSubTypes().get(0), pType.getSubTypes().get(1), pType.getSubTypes().get(2),  pType.getSubTypes().get(3)),
-        tf.nulls());
-    PTable<Tuple4<V1, V2, V3, V4>, Void> pt =
-      collection.parallelDo(new DoFn<Tuple4<V1, V2, V3, V4>, Pair<Tuple4<V1, V2, V3, V4>, Void>>() {
-        @Override
-        public void process(Tuple4<V1, V2, V3, V4> input,
-            Emitter<Pair<Tuple4<V1, V2, V3, V4>, Void>> emitter) {
-          emitter.emit(Pair.of(input, (Void) null));
-        }
-      }, type);
-    Configuration conf = collection.getPipeline().getConfiguration();
-    GroupingOptions options = buildGroupingOptions(conf, tf, pType, columnOrders);
-    PTable<Tuple4<V1, V2, V3, V4>, Void> sortedPt = pt.groupByKey(options).ungroup();
-    return sortedPt.parallelDo(new DoFn<Pair<Tuple4<V1, V2, V3, V4>,Void>, Tuple4<V1, V2, V3, V4>>() {
-      @Override
-      public void process(Pair<Tuple4<V1, V2, V3, V4>, Void> input,
-          Emitter<Tuple4<V1, V2, V3, V4>> emitter) {
-        emitter.emit(input.first());
-      }
-    }, collection.getPType());
-  }
-
-  /**
-   * Sorts the {@link PCollection} of {@link TupleN}s using the specified column
-   * ordering.
-   * 
-   * @return a {@link PCollection} representing the sorted collection.
-   */
-  public static PCollection<TupleN> sortTuples(PCollection<TupleN> collection,
-      ColumnOrder... columnOrders) {
-    PTypeFamily tf = collection.getTypeFamily();
-    PType<TupleN> pType = collection.getPType();
-    PTableType<TupleN, Void> type = tf.tableOf(
-        tf.tuples(pType.getSubTypes().toArray(new PType[0])),
-        tf.nulls());
-    PTable<TupleN, Void> pt =
-      collection.parallelDo(new DoFn<TupleN, Pair<TupleN, Void>>() {
-        @Override
-        public void process(TupleN input,
-            Emitter<Pair<TupleN, Void>> emitter) {
-          emitter.emit(Pair.of(input, (Void) null));
-        }
-      }, type);
-    Configuration conf = collection.getPipeline().getConfiguration();
-    GroupingOptions options = buildGroupingOptions(conf, tf, pType, columnOrders);
-    PTable<TupleN, Void> sortedPt = pt.groupByKey(options).ungroup();
-    return sortedPt.parallelDo(new DoFn<Pair<TupleN,Void>, TupleN>() {
-      @Override
-      public void process(Pair<TupleN, Void> input,
-          Emitter<TupleN> emitter) {
-        emitter.emit(input.first());
-      }
-    }, collection.getPType());
-  }
-  
-  // TODO: move to type family?
-  private static <T> GroupingOptions buildGroupingOptions(Configuration conf,
-      PTypeFamily tf, PType<T> ptype, Order order) {
-    Builder builder = GroupingOptions.builder();
-    if (order == Order.DESCENDING) {
-      if (tf == WritableTypeFamily.getInstance()) {
-        builder.sortComparatorClass(ReverseWritableComparator.class);
-      } else if (tf == AvroTypeFamily.getInstance()) {
-        AvroType<T> avroType = (AvroType<T>) ptype;
-        Schema schema = avroType.getSchema();
-        conf.set("crunch.schema", schema.toString());
-        builder.sortComparatorClass(ReverseAvroComparator.class);
-      } else {
-        throw new RuntimeException("Unrecognized type family: " + tf);
-      }
-    }
-    return builder.build();
-  }
-  
-  private static <T> GroupingOptions buildGroupingOptions(Configuration conf,
-      PTypeFamily tf, PType<T> ptype, ColumnOrder[] columnOrders) {
-    Builder builder = GroupingOptions.builder();
-    if (tf == WritableTypeFamily.getInstance()) {
-      TupleWritableComparator.configureOrdering(conf, columnOrders);
-      builder.sortComparatorClass(TupleWritableComparator.class);
-    } else if (tf == AvroTypeFamily.getInstance()) {
-      TupleAvroComparator.configureOrdering(conf, columnOrders, ptype);
-      builder.sortComparatorClass(TupleAvroComparator.class);
-    } else {
-      throw new RuntimeException("Unrecognized type family: " + tf);
-    }
-    return builder.build();
-  }
-  
-  static class ReverseWritableComparator<T> extends Configured implements RawComparator<T> {
-    
-    RawComparator<T> comparator;
-    
-    @SuppressWarnings("unchecked")
-    @Override
-    public void setConf(Configuration conf) {
-      super.setConf(conf);
-      if (conf != null) {
-        JobConf jobConf = new JobConf(conf);
-        comparator = WritableComparator.get(
-            jobConf.getMapOutputKeyClass().asSubclass(WritableComparable.class));
-      }
-    }
-
-    @Override
-    public int compare(byte[] arg0, int arg1, int arg2, byte[] arg3, int arg4,
-        int arg5) {
-      return -comparator.compare(arg0, arg1, arg2, arg3, arg4, arg5);
-    }
-
-    @Override
-    public int compare(T o1, T o2) {
-      return -comparator.compare(o1, o2);
-    }
-
-  }
-  
-  static class ReverseAvroComparator<T> extends Configured implements RawComparator<T> {
-
-    Schema schema;
-    
-    @Override
-    public void setConf(Configuration conf) {
-      super.setConf(conf);
-      if (conf != null) {
-        schema = (new Schema.Parser()).parse(conf.get("crunch.schema"));
-      }
-    }
-
-    @Override
-    public int compare(T o1, T o2) {
-      return -ReflectData.get().compare(o1, o2, schema);
-    }
-
-    @Override
-    public int compare(byte[] arg0, int arg1, int arg2, byte[] arg3, int arg4,
-        int arg5) {
-      return -BinaryData.compare(arg0, arg1, arg2, arg3, arg4, arg5, schema);
-    }
-    
-  }
-  
-  static class TupleWritableComparator extends WritableComparator implements Configurable {
-    
-    private static final String CRUNCH_ORDERING_PROPERTY = "crunch.ordering";
-    
-    Configuration conf;
-    ColumnOrder[] columnOrders;
-    
-    public TupleWritableComparator() {
-      super(TupleWritable.class, true);
-    }
-    
-    public static void configureOrdering(Configuration conf, Order... orders) {
-      conf.set(CRUNCH_ORDERING_PROPERTY, Joiner.on(",").join(
-        Iterables.transform(Arrays.asList(orders),
-          new Function<Order, String>() {
-        @Override
-        public String apply(Order o) {
-          return o.name();
-        }
-      })));
-    }
-
-    
-    public static void configureOrdering(Configuration conf, ColumnOrder... columnOrders) {
-      conf.set(CRUNCH_ORDERING_PROPERTY, Joiner.on(",").join(
-        Iterables.transform(Arrays.asList(columnOrders),
-          new Function<ColumnOrder, String>() {
-        @Override
-        public String apply(ColumnOrder o) {
-          return o.column + ";" + o.order.name();
-        }
-      })));
-    }
-    
-    @Override
-    public int compare(WritableComparable a, WritableComparable b) {
-      TupleWritable ta = (TupleWritable) a;
-      TupleWritable tb = (TupleWritable) b;
-      for (int i = 0; i < columnOrders.length; i++) {
-        int index = columnOrders[i].column - 1;
-        int order = 1;
-        if (columnOrders[i].order == Order.ASCENDING) {
-          order = 1;
-        } else  if (columnOrders[i].order == Order.DESCENDING) {
-          order = -1;
-        } else { // ignore
-          continue;
-        }
-        if (!ta.has(index) && !tb.has(index)) {
-          continue;
-        } else if (ta.has(index) && !tb.has(index)) {
-          return order;
-        } else if (!ta.has(index) && tb.has(index)) {
-          return -order;
+    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
+        if(null == rset) {
+            return null;
         } else {
-          Writable v1 = ta.get(index);
-          Writable v2 = tb.get(index);
-          if (v1 != v2 && (v1 != null && !v1.equals(v2))) {
-            if (v1 instanceof WritableComparable
-                && v2 instanceof WritableComparable) {
-              int cmp = ((WritableComparable) v1)
-                  .compareTo((WritableComparable) v2);
-              if (cmp != 0) {
-                return order * cmp;
-              }
-            } else {
-              int cmp = v1.hashCode() - v2.hashCode();
-              if (cmp != 0) {
-                return order * cmp;
-              }
+            return new DelegatingResultSet(stmt,rset);
+        }
+    }
+
+    public ResultSet getDelegate() {
+        return _res;
+    }
+
+    public boolean equals(Object obj) {
+        ResultSet delegate = getInnermostDelegate();
+        if (delegate == null) {
+            return false;
+        }
+        if (obj instanceof DelegatingResultSet) {
+            DelegatingResultSet s = (DelegatingResultSet) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
+    }
+
+    public int hashCode() {
+        Object obj = getInnermostDelegate();
+        if (obj == null) {
+            return 0;
+        }
+        return obj.hashCode();
+    }
+
+    /**
+     * If my underlying {@link ResultSet} is not a
+     * <tt>DelegatingResultSet</tt>, returns it,
+     * otherwise recursively invokes this method on
+     * my delegate.
+     * <p>
+     * Hence this method will return the first
+     * delegate that is not a <tt>DelegatingResultSet</tt>,
+     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
+     * delegate can be found by transversing this chain.
+     * <p>
+     * This method is useful when you may have nested
+     * <tt>DelegatingResultSet</tt>s, and you want to make
+     * sure to obtain a "genuine" {@link ResultSet}.
+     */
+    public ResultSet getInnermostDelegate() {
+        ResultSet r = _res;
+        while(r != null && r instanceof DelegatingResultSet) {
+            r = ((DelegatingResultSet)r).getDelegate();
+            if(this == r) {
+                return null;
             }
-          }
         }
-      }
-      return 0; // ordering using specified columns found no differences
-    }
-
-    @Override
-    public Configuration getConf() {
-      return conf;
-    }
-
-    @Override
-    public void setConf(Configuration conf) {
-      this.conf = conf;
-      if (conf != null) {
-        String ordering = conf.get(CRUNCH_ORDERING_PROPERTY);
-        String[] columnOrderNames = ordering.split(",");
-        columnOrders = new ColumnOrder[columnOrderNames.length];
-        for (int i = 0; i < columnOrders.length; i++) {
-          String[] split = columnOrderNames[i].split(";");
-          int column = Integer.parseInt(split[0]);
-          Order order = Order.valueOf(split[1]);
-          columnOrders[i] = ColumnOrder.by(column, order);
-          
-        }
-      }
-    }
-  }
-  
-  static class TupleAvroComparator<T> extends Configured implements RawComparator<T> {
-
-    Schema schema;
-    
-    @Override
-    public void setConf(Configuration conf) {
-      super.setConf(conf);
-      if (conf != null) {
-        schema = (new Schema.Parser()).parse(conf.get("crunch.schema"));
-      }
-    }
-
-    public static <S> void configureOrdering(Configuration conf, ColumnOrder[] columnOrders,
-        PType<S> ptype) {
-      Schema orderedSchema = createOrderedTupleSchema(ptype, columnOrders);
-      conf.set("crunch.schema", orderedSchema.toString());
+        return r;
     }
     
-    // TODO: move to Avros
-    // TODO: need to re-order columns in map output then switch back in the reduce
-    //       this will require more extensive changes in Crunch
-    private static <S> Schema createOrderedTupleSchema(PType<S> ptype, ColumnOrder[] orders) {
-      // Guarantee each tuple schema has a globally unique name
-      String tupleName = "tuple" + UUID.randomUUID().toString().replace('-', 'x');
-      Schema schema = Schema.createRecord(tupleName, "", "crunch", false);
-      List<Schema.Field> fields = Lists.newArrayList();
-      AvroType<S> parentAvroType = (AvroType<S>) ptype;
-      Schema parentAvroSchema = parentAvroType.getSchema();
-      
-      BitSet orderedColumns = new BitSet();
-      // First add any fields specified by ColumnOrder
-      for (ColumnOrder columnOrder : orders) {
-        int index = columnOrder.column - 1;
-        AvroType<?> atype = (AvroType<?>) ptype.getSubTypes().get(index);
-        Schema fieldSchema = Schema.createUnion(
-            ImmutableList.of(atype.getSchema(), Schema.create(Type.NULL)));
-        String fieldName = parentAvroSchema.getFields().get(index).name();
-        fields.add(new Schema.Field(fieldName, fieldSchema, "", null,
-            Schema.Field.Order.valueOf(columnOrder.order.name())));
-        orderedColumns.set(index);
-      }
-      // Then add remaining fields from the ptypes, with no sort order
-      for (int i = 0; i < ptype.getSubTypes().size(); i++) {
-        if (orderedColumns.get(i)) {
-          continue;
+    public Statement getStatement() throws SQLException {
+        return _stmt;
+    }
+
+    /**
+     * Wrapper for close of ResultSet which removes this
+     * result set from being traced then calls close on
+     * the original ResultSet.
+     */
+    public void close() throws SQLException {
+        if(_stmt != null) {
+            ((AbandonedTrace)_stmt).removeTrace(this);
+            _stmt = null;
         }
-        AvroType<?> atype = (AvroType<?>) ptype.getSubTypes().get(i);
-        Schema fieldSchema = Schema.createUnion(
-            ImmutableList.of(atype.getSchema(), Schema.create(Type.NULL)));
-        String fieldName = parentAvroSchema.getFields().get(i).name();
-        fields.add(new Schema.Field(fieldName, fieldSchema, "", null,
-            Schema.Field.Order.IGNORE));
-      }
-      schema.setFields(fields);
-      return schema;
+        _res.close();
     }
 
-    @Override
-    public int compare(T o1, T o2) {
-      return ReflectData.get().compare(o1, o2, schema);
+    public boolean next() throws SQLException { return _res.next();  }
+    public boolean wasNull() throws SQLException { return _res.wasNull();  }
+    public String getString(int columnIndex) throws SQLException { return _res.getString(columnIndex);  }
+    public boolean getBoolean(int columnIndex) throws SQLException { return _res.getBoolean(columnIndex);  }
+    public byte getByte(int columnIndex) throws SQLException { return _res.getByte(columnIndex); }
+    public short getShort(int columnIndex) throws SQLException { return _res.getShort(columnIndex); }
+    public int getInt(int columnIndex) throws SQLException { return _res.getInt(columnIndex); }
+    public long getLong(int columnIndex) throws SQLException { return _res.getLong(columnIndex); }
+    public float getFloat(int columnIndex) throws SQLException { return _res.getFloat(columnIndex); }
+    public double getDouble(int columnIndex) throws SQLException { return _res.getDouble(columnIndex); }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException { return _res.getBigDecimal(columnIndex); }
+    public byte[] getBytes(int columnIndex) throws SQLException { return _res.getBytes(columnIndex); }
+    public Date getDate(int columnIndex) throws SQLException { return _res.getDate(columnIndex); }
+    public Time getTime(int columnIndex) throws SQLException { return _res.getTime(columnIndex); }
+    public Timestamp getTimestamp(int columnIndex) throws SQLException { return _res.getTimestamp(columnIndex); }
+    public InputStream getAsciiStream(int columnIndex) throws SQLException { return _res.getAsciiStream(columnIndex); }
+    /** @deprecated */
+    public InputStream getUnicodeStream(int columnIndex) throws SQLException { return _res.getUnicodeStream(columnIndex); }
+    public InputStream getBinaryStream(int columnIndex) throws SQLException { return _res.getBinaryStream(columnIndex); }
+    public String getString(String columnName) throws SQLException { return _res.getString(columnName); }
+    public boolean getBoolean(String columnName) throws SQLException { return _res.getBoolean(columnName); }
+    public byte getByte(String columnName) throws SQLException { return _res.getByte(columnName); }
+    public short getShort(String columnName) throws SQLException { return _res.getShort(columnName); }
+    public int getInt(String columnName) throws SQLException { return _res.getInt(columnName); }
+    public long getLong(String columnName) throws SQLException { return _res.getLong(columnName); }
+    public float getFloat(String columnName) throws SQLException { return _res.getFloat(columnName); }
+    public double getDouble(String columnName) throws SQLException { return _res.getDouble(columnName); }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException { return _res.getBigDecimal(columnName); }
+    public byte[] getBytes(String columnName) throws SQLException { return _res.getBytes(columnName); }
+    public Date getDate(String columnName) throws SQLException { return _res.getDate(columnName); }
+    public Time getTime(String columnName) throws SQLException { return _res.getTime(columnName); }
+    public Timestamp getTimestamp(String columnName) throws SQLException { return _res.getTimestamp(columnName); }
+    public InputStream getAsciiStream(String columnName) throws SQLException { return _res.getAsciiStream(columnName); }
+    /** @deprecated */
+    public InputStream getUnicodeStream(String columnName) throws SQLException { return _res.getUnicodeStream(columnName); }
+    public InputStream getBinaryStream(String columnName) throws SQLException { return _res.getBinaryStream(columnName); }
+    public SQLWarning getWarnings() throws SQLException { return _res.getWarnings();  }
+    public void clearWarnings() throws SQLException { _res.clearWarnings();  }
+    public String getCursorName() throws SQLException { return _res.getCursorName();  }
+    public ResultSetMetaData getMetaData() throws SQLException { return _res.getMetaData();  }
+    public Object getObject(int columnIndex) throws SQLException { return _res.getObject(columnIndex);  }
+    public Object getObject(String columnName) throws SQLException { return _res.getObject(columnName);  }
+    public int findColumn(String columnName) throws SQLException { return _res.findColumn(columnName);  }
+    public Reader getCharacterStream(int columnIndex) throws SQLException { return _res.getCharacterStream(columnIndex);  }
+    public Reader getCharacterStream(String columnName) throws SQLException { return _res.getCharacterStream(columnName);  }
+    public BigDecimal getBigDecimal(int columnIndex) throws SQLException { return _res.getBigDecimal(columnIndex);  }
+    public BigDecimal getBigDecimal(String columnName) throws SQLException { return _res.getBigDecimal(columnName);  }
+    public boolean isBeforeFirst() throws SQLException { return _res.isBeforeFirst();  }
+    public boolean isAfterLast() throws SQLException { return _res.isAfterLast();  }
+    public boolean isFirst() throws SQLException { return _res.isFirst();  }
+    public boolean isLast() throws SQLException { return _res.isLast();  }
+    public void beforeFirst() throws SQLException { _res.beforeFirst();  }
+    public void afterLast() throws SQLException { _res.afterLast();  }
+    public boolean first() throws SQLException { return _res.first();  }
+    public boolean last() throws SQLException { return _res.last();  }
+    public int getRow() throws SQLException { return _res.getRow();  }
+    public boolean absolute(int row) throws SQLException { return _res.absolute(row);  }
+    public boolean relative(int rows) throws SQLException { return _res.relative(rows);  }
+    public boolean previous() throws SQLException { return _res.previous();  }
+    public void setFetchDirection(int direction) throws SQLException { _res.setFetchDirection(direction);  }
+    public int getFetchDirection() throws SQLException { return _res.getFetchDirection();  }
+    public void setFetchSize(int rows) throws SQLException { _res.setFetchSize(rows); }
+    public int getFetchSize() throws SQLException { return _res.getFetchSize();  }
+    public int getType() throws SQLException { return _res.getType();  }
+    public int getConcurrency() throws SQLException { return _res.getConcurrency();  }
+    public boolean rowUpdated() throws SQLException { return _res.rowUpdated();  }
+    public boolean rowInserted() throws SQLException { return _res.rowInserted();  }
+    public boolean rowDeleted() throws SQLException { return _res.rowDeleted();  }
+    public void updateNull(int columnIndex) throws SQLException {  _res.updateNull(columnIndex);  }
+    public void updateBoolean(int columnIndex, boolean x) throws SQLException {  _res.updateBoolean(columnIndex, x);  }
+    public void updateByte(int columnIndex, byte x) throws SQLException {  _res.updateByte(columnIndex, x);  }
+    public void updateShort(int columnIndex, short x) throws SQLException {  _res.updateShort(columnIndex, x);  }
+    public void updateInt(int columnIndex, int x) throws SQLException {  _res.updateInt(columnIndex, x);  }
+    public void updateLong(int columnIndex, long x) throws SQLException {  _res.updateLong(columnIndex, x); }
+    public void updateFloat(int columnIndex, float x) throws SQLException {  _res.updateFloat(columnIndex, x);  }
+    public void updateDouble(int columnIndex, double x) throws SQLException {  _res.updateDouble(columnIndex, x);  }
+    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnIndex, x);  }
+    public void updateString(int columnIndex, String x) throws SQLException {  _res.updateString(columnIndex, x);  }
+    public void updateBytes(int columnIndex, byte[] x) throws SQLException {  _res.updateBytes(columnIndex, x); }
+    public void updateDate(int columnIndex, Date x) throws SQLException {  _res.updateDate(columnIndex, x);  }
+    public void updateTime(int columnIndex, Time x) throws SQLException {  _res.updateTime(columnIndex, x); }
+    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException {  _res.updateTimestamp(columnIndex, x);  }
+    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnIndex, x, length);  }
+    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnIndex, x, length); }
+    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {  _res.updateCharacterStream(columnIndex, x, length); }
+    public void updateObject(int columnIndex, Object x, int scale) throws SQLException {  _res.updateObject(columnIndex, x);  }
+    public void updateObject(int columnIndex, Object x) throws SQLException {  _res.updateObject(columnIndex, x);  }
+    public void updateNull(String columnName) throws SQLException {  _res.updateNull(columnName);  }
+    public void updateBoolean(String columnName, boolean x) throws SQLException {  _res.updateBoolean(columnName, x);  }
+    public void updateByte(String columnName, byte x) throws SQLException {  _res.updateByte(columnName, x);  }
+    public void updateShort(String columnName, short x) throws SQLException {  _res.updateShort(columnName, x);  }
+    public void updateInt(String columnName, int x) throws SQLException {  _res.updateInt(columnName, x);  }
+    public void updateLong(String columnName, long x) throws SQLException {  _res.updateLong(columnName, x);  }
+    public void updateFloat(String columnName, float x) throws SQLException {  _res.updateFloat(columnName, x);  }
+    public void updateDouble(String columnName, double x) throws SQLException { _res.updateDouble(columnName, x);  }
+    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnName, x);  }
+    public void updateString(String columnName, String x) throws SQLException {  _res.updateString(columnName, x);  }
+    public void updateBytes(String columnName, byte[] x) throws SQLException {  _res.updateBytes(columnName, x);  }
+    public void updateDate(String columnName, Date x) throws SQLException {  _res.updateDate(columnName, x);  }
+    public void updateTime(String columnName, Time x) throws SQLException {  _res.updateTime(columnName, x);  }
+    public void updateTimestamp(String columnName, Timestamp x) throws SQLException {  _res.updateTimestamp(columnName, x);  }
+    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnName, x, length);  }
+    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnName, x, length);  }
+    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException {  _res.updateCharacterStream(columnName, reader, length);  }
+    public void updateObject(String columnName, Object x, int scale) throws SQLException {  _res.updateObject(columnName, x);  }
+    public void updateObject(String columnName, Object x) throws SQLException {  _res.updateObject(columnName, x);  }
+    public void insertRow() throws SQLException {  _res.insertRow();  }
+    public void updateRow() throws SQLException {  _res.updateRow();  }
+    public void deleteRow() throws SQLException {  _res.deleteRow();  }
+    public void refreshRow() throws SQLException {  _res.refreshRow();  }
+    public void cancelRowUpdates() throws SQLException {  _res.cancelRowUpdates();  }
+    public void moveToInsertRow() throws SQLException {  _res.moveToInsertRow();  }
+    public void moveToCurrentRow() throws SQLException {  _res.moveToCurrentRow();  }
+    public Object getObject(int i, Map map) throws SQLException { return _res.getObject(i, map);  }
+    public Ref getRef(int i) throws SQLException { return _res.getRef(i);  }
+    public Blob getBlob(int i) throws SQLException { return _res.getBlob(i);  }
+    public Clob getClob(int i) throws SQLException { return _res.getClob(i);  }
+    public Array getArray(int i) throws SQLException { return _res.getArray(i);  }
+    public Object getObject(String colName, Map map) throws SQLException { return _res.getObject(colName, map);  }
+    public Ref getRef(String colName) throws SQLException { return _res.getRef(colName);  }
+    public Blob getBlob(String colName) throws SQLException { return _res.getBlob(colName);  }
+    public Clob getClob(String colName) throws SQLException { return _res.getClob(colName);  }
+    public Array getArray(String colName) throws SQLException { return _res.getArray(colName);  }
+    public Date getDate(int columnIndex, Calendar cal) throws SQLException { return _res.getDate(columnIndex, cal);  }
+    public Date getDate(String columnName, Calendar cal) throws SQLException { return _res.getDate(columnName, cal);  }
+    public Time getTime(int columnIndex, Calendar cal) throws SQLException { return _res.getTime(columnIndex, cal);  }
+    public Time getTime(String columnName, Calendar cal) throws SQLException { return _res.getTime(columnName, cal);  }
+    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException { return _res.getTimestamp(columnIndex, cal);  }
+    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException { return _res.getTimestamp(columnName, cal);  }
+
+    // ------------------- JDBC 3.0 -----------------------------------------
+    // Will be commented by the build process on a JDBC 2.0 system
+
+/* JDBC_3_ANT_KEY_BEGIN */
+
+    public java.net.URL getURL(int columnIndex) throws SQLException {
+        return _res.getURL(columnIndex);
     }
 
-    @Override
-    public int compare(byte[] arg0, int arg1, int arg2, byte[] arg3, int arg4,
-        int arg5) {
-      return BinaryData.compare(arg0, arg1, arg2, arg3, arg4, arg5, schema);
+    public java.net.URL getURL(String columnName) throws SQLException {
+        return _res.getURL(columnName);
     }
-    
-  }
+
+    public void updateRef(int columnIndex, java.sql.Ref x)
+        throws SQLException {
+        _res.updateRef(columnIndex, x);
+    }
+
+    public void updateRef(String columnName, java.sql.Ref x)
+        throws SQLException {
+        _res.updateRef(columnName, x);
+    }
+
+    public void updateBlob(int columnIndex, java.sql.Blob x)
+        throws SQLException {
+        _res.updateBlob(columnIndex, x);
+    }
+
+    public void updateBlob(String columnName, java.sql.Blob x)
+        throws SQLException {
+        _res.updateBlob(columnName, x);
+    }
+
+    public void updateClob(int columnIndex, java.sql.Clob x)
+        throws SQLException {
+        _res.updateClob(columnIndex, x);
+    }
+
+    public void updateClob(String columnName, java.sql.Clob x)
+        throws SQLException {
+        _res.updateClob(columnName, x);
+    }
+
+    public void updateArray(int columnIndex, java.sql.Array x)
+        throws SQLException {
+        _res.updateArray(columnIndex, x);
+    }
+
+    public void updateArray(String columnName, java.sql.Array x)
+        throws SQLException {
+        _res.updateArray(columnName, x);
+    }
+
+/* JDBC_3_ANT_KEY_END */
 }

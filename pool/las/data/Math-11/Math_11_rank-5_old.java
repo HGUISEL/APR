@@ -1,476 +1,665 @@
 /*
- *  Licensed to the Apache Software Foundation (ASF) under one
- *  or more contributor license agreements.  See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership.  The ASF licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License.  You may obtain a copy of the License at
- *
- *        http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied.  See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
-package org.apache.isis.viewer.wicket.ui.components.scalars.reference;
+package org.apache.commons.dbcp2;
 
-import java.util.List;
-
-import com.google.common.collect.Lists;
-import com.vaynberg.wicket.select2.ChoiceProvider;
-import com.vaynberg.wicket.select2.Select2Choice;
-import com.vaynberg.wicket.select2.Settings;
-
-import org.apache.wicket.AttributeModifier;
-import org.apache.wicket.Component;
-import org.apache.wicket.MarkupContainer;
-import org.apache.wicket.behavior.Behavior;
-import org.apache.wicket.markup.html.basic.Label;
-import org.apache.wicket.markup.html.form.FormComponentLabel;
-import org.apache.wicket.model.IModel;
-import org.apache.wicket.model.Model;
-import org.apache.wicket.validation.IValidatable;
-import org.apache.wicket.validation.IValidator;
-import org.apache.wicket.validation.ValidationError;
-
-import org.apache.isis.core.metamodel.adapter.ObjectAdapter;
-import org.apache.isis.core.metamodel.adapter.mgr.AdapterManager.ConcurrencyChecking;
-import org.apache.isis.core.metamodel.facets.object.autocomplete.AutoCompleteFacet;
-import org.apache.isis.core.metamodel.spec.ObjectSpecification;
-import org.apache.isis.viewer.wicket.model.mementos.ObjectAdapterMemento;
-import org.apache.isis.viewer.wicket.model.models.EntityModel;
-import org.apache.isis.viewer.wicket.model.models.ScalarModel;
-import org.apache.isis.viewer.wicket.model.models.ScalarModelWithPending.Util;
-import org.apache.isis.viewer.wicket.ui.ComponentFactory;
-import org.apache.isis.viewer.wicket.ui.ComponentType;
-import org.apache.isis.viewer.wicket.ui.components.scalars.ScalarPanelAbstract;
-import org.apache.isis.viewer.wicket.ui.components.widgets.ObjectAdapterMementoProviderAbstract;
-import org.apache.isis.viewer.wicket.ui.components.widgets.Select2ChoiceUtil;
-import org.apache.isis.viewer.wicket.ui.components.widgets.entitysimplelink.EntityLinkSimplePanel;
-import org.apache.isis.viewer.wicket.ui.util.Components;
-import org.apache.isis.viewer.wicket.ui.util.CssClassAppender;
+import java.net.URL;
+import java.sql.CallableStatement;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.util.Map;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+import java.io.InputStream;
+import java.io.Reader;
+import java.sql.SQLException;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
+/* JDBC_4_ANT_KEY_END */
 
 /**
- * Panel for rendering scalars which of are of reference type (as opposed to
- * value types).
+ * A base delegating implementation of {@link CallableStatement}.
+ * <p>
+ * All of the methods from the {@link CallableStatement} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement Statement tracking and
+ * logging of code which created the Statement. Tracking the
+ * Statement ensures that the Connection which created it can
+ * close any open Statement's on Connection close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House
+ * @author Dirk Verbeeck
+ * @version $Revision$ $Date$
  */
-public class ReferencePanel extends ScalarPanelAbstract {
-
-    private static final long serialVersionUID = 1L;
-
-    private static final String ID_SCALAR_IF_REGULAR = "scalarIfRegular";
-    private static final String ID_SCALAR_NAME = "scalarName";
-
-    private static final String ID_SCALAR_IF_COMPACT = "scalarIfCompact";
-
-    static final String ID_AUTO_COMPLETE = "autoComplete";
-    
-    static final String ID_ENTITY_ICON_AND_TITLE = "entityIconAndTitle";
-
-    private EntityLinkSelect2Panel entityLink;
-    private EntityLinkSimplePanel entitySimpleLink;
-
-    private FormComponentLabel labelIfRegular;
-
-    public ReferencePanel(final String id, final ScalarModel scalarModel) {
-        super(id, scalarModel);
-    }
-
-    @Override
-    protected void onBeforeRenderWhenEnabled() {
-        super.onBeforeRenderWhenEnabled();
-        entityLink.setEnabled(true);
-        entityLink.owningPanel.syncVisibilityAndUsability(entityLink, entityLink.select2Field);
-    }
-
-    @Override
-    protected void onBeforeRenderWhenViewMode() {
-        super.onBeforeRenderWhenViewMode();
-        entityLink.setEnabled(true);
-        entityLink.owningPanel.syncVisibilityAndUsability(entityLink, entityLink.select2Field);
-    }
-
-    @Override
-    protected void onBeforeRenderWhenDisabled(final String disableReason) {
-        super.onBeforeRenderWhenDisabled(disableReason);
-        final EntityModel entityLinkModel = (EntityModel) entityLink.getModel();
-        entityLinkModel.toViewMode();
-        setTitleAttribute(disableReason);
-        entityLink.owningPanel.syncVisibilityAndUsability(entityLink, entityLink.select2Field);
-    }
-
-    private void setTitleAttribute(final String titleAttribute) {
-        entityLink.add(new AttributeModifier("title", Model.of(titleAttribute)));
-    }
-
-    @Override
-    protected FormComponentLabel addComponentForRegular() {
-        final ScalarModel scalarModel = getModel();
-        final String name = scalarModel.getName();
-        
-        entityLink = new EntityLinkSelect2Panel(ComponentType.ENTITY_LINK.getWicketId(), this);
-        
-        setOutputMarkupId(true);
-        entityLink.setOutputMarkupId(true);
-        entityLink.setLabel(Model.of(name));
-        
-        labelIfRegular = new FormComponentLabel(ID_SCALAR_IF_REGULAR, entityLink);
-        labelIfRegular.add(entityLink);
-        
-        final String describedAs = getModel().getDescribedAs();
-        if(describedAs != null) {
-            labelIfRegular.add(new AttributeModifier("title", Model.of(describedAs)));
-        }
-        
-        final Label scalarName = new Label(ID_SCALAR_NAME, getRendering().getLabelCaption(entityLink));
-        labelIfRegular.add(scalarName);
-        
-        addOrReplace(labelIfRegular);
-        
-        addFeedbackTo(labelIfRegular, entityLink);
-        addAdditionalLinksTo(labelIfRegular);
-        
-        addStandardSemantics();
-        addSemantics();
-
-        if(getModel().isRequired()) {
-            labelIfRegular.add(new CssClassAppender("mandatory"));
-        }
-        return labelIfRegular;
-    }
-
-    protected void addStandardSemantics() {
-        setRequiredIfSpecified();
-    }
-
-    private void setRequiredIfSpecified() {
-        final ScalarModel scalarModel = getModel();
-        final boolean required = scalarModel.isRequired();
-        entityLink.setRequired(required);
-    }
-
-    protected void addSemantics() {
-
-        addObjectAdapterValidator();
-    }
-
-    private void addObjectAdapterValidator() {
-        final ScalarModel scalarModel = getModel();
-
-        entityLink.add(new IValidator<ObjectAdapter>() {
-
-            private static final long serialVersionUID = 1L;
-
-            @Override
-            public void validate(final IValidatable<ObjectAdapter> validatable) {
-                final ObjectAdapter proposedAdapter = validatable.getValue();
-                final String reasonIfAny = scalarModel.validate(proposedAdapter);
-                if (reasonIfAny != null) {
-                    final ValidationError error = new ValidationError();
-                    error.setMessage(reasonIfAny);
-                    validatable.error(error);
-                }
-            }
-        });
-    }
+public class DelegatingCallableStatement extends DelegatingPreparedStatement
+        implements CallableStatement {
 
     /**
-     * Mandatory hook method to build the component to render the model when in
-     * {@link Rendering#COMPACT compact} format.
+     * Create a wrapper for the Statement which traces this
+     * Statement to the Connection which created it and the
+     * code which created it.
+     *
+     * @param c the {@link DelegatingConnection} that created this statement
+     * @param s the {@link CallableStatement} to delegate all calls to
      */
-    @Override
-    protected Component addComponentForCompact() {
-
-        final ScalarModel scalarModel = getModel();
-        final String name = scalarModel.getName();
-        
-        entitySimpleLink = (EntityLinkSimplePanel) getComponentFactoryRegistry().createComponent(ComponentType.ENTITY_LINK, getModel());
-        
-        entitySimpleLink.setOutputMarkupId(true);
-        entitySimpleLink.setLabel(Model.of(name));
-        
-        final FormComponentLabel labelIfCompact = new FormComponentLabel(ID_SCALAR_IF_COMPACT, entitySimpleLink);
-        labelIfCompact.add(entitySimpleLink);
-        
-        addOrReplace(labelIfCompact);
-        
-        return labelIfCompact;
+    public DelegatingCallableStatement(DelegatingConnection c,
+                                       CallableStatement s) {
+        super(c, s);
     }
 
-    // //////////////////////////////////////
-
-    @Override
-    protected void addFormComponentBehavior(Behavior behavior) {
-        if(entityLink.select2Field != null) {
-            entityLink.select2Field.add(behavior);
-        }
-    }
-
-    @Override
-    public boolean updateChoices(ObjectAdapter[] argsIfAvailable) {
-        if(entityLink.select2Field != null) {
-            setProviderAndCurrAndPending(entityLink.select2Field, argsIfAvailable);
-            return true;
-        } else {
+    public boolean equals(Object obj) {
+    	if (this == obj) return true;
+        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
+        if (delegate == null) {
             return false;
         }
-    }
-
-    // //////////////////////////////////////
-
-    
-    boolean isEditableWithEitherAutoCompleteOrChoices() {
-        if(getModel().getRenderingHint().isInTable()) {
-            return false;
+        if (obj instanceof DelegatingCallableStatement) {
+            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
+            return delegate.equals(s.getInnermostDelegate());
         }
-        // doesn't apply if not editable, either
-        if(getModel().isViewMode()) {
-            return false;
-        }
-        return getModel().hasChoices() || hasParamOrPropertyAutoComplete() || hasObjectAutoComplete();
-    }
-
-    boolean hasParamOrPropertyAutoComplete() {
-        return getModel().hasAutoComplete();
-    }
-
-    boolean hasObjectAutoComplete() {
-        boolean hasAutoComplete = getModel().hasAutoComplete();
-        if(hasAutoComplete) {
-            return true;
-        }
-        
-        // else on underlying type
-        final ObjectSpecification typeOfSpecification = getModel().getTypeOfSpecification();
-        final AutoCompleteFacet autoCompleteFacet = 
-                (typeOfSpecification != null)? typeOfSpecification.getFacet(AutoCompleteFacet.class):null;
-        return autoCompleteFacet != null;
-    }
-
-    void setProviderAndCurrAndPending(final Select2Choice<ObjectAdapterMemento> select2Field, final ObjectAdapter[] argsIfAvailable) {
-        if (getModel().hasChoices()) {
-            
-            final List<ObjectAdapterMemento> choiceMementos = getChoiceMementos(argsIfAvailable);
-            ObjectAdapterMementoProviderAbstract providerForChoices = providerForChoices(choiceMementos);
-            
-            select2Field.setProvider(providerForChoices);
-            getModel().clearPending();
-            
-            resetIfCurrentNotInChoices(select2Field, choiceMementos);
-            
-        } else if(hasParamOrPropertyAutoComplete()) {
-            select2Field.setProvider(providerForParamOrPropertyAutoComplete());
-            getModel().clearPending();
-        } else {
-            select2Field.setProvider(providerForObjectAutoComplete());
-            getModel().clearPending();
+        else {
+            return delegate.equals(obj);
         }
     }
 
-    List<ObjectAdapterMemento> getChoiceMementos(final ObjectAdapter[] argsIfAvailable) {
-        final List<ObjectAdapter> choices = Lists.newArrayList();
-        if(getModel().hasChoices()) {
-            choices.addAll(getModel().getChoices(argsIfAvailable));
-        }
-        // take a copy otherwise is only lazily evaluated
-        return Lists.newArrayList(Lists.transform(choices, ObjectAdapterMemento.Functions.fromAdapter()));
+    /** Sets my delegate. */
+    public void setDelegate(CallableStatement s) {
+        super.setDelegate(s);
+        _stmt = s;
     }
 
+    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
 
-    ChoiceProvider<ObjectAdapterMemento> providerForObjectAutoComplete() {
-        return new ObjectAdapterMementoProviderAbstract(getModel()) {
+    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
 
-            private static final long serialVersionUID = 1L;
+    public boolean wasNull() throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
 
-            @Override
-            protected List<ObjectAdapterMemento> obtainMementos(String term) {
-                final ObjectSpecification typeOfSpecification = getScalarModel().getTypeOfSpecification();
-                final AutoCompleteFacet autoCompleteFacet = typeOfSpecification.getFacet(AutoCompleteFacet.class);
-                final List<ObjectAdapter> results = autoCompleteFacet.execute(term);
-                return Lists.transform(results, ObjectAdapterMemento.Functions.fromAdapter());
-            }
-        };
+    public String getString(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int i, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public URL getURL(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void setURL(String parameterName, URL val) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setBoolean(String parameterName, boolean x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setByte(String parameterName, byte x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setShort(String parameterName, short x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setInt(String parameterName, int x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setLong(String parameterName, long x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setFloat(String parameterName, float x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDouble(String parameterName, double x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setString(String parameterName, String x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBytes(String parameterName, byte [] x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDate(String parameterName, Date x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
+    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
+
+    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public String getString(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public byte[] getBytes(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public URL getURL(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+/* JDBC_4_ANT_KEY_BEGIN */
+
+    public RowId getRowId(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
     }
 
-
-    ChoiceProvider<ObjectAdapterMemento> providerForParamOrPropertyAutoComplete() {
-        return new ObjectAdapterMementoProviderAbstract(getModel()) {
-            
-            private static final long serialVersionUID = 1L;
-            
-            @Override
-            protected List<ObjectAdapterMemento> obtainMementos(String term) {
-                final List<ObjectAdapter> autoCompleteChoices = Lists.newArrayList();
-                if(getScalarModel().hasAutoComplete()) {
-                    autoCompleteChoices.addAll(getScalarModel().getAutoComplete(term));
-                }
-                // take a copy otherwise is only lazily evaluated
-                return Lists.newArrayList(Lists.transform(autoCompleteChoices, ObjectAdapterMemento.Functions.fromAdapter()));
-            }
-            
-        };
-    }
-    
-
-    void resetIfCurrentNotInChoices(final Select2Choice<ObjectAdapterMemento> select2Field, final List<ObjectAdapterMemento> choiceMementos) {
-        final ObjectAdapterMemento curr = select2Field.getModelObject();
-        if(curr == null) {
-            select2Field.getModel().setObject(null);
-            this.getModel().setObject(null);
-            return;
+    public RowId getRowId(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterName);
         }
-        if(!curr.containedIn(choiceMementos)) {
-            if(!choiceMementos.isEmpty()) {
-                final ObjectAdapterMemento newAdapterMemento = choiceMementos.get(0);
-                select2Field.getModel().setObject(newAdapterMemento);
-                this.getModel().setObject(newAdapterMemento.getObjectAdapter(ConcurrencyChecking.NO_CHECK));
-            } else {
-                select2Field.getModel().setObject(null);
-                this.getModel().setObject(null);
-            }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
         }
     }
 
-    ObjectAdapterMementoProviderAbstract providerForChoices(final List<ObjectAdapterMemento> choiceMementos) {
-        return new ObjectAdapterMementoProviderAbstract(getModel()) {
-            private static final long serialVersionUID = 1L;
-            @Override
-            protected List<ObjectAdapterMemento> obtainMementos(String unused) {
-                return choiceMementos;
-            }
-        };
-    }
-
-    void syncLinkWithInput(EntityLinkSelect2Panel linkPanel, final ObjectAdapter adapter) {
-        if(labelIfRegular == null) {
-            return;
+    public void setRowId(String parameterName, RowId value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setRowId(parameterName, value);
         }
-        
-        if (adapter != null) {
-            final EntityModel entityModelForLink = new EntityModel(adapter);
-            
-            entityModelForLink.setContextAdapterIfAny(getModel().getContextAdapterIfAny());
-            entityModelForLink.setRenderingHint(getModel().getRenderingHint());
-            
-            final ComponentFactory componentFactory = 
-                    getComponentFactoryRegistry().findComponentFactory(ComponentType.ENTITY_ICON_AND_TITLE, entityModelForLink);
-            final Component component = componentFactory.createComponent(entityModelForLink);
-            
-            labelIfRegular.addOrReplace(component);
-        } else {
-            Components.permanentlyHide(labelIfRegular, ReferencePanel.ID_ENTITY_ICON_AND_TITLE);
-            
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-
-    void onSelected(EntityLinkSelect2Panel linkPanel, final ObjectAdapterMemento selectedAdapterMemento) {
-
-        getModel().setPending(selectedAdapterMemento);
-        getModel().setObject(selectedAdapterMemento!=null?selectedAdapterMemento.getObjectAdapter(ConcurrencyChecking.NO_CHECK):null);
-        if(linkPanel.select2Field != null) {
-            linkPanel.select2Field.getModel().setObject(selectedAdapterMemento);
+    public void setNString(String parameterName, String value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNString(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-    /**
-     * Must be called after {@link #setEnabled(boolean)}, apparently...
-     * originally to ensure that the findUsing button and entityClearLink were
-     * shown/not shown as required, however these have now gone.  Which beckons the question,
-     * is it still important?
-     * 
-     * <p>
-     * REVIEW: there ought to be a better way to do this. I'd hoped to override
-     * {@link #setEnabled(boolean)}, but it is <tt>final</tt>, and there doesn't
-     * seem to be anyway to install a listener. One option might be to move it
-     * to {@link #onBeforeRender()} ?
-     */
-    void syncVisibilityAndUsability(EntityLinkSelect2Panel linkPanel, Select2Choice<ObjectAdapterMemento> select2Field) {
-        final boolean mutability = linkPanel.isEnableAllowed() && !getModel().isViewMode();
-    
-        if(select2Field != null) {
-            select2Field.setEnabled(mutability);
+    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
         }
-        
-        if(labelIfRegular != null && isEditableWithEitherAutoCompleteOrChoices()) {
-            Components.permanentlyHide(labelIfRegular, ReferencePanel.ID_ENTITY_ICON_AND_TITLE);
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-    void convertInput(EntityLinkSelect2Panel linkPanel) {
-        if(getModel().isEditMode() && isEditableWithEitherAutoCompleteOrChoices()) {
-            // flush changes to pending
-            this.onSelected(linkPanel, linkPanel.select2Field.getConvertedInput());
+    public void setNClob(String parameterName, NClob value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, value);
         }
-    
-        final ObjectAdapter pendingAdapter = getModel().getPendingAdapter();
-        linkPanel.setConvertedInput(pendingAdapter);
-    }
-
-    void syncWithInput(EntityLinkSelect2Panel linkPanel) {
-        final ObjectAdapter adapter = getModel().getPendingElseCurrentAdapter();
-        syncLinkWithInput(linkPanel, adapter);
-        doSyncWithInputIfAutoCompleteOrChoices(linkPanel);
-        syncVisibilityAndUsability(linkPanel, linkPanel.select2Field);
-    }
-
-    void doSyncWithInputIfAutoCompleteOrChoices(EntityLinkSelect2Panel linkPanel) {
-        if(!isEditableWithEitherAutoCompleteOrChoices()) {
-            // this is horrid; adds a label to the id
-            // should instead be a 'temporary hide'
-            Components.permanentlyHide(linkPanel, ReferencePanel.ID_AUTO_COMPLETE);
-            linkPanel.select2Field = null; // this forces recreation next time around
-            return;
-        }
-    
-        final IModel<ObjectAdapterMemento> model = Util.createModel(getModel().asScalarModelWithPending());       
-    
-        if(linkPanel.select2Field == null) {
-            linkPanel.setRequired(getModel().isRequired());
-            linkPanel.select2Field = Select2ChoiceUtil.newSelect2Choice(ReferencePanel.ID_AUTO_COMPLETE, model, getModel());
-            setProviderAndCurrAndPending(linkPanel.select2Field, getModel().getActionArgsHint());
-            if(!getModel().hasChoices()) {
-                final Settings settings = linkPanel.select2Field.getSettings();
-                final int minLength = getModel().getAutoCompleteMinLength();
-                settings.setMinimumInputLength(minLength);
-                settings.setPlaceholder(getModel().getName());
-            }
-            linkPanel.addOrReplace(linkPanel.select2Field);
-        } else {
-            //
-            // the select2Field already exists, so the widget has been rendered before.  If it is
-            // being re-rendered now, it may be because some other property/parameter was invalid.
-            // when the form was submitted, the selected object (its oid as a string) would have
-            // been saved as rawInput.  If the property/parameter had been valid, then this rawInput
-            // would be correctly converted and processed by the select2Field's choiceProvider.  However,
-            // an invalid property/parameter means that the webpage is re-rendered in another request,
-            // and the rawInput can no longer be interpreted.  The net result is that the field appears
-            // with no input.
-            //
-            // The fix is therefore (I think) simply to clear any rawInput, so that the select2Field
-            // renders its state from its model.
-            //
-            // see: FormComponent#getInputAsArray()
-            // see: Select2Choice#renderInitializationScript()
-            //
-            linkPanel.select2Field.clearInput();
-        }
-    
-        if(labelIfRegular != null) {
-            // no need for link, since can see in drop-down
-            Components.permanentlyHide(labelIfRegular, ReferencePanel.ID_ENTITY_ICON_AND_TITLE);
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-    String getInput() {
-        final ObjectAdapter pendingElseCurrentAdapter = getModel().getPendingElseCurrentAdapter();
-        return pendingElseCurrentAdapter != null? pendingElseCurrentAdapter.titleString(null): "(no object)";
+    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
 
+    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
 
+    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public NClob getNClob(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public NClob getNClob(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setBlob(String parameterName, Blob blob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, blob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Clob clob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, clob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setNClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+/* JDBC_4_ANT_KEY_END */
 }

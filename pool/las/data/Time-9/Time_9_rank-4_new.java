@@ -1,339 +1,341 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package org.jsoup.nodes;
 
-package org.apache.hadoop.hive.ql.optimizer;
+import org.jsoup.SerializationException;
+import org.jsoup.helper.Validate;
 
-import java.io.Serializable;
+import java.io.IOException;
+import java.util.AbstractMap;
+import java.util.AbstractSet;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.Vector;
-
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.ql.exec.ColumnInfo;
-import org.apache.hadoop.hive.ql.exec.JoinOperator;
-import org.apache.hadoop.hive.ql.exec.MapJoinOperator;
-import org.apache.hadoop.hive.ql.exec.Operator;
-import org.apache.hadoop.hive.ql.exec.OperatorFactory;
-import org.apache.hadoop.hive.ql.exec.FunctionRegistry;
-import org.apache.hadoop.hive.ql.exec.RowSchema;
-import org.apache.hadoop.hive.ql.exec.SelectOperator;
-import org.apache.hadoop.hive.ql.parse.ASTNode;
-import org.apache.hadoop.hive.ql.parse.ErrorMsg;
-import org.apache.hadoop.hive.ql.parse.OpParseContext;
-import org.apache.hadoop.hive.ql.parse.ParseContext;
-import org.apache.hadoop.hive.ql.parse.QBJoinTree;
-import org.apache.hadoop.hive.ql.parse.RowResolver;
-import org.apache.hadoop.hive.ql.parse.SemanticAnalyzer;
-import org.apache.hadoop.hive.ql.parse.SemanticException;
-import org.apache.hadoop.hive.ql.parse.TypeCheckProcFactory;
-import org.apache.hadoop.hive.ql.parse.joinCond;
-import org.apache.hadoop.hive.ql.plan.PlanUtils;
-import org.apache.hadoop.hive.ql.plan.exprNodeColumnDesc;
-import org.apache.hadoop.hive.ql.plan.exprNodeDesc;
-import org.apache.hadoop.hive.ql.plan.mapJoinDesc;
-import org.apache.hadoop.hive.ql.plan.selectDesc;
-import org.apache.hadoop.hive.ql.plan.tableDesc;
-import org.apache.hadoop.hive.ql.plan.joinDesc;
-import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 
 /**
- * Implementation of one of the rule-based map join optimization. User passes hints to specify map-joins and during this optimization,
- * all user specified map joins are converted to MapJoins - the reduce sink operator above the join are converted to map sink operators.
- * In future, once statistics are implemented, this transformation can also be done based on costs.
+ * The attributes of an Element.
+ * <p>
+ * Attributes are treated as a map: there can be only one value associated with an attribute key/name.
+ * </p>
+ * <p>
+ * Attribute name and value comparisons are  <b>case sensitive</b>. By default for HTML, attribute names are
+ * normalized to lower-case on parsing. That means you should use lower-case strings when referring to attributes by
+ * name.
+ * </p>
+ *
+ * @author Jonathan Hedley, jonathan@hedley.net
  */
-public class MapJoinProcessor implements Transform {
-  private ParseContext pGraphContext;
+public class Attributes implements Iterable<Attribute>, Cloneable {
+    protected static final String dataPrefix = "data-";
 
-  /**
-   * empty constructor
-   */
-	public MapJoinProcessor() {
-    pGraphContext = null;
-	}
+    private LinkedHashMap<String, Attribute> attributes = null;
+    // linked hash map to preserve insertion order.
+    // null be default as so many elements have no attributes -- saves a good chunk of memory
 
-  @SuppressWarnings("nls")
-  private Operator<? extends Serializable> putOpInsertMap(Operator<? extends Serializable> op, RowResolver rr) {
-    OpParseContext ctx = new OpParseContext(rr);
-    pGraphContext.getOpParseCtx().put(op, ctx);
-    return op;
-  }
-  
-  /**
-   * convert a regular join to a a map-side join. 
-   * @param op join operator
-   * @param qbJoin qb join tree
-   * @param mapJoinPos position of the source to be read as part of map-reduce framework. All other sources are cached in memory
-   */
-  private void convertMapJoin(ParseContext pctx, JoinOperator op, QBJoinTree joinTree, int mapJoinPos) throws SemanticException {
-    // outer join cannot be performed on a table which is being cached
-    joinDesc desc = op.getConf();
-    org.apache.hadoop.hive.ql.plan.joinCond[] condns = desc.getConds();
-    for (org.apache.hadoop.hive.ql.plan.joinCond condn : condns) {
-      if (condn.getType() == joinDesc.FULL_OUTER_JOIN)
-        throw new SemanticException(ErrorMsg.NO_OUTER_MAPJOIN.getMsg());
-      if ((condn.getType() == joinDesc.LEFT_OUTER_JOIN) && (condn.getLeft() != mapJoinPos))
-        throw new SemanticException(ErrorMsg.NO_OUTER_MAPJOIN.getMsg());
-      if ((condn.getType() == joinDesc.RIGHT_OUTER_JOIN) && (condn.getRight() != mapJoinPos))
-        throw new SemanticException(ErrorMsg.NO_OUTER_MAPJOIN.getMsg());
+    /**
+     Get an attribute value by key.
+     @param key the (case-sensitive) attribute key
+     @return the attribute value if set; or empty string if not set.
+     @see #hasKey(String)
+     */
+    public String get(String key) {
+        Validate.notEmpty(key);
+
+        if (attributes == null)
+            return "";
+
+        Attribute attr = attributes.get(key);
+        return attr != null ? attr.getValue() : "";
     }
 
-    RowResolver outputRS = new RowResolver();
-    Map<Byte, List<exprNodeDesc>> keyExprMap   = new HashMap<Byte, List<exprNodeDesc>>();
-    Map<Byte, List<exprNodeDesc>> valueExprMap = new HashMap<Byte, List<exprNodeDesc>>();
+    /**
+     * Get an attribute's value by case-insensitive key
+     * @param key the attribute name
+     * @return the first matching attribute value if set; or empty string if not set.
+     */
+    public String getIgnoreCase(String key) {
+        Validate.notEmpty(key);
+        if (attributes == null)
+            return "";
 
-    // Walk over all the sources (which are guaranteed to be reduce sink operators). 
-    // The join outputs a concatenation of all the inputs.
-    QBJoinTree leftSrc = joinTree.getJoinSrc();
-
-    List<Operator<? extends Serializable>> parentOps = op.getParentOperators();
-    List<Operator<? extends Serializable>> newParentOps = new ArrayList<Operator<? extends Serializable>>();
-    
-    // found a source which is not to be stored in memory
-    if (leftSrc != null) {
-      //      assert mapJoinPos == 0;
-      Operator<? extends Serializable> parentOp = parentOps.get(0);
-      assert parentOp.getParentOperators().size() == 1;
-      Operator<? extends Serializable> grandParentOp = parentOp.getParentOperators().get(0);
-      
-      grandParentOp.removeChild(parentOp);
-      newParentOps.add(grandParentOp);
-    }
-
-    int pos = 0;
-    // Remove parent reduce-sink operators
-    for (String src : joinTree.getBaseSrc()) {
-      if (src != null) {
-        Operator<? extends Serializable> parentOp = parentOps.get(pos);
-        assert parentOp.getParentOperators().size() == 1;
-        Operator<? extends Serializable> grandParentOp = parentOp.getParentOperators().get(0);
-        
-        grandParentOp.removeChild(parentOp);
-
-        newParentOps.add(grandParentOp);
-      }
-      pos++;
-    }
-
-    int keyLength = 0;
-    int outputPos = 0;
-
-    // create the map-join operator
-    for (pos = 0; pos < newParentOps.size(); pos++) {
-      RowResolver inputRS = pGraphContext.getOpParseCtx().get(newParentOps.get(pos)).getRR();
-    
-      List<exprNodeDesc> keys   = new ArrayList<exprNodeDesc>();
-      List<exprNodeDesc> values = new ArrayList<exprNodeDesc>();
-
-      // Compute join keys and store in reduceKeys
-      Vector<ASTNode> exprs = joinTree.getExpressions().get(pos);
-      for (int i = 0; i < exprs.size(); i++) {
-        ASTNode expr = exprs.get(i);
-        keys.add(SemanticAnalyzer.genExprNodeDesc(expr, inputRS));
-      }
-
-      if (pos == 0)
-        keyLength = keys.size();
-      else
-        assert (keyLength == keys.size());
-    
-      keyExprMap.put(new Byte((byte)pos), keys);
-
-      Iterator<String> keysIter = inputRS.getTableNames().iterator();
-      while (keysIter.hasNext())
-      {
-        String key = keysIter.next();
-        HashMap<String, ColumnInfo> rrMap = inputRS.getFieldMap(key);
-        Iterator<String> fNamesIter = rrMap.keySet().iterator();
-        while (fNamesIter.hasNext())
-        {
-          String field = fNamesIter.next();
-          ColumnInfo valueInfo = inputRS.get(key, field);
-          values.add(new exprNodeColumnDesc(valueInfo.getType(), valueInfo.getInternalName()));
-          if (outputRS.get(key, field) == null)
-            outputRS.put(key, field, new ColumnInfo((Integer.valueOf(outputPos++)).toString(), 
-                                                    valueInfo.getType()));
+        for (String attrKey : attributes.keySet()) {
+            if (attrKey.equalsIgnoreCase(key))
+                return attributes.get(attrKey).getValue();
         }
-      }
-      
-      valueExprMap.put(new Byte((byte)pos), values);      
+        return "";
     }
 
-    // implicit type conversion hierarchy
-    for (int k = 0; k < keyLength; k++) {
-      // Find the common class for type conversion
-      TypeInfo commonType = keyExprMap.get(new Byte((byte)0)).get(k).getTypeInfo();
-      for (int i=1; i < newParentOps.size(); i++) {
-        TypeInfo a = commonType;
-        TypeInfo b = keyExprMap.get(new Byte((byte)i)).get(k).getTypeInfo(); 
-        commonType = FunctionRegistry.getCommonClass(a, b);
-        if (commonType == null) {
-          throw new SemanticException("Cannot do equality join on different types: " + a.getTypeName() + " and " + b.getTypeName());
+    /**
+     Set a new attribute, or replace an existing one by key.
+     @param key attribute key
+     @param value attribute value
+     */
+    public void put(String key, String value) {
+        Attribute attr = new Attribute(key, value);
+        put(attr);
+    }
+
+    /**
+    Set a new boolean attribute, remove attribute if value is false.
+    @param key attribute key
+    @param value attribute value
+    */
+    public void put(String key, boolean value) {
+        if (value)
+            put(new BooleanAttribute(key));
+        else
+            remove(key);
+    }
+
+    /**
+     Set a new attribute, or replace an existing one by key.
+     @param attribute attribute
+     */
+    public void put(Attribute attribute) {
+        Validate.notNull(attribute);
+        if (attributes == null)
+             attributes = new LinkedHashMap<String, Attribute>(2);
+        attributes.put(attribute.getKey(), attribute);
+    }
+
+    /**
+     Remove an attribute by key. <b>Case sensitive.</b>
+     @param key attribute key to remove
+     */
+    public void remove(String key) {
+        Validate.notEmpty(key);
+        if (attributes == null)
+            return;
+        attributes.remove(key);
+    }
+
+    /**
+     Remove an attribute by key. <b>Case insensitive.</b>
+     @param key attribute key to remove
+     */
+    public void removeIgnoreCase(String key) {
+        Validate.notEmpty(key);
+        if (attributes == null)
+            return;
+        for (String attrKey : attributes.keySet()) {
+            if (attrKey.equalsIgnoreCase(key))
+                attributes.remove(attrKey);
         }
-      }
-      
-      // Add implicit type conversion if necessary
-      for (int i=0; i < newParentOps.size(); i++) {
-        if (!commonType.equals(keyExprMap.get(new Byte((byte)i)).get(k).getTypeInfo())) {
-          keyExprMap.get(new Byte((byte)i)).set(k, TypeCheckProcFactory.DefaultExprProcessor.getFuncExprNodeDesc(commonType.getTypeName(), keyExprMap.get(new Byte((byte)i)).get(k)));
+    }
+
+    /**
+     Tests if these attributes contain an attribute with this key.
+     @param key case-sensitive key to check for
+     @return true if key exists, false otherwise
+     */
+    public boolean hasKey(String key) {
+        return attributes != null && attributes.containsKey(key);
+    }
+
+    /**
+     Tests if these attributes contain an attribute with this key.
+     @param key key to check for
+     @return true if key exists, false otherwise
+     */
+    public boolean hasKeyIgnoreCase(String key) {
+        if (attributes == null)
+            return false;
+        for (String attrKey : attributes.keySet()) {
+            if (attrKey.equalsIgnoreCase(key))
+                return true;
         }
-      }
-    }
-    
-    org.apache.hadoop.hive.ql.plan.joinCond[] joinCondns = new org.apache.hadoop.hive.ql.plan.joinCond[joinTree.getJoinCond().length];
-    for (int i = 0; i < joinTree.getJoinCond().length; i++) {
-      joinCond condn = joinTree.getJoinCond()[i];
-      joinCondns[i] = new org.apache.hadoop.hive.ql.plan.joinCond(condn);
+        return false;
     }
 
-    Operator[] newPar = new Operator[newParentOps.size()];
-    pos = 0;
-    for (Operator<? extends Serializable> o : newParentOps)
-      newPar[pos++] = o;
-
-    List<exprNodeDesc> keyCols = keyExprMap.get(new Byte((byte)0));
-    StringBuilder keyOrder = new StringBuilder();
-    for (int i=0; i < keyCols.size(); i++) {
-      keyOrder.append("+");
+    /**
+     Get the number of attributes in this set.
+     @return size
+     */
+    public int size() {
+        if (attributes == null)
+            return 0;
+        return attributes.size();
     }
-    
-    tableDesc keyTableDesc = 
-      PlanUtils.getLazySimpleSerDeTableDesc(PlanUtils.getFieldSchemasFromColumnList(keyCols, "mapjoinkey"));
 
-    List<tableDesc> valueTableDescs = new ArrayList<tableDesc>();
-    
-    for (pos = 0; pos < newParentOps.size(); pos++) {
-      List<exprNodeDesc> valueCols = valueExprMap.get(new Byte((byte)pos));
-      keyOrder = new StringBuilder();
-      for (int i=0; i < valueCols.size(); i++) {
-        keyOrder.append("+");
-      }
-              
-      tableDesc valueTableDesc = 
-        PlanUtils.getLazySimpleSerDeTableDesc(PlanUtils.getFieldSchemasFromColumnList(valueCols, "mapjoinvalue"));
-    
-      valueTableDescs.add(valueTableDesc);
+    /**
+     Add all the attributes from the incoming set to this set.
+     @param incoming attributes to add to these attributes.
+     */
+    public void addAll(Attributes incoming) {
+        if (incoming.size() == 0)
+            return;
+        if (attributes == null)
+            attributes = new LinkedHashMap<String, Attribute>(incoming.size());
+        attributes.putAll(incoming.attributes);
     }
-      
-    MapJoinOperator mapJoinOp = (MapJoinOperator)putOpInsertMap(OperatorFactory.getAndMakeChild(
-      new mapJoinDesc(keyExprMap, keyTableDesc, valueExprMap, valueTableDescs, mapJoinPos, joinCondns),
-      new RowSchema(outputRS.getColumnInfos()), newPar), outputRS);
-    
-    // change the children of the original join operator to point to the map join operator
-    List<Operator<? extends Serializable>> childOps = op.getChildOperators();
-    for (Operator<? extends Serializable> childOp : childOps) 
-      childOp.replaceParent(op, mapJoinOp);
-    
-    // TODO: do as part of replaceParent
-    mapJoinOp.setChildOperators(childOps);
-    mapJoinOp.setParentOperators(newParentOps);
-    op.setChildOperators(null);
-    op.setParentOperators(null);
 
-    // create a dummy select to select all columns
-    genSelectPlan(pctx, mapJoinOp);
-  }
-
-  private void genSelectPlan(ParseContext pctx, Operator<? extends Serializable> input) {
-    List<Operator<? extends Serializable>> childOps = input.getChildOperators();
-    input.setChildOperators(null);
-
-    // create a dummy select - This select is needed by the walker to split the mapJoin later on
-  	RowResolver inputRR = pctx.getOpParseCtx().get(input).getRR();
-    SelectOperator sel = 
-      (SelectOperator)putOpInsertMap(OperatorFactory.getAndMakeChild(
-                       new selectDesc(true), new RowSchema(inputRR.getColumnInfos()), input), inputRR);
-    
-    // Insert the select operator in between. 
-    sel.setChildOperators(childOps);
-    for (Operator<? extends Serializable> ch: childOps) {
-      ch.replaceParent(input, sel);
-    }
-  }
-
-  /**
-   * Is it a map-side join. 
-   * @param op join operator
-   * @param qbJoin qb join tree
-   * @return -1 if it cannot be converted to a map-side join, position of the map join node otherwise
-   */
-  private int mapSideJoin(JoinOperator op, QBJoinTree joinTree) throws SemanticException {
-    int mapJoinPos = -1;
-    if (joinTree.isMapSideJoin()) {
-      int pos = 0;
-      // In a map-side join, exactly one table is not present in memory.
-      // The client provides the list of tables which can be cached in memory via a hint.
-      if (joinTree.getJoinSrc() != null) 
-        mapJoinPos = pos;
-      for (String src : joinTree.getBaseSrc()) {
-        if (src != null) {
-          if (!joinTree.getMapAliases().contains(src)) {
-            if (mapJoinPos >= 0) 
-              return -1;
-            mapJoinPos = pos;
-          }
+    public Iterator<Attribute> iterator() {
+        if (attributes == null || attributes.isEmpty()) {
+            return Collections.<Attribute>emptyList().iterator();
         }
-        pos++;
-      }
-      
-      // All tables are to be cached - this is not possible. In future, we can support this by randomly 
-      // leaving some table from the list of tables to be cached
-      if (mapJoinPos == -1) 
-        throw new SemanticException(ErrorMsg.INVALID_MAPJOIN_HINT.getMsg(pGraphContext.getQB().getParseInfo().getHints()));
+
+        return attributes.values().iterator();
     }
 
-    return mapJoinPos;
-  }
+    /**
+     Get the attributes as a List, for iteration. Do not modify the keys of the attributes via this view, as changes
+     to keys will not be recognised in the containing set.
+     @return an view of the attributes as a List.
+     */
+    public List<Attribute> asList() {
+        if (attributes == null)
+            return Collections.emptyList();
 
-  /**
-   * Transform the query tree. For each join, check if it is a map-side join (user specified). If yes, 
-   * convert it to a map-side join.
-   * @param pactx current parse context
-   */
-  public ParseContext transform(ParseContext pactx) throws SemanticException {
-    this.pGraphContext = pactx;
-
-    // traverse all the joins and convert them if necessary
-    if (pGraphContext.getJoinContext() != null) {
-      Map<JoinOperator, QBJoinTree> joinMap = new HashMap<JoinOperator, QBJoinTree>();
-      
-      Set<Map.Entry<JoinOperator, QBJoinTree>> joinCtx = pGraphContext.getJoinContext().entrySet();
-      Iterator<Map.Entry<JoinOperator, QBJoinTree>> joinCtxIter = joinCtx.iterator();
-      while (joinCtxIter.hasNext()) {
-        Map.Entry<JoinOperator, QBJoinTree> joinEntry = joinCtxIter.next();
-        JoinOperator joinOp = joinEntry.getKey();
-        QBJoinTree   qbJoin = joinEntry.getValue();
-        int mapJoinPos = mapSideJoin(joinOp, qbJoin);
-        if (mapJoinPos >= 0) {
-          convertMapJoin(pactx, joinOp, qbJoin, mapJoinPos);
+        List<Attribute> list = new ArrayList<Attribute>(attributes.size());
+        for (Map.Entry<String, Attribute> entry : attributes.entrySet()) {
+            list.add(entry.getValue());
         }
-        else {
-          joinMap.put(joinOp, qbJoin);
-        }
-      }
-      
-      // store the new joinContext
-      pGraphContext.setJoinContext(joinMap);
+        return Collections.unmodifiableList(list);
     }
 
-    return pGraphContext;
-	}
+    /**
+     * Retrieves a filtered view of attributes that are HTML5 custom data attributes; that is, attributes with keys
+     * starting with {@code data-}.
+     * @return map of custom data attributes.
+     */
+    public Map<String, String> dataset() {
+        return new Dataset();
+    }
+
+    /**
+     Get the HTML representation of these attributes.
+     @return HTML
+     @throws SerializationException if the HTML representation of the attributes cannot be constructed.
+     */
+    public String html() {
+        StringBuilder accum = new StringBuilder();
+        try {
+            html(accum, (new Document("")).outputSettings()); // output settings a bit funky, but this html() seldom used
+        } catch (IOException e) { // ought never happen
+            throw new SerializationException(e);
+        }
+        return accum.toString();
+    }
+
+    void html(Appendable accum, Document.OutputSettings out) throws IOException {
+        if (attributes == null)
+            return;
+
+        for (Map.Entry<String, Attribute> entry : attributes.entrySet()) {
+            Attribute attribute = entry.getValue();
+            accum.append(" ");
+            attribute.html(accum, out);
+        }
+    }
+
+    @Override
+    public String toString() {
+        return html();
+    }
+
+    /**
+     * Checks if these attributes are equal to another set of attributes, by comparing the two sets
+     * @param o attributes to compare with
+     * @return if both sets of attributes have the same content
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Attributes)) return false;
+
+        Attributes that = (Attributes) o;
+
+        return !(attributes != null ? !attributes.equals(that.attributes) : that.attributes != null);
+    }
+
+    /**
+     * Calculates the hashcode of these attributes, by iterating all attributes and summing their hashcodes.
+     * @return calculated hashcode
+     */
+    @Override
+    public int hashCode() {
+        return attributes != null ? attributes.hashCode() : 0;
+    }
+
+    @Override
+    public Attributes clone() {
+        if (attributes == null)
+            return new Attributes();
+
+        Attributes clone;
+        try {
+            clone = (Attributes) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+        }
+        clone.attributes = new LinkedHashMap<String, Attribute>(attributes.size());
+        for (Attribute attribute: this)
+            clone.attributes.put(attribute.getKey(), attribute.clone());
+        return clone;
+    }
+
+    private class Dataset extends AbstractMap<String, String> {
+
+        private Dataset() {
+            if (attributes == null)
+                attributes = new LinkedHashMap<String, Attribute>(2);
+        }
+
+        @Override
+        public Set<Entry<String, String>> entrySet() {
+            return new EntrySet();
+        }
+
+        @Override
+        public String put(String key, String value) {
+            String dataKey = dataKey(key);
+            String oldValue = hasKey(dataKey) ? attributes.get(dataKey).getValue() : null;
+            Attribute attr = new Attribute(dataKey, value);
+            attributes.put(dataKey, attr);
+            return oldValue;
+        }
+
+        private class EntrySet extends AbstractSet<Map.Entry<String, String>> {
+
+            @Override
+            public Iterator<Map.Entry<String, String>> iterator() {
+                return new DatasetIterator();
+            }
+
+           @Override
+            public int size() {
+                int count = 0;
+                Iterator iter = new DatasetIterator();
+                while (iter.hasNext())
+                    count++;
+                return count;
+            }
+        }
+
+        private class DatasetIterator implements Iterator<Map.Entry<String, String>> {
+            private Iterator<Attribute> attrIter = attributes.values().iterator();
+            private Attribute attr;
+            public boolean hasNext() {
+                while (attrIter.hasNext()) {
+                    attr = attrIter.next();
+                    if (attr.isDataAttribute()) return true;
+                }
+                return false;
+            }
+
+            public Entry<String, String> next() {
+                return new Attribute(attr.getKey().substring(dataPrefix.length()), attr.getValue());
+            }
+
+            public void remove() {
+                attributes.remove(attr.getKey());
+            }
+        }
+    }
+
+    private static String dataKey(String key) {
+        return dataPrefix + key;
+    }
 }

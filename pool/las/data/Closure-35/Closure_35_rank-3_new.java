@@ -1,308 +1,329 @@
-/*
- * Copyright 2014 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.pdfbox.filter;
+package com.fasterxml.jackson.databind.ser;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.EOFException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.Arrays;
-import javax.imageio.stream.MemoryCacheImageInputStream;
-import javax.imageio.stream.MemoryCacheImageOutputStream;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.pdfbox.cos.COSDictionary;
-import org.apache.pdfbox.cos.COSName;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
+import com.fasterxml.jackson.databind.util.*;
 
 /**
- *
- * This is the filter used for the LZWDecode filter.
- *
- * @author <a href="mailto:ben@benlitchfield.com">Ben Litchfield</a>
- * @author Tilman Hausherr
+ * Helper class for {@link BeanSerializerFactory} that is used to
+ * construct {@link BeanPropertyWriter} instances. Can be sub-classed
+ * to change behavior.
  */
-public class LZWFilter extends Filter
+public class PropertyBuilder
 {
-    /**
-     * Log instance.
-     */
-    private static final Log LOG = LogFactory.getLog(LZWFilter.class);
-
-    /**
-     * The LZW clear table code.
-     */
-    public static final long CLEAR_TABLE = 256;
-
-    /**
-     * The LZW end of data code.
-     */
-    public static final long EOD = 257;
+    // @since 2.7
+    private final static Object NO_DEFAULT_MARKER = Boolean.FALSE;
     
-    //BEWARE: codeTable must be local to each method, because there is only
-    // one instance of each filter
+    final protected SerializationConfig _config;
+    final protected BeanDescription _beanDesc;
 
     /**
-     * {@inheritDoc}
+     * Default inclusion mode for properties of the POJO for which
+     * properties are collected; possibly overridden on
+     * per-property basis.
      */
-    @Override
-    protected final DecodeResult decode(InputStream encoded, OutputStream decoded,
-            COSDictionary parameters) throws IOException
-    {
-        int predictor = -1;
+    final protected JsonInclude.Value _defaultInclusion;
 
-        COSDictionary decodeParams = (COSDictionary)
-                parameters.getDictionaryObject(COSName.DECODE_PARMS, COSName.DP);
-        if (decodeParams != null)
-        {
-            predictor = decodeParams.getInt(COSName.PREDICTOR);
-        }
-        if (predictor > 1)
-        {
-            int colors = decodeParams.getInt(COSName.COLORS, 1);
-            int bitsPerPixel = decodeParams.getInt(COSName.BITS_PER_COMPONENT, 8);
-            int columns = decodeParams.getInt(COSName.COLUMNS, 1);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            doLZWDecode(encoded, baos);
-            ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-            byte[] decodedData = Predictor.decodePredictor(predictor, colors, bitsPerPixel, columns, bais);
-            decoded.write(decodedData);
-            decoded.flush();
-            baos.reset();
-            bais.reset();
-        }
-        else
-        {
-            doLZWDecode(encoded, decoded);
-        }
-        return new DecodeResult(parameters);
-    }
-
-    private void doLZWDecode(InputStream encoded, OutputStream decoded) throws IOException
-    {
-        ArrayList<byte[]> codeTable = null;
-        int chunk = 9;
-        MemoryCacheImageInputStream in = new MemoryCacheImageInputStream(encoded);
-        long nextCommand = 0;
-        long prevCommand = -1;
-
-        try
-        {
-            while ((nextCommand = in.readBits(chunk)) != EOD)
-            {
-                if (nextCommand == CLEAR_TABLE)
-                {
-                    chunk = 9;
-                    codeTable = createCodeTable();
-                    prevCommand = -1;
-                }
-                else
-                {
-                    if (nextCommand < codeTable.size())
-                    {
-                        byte[] data = codeTable.get((int) nextCommand);
-                        byte firstByte = data[0];
-                        decoded.write(data);
-                        if (prevCommand != -1)
-                        {
-                            data = codeTable.get((int) prevCommand);
-                            byte[] newData = Arrays.copyOf(data, data.length + 1);
-                            newData[data.length] = firstByte;
-                            codeTable.add(newData);
-                        }
-                    }
-                    else
-                    {
-                        byte[] data = codeTable.get((int) prevCommand);
-                        byte[] newData = Arrays.copyOf(data, data.length + 1);
-                        newData[data.length] = data[0];
-                        decoded.write(newData);
-                        codeTable.add(newData);
-                    }
-                    
-                    chunk = calculateChunk(codeTable.size());
-                    prevCommand = nextCommand;
-                }
-            }
-        }
-        catch (EOFException ex)
-        {
-            LOG.warn("Premature EOF in LZW stream, EOD code missing");
-        }
-        decoded.flush();
-    }
+    final protected AnnotationIntrospector _annotationIntrospector;
 
     /**
-     * {@inheritDoc}
+     * If a property has serialization inclusion value of
+     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT},
+     * we may need to know the default value of the bean, to know if property value
+     * equals default one.
+     *<p>
+     * NOTE: only used if enclosing class defines NON_DEFAULT, but NOT if it is the
+     * global default OR per-property override.
      */
-    @Override
-    protected final void encode(InputStream rawData, OutputStream encoded, COSDictionary parameters)
-            throws IOException
+    protected Object _defaultBean;
+
+    public PropertyBuilder(SerializationConfig config, BeanDescription beanDesc)
     {
-        ArrayList<byte[]> codeTable = createCodeTable();
-        int chunk = 9;
+        _config = config;
+        _beanDesc = beanDesc;
+        _defaultInclusion = beanDesc.findPropertyInclusion(
+                config.getDefaultPropertyInclusion(beanDesc.getBeanClass()));
+        _annotationIntrospector = _config.getAnnotationIntrospector();
+    }
 
-        byte[] inputPattern = null;
-        MemoryCacheImageOutputStream out = new MemoryCacheImageOutputStream(encoded);
-        out.writeBits(CLEAR_TABLE, chunk);
-        int foundCode = -1;
-        int r;
-        while ((r = rawData.read()) != -1)
-        {
-            byte by = (byte) r;
-            if (inputPattern == null)
-            {
-                inputPattern = new byte[]
-                {
-                    by
-                };
-                foundCode = by & 0xff;
-            }
-            else
-            {
-                inputPattern = Arrays.copyOf(inputPattern, inputPattern.length + 1);
-                inputPattern[inputPattern.length - 1] = by;
-                int newFoundCode = findPatternCode(codeTable, inputPattern);
-                if (newFoundCode == -1)
-                {
-                    // use previous
-                    chunk = calculateChunk(codeTable.size() - 1);
-                    out.writeBits(foundCode, chunk);
-                    // create new table entry
-                    codeTable.add(inputPattern);
+    /*
+    /**********************************************************
+    /* Public API
+    /**********************************************************
+     */
 
-                    if (codeTable.size() == 4096)
-                    {
-                        // code table is full
-                        out.writeBits(CLEAR_TABLE, chunk);
-                        chunk = 9;
-                        codeTable = createCodeTable();
-                    }
-
-                    inputPattern = new byte[]
-                    {
-                        by
-                    };
-                    foundCode = by & 0xff;
-                }
-                else
-                {
-                    foundCode = newFoundCode;
-                }
-            }
-        }
-        if (foundCode != -1)
-        {
-            chunk = calculateChunk(codeTable.size() - 1);
-            out.writeBits(foundCode, chunk);
-        }
-
-        // PPDFBOX-1977: the decoder wouldn't know that the encoder would output 
-        // an EOD as code, so he would have increased his own code table and 
-        // possibly adjusted the chunk. Therefore, the encoder must behave as 
-        // if the code table had just grown and thus it must be checked it is
-        // needed to adjust the chunk, based on an increased table size parameter
-        chunk = calculateChunk(codeTable.size());
-
-        out.writeBits(EOD, chunk);
-        out.writeBits(0, 7); // pad with 0
-        out.flush(); // must do or file will be empty :-(
+    public Annotations getClassAnnotations() {
+        return _beanDesc.getClassAnnotations();
     }
 
     /**
-     * Find the longest matching pattern in the code table.
+     * @param contentTypeSer Optional explicit type information serializer
+     *    to use for contained values (only used for properties that are
+     *    of container type)
+     */
+    @SuppressWarnings("deprecation")
+    protected BeanPropertyWriter buildWriter(SerializerProvider prov,
+            BeanPropertyDefinition propDef, JavaType declaredType, JsonSerializer<?> ser,
+            TypeSerializer typeSer, TypeSerializer contentTypeSer,
+            AnnotatedMember am, boolean defaultUseStaticTyping)
+        throws JsonMappingException
+    {
+        // do we have annotation that forces type to use (to declared type or its super type)?
+        JavaType serializationType = findSerializationType(am, defaultUseStaticTyping, declaredType);
+
+        // Container types can have separate type serializers for content (value / element) type
+        if (contentTypeSer != null) {
+            /* 04-Feb-2010, tatu: Let's force static typing for collection, if there is
+             *    type information for contents. Should work well (for JAXB case); can be
+             *    revisited if this causes problems.
+             */
+            if (serializationType == null) {
+//                serializationType = TypeFactory.type(am.getGenericType(), _beanDesc.getType());
+                serializationType = declaredType;
+            }
+            JavaType ct = serializationType.getContentType();
+            // Not exactly sure why, but this used to occur; better check explicitly:
+            if (ct == null) {
+                throw new IllegalStateException("Problem trying to create BeanPropertyWriter for property '"
+                        +propDef.getName()+"' (of type "+_beanDesc.getType()+"); serialization type "+serializationType+" has no content");
+            }
+            serializationType = serializationType.withContentTypeHandler(contentTypeSer);
+            ct = serializationType.getContentType();
+        }
+        
+        Object valueToSuppress = null;
+        boolean suppressNulls = false;
+
+        JsonInclude.Value inclV = _defaultInclusion.withOverrides(propDef.findInclusion());
+        JsonInclude.Include inclusion = inclV.getValueInclusion();
+        if (inclusion == JsonInclude.Include.USE_DEFAULTS) { // should not occur but...
+            inclusion = JsonInclude.Include.ALWAYS;
+        }
+
+        switch (inclusion) {
+        case NON_DEFAULT:
+            // 11-Nov-2015, tatu: This is tricky because semantics differ between cases,
+            //    so that if enclosing class has this, we may need to values of property,
+            //    whereas for global defaults OR per-property overrides, we have more
+            //    static definition. Sigh.
+            // First: case of class specifying it; try to find POJO property defaults
+            JavaType t = (serializationType == null) ? declaredType : serializationType;
+            if (_defaultInclusion.getValueInclusion() == JsonInclude.Include.NON_DEFAULT) {
+                valueToSuppress = getPropertyDefaultValue(propDef.getName(), am, t);
+            } else {
+                valueToSuppress = getDefaultValue(t);
+            }
+            if (valueToSuppress == null) {
+                suppressNulls = true;
+            } else {
+                if (valueToSuppress.getClass().isArray()) {
+                    valueToSuppress = ArrayBuilders.getArrayComparator(valueToSuppress);
+                }
+            }
+
+            break;
+        case NON_ABSENT: // new with 2.6, to support Guava/JDK8 Optionals
+            // always suppress nulls
+            suppressNulls = true;
+            // and for referential types, also "empty", which in their case means "absent"
+            if (declaredType.isReferenceType()) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
+        case NON_EMPTY:
+            // always suppress nulls
+            suppressNulls = true;
+            // but possibly also 'empty' values:
+            valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            break;
+        case NON_NULL:
+            suppressNulls = true;
+            // fall through
+        case ALWAYS: // default
+        default:
+            // we may still want to suppress empty collections, as per [JACKSON-254]:
+            if (declaredType.isContainerType()
+                    && !_config.isEnabled(SerializationFeature.WRITE_EMPTY_JSON_ARRAYS)) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
+        }
+        BeanPropertyWriter bpw = new BeanPropertyWriter(propDef,
+                am, _beanDesc.getClassAnnotations(), declaredType,
+                ser, typeSer, serializationType, suppressNulls, valueToSuppress);
+
+        // How about custom null serializer?
+        Object serDef = _annotationIntrospector.findNullSerializer(am);
+        if (serDef != null) {
+            bpw.assignNullSerializer(prov.serializerInstance(am, serDef));
+        }
+        // And then, handling of unwrapping
+        NameTransformer unwrapper = _annotationIntrospector.findUnwrappingNameTransformer(am);
+        if (unwrapper != null) {
+            bpw = bpw.unwrappingWriter(unwrapper);
+        }
+        return bpw;
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods; annotation access
+    /**********************************************************
+     */
+
+    /**
+     * Method that will try to determine statically defined type of property
+     * being serialized, based on annotations (for overrides), and alternatively
+     * declared type (if static typing for serialization is enabled).
+     * If neither can be used (no annotations, dynamic typing), returns null.
+     */
+    protected JavaType findSerializationType(Annotated a, boolean useStaticTyping, JavaType declaredType)
+        throws JsonMappingException
+    {
+        JavaType secondary = _annotationIntrospector.refineSerializationType(_config, a, declaredType);
+        // 11-Oct-2015, tatu: As of 2.7, not 100% sure following checks are needed. But keeping
+        //    for now, just in case
+        if (secondary != declaredType) {
+            Class<?> serClass = secondary.getRawClass();
+            // Must be a super type to be usable
+            Class<?> rawDeclared = declaredType.getRawClass();
+            if (serClass.isAssignableFrom(rawDeclared)) {
+                ; // fine as is
+            } else {
+                /* 18-Nov-2010, tatu: Related to fixing [JACKSON-416], an issue with such
+                 *   check is that for deserialization more specific type makes sense;
+                 *   and for serialization more generic. But alas JAXB uses but a single
+                 *   annotation to do both... Hence, we must just discard type, as long as
+                 *   types are related
+                 */
+                if (!rawDeclared.isAssignableFrom(serClass)) {
+                    throw new IllegalArgumentException("Illegal concrete-type annotation for method '"+a.getName()+"': class "+serClass.getName()+" not a super-type of (declared) class "+rawDeclared.getName());
+                }
+                /* 03-Dec-2010, tatu: Actually, ugh, we may need to further relax this
+                 *   and actually accept subtypes too for serialization. Bit dangerous in theory
+                 *   but need to trust user here...
+                 */
+            }
+            useStaticTyping = true;
+            declaredType = secondary;
+        }
+        // If using static typing, declared type is known to be the type...
+        JsonSerialize.Typing typing = _annotationIntrospector.findSerializationTyping(a);
+        if ((typing != null) && (typing != JsonSerialize.Typing.DEFAULT_TYPING)) {
+            useStaticTyping = (typing == JsonSerialize.Typing.STATIC);
+        }
+        if (useStaticTyping) {
+            // 11-Oct-2015, tatu: Make sure JavaType also "knows" static-ness...
+            return declaredType.withStaticTyping();
+            
+        }
+        return null;
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods for default value handling
+    /**********************************************************
+     */
+
+    protected Object getDefaultBean()
+    {
+        Object def = _defaultBean;
+        if (def == null) {
+            /* If we can fix access rights, we should; otherwise non-public
+             * classes or default constructor will prevent instantiation
+             */
+            def = _beanDesc.instantiateBean(_config.canOverrideAccessModifiers());
+            if (def == null) {
+                // 06-Nov-2015, tatu: As per [databind#998], do not fail.
+                /*
+                Class<?> cls = _beanDesc.getClassInfo().getAnnotated();
+                throw new IllegalArgumentException("Class "+cls.getName()+" has no default constructor; can not instantiate default bean value to support 'properties=JsonSerialize.Inclusion.NON_DEFAULT' annotation");
+                 */
+
+                // And use a marker
+                def = NO_DEFAULT_MARKER;
+            }
+            _defaultBean = def;
+        }
+        return (def == NO_DEFAULT_MARKER) ? null : _defaultBean;
+    }
+
+    /**
+     * Accessor used to find out "default value" for given property, to use for
+     * comparing values to serialize, to determine whether to exclude value from serialization with
+     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_EMPTY}.
+     * This method is called when we specifically want to know default value within context
+     * of a POJO, when annotation is within containing class, and not for property or
+     * defined as global baseline.
+     *<p>
+     * Note that returning of pseudo-type 
      *
-     * @param codeTable The LZW code table.
-     * @param pattern The pattern to be searched for.
-     * @return The index of the longest matching pattern or -1 if nothing is
-     * found.
+     * @since 2.7
      */
-    private int findPatternCode(ArrayList<byte[]> codeTable, byte[] pattern)
+    protected Object getPropertyDefaultValue(String name, AnnotatedMember member,
+            JavaType type)
     {
-        int foundCode = -1;
-        int foundLen = 0;
-        for (int i = codeTable.size() - 1; i >= 0; --i)
-        {
-            if (i <= EOD)
-            {
-                // we're in the single byte area
-                if (foundCode != -1)
-                {
-                    return foundCode; // we already found pattern with size > 1
-                }
-                else if (pattern.length > 1)
-                {
-                    return -1; // we won't find anything here anyway
-                }
-            }
-            byte[] tryPattern = codeTable.get(i);
-            if (foundCode != -1 || tryPattern.length > foundLen)
-            {
-                if (Arrays.equals(tryPattern, pattern))
-                {
-                    foundCode = i;
-                    foundLen = tryPattern.length;
-                }
-            }
+        Object defaultBean = getDefaultBean();
+        if (defaultBean == null) {
+            return getDefaultValue(type);
         }
-        return foundCode;
+        try {
+            return member.getValue(defaultBean);
+        } catch (Exception e) {
+            return _throwWrapped(e, name, defaultBean);
+        }
     }
 
     /**
-     * Init the code table with 1 byte entries and the EOD and CLEAR_TABLE
-     * markers.
+     * Accessor used to find out "default value" to use for comparing values to
+     * serialize, to determine whether to exclude value from serialization with
+     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}.
+     *<p>
+     * Default logic is such that for primitives and wrapper types for primitives, expected
+     * defaults (0 for `int` and `java.lang.Integer`) are returned; for Strings, empty String,
+     * and for structured (Maps, Collections, arrays) and reference types, criteria
+     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}
+     * is used.
+     *
+     * @since 2.7
      */
-    private ArrayList<byte[]> createCodeTable()
+    protected Object getDefaultValue(JavaType type)
     {
-        ArrayList<byte[]> codeTable = new ArrayList<byte[]>(4096);
-        for (int i = 0; i < 256; ++i)
-        {
-            codeTable.add(new byte[]
-            {
-                (byte) (i & 0xFF)
-            });
-        }
-        codeTable.add(null); // 256 EOD
-        codeTable.add(null); // 257 CLEAR_TABLE
-        return codeTable;
-    }
+        // 06-Nov-2015, tatu: Returning null is fine for Object types; but need special
+        //   handling for primitives since they are never passed as nulls.
+        Class<?> cls = type.getRawClass();
 
-    /**
-     * Calculate the appropriate chunk size
-     *
-     * @param tabSize the size of the code table
-     *
-     * @return a value between 9 and 12
+        Class<?> prim = ClassUtil.primitiveType(cls);
+        if (prim != null) {
+            return ClassUtil.defaultValue(prim);
+        }
+        if (type.isContainerType() || type.isReferenceType()) {
+            return JsonInclude.Include.NON_EMPTY;
+        }
+        if (cls == String.class) {
+            return "";
+        }
+        return null;
+    }
+    
+    /*
+    /**********************************************************
+    /* Helper methods for exception handling
+    /**********************************************************
      */
-    private int calculateChunk(int tabSize)
+    
+    protected Object _throwWrapped(Exception e, String propName, Object defaultBean)
     {
-        if (tabSize >= 2047)
-        {
-            return 12;
+        Throwable t = e;
+        while (t.getCause() != null) {
+            t = t.getCause();
         }
-        if (tabSize >= 1023)
-        {
-            return 11;
-        }
-        if (tabSize >= 511)
-        {
-            return 10;
-        }
-        return 9;
+        if (t instanceof Error) throw (Error) t;
+        if (t instanceof RuntimeException) throw (RuntimeException) t;
+        throw new IllegalArgumentException("Failed to get property '"+propName+"' of default "+defaultBean.getClass().getName()+" instance");
     }
 }

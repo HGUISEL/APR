@@ -1,1143 +1,1083 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.sshd.client.subsystem.sftp;
 
-import java.io.IOException;
+package org.apache.commons.dbcp2;
+
+import java.sql.ResultSet;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.net.URI;
-import java.nio.channels.FileChannel;
-import java.nio.channels.SeekableByteChannel;
-import java.nio.file.AccessDeniedException;
-import java.nio.file.AccessMode;
-import java.nio.file.CopyOption;
-import java.nio.file.DirectoryStream;
-import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.FileStore;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystemAlreadyExistsException;
-import java.nio.file.FileSystemException;
-import java.nio.file.FileSystemNotFoundException;
-import java.nio.file.LinkOption;
-import java.nio.file.NoSuchFileException;
-import java.nio.file.OpenOption;
-import java.nio.file.Path;
-import java.nio.file.ProviderMismatchException;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.BasicFileAttributeView;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.FileAttribute;
-import java.nio.file.attribute.FileAttributeView;
-import java.nio.file.attribute.FileTime;
-import java.nio.file.attribute.GroupPrincipal;
-import java.nio.file.attribute.PosixFileAttributeView;
-import java.nio.file.attribute.PosixFileAttributes;
-import java.nio.file.attribute.PosixFilePermission;
-import java.nio.file.attribute.UserPrincipal;
-import java.nio.file.spi.FileSystemProvider;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
+import java.sql.SQLWarning;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.io.Reader;
+import java.sql.Statement;
 import java.util.Map;
-import java.util.NoSuchElementException;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
+import java.sql.Connection;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
+/* JDBC_4_ANT_KEY_END */
 
-import org.apache.sshd.client.SshClient;
-import org.apache.sshd.client.session.ClientSession;
-import org.apache.sshd.client.subsystem.sftp.SftpClient.Attributes;
-import org.apache.sshd.common.FactoryManager;
-import org.apache.sshd.common.FactoryManagerUtils;
-import org.apache.sshd.common.SshException;
-import org.apache.sshd.common.config.SshConfigFileReader;
-import org.apache.sshd.common.io.IoSession;
-import org.apache.sshd.common.subsystem.sftp.SftpConstants;
-import org.apache.sshd.common.util.GenericUtils;
-import org.apache.sshd.common.util.ValidateUtils;
-import org.apache.sshd.common.util.io.IoUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+/**
+ * A base delegating implementation of {@link ResultSet}.
+ * <p>
+ * All of the methods from the {@link ResultSet} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement result set tracking and
+ * logging of code which created the ResultSet. Tracking the
+ * ResultSet ensures that the Statment which created it can
+ * close any open ResultSet's on Statement close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House
+ * @author Dirk Verbeeck
+ * @version $Revision$ $Date$
+ */
+public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
 
-public class SftpFileSystemProvider extends FileSystemProvider {
-    public static final String READ_BUFFER_PROP_NAME = "sftp-fs-read-buffer-size";
-        public static final int DEFAULT_READ_BUFFER_SIZE = SftpClient.DEFAULT_READ_BUFFER_SIZE;
-    public static final String WRITE_BUFFER_PROP_NAME = "sftp-fs-write-buffer-size";
-        public static final int DEFAULT_WRITE_BUFFER_SIZE = SftpClient.DEFAULT_WRITE_BUFFER_SIZE;
-    public static final String CONNECT_TIME_PROP_NAME = "sftp-fs-connect-time";
-        public static final long DEFAULT_CONNECT_TIME = SftpClient.DEFAULT_WAIT_TIMEOUT;
-    public static final String AUTH_TIME_PROP_NAME = "sftp-fs-auth-time";
-        public static final long DEFAULT_AUTH_TIME = SftpClient.DEFAULT_WAIT_TIMEOUT;
+    /** My delegate. **/
+    private ResultSet _res;
 
-    public static final Set<Class<? extends FileAttributeView>> SUPPORTED_VIEWS =
-            Collections.unmodifiableSet(
-                    new HashSet<>(
-                            Arrays.<Class<? extends FileAttributeView>>asList(
-                                    BasicFileAttributeView.class, PosixFileAttributeView.class
-                            )));
+    /** The Statement that created me, if any. **/
+    private Statement _stmt;
 
-    private final SshClient client;
-    private final SftpVersionSelector selector;
-    private final Map<String, SftpFileSystem> fileSystems = new HashMap<String, SftpFileSystem>();
-    protected final Logger log;
-
-    public SftpFileSystemProvider() {
-        this((SshClient) null);
-    }
-
-    public SftpFileSystemProvider(SftpVersionSelector selector) {
-        this(null, selector);
-    }
+    /** The Connection that created me, if any. **/
+    private Connection _conn;
 
     /**
-     * @param client The {@link SshClient} to use - if {@code null} then a
-     * default one will be setup and started. Otherwise, it is assumed that
-     * the client has already been started
-     * @see SshClient#setUpDefaultClient()
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Statement which created it and the
+     * code which created it.
+     *
+     * @param stmt Statement which created this ResultSet
+     * @param res ResultSet to wrap
      */
-    public SftpFileSystemProvider(SshClient client) {
-        this(client, SftpVersionSelector.CURRENT);
-    }
-
-    public SftpFileSystemProvider(SshClient client, SftpVersionSelector selector) {
-        this.log = LoggerFactory.getLogger(getClass());
-        this.selector = ValidateUtils.checkNotNull(selector, "No SFTP version selector provided");
-        if (client == null) {
-            // TODO: make this configurable using system properties
-            client = SshClient.setUpDefaultClient();
-            client.start();
-        }
-        this.client = client;
-    }
-
-    @Override
-    public String getScheme() {
-        return SftpConstants.SFTP_SUBSYSTEM_NAME;
-    }
-
-    public final SftpVersionSelector getSftpVersionSelector() {
-        return selector;
-    }
-
-    @Override // NOTE: co-variant return
-    public SftpFileSystem newFileSystem(URI uri, Map<String, ?> env) throws IOException {
-        String host = ValidateUtils.checkNotNullAndNotEmpty(uri.getHost(), "Host not provided");
-        int port = uri.getPort();
-        if (port <= 0) {
-            port = SshConfigFileReader.DEFAULT_PORT;
-        }
-
-        String userInfo = ValidateUtils.checkNotNullAndNotEmpty(uri.getUserInfo(), "UserInfo not provided");
-        String[] ui = GenericUtils.split(userInfo, ':');
-        ValidateUtils.checkTrue(GenericUtils.length(ui) == 2, "Invalid user info: %s", userInfo);
-        String username = ui[0], password = ui[1];
-        String id = getFileSystemIdentifier(host, port, username);
-
-        SftpFileSystem fileSystem;
-        synchronized (fileSystems) {
-            if ((fileSystem = fileSystems.get(id)) != null) {
-                throw new FileSystemAlreadyExistsException(id);
-            }
-
-            // TODO try and find a way to avoid doing this while locking the file systems cache
-            ClientSession session=null;
-            try {
-                session = client.connect(username, host, port)
-                                .verify(FactoryManagerUtils.getLongProperty(env, CONNECT_TIME_PROP_NAME, DEFAULT_CONNECT_TIME))
-                                .getSession()
-                                ;
-                session.addPasswordIdentity(password);
-                session.auth().verify(FactoryManagerUtils.getLongProperty(env, AUTH_TIME_PROP_NAME, DEFAULT_AUTH_TIME));
-
-                fileSystem = new SftpFileSystem(this, id, session, getSftpVersionSelector());
-                fileSystems.put(id, fileSystem);
-            } catch(Exception e) {
-                if (session != null) {
-                    try {
-                        session.close();
-                    } catch(IOException t) {
-                        if (log.isDebugEnabled()) {
-                            log.debug("Failed (" + t.getClass().getSimpleName() + ")"
-                                    + " to close session for new file system on " + host + ":" + port
-                                    + " due to " + e.getClass().getSimpleName() + "[" + e.getMessage() + "]"
-                                    + ": " + t.getMessage());
-                        }
-                    }
-                }
-                
-                if (e instanceof IOException) {
-                    throw (IOException) e;
-                } else if (e instanceof RuntimeException) {
-                    throw (RuntimeException) e;
-                } else {
-                    throw new IOException(e);
-                }
-            }
-        }
-        
-        fileSystem.setReadBufferSize(FactoryManagerUtils.getIntProperty(env, READ_BUFFER_PROP_NAME, DEFAULT_READ_BUFFER_SIZE));
-        fileSystem.setWriteBufferSize(FactoryManagerUtils.getIntProperty(env, WRITE_BUFFER_PROP_NAME, DEFAULT_WRITE_BUFFER_SIZE));
-        return fileSystem;
-    }
-
-    public SftpFileSystem newFileSystem(ClientSession session) throws IOException {
-        String id = getFileSystemIdentifier(session);
-        SftpFileSystem fileSystem;
-        synchronized (fileSystems) {
-            if ((fileSystem=fileSystems.get(id)) != null) {
-                throw new FileSystemAlreadyExistsException(id);
-            }
-
-            fileSystem = new SftpFileSystem(this, id, session, getSftpVersionSelector());
-            fileSystems.put(id, fileSystem);
-        }
-        
-        FactoryManager manager = session.getFactoryManager();
-        fileSystem.setReadBufferSize(FactoryManagerUtils.getIntProperty(manager, READ_BUFFER_PROP_NAME, DEFAULT_READ_BUFFER_SIZE));
-        fileSystem.setWriteBufferSize(FactoryManagerUtils.getIntProperty(manager, WRITE_BUFFER_PROP_NAME, DEFAULT_WRITE_BUFFER_SIZE));
-        return fileSystem;
-    }
-
-    @Override
-    public FileSystem getFileSystem(URI uri) {
-        String id = getFileSystemIdentifier(uri);
-        SftpFileSystem fs = getFileSystem(id);
-        if (fs == null) {
-            throw new FileSystemNotFoundException(id);
-        }
-        return fs;
-    }
-
-    /**
-     * @param id File system identifier - ignored if {@code null}/empty
-     * @return The removed {@link SftpFileSystem} - {@code null} if no match
-     */
-    public SftpFileSystem removeFileSystem(String id) {
-        if (GenericUtils.isEmpty(id)) {
-            return null;
-        }
-
-        synchronized (fileSystems) {
-            return fileSystems.remove(id);
-        }
-    }
-
-    /**
-     * @param id File system identifier - ignored if {@code null}/empty
-     * @return The cached {@link SftpFileSystem} - {@code null} if no match
-     */
-    public SftpFileSystem getFileSystem(String id) {
-        if (GenericUtils.isEmpty(id)) {
-            return null;
-        }
-
-        synchronized (fileSystems) {
-            return fileSystems.get(id);
-        }
-    }
-
-    @Override
-    public Path getPath(URI uri) {
-        FileSystem fs = getFileSystem(uri);
-        return fs.getPath(uri.getPath());
-    }
-
-    @Override
-    public SeekableByteChannel newByteChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs) throws IOException {
-        return newFileChannel(path, options, attrs);
-    }
-
-    @Override
-    public FileChannel newFileChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs) throws IOException {
-        Collection<SftpClient.OpenMode> modes = EnumSet.noneOf(SftpClient.OpenMode.class);
-        for (OpenOption option : options) {
-            if (option == StandardOpenOption.READ) {
-                modes.add(SftpClient.OpenMode.Read);
-            } else if (option == StandardOpenOption.APPEND) {
-                modes.add(SftpClient.OpenMode.Append);
-            } else if (option == StandardOpenOption.CREATE) {
-                modes.add(SftpClient.OpenMode.Create);
-            } else if (option == StandardOpenOption.TRUNCATE_EXISTING) {
-                modes.add(SftpClient.OpenMode.Truncate);
-            } else if (option == StandardOpenOption.WRITE) {
-                modes.add(SftpClient.OpenMode.Write);
-            } else if (option == StandardOpenOption.CREATE_NEW) {
-                modes.add(SftpClient.OpenMode.Create);
-                modes.add(SftpClient.OpenMode.Exclusive);
-            } else if (option == StandardOpenOption.SPARSE) {
-                /*
-                 * As per the Javadoc:
-                 * 
-                 *      The option is ignored when the file system does not
-                 *  support the creation of sparse files
-                 */
-                continue;
-            } else {
-                throw new IllegalArgumentException("newFileChannel(" + path + ") unsupported open option: " + option);
-            }
-        }
-        if (modes.isEmpty()) {
-            modes.add(SftpClient.OpenMode.Read);
-            modes.add(SftpClient.OpenMode.Write);
-        }
-        // TODO: attrs
-        return new SftpFileChannel(toSftpPath(path), modes);
-    }
-
-    @Override
-    public DirectoryStream<Path> newDirectoryStream(Path dir, DirectoryStream.Filter<? super Path> filter) throws IOException {
-        final SftpPath p = toSftpPath(dir);
-        return new DirectoryStream<Path>() {
-            private final SftpFileSystem fs = p.getFileSystem();
-            private final SftpClient sftp = fs.getClient();
-            private final Iterable<SftpClient.DirEntry> iter = sftp.readDir(p.toString());
-
-            @Override
-            public Iterator<Path> iterator() {
-                return new Iterator<Path>() {
-                    @SuppressWarnings("synthetic-access")
-                    private final Iterator<SftpClient.DirEntry> it = (iter == null) ? null : iter.iterator();
-                    private boolean dotIgnored, dotdotIgnored;
-                    private SftpClient.DirEntry curEntry = nextEntry();
-
-                    @Override
-                    public boolean hasNext() {
-                        return (curEntry != null);
-                    }
-
-                    @Override
-                    public Path next() {
-                        if (curEntry == null) {
-                            throw new NoSuchElementException("No next entry");
-                        }
-
-                        SftpClient.DirEntry entry = curEntry;
-                        curEntry = nextEntry();
-                        return p.resolve(entry.filename);
-                    }
-
-                    private SftpClient.DirEntry nextEntry() {
-                        while((it != null) && it.hasNext()) {
-                            SftpClient.DirEntry entry = it.next();
-                            String name = entry.filename;
-                            if (".".equals(name) && (!dotIgnored)) {
-                                dotIgnored = true;
-                            } else if ("..".equals(name) && (!dotdotIgnored)) {
-                                dotdotIgnored = true;
-                            } else {
-                                return entry;
-                            }
-                        }
-                        
-                        return null;
-                    }
-
-                    @Override
-                    public void remove() {
-                        throw new UnsupportedOperationException("newDirectoryStream(" + p + ") Iterator#remove() N/A");
-                    }
-                };
-            }
-
-            @Override
-            public void close() throws IOException {
-                sftp.close();
-            }
-        };
-    }
-
-    @Override
-    public void createDirectory(Path dir, FileAttribute<?>... attrs) throws IOException {
-        SftpPath p = toSftpPath(dir);
-        SftpFileSystem fs = p.getFileSystem();
-        try (SftpClient sftp = fs.getClient()) {
-            try {
-                sftp.mkdir(dir.toString());
-            } catch (SftpException e) {
-                int sftpStatus=e.getStatus();
-                if ((sftp.getVersion() == SftpConstants.SFTP_V3) && (sftpStatus == SftpConstants.SSH_FX_FAILURE)) {
-                    try {
-                        Attributes attributes = sftp.stat(dir.toString());
-                        if (attributes != null) {
-                            throw new FileAlreadyExistsException(p.toString());
-                        }
-                    } catch (SshException e2) {
-                        e.addSuppressed(e2);
-                    }
-                }
-                if (sftpStatus == SftpConstants.SSH_FX_FILE_ALREADY_EXISTS) {
-                    throw new FileAlreadyExistsException(p.toString());
-                }
-                throw e;
-            }
-            for (FileAttribute<?> attr : attrs) {
-                setAttribute(p, attr.name(), attr.value());
-            }
-        }
-    }
-
-    @Override
-    public void delete(Path path) throws IOException {
-        SftpPath p = toSftpPath(path);
-        checkAccess(p, AccessMode.WRITE);
-        
-        SftpFileSystem fs = p.getFileSystem();
-        try (SftpClient sftp = fs.getClient()) {
-            BasicFileAttributes attributes = readAttributes(path, BasicFileAttributes.class);
-            if (attributes.isDirectory()) {
-                sftp.rmdir(path.toString());
-            } else {
-                sftp.remove(path.toString());
-            }
-        }
-    }
-
-    @Override
-    public void copy(Path source, Path target, CopyOption... options) throws IOException {
-        SftpPath src = toSftpPath(source);
-        SftpPath dst = toSftpPath(target);
-        if (src.getFileSystem() != dst.getFileSystem()) {
-            throw new ProviderMismatchException("Mismatched file system providers for " + src + " vs. " + dst);
-        }
-        checkAccess(src);
-
-        boolean replaceExisting = false;
-        boolean copyAttributes = false;
-        boolean noFollowLinks = false;
-        for (CopyOption opt : options) {
-            replaceExisting |= opt == StandardCopyOption.REPLACE_EXISTING;
-            copyAttributes |= opt == StandardCopyOption.COPY_ATTRIBUTES;
-            noFollowLinks |= opt == LinkOption.NOFOLLOW_LINKS;
-        }
-        LinkOption[] linkOptions = IoUtils.getLinkOptions(!noFollowLinks);
-
-        // attributes of source file
-        BasicFileAttributes attrs = readAttributes(source, BasicFileAttributes.class, linkOptions);
-        if (attrs.isSymbolicLink())
-            throw new IOException("Copying of symbolic links not supported");
-
-        // delete target if it exists and REPLACE_EXISTING is specified
-        Boolean status=IoUtils.checkFileExists(target, linkOptions);
-        if (status == null) {
-            throw new AccessDeniedException("Existence cannot be determined for copy target: " + target);
-        }
-
-        if (replaceExisting) {
-            deleteIfExists(target);
-        } else {
-            if (status) {
-                throw new FileAlreadyExistsException(target.toString());
-            }
-        }
-
-        // create directory or copy file
-        if (attrs.isDirectory()) {
-            createDirectory(target);
-        } else {
-            try (InputStream in = newInputStream(source);
-                 OutputStream os = newOutputStream(target)) {
-                IoUtils.copy(in, os);
-            }
-        }
-
-        // copy basic attributes to target
-        if (copyAttributes) {
-            BasicFileAttributeView view = getFileAttributeView(target, BasicFileAttributeView.class, linkOptions);
-            try {
-                view.setTimes(attrs.lastModifiedTime(), attrs.lastAccessTime(), attrs.creationTime());
-            } catch (Throwable x) {
-                // rollback
-                try {
-                    delete(target);
-                } catch (Throwable suppressed) {
-                    x.addSuppressed(suppressed);
-                }
-                throw x;
-            }
-        }
-    }
-
-    @Override
-    public void move(Path source, Path target, CopyOption... options) throws IOException {
-        SftpPath src = toSftpPath(source);
-        SftpFileSystem fsSrc = src.getFileSystem(); 
-        SftpPath dst = toSftpPath(target);
-        
-        if (src.getFileSystem() != dst.getFileSystem()) {
-            throw new ProviderMismatchException("Mismatched file system providers for " + src + " vs. " + dst);
-        }
-        checkAccess(src);
-
-        boolean replaceExisting = false;
-        boolean copyAttributes = false;
-        boolean noFollowLinks = false;
-        for (CopyOption opt : options) {
-            replaceExisting |= opt == StandardCopyOption.REPLACE_EXISTING;
-            copyAttributes |= opt == StandardCopyOption.COPY_ATTRIBUTES;
-            noFollowLinks |= opt == LinkOption.NOFOLLOW_LINKS;
-        }
-        LinkOption[] linkOptions = IoUtils.getLinkOptions(noFollowLinks);
-
-        // attributes of source file
-        BasicFileAttributes attrs = readAttributes(source, BasicFileAttributes.class, linkOptions);
-        if (attrs.isSymbolicLink()) {
-            throw new IOException("Copying of symbolic links not supported");
-        }
-
-        // delete target if it exists and REPLACE_EXISTING is specified
-        Boolean status=IoUtils.checkFileExists(target, linkOptions);
-        if (status == null) {
-            throw new AccessDeniedException("Existence cannot be determined for move target " + target);
-        }
-
-        if (replaceExisting) {
-            deleteIfExists(target);
-        } else if (status) {
-            throw new FileAlreadyExistsException(target.toString());
-        }
-
-        try (SftpClient sftp = fsSrc.getClient()) {
-            sftp.rename(src.toString(), dst.toString());
-        }
-
-        // copy basic attributes to target
-        if (copyAttributes) {
-            BasicFileAttributeView view = getFileAttributeView(target, BasicFileAttributeView.class, linkOptions);
-            try {
-                view.setTimes(attrs.lastModifiedTime(), attrs.lastAccessTime(), attrs.creationTime());
-            } catch (Throwable x) {
-                // rollback
-                try {
-                    delete(target);
-                } catch (Throwable suppressed) {
-                    x.addSuppressed(suppressed);
-                }
-                throw x;
-            }
-        }
-    }
-
-    @Override
-    public boolean isSameFile(Path path1, Path path2) throws IOException {
-        SftpPath p1 = toSftpPath(path1);
-        SftpPath p2 = toSftpPath(path2);
-        if (p1.getFileSystem() != p2.getFileSystem()) {
-            throw new ProviderMismatchException("Mismatched file system providers for " + p1 + " vs. " + p2);
-        }
-        checkAccess(p1);
-        checkAccess(p2);
-        return p1.equals(p2);
-    }
-
-    @Override
-    public boolean isHidden(Path path) throws IOException {
-        return false;
-    }
-
-    @Override
-    public FileStore getFileStore(Path path) throws IOException {
-        FileSystem fs = path.getFileSystem();
-        if (!(fs instanceof SftpFileSystem)) {
-            throw new FileSystemException(path.toString(), path.toString(), "getFileStore(" + path + ") path not attached to an SFTP file system");
-        }
-        
-        SftpFileSystem sftpFs = (SftpFileSystem) fs;
-        String id = sftpFs.getId();
-        SftpFileSystem cached = getFileSystem(id);
-        if (cached != sftpFs) {
-            throw new FileSystemException(path.toString(), path.toString(), "Mismatched file system instance for id=" + id);
-        }
-        
-        return sftpFs.getFileStores().get(0);
-    }
-
-    @Override
-    public void createSymbolicLink(Path link, Path target, FileAttribute<?>... attrs) throws IOException {
-        SftpPath l = toSftpPath(link);
-        SftpFileSystem fsLink = l.getFileSystem();
-        SftpPath t = toSftpPath(target);
-        if (fsLink != t.getFileSystem()) {
-            throw new ProviderMismatchException("Mismatched file system providers for " + l + " vs. " + t);
-        }
-        try (SftpClient client = fsLink.getClient()) {
-            client.symLink(l.toString(), t.toString());
-        }
-    }
-
-    @Override
-    public Path readSymbolicLink(Path link) throws IOException {
-        SftpPath l = toSftpPath(link);
-        SftpFileSystem fsLink = l.getFileSystem();
-        try (SftpClient client = fsLink.getClient()) {
-            return fsLink.getPath(client.readLink(l.toString()));
-        }
-    }
-
-    @Override
-    public void checkAccess(Path path, AccessMode... modes) throws IOException {
-        SftpPath p = toSftpPath(path);
-        boolean w = false;
-        boolean x = false;
-        if (GenericUtils.length(modes) > 0) {
-            for (AccessMode mode : modes) {
-                switch (mode) {
-                    case READ:
-                        break;
-                    case WRITE:
-                        w = true;
-                        break;
-                    case EXECUTE:
-                        x = true;
-                        break;
-                    default:
-                        throw new UnsupportedOperationException("Unsupported mode: " + mode);
-                }
-            }
-        }
-
-        BasicFileAttributes attrs = getFileAttributeView(p, BasicFileAttributeView.class).readAttributes();
-        if ((attrs == null) && !(p.isAbsolute() && p.getNameCount() == 0)) {
-            throw new NoSuchFileException(path.toString());
-        }
-        
-        SftpFileSystem fs = p.getFileSystem();
-        if (x || (w && fs.isReadOnly())) {
-            throw new AccessDeniedException("Filesystem is read-only: " + path.toString());
-        }
-    }
-
-    @Override
-    public <V extends FileAttributeView> V getFileAttributeView(final Path path, Class<V> type, final LinkOption... options) {
-        if (isSupportedFileAttributeView(type)) {
-            return type.cast(new PosixFileAttributeView() {
-                @Override
-                public String name() {
-                    return "view";
-                }
-
-                @SuppressWarnings("synthetic-access")
-                @Override
-                public PosixFileAttributes readAttributes() throws IOException {
-                    SftpPath p = toSftpPath(path);
-                    SftpFileSystem fs = p.getFileSystem();
-                    final SftpClient.Attributes attributes;
-                    try (SftpClient client =fs.getClient()) {
-                        try {
-                            if (IoUtils.followLinks(options)) {
-                                attributes = client.stat(p.toString());
-                            } else {
-                                attributes = client.lstat(p.toString());
-                            }
-                        } catch (SftpException e) {
-                            if (e.getStatus() == SftpConstants.SSH_FX_NO_SUCH_FILE) {
-                                throw new NoSuchFileException(p.toString());
-                            }
-                            throw e;
-                        }
-                    }
-                    return new PosixFileAttributes() {
-                        @Override
-                        public UserPrincipal owner() {
-                            return attributes.owner != null ? new SftpFileSystem.DefaultGroupPrincipal(attributes.owner) : null;
-                        }
-
-                        @Override
-                        public GroupPrincipal group() {
-                            return attributes.group != null ? new SftpFileSystem.DefaultGroupPrincipal(attributes.group) : null;
-                        }
-
-                        @Override
-                        public Set<PosixFilePermission> permissions() {
-                            return permissionsToAttributes(attributes.perms);
-                        }
-
-                        @Override
-                        public FileTime lastModifiedTime() {
-                            return FileTime.from(attributes.mtime, TimeUnit.SECONDS);
-                        }
-
-                        @Override
-                        public FileTime lastAccessTime() {
-                            return FileTime.from(attributes.atime, TimeUnit.SECONDS);
-                        }
-
-                        @Override
-                        public FileTime creationTime() {
-                            return FileTime.from(attributes.ctime, TimeUnit.SECONDS);
-                        }
-
-                        @Override
-                        public boolean isRegularFile() {
-                            return attributes.isRegularFile();
-                        }
-
-                        @Override
-                        public boolean isDirectory() {
-                            return attributes.isDirectory();
-                        }
-
-                        @Override
-                        public boolean isSymbolicLink() {
-                            return attributes.isSymbolicLink();
-                        }
-
-                        @Override
-                        public boolean isOther() {
-                            return attributes.isOther();
-                        }
-
-                        @Override
-                        public long size() {
-                            return attributes.size;
-                        }
-
-                        @Override
-                        public Object fileKey() {
-                            // TODO
-                            return null;
-                        }
-                    };
-                }
-
-                @Override
-                public void setTimes(FileTime lastModifiedTime, FileTime lastAccessTime, FileTime createTime) throws IOException {
-                    if (lastModifiedTime != null) {
-                        setAttribute(path, "lastModifiedTime", lastModifiedTime, options);
-                    }
-                    if (lastAccessTime != null) {
-                        setAttribute(path, "lastAccessTime", lastAccessTime, options);
-                    }
-                    if (createTime != null) {
-                        setAttribute(path, "createTime", createTime, options);
-                    }
-                }
-
-                @Override
-                public void setPermissions(Set<PosixFilePermission> perms) throws IOException {
-                    setAttribute(path, "permissions", perms, options);
-                }
-
-                @Override
-                public void setGroup(GroupPrincipal group) throws IOException {
-                    setAttribute(path, "group", group, options);
-                }
-
-                @Override
-                public UserPrincipal getOwner() throws IOException {
-                    return readAttributes().owner();
-                }
-
-                @Override
-                public void setOwner(UserPrincipal owner) throws IOException {
-                    setAttribute(path, "owner", owner, options);
-                }
-            });
-        } else {
-            throw new UnsupportedOperationException("getFileAttributeView(" + path + ") view not supported: " + type.getSimpleName());
-        }
-    }
-
-    public boolean isSupportedFileAttributeView(Class<? extends FileAttributeView> type) {
-        if ((type != null) && SUPPORTED_VIEWS.contains(type)) {
-            return true;
-        } else {
-            return false;   // debug breakpoint 
-        }
-    }
-
-    @Override
-    public <A extends BasicFileAttributes> A readAttributes(Path path, Class<A> type, LinkOption... options) throws IOException {
-        if (type.isAssignableFrom(PosixFileAttributes.class)) {
-            return type.cast(getFileAttributeView(path, PosixFileAttributeView.class, options).readAttributes());
-        }
-
-        throw new UnsupportedOperationException("readAttributes(" + path + ")[" + type.getSimpleName() + "] N/A");
-    }
-
-    @Override
-    public Map<String, Object> readAttributes(Path path, String attributes, LinkOption... options) throws IOException {
-        String view;
-        String attrs;
-        int i = attributes.indexOf(':');
-        if (i == -1) {
-            view = "basic";
-            attrs = attributes;
-        } else {
-            view = attributes.substring(0, i++);
-            attrs = attributes.substring(i);
-        }
-        SftpPath p = toSftpPath(path);
-        SftpFileSystem fs = p.getFileSystem();
-        Collection<String> views = fs.supportedFileAttributeViews();
-        if (GenericUtils.isEmpty(views) || (!views.contains(view))) {
-            throw new UnsupportedOperationException("readAttributes(" + path + ")[" + attributes + "] view " + view + " not supported: " + views);
-        }
-
-        PosixFileAttributes v = readAttributes(path, PosixFileAttributes.class, options);
-        if ("*".equals(attrs)) {
-            attrs = "lastModifiedTime,lastAccessTime,creationTime,size,isRegularFile,isDirectory,isSymbolicLink,isOther,fileKey,owner,permissions,group";
-        }
-        Map<String, Object> map = new HashMap<>();
-        for (String attr : attrs.split(",")) {
-            switch (attr) {
-                case "lastModifiedTime":
-                    map.put(attr, v.lastModifiedTime());
-                    break;
-                case "lastAccessTime":
-                    map.put(attr, v.lastAccessTime());
-                    break;
-                case "creationTime":
-                    map.put(attr, v.creationTime());
-                    break;
-                case "size":
-                    map.put(attr, v.size());
-                    break;
-                case "isRegularFile":
-                    map.put(attr, v.isRegularFile());
-                    break;
-                case "isDirectory":
-                    map.put(attr, v.isDirectory());
-                    break;
-                case "isSymbolicLink":
-                    map.put(attr, v.isSymbolicLink());
-                    break;
-                case "isOther":
-                    map.put(attr, v.isOther());
-                    break;
-                case "fileKey":
-                    map.put(attr, v.fileKey());
-                    break;
-                case "owner":
-                    map.put(attr, v.owner());
-                    break;
-                case "permissions":
-                    map.put(attr, v.permissions());
-                    break;
-                case "group":
-                    map.put(attr, v.group());
-                    break;
-                default:
-                    if (log.isTraceEnabled()) {
-                        log.trace("readAttributes({})[{}] ignored {}={}", path, attributes, attr, v);
-                    }
-            }
-        }
-        return map;
-    }
-
-    @Override
-    public void setAttribute(Path path, String attribute, Object value, LinkOption... options) throws IOException {
-        String view;
-        String attr;
-        int i = attribute.indexOf(':');
-        if (i == -1) {
-            view = "basic";
-            attr = attribute;
-        } else {
-            view = attribute.substring(0, i++);
-            attr = attribute.substring(i);
-        }
-        SftpPath p = toSftpPath(path);
-        SftpFileSystem fs = p.getFileSystem();
-        Collection<String> views = fs.supportedFileAttributeViews();
-        if (GenericUtils.isEmpty(views) || (!view.contains(view))) {
-            throw new UnsupportedOperationException("setAttribute(" + path + ")[" + attribute + "=" + value + "] view " + view + " not supported: " + views);
-        }
-
-        SftpClient.Attributes attributes = new SftpClient.Attributes();
-        switch (attr) {
-            case "lastModifiedTime":
-                attributes.mtime((int) ((FileTime) value).to(TimeUnit.SECONDS));
-                break;
-            case "lastAccessTime":
-                attributes.atime((int) ((FileTime) value).to(TimeUnit.SECONDS));
-                break;
-            case "creationTime":
-                attributes.ctime((int) ((FileTime) value).to(TimeUnit.SECONDS));
-                break;
-            case "size":
-                attributes.size(((Number) value).longValue());
-                break;
-            case "permissions": {
-                @SuppressWarnings("unchecked")
-                Set<PosixFilePermission>    attrSet = (Set<PosixFilePermission>) value;
-                attributes.perms(attributesToPermissions(path, attrSet));
-                }
-                break;
-            case "owner":
-                attributes.owner(((UserPrincipal) value).getName());
-                break;
-            case "group":
-                attributes.group(((GroupPrincipal) value).getName());
-                break;
-            case "isRegularFile":
-            case "isDirectory":
-            case "isSymbolicLink":
-            case "isOther":
-            case "fileKey":
-                throw new UnsupportedOperationException("setAttribute(" + path + ")[" + attribute + "=" + value + "]"
-                                                       + " unknown view=" + view + " attribute: " + attr);
-            default:
-                if (log.isTraceEnabled()) {
-                    log.trace("setAttribute({})[{}] ignore {}={}", path, attribute, attr, value);
-                }
-        }
-
-        try (SftpClient client = fs.getClient()) {
-            client.setStat(p.toString(), attributes);
-        }
-    }
-
-    private SftpPath toSftpPath(Path path) {
-        ValidateUtils.checkNotNull(path, "No path provided");
-        if (!(path instanceof SftpPath)) {
-            throw new ProviderMismatchException("Path is not SFTP: " + path);
-        }
-        return (SftpPath) path;
-    }
-
-    protected int attributesToPermissions(Path path, Collection<PosixFilePermission> perms) {
-        if (GenericUtils.isEmpty(perms)) {
-            return 0;
-        }
-
-        int pf = 0;
-        for (PosixFilePermission p : perms) {
-            switch (p) {
-                case OWNER_READ:
-                    pf |= SftpConstants.S_IRUSR;
-                    break;
-                case OWNER_WRITE:
-                    pf |= SftpConstants.S_IWUSR;
-                    break;
-                case OWNER_EXECUTE:
-                    pf |= SftpConstants.S_IXUSR;
-                    break;
-                case GROUP_READ:
-                    pf |= SftpConstants.S_IRGRP;
-                    break;
-                case GROUP_WRITE:
-                    pf |= SftpConstants.S_IWGRP;
-                    break;
-                case GROUP_EXECUTE:
-                    pf |= SftpConstants.S_IXGRP;
-                    break;
-                case OTHERS_READ:
-                    pf |= SftpConstants.S_IROTH;
-                    break;
-                case OTHERS_WRITE:
-                    pf |= SftpConstants.S_IWOTH;
-                    break;
-                case OTHERS_EXECUTE:
-                    pf |= SftpConstants.S_IXOTH;
-                    break;
-                default:
-                    if (log.isTraceEnabled()) {
-                        log.trace("attributesToPermissions(" + path + ") ignored " + p);
-                    }
-            }
-        }
-
-        return pf;
-    }
-
-    public static String getRWXPermissions(int perms) {
-        StringBuilder sb=new StringBuilder(10 /* 3 * rwx + (d)irectory */);
-        if ((perms & SftpConstants.S_IFLNK) == SftpConstants.S_IFLNK) {
-            sb.append('l');
-        } else if ((perms & SftpConstants.S_IFDIR) == SftpConstants.S_IFDIR) {
-            sb.append('d');
-        } else {
-            sb.append('-');
-        }
-
-        if ((perms & SftpConstants.S_IRUSR) == SftpConstants.S_IRUSR) {
-            sb.append('r');
-        } else {
-            sb.append('-');
-        }
-        if ((perms & SftpConstants.S_IWUSR) == SftpConstants.S_IWUSR) {
-            sb.append('w');
-        } else {
-            sb.append('-');
-        }
-        if ((perms & SftpConstants.S_IXUSR) == SftpConstants.S_IXUSR) {
-            sb.append('x');
-        } else {
-            sb.append('-');
-        }
-
-        if ((perms & SftpConstants.S_IRGRP) == SftpConstants.S_IRGRP) {
-            sb.append('r');
-        } else {
-            sb.append('-');
-        }
-        if ((perms & SftpConstants.S_IWGRP) == SftpConstants.S_IWGRP) {
-            sb.append('w');
-        } else {
-            sb.append('-');
-        }
-        if ((perms & SftpConstants.S_IXGRP) == SftpConstants.S_IXGRP) {
-            sb.append('x');
-        } else {
-            sb.append('-');
-        }
-
-        if ((perms & SftpConstants.S_IROTH) == SftpConstants.S_IROTH) {
-            sb.append('r');
-        } else {
-            sb.append('-');
-        }
-        if ((perms & SftpConstants.S_IWOTH) == SftpConstants.S_IWOTH) {
-            sb.append('w');
-        } else {
-            sb.append('-');
-        }
-        if ((perms & SftpConstants.S_IXOTH) == SftpConstants.S_IXOTH) {
-            sb.append('x');
-        } else {
-            sb.append('-');
-        }
-        
-        return sb.toString();
-    }
-
-    public static String getOctalPermissions(int perms) {
-        return getOctalPermissions(permissionsToAttributes(perms));
-    }
-
-    public static Set<PosixFilePermission> permissionsToAttributes(int perms) {
-        Set<PosixFilePermission> p = new HashSet<>();
-        if ((perms & SftpConstants.S_IRUSR) == SftpConstants.S_IRUSR) {
-            p.add(PosixFilePermission.OWNER_READ);
-        }
-        if ((perms & SftpConstants.S_IWUSR) == SftpConstants.S_IWUSR) {
-            p.add(PosixFilePermission.OWNER_WRITE);
-        }
-        if ((perms & SftpConstants.S_IXUSR) == SftpConstants.S_IXUSR) {
-            p.add(PosixFilePermission.OWNER_EXECUTE);
-        }
-        if ((perms & SftpConstants.S_IRGRP) == SftpConstants.S_IRGRP) {
-            p.add(PosixFilePermission.GROUP_READ);
-        }
-        if ((perms & SftpConstants.S_IWGRP) == SftpConstants.S_IWGRP) {
-            p.add(PosixFilePermission.GROUP_WRITE);
-        }
-        if ((perms & SftpConstants.S_IXGRP) == SftpConstants.S_IXGRP) {
-            p.add(PosixFilePermission.GROUP_EXECUTE);
-        }
-        if ((perms & SftpConstants.S_IROTH) == SftpConstants.S_IROTH) {
-            p.add(PosixFilePermission.OTHERS_READ);
-        }
-        if ((perms & SftpConstants.S_IWOTH) == SftpConstants.S_IWOTH) {
-            p.add(PosixFilePermission.OTHERS_WRITE);
-        }
-        if ((perms & SftpConstants.S_IXOTH) == SftpConstants.S_IXOTH) {
-            p.add(PosixFilePermission.OTHERS_EXECUTE);
-        }
-        return p;
-    }
-
-    public static String getOctalPermissions(Collection<PosixFilePermission> perms) {
-        int pf = 0;
-
-        for (PosixFilePermission p : perms) {
-            switch (p) {
-                case OWNER_READ:
-                    pf |= SftpConstants.S_IRUSR;
-                    break;
-                case OWNER_WRITE:
-                    pf |= SftpConstants.S_IWUSR;
-                    break;
-                case OWNER_EXECUTE:
-                    pf |= SftpConstants.S_IXUSR;
-                    break;
-                case GROUP_READ:
-                    pf |= SftpConstants.S_IRGRP;
-                    break;
-                case GROUP_WRITE:
-                    pf |= SftpConstants.S_IWGRP;
-                    break;
-                case GROUP_EXECUTE:
-                    pf |= SftpConstants.S_IXGRP;
-                    break;
-                case OTHERS_READ:
-                    pf |= SftpConstants.S_IROTH;
-                    break;
-                case OTHERS_WRITE:
-                    pf |= SftpConstants.S_IWOTH;
-                    break;
-                case OTHERS_EXECUTE:
-                    pf |= SftpConstants.S_IXOTH;
-                    break;
-                default:    // ignored
-            }
-        }
-
-        return String.format("%04o", pf);
-    }
-
-    /**
-     * Uses the host, port and username to create a unique identifier
-     * @param uri The {@link URI} - <B>Note:</B> not checked to make sure
-     * that the scheme is {@code sftp://}
-     * @return The unique identifier
-     * @see #getFileSystemIdentifier(String, int, String)
-     */
-    public static String getFileSystemIdentifier(URI uri) {
-        String userInfo = ValidateUtils.checkNotNullAndNotEmpty(uri.getUserInfo(), "UserInfo not provided");
-        String[] ui = GenericUtils.split(userInfo, ':');
-        ValidateUtils.checkTrue(GenericUtils.length(ui) == 2, "Invalid user info: %s", userInfo);
-        return getFileSystemIdentifier(uri.getHost(), uri.getPort(), ui[0]);
+    public DelegatingResultSet(Statement stmt, ResultSet res) {
+        super((AbandonedTrace)stmt);
+        this._stmt = stmt;
+        this._res = res;
     }
     
     /**
-     * Uses the remote host address, port and current username to create a unique identifier
-     * @param session The {@link ClientSession}
-     * @return The unique identifier
-     * @see #getFileSystemIdentifier(String, int, String)
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Connection which created it (via, for
+     * example DatabaseMetadata, and the code which created it.
+     *
+     * @param conn Connection which created this ResultSet
+     * @param res ResultSet to wrap
      */
-    public static String getFileSystemIdentifier(ClientSession session) {
-        IoSession ioSession = session.getIoSession();
-        SocketAddress addr = ioSession.getRemoteAddress();
-        String username = session.getUsername();
-        if (addr instanceof InetSocketAddress) {
-            InetSocketAddress inetAddr = (InetSocketAddress) addr;
-            return getFileSystemIdentifier(inetAddr.getHostString(), inetAddr.getPort(), username);
+    public DelegatingResultSet(Connection conn, ResultSet res) {
+        super((AbandonedTrace)conn);
+        this._conn = conn;
+        this._res = res;
+    }
+    
+    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
+        if(null == rset) {
+            return null;
         } else {
-            return getFileSystemIdentifier(addr.toString(), SshConfigFileReader.DEFAULT_PORT, username);
+            return new DelegatingResultSet(stmt,rset);
         }
     }
 
-    public static String getFileSystemIdentifier(String host, int port, String username) {
-        return GenericUtils.trimToEmpty(host) + ':'
-                + ((port <= 0) ? SshConfigFileReader.DEFAULT_PORT : port) + ':'
-                + GenericUtils.trimToEmpty(username);
+    public static ResultSet wrapResultSet(Connection conn, ResultSet rset) {
+        if(null == rset) {
+            return null;
+        } else {
+            return new DelegatingResultSet(conn,rset);
+        }
     }
 
-    public static URI createFileSystemURI(String host, int port, String username, String password) {
-        return URI.create(SftpConstants.SFTP_SUBSYSTEM_NAME + "://" + username + ":" + password + "@" + host + ":" + port + "/");
+    public ResultSet getDelegate() {
+        return _res;
     }
+
+    public boolean equals(Object obj) {
+    	if (this == obj) return true;
+        ResultSet delegate = getInnermostDelegate();
+        if (delegate == null) {
+            return false;
+        }
+        if (obj instanceof DelegatingResultSet) {
+            DelegatingResultSet s = (DelegatingResultSet) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
+    }
+
+    public int hashCode() {
+        Object obj = getInnermostDelegate();
+        if (obj == null) {
+            return 0;
+        }
+        return obj.hashCode();
+    }
+
+    /**
+     * If my underlying {@link ResultSet} is not a
+     * <tt>DelegatingResultSet</tt>, returns it,
+     * otherwise recursively invokes this method on
+     * my delegate.
+     * <p>
+     * Hence this method will return the first
+     * delegate that is not a <tt>DelegatingResultSet</tt>,
+     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
+     * delegate can be found by transversing this chain.
+     * <p>
+     * This method is useful when you may have nested
+     * <tt>DelegatingResultSet</tt>s, and you want to make
+     * sure to obtain a "genuine" {@link ResultSet}.
+     */
+    public ResultSet getInnermostDelegate() {
+        ResultSet r = _res;
+        while(r != null && r instanceof DelegatingResultSet) {
+            r = ((DelegatingResultSet)r).getDelegate();
+            if(this == r) {
+                return null;
+            }
+        }
+        return r;
+    }
+    
+    public Statement getStatement() throws SQLException {
+        return _stmt;
+    }
+
+    /**
+     * Wrapper for close of ResultSet which removes this
+     * result set from being traced then calls close on
+     * the original ResultSet.
+     */
+    public void close() throws SQLException {
+        try {
+            if(_stmt != null) {
+                ((AbandonedTrace)_stmt).removeTrace(this);
+                _stmt = null;
+            }
+            if(_conn != null) {
+                ((AbandonedTrace)_conn).removeTrace(this);
+                _conn = null;
+            }
+            _res.close();
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    protected void handleException(SQLException e) throws SQLException {
+        if ((_stmt != null) && (_stmt instanceof DelegatingStatement)) {
+            ((DelegatingStatement)_stmt).handleException(e);
+        }
+        else if ((_conn != null) && (_conn instanceof DelegatingConnection)) {
+            ((DelegatingConnection)_conn).handleException(e);
+        }
+        else {
+            throw e;
+        }
+    }
+
+    public boolean next() throws SQLException 
+    { try { return _res.next(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean wasNull() throws SQLException
+    { try { return _res.wasNull(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public String getString(int columnIndex) throws SQLException
+    { try { return _res.getString(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(int columnIndex) throws SQLException
+    { try { return _res.getBoolean(columnIndex); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(int columnIndex) throws SQLException
+    { try { return _res.getByte(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(int columnIndex) throws SQLException
+    { try { return _res.getShort(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(int columnIndex) throws SQLException
+    { try { return _res.getInt(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(int columnIndex) throws SQLException
+    { try { return _res.getLong(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(int columnIndex) throws SQLException
+    { try { return _res.getFloat(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(int columnIndex) throws SQLException
+    { try { return _res.getDouble(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException
+    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(int columnIndex) throws SQLException
+    { try { return _res.getBytes(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int columnIndex) throws SQLException
+    { try { return _res.getDate(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int columnIndex) throws SQLException
+    { try { return _res.getTime(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int columnIndex) throws SQLException
+    { try { return _res.getTimestamp(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getAsciiStream(int columnIndex) throws SQLException
+    { try { return _res.getAsciiStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    /** @deprecated */
+    public InputStream getUnicodeStream(int columnIndex) throws SQLException
+    { try { return _res.getUnicodeStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getBinaryStream(int columnIndex) throws SQLException
+    { try { return _res.getBinaryStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public String getString(String columnName) throws SQLException
+    { try { return _res.getString(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(String columnName) throws SQLException
+    { try { return _res.getBoolean(columnName); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(String columnName) throws SQLException
+    { try { return _res.getByte(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(String columnName) throws SQLException
+    { try { return _res.getShort(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(String columnName) throws SQLException
+    { try { return _res.getInt(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(String columnName) throws SQLException
+    { try { return _res.getLong(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(String columnName) throws SQLException
+    { try { return _res.getFloat(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(String columnName) throws SQLException
+    { try { return _res.getDouble(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException
+    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(String columnName) throws SQLException
+    { try { return _res.getBytes(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String columnName) throws SQLException
+    { try { return _res.getDate(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String columnName) throws SQLException
+    { try { return _res.getTime(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String columnName) throws SQLException
+    { try { return _res.getTimestamp(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getAsciiStream(String columnName) throws SQLException
+    { try { return _res.getAsciiStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    /** @deprecated */
+    public InputStream getUnicodeStream(String columnName) throws SQLException
+    { try { return _res.getUnicodeStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getBinaryStream(String columnName) throws SQLException
+    { try { return _res.getBinaryStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public SQLWarning getWarnings() throws SQLException
+    { try { return _res.getWarnings(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void clearWarnings() throws SQLException
+    { try { _res.clearWarnings(); } catch (SQLException e) { handleException(e); } }
+
+    public String getCursorName() throws SQLException
+    { try { return _res.getCursorName(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public ResultSetMetaData getMetaData() throws SQLException
+    { try { return _res.getMetaData(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int columnIndex) throws SQLException
+    { try { return _res.getObject(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String columnName) throws SQLException
+    { try { return _res.getObject(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public int findColumn(String columnName) throws SQLException
+    { try { return _res.findColumn(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public Reader getCharacterStream(int columnIndex) throws SQLException
+    { try { return _res.getCharacterStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Reader getCharacterStream(String columnName) throws SQLException
+    { try { return _res.getCharacterStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(int columnIndex) throws SQLException
+    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(String columnName) throws SQLException
+    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean isBeforeFirst() throws SQLException
+    { try { return _res.isBeforeFirst(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isAfterLast() throws SQLException
+    { try { return _res.isAfterLast(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isFirst() throws SQLException
+    { try { return _res.isFirst(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isLast() throws SQLException
+    { try { return _res.isLast(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void beforeFirst() throws SQLException
+    { try { _res.beforeFirst(); } catch (SQLException e) { handleException(e); } }
+
+    public void afterLast() throws SQLException
+    { try { _res.afterLast(); } catch (SQLException e) { handleException(e); } }
+
+    public boolean first() throws SQLException
+    { try { return _res.first(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean last() throws SQLException
+    { try { return _res.last(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public int getRow() throws SQLException
+    { try { return _res.getRow(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public boolean absolute(int row) throws SQLException
+    { try { return _res.absolute(row); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean relative(int rows) throws SQLException
+    { try { return _res.relative(rows); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean previous() throws SQLException
+    { try { return _res.previous(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void setFetchDirection(int direction) throws SQLException
+    { try { _res.setFetchDirection(direction); } catch (SQLException e) { handleException(e); } }
+
+    public int getFetchDirection() throws SQLException
+    { try { return _res.getFetchDirection(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public void setFetchSize(int rows) throws SQLException
+    { try { _res.setFetchSize(rows); } catch (SQLException e) { handleException(e); } }
+
+    public int getFetchSize() throws SQLException
+    { try { return _res.getFetchSize(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getType() throws SQLException
+    { try { return _res.getType(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getConcurrency() throws SQLException
+    { try { return _res.getConcurrency(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public boolean rowUpdated() throws SQLException
+    { try { return _res.rowUpdated(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean rowInserted() throws SQLException
+    { try { return _res.rowInserted(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean rowDeleted() throws SQLException
+    { try { return _res.rowDeleted(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void updateNull(int columnIndex) throws SQLException
+    { try { _res.updateNull(columnIndex); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBoolean(int columnIndex, boolean x) throws SQLException
+    { try { _res.updateBoolean(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateByte(int columnIndex, byte x) throws SQLException
+    { try { _res.updateByte(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateShort(int columnIndex, short x) throws SQLException
+    { try { _res.updateShort(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateInt(int columnIndex, int x) throws SQLException
+    { try { _res.updateInt(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateLong(int columnIndex, long x) throws SQLException
+    { try { _res.updateLong(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateFloat(int columnIndex, float x) throws SQLException
+    { try { _res.updateFloat(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDouble(int columnIndex, double x) throws SQLException
+    { try { _res.updateDouble(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException
+    { try { _res.updateBigDecimal(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateString(int columnIndex, String x) throws SQLException
+    { try { _res.updateString(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBytes(int columnIndex, byte[] x) throws SQLException
+    { try { _res.updateBytes(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDate(int columnIndex, Date x) throws SQLException
+    { try { _res.updateDate(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTime(int columnIndex, Time x) throws SQLException
+    { try { _res.updateTime(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException
+    { try { _res.updateTimestamp(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException
+    { try { _res.updateAsciiStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException
+    { try { _res.updateBinaryStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException
+    { try { _res.updateCharacterStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(int columnIndex, Object x, int scale) throws SQLException
+    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(int columnIndex, Object x) throws SQLException
+    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateNull(String columnName) throws SQLException
+    { try { _res.updateNull(columnName); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBoolean(String columnName, boolean x) throws SQLException
+    { try { _res.updateBoolean(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateByte(String columnName, byte x) throws SQLException
+    { try { _res.updateByte(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateShort(String columnName, short x) throws SQLException
+    { try { _res.updateShort(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateInt(String columnName, int x) throws SQLException
+    { try { _res.updateInt(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateLong(String columnName, long x) throws SQLException
+    { try { _res.updateLong(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateFloat(String columnName, float x) throws SQLException
+    { try { _res.updateFloat(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDouble(String columnName, double x) throws SQLException
+    { try { _res.updateDouble(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException
+    { try { _res.updateBigDecimal(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateString(String columnName, String x) throws SQLException
+    { try { _res.updateString(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBytes(String columnName, byte[] x) throws SQLException
+    { try { _res.updateBytes(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDate(String columnName, Date x) throws SQLException
+    { try { _res.updateDate(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTime(String columnName, Time x) throws SQLException
+    { try { _res.updateTime(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTimestamp(String columnName, Timestamp x) throws SQLException
+    { try { _res.updateTimestamp(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException
+    { try { _res.updateAsciiStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException
+    { try { _res.updateBinaryStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException
+    { try { _res.updateCharacterStream(columnName, reader, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(String columnName, Object x, int scale) throws SQLException
+    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(String columnName, Object x) throws SQLException
+    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void insertRow() throws SQLException
+    { try { _res.insertRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void updateRow() throws SQLException
+    { try { _res.updateRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void deleteRow() throws SQLException
+    { try { _res.deleteRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void refreshRow() throws SQLException
+    { try { _res.refreshRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void cancelRowUpdates() throws SQLException
+    { try { _res.cancelRowUpdates(); } catch (SQLException e) { handleException(e); } }
+
+    public void moveToInsertRow() throws SQLException
+    { try { _res.moveToInsertRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void moveToCurrentRow() throws SQLException
+    { try { _res.moveToCurrentRow(); } catch (SQLException e) { handleException(e); } }
+
+    public Object getObject(int i, Map map) throws SQLException
+    { try { return _res.getObject(i, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(int i) throws SQLException
+    { try { return _res.getRef(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(int i) throws SQLException
+    { try { return _res.getBlob(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(int i) throws SQLException
+    { try { return _res.getClob(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(int i) throws SQLException
+    { try { return _res.getArray(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String colName, Map map) throws SQLException
+    { try { return _res.getObject(colName, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(String colName) throws SQLException
+    { try { return _res.getRef(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(String colName) throws SQLException
+    { try { return _res.getBlob(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(String colName) throws SQLException
+    { try { return _res.getClob(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(String colName) throws SQLException
+    { try { return _res.getArray(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getDate(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getDate(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getTime(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getTime(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getTimestamp(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getTimestamp(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+
+    public java.net.URL getURL(int columnIndex) throws SQLException
+    { try { return _res.getURL(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public java.net.URL getURL(String columnName) throws SQLException
+    { try { return _res.getURL(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void updateRef(int columnIndex, java.sql.Ref x) throws SQLException
+    { try { _res.updateRef(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateRef(String columnName, java.sql.Ref x) throws SQLException
+    { try { _res.updateRef(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBlob(int columnIndex, java.sql.Blob x) throws SQLException
+    { try { _res.updateBlob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBlob(String columnName, java.sql.Blob x) throws SQLException
+    { try { _res.updateBlob(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateClob(int columnIndex, java.sql.Clob x) throws SQLException
+    { try { _res.updateClob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateClob(String columnName, java.sql.Clob x) throws SQLException
+    { try { _res.updateClob(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateArray(int columnIndex, java.sql.Array x) throws SQLException
+    { try { _res.updateArray(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateArray(String columnName, java.sql.Array x) throws SQLException
+    { try { _res.updateArray(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+/* JDBC_4_ANT_KEY_BEGIN */
+
+    public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        return iface.isAssignableFrom(getClass()) || _res.isWrapperFor(iface);
+    }
+
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+        if (iface.isAssignableFrom(getClass())) {
+            return iface.cast(this);
+        } else if (iface.isAssignableFrom(_res.getClass())) {
+            return iface.cast(_res);
+        } else {
+            return _res.unwrap(iface);
+        }
+    }
+
+    public RowId getRowId(int columnIndex) throws SQLException {
+        try {
+            return _res.getRowId(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public RowId getRowId(String columnLabel) throws SQLException {
+        try {
+            return _res.getRowId(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateRowId(int columnIndex, RowId value) throws SQLException {
+        try {
+            _res.updateRowId(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateRowId(String columnLabel, RowId value) throws SQLException {
+        try {
+            _res.updateRowId(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public int getHoldability() throws SQLException {
+        try {
+            return _res.getHoldability();
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return 0;
+        }
+    }
+
+    public boolean isClosed() throws SQLException {
+        try {
+            return _res.isClosed();
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return false;
+        }
+    }
+
+    public void updateNString(int columnIndex, String value) throws SQLException {
+        try {
+            _res.updateNString(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNString(String columnLabel, String value) throws SQLException {
+        try {
+            _res.updateNString(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, NClob value) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, NClob value) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public NClob getNClob(int columnIndex) throws SQLException {
+        try {
+            return _res.getNClob(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public NClob getNClob(String columnLabel) throws SQLException {
+        try {
+            return _res.getNClob(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(int columnIndex) throws SQLException {
+        try {
+            return _res.getSQLXML(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(String columnLabel) throws SQLException {
+        try {
+            return _res.getSQLXML(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateSQLXML(int columnIndex, SQLXML value) throws SQLException {
+        try {
+            _res.updateSQLXML(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateSQLXML(String columnLabel, SQLXML value) throws SQLException {
+        try {
+            _res.updateSQLXML(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public String getNString(int columnIndex) throws SQLException {
+        try {
+            return _res.getNString(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(String columnLabel) throws SQLException {
+        try {
+            return _res.getNString(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(int columnIndex) throws SQLException {
+        try {
+            return _res.getNCharacterStream(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(String columnLabel) throws SQLException {
+        try {
+            return _res.getNCharacterStream(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateNCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBlob(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBlob(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateClob(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateClob(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBlob(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBlob(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateClob(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateClob(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+/* JDBC_4_ANT_KEY_END */
 }

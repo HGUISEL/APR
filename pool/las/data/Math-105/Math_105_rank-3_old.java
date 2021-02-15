@@ -1,295 +1,257 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-package org.apache.felix.webconsole.internal.servlet;
+package org.jsoup.parser;
 
+import org.apache.commons.lang.Validate;
+import org.jsoup.nodes.*;
 
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Locale;
-import java.util.ResourceBundle;
-import java.util.TreeMap;
+import java.util.*;
 
-import org.apache.felix.webconsole.internal.Util;
-import org.osgi.framework.ServiceRegistration;
-import org.osgi.service.cm.ManagedService;
-import org.osgi.service.metatype.AttributeDefinition;
-import org.osgi.service.metatype.MetaTypeProvider;
-import org.osgi.service.metatype.ObjectClassDefinition;
+/**
+ Parses HTML into a {@link Document}
 
+ @author Jonathan Hedley, jonathan@hedley.net */
+public class Parser {
+    private static String SQ = "'";
+    private static String DQ = "\"";
 
-class ConfigurationListener2 extends ConfigurationListener implements MetaTypeProvider
-{
+    private static Tag htmlTag = Tag.valueOf("html");
+    private static Tag headTag = Tag.valueOf("head");
+    private static Tag bodyTag = Tag.valueOf("body");
+    private static Tag titleTag = Tag.valueOf("title");
 
-    final String pid; // reduces visibility because access to this was made though synthetic accessor method
+    private LinkedList<Element> stack;
+    private TokenQueue tq;
+    private Document doc;
+    private String baseUri;
 
-    private final Object ocdLock = new Object();
-    private String ocdLocale;
-    private ObjectClassDefinition ocd;
-    private final OsgiManager osgiManager;
+    public Parser(String html, String baseUri) {
+        Validate.notNull(html);
+        Validate.notNull(baseUri);
 
-    private static final String[] CONF_PROPS = new String[] {
-        OsgiManager.PROP_MANAGER_ROOT, OsgiManager.DEFAULT_MANAGER_ROOT, //
-        OsgiManager.PROP_HTTP_SERVICE_SELECTOR, OsgiManager.DEFAULT_HTTP_SERVICE_SELECTOR, //
-        OsgiManager.PROP_DEFAULT_RENDER, OsgiManager.DEFAULT_PAGE, //
-        OsgiManager.PROP_REALM, OsgiManager.DEFAULT_REALM, //
-        OsgiManager.PROP_USER_NAME, OsgiManager.DEFAULT_USER_NAME, //
-        OsgiManager.PROP_PASSWORD, OsgiManager.DEFAULT_PASSWORD, //
-        OsgiManager.PROP_LOCALE, "", //$NON-NLS-1$
-    };
+        stack = new LinkedList<Element>();
+        tq = new TokenQueue(html);
+        this.baseUri = baseUri;
 
-
-
-
-    static ServiceRegistration create( OsgiManager osgiManager )
-    {
-        ConfigurationListener2 cl = new ConfigurationListener2( osgiManager );
-        return registerService( cl, new String[]
-            { ManagedService.class.getName(), MetaTypeProvider.class.getName() } );
+        doc = new Document(baseUri);
+        stack.add(doc);
     }
 
-
-    private ConfigurationListener2( OsgiManager osgiManager )
-    {
-        super( osgiManager );
-        this.pid = osgiManager.getConfigurationPid();
-        this.osgiManager = osgiManager;
+    public static Document parse(String html, String baseUri) {
+        Parser parser = new Parser(html, baseUri);
+        return parser.parse();
     }
 
+    public Document parse() {
+        while (!tq.isEmpty()) {
+            if (tq.matches("<!--")) {
+                parseComment();
+            } else if (tq.matches("<![CDATA[")) {
+                parseCdata();
+            } else if (tq.matches("<?") || tq.matches("<!")) {
+                parseXmlDecl();
+            } else if (tq.matches("</")) {
+                parseEndTag();
+            } else if (tq.matches("<")) {
+                parseStartTag();
+            } else {
+                parseTextNode();
+            }
+        }
+        return doc;
+    }
 
-    //---------- MetaTypeProvider
+    private void parseComment() {
+        tq.consume("<!--");
+        String data = tq.chompTo("->");
 
-    public String[] getLocales()
-    {
-        // there is no locale support here
+        if (data.endsWith("-")) // i.e. was -->
+            data = data.substring(0, data.length()-1);
+        Comment comment = new Comment(data, baseUri);
+        last().addChild(comment);
+    }
+
+    private void parseXmlDecl() {
+        tq.consume("<");
+        Character firstChar = tq.consume(); // <? or <!, from initial match.
+        boolean procInstr = firstChar.toString().equals("!");
+        String data = tq.chompTo(">");
+
+        XmlDeclaration decl = new XmlDeclaration(data, baseUri, procInstr);
+        last().addChild(decl);
+    }
+
+    private void parseEndTag() {
+        tq.consume("</");
+        String tagName = tq.consumeWord();
+        tq.chompTo(">");
+
+        if (!tagName.isEmpty()) {
+            Tag tag = Tag.valueOf(tagName);
+            popStackToClose(tag);
+        }
+    }
+
+    private void parseStartTag() {
+        tq.consume("<");
+        String tagName = tq.consumeWord();
+
+        if (tagName.isEmpty()) { // doesn't look like a start tag after all; put < back on stack and handle as text
+            tq.addFirst("&lt;");
+            parseTextNode();
+            return;
+        }
+
+        Attributes attributes = new Attributes();
+        while (!tq.matchesAny("<", "/>", ">") && !tq.isEmpty()) {
+            Attribute attribute = parseAttribute();
+            if (attribute != null)
+                attributes.put(attribute);
+        }
+
+        Tag tag = Tag.valueOf(tagName);
+        StartTag startTag = new StartTag(tag, baseUri, attributes);
+        Element child = new Element(startTag);
+
+        if (!tq.matchChomp("/>")) { // close empty element or tag
+            tq.matchChomp(">");
+        }
+
+        // pc data only tags (textarea, script): chomp to end tag, add content as text node
+        if (tag.isData()) {
+            String data = tq.chompTo("</" + tagName);
+            tq.chompTo(">");
+            DataNode dataNode = DataNode.createFromEncoded(data, baseUri);
+            child.addChild(dataNode);
+
+            if (tag.equals(titleTag))
+                doc.setTitle(child.data());
+        }
+
+        // <base href>: update the base uri
+        if (child.tagName().equals("base")) {
+            baseUri = child.absUrl("href");
+        }
+
+        addChildToParent(child);
+    }
+
+    private Attribute parseAttribute() {
+        tq.consumeWhitespace();
+        String key = tq.consumeAttributeKey();
+        String value = "";
+        tq.consumeWhitespace();
+        if (tq.matchChomp("=")) {
+            tq.consumeWhitespace();
+
+            if (tq.matchChomp(SQ)) {
+                value = tq.chompTo(SQ);
+            } else if (tq.matchChomp(DQ)) {
+                value = tq.chompTo(DQ);
+            } else {
+                StringBuilder valueAccum = new StringBuilder();
+                // no ' or " to look for, so scan to end tag or space (or end of stream)
+                while (!tq.matchesAny("<", "/>", ">") && !tq.matchesWhitespace() && !tq.isEmpty()) {
+                    valueAccum.append(tq.consume());
+                }
+                value = valueAccum.toString();
+            }
+            tq.consumeWhitespace();
+        }
+        if (!key.isEmpty())
+            return Attribute.createFromEncoded(key, value);
+        else {
+            tq.consume(); // unknown char, keep popping so not get stuck
+            return null;
+        }
+    }
+
+    private void parseTextNode() {
+        String text = tq.consumeTo("<");
+        TextNode textNode = TextNode.createFromEncoded(text, baseUri);
+        last().addChild(textNode);
+    }
+
+    private void parseCdata() {
+        tq.consume("<![CDATA[");
+        String rawText = tq.chompTo("]]>");
+        TextNode textNode = new TextNode(rawText, baseUri); // constructor does not escape
+        last().addChild(textNode);
+    }
+
+    private Element addChildToParent(Element child) {
+        Element parent = popStackToSuitableContainer(child.getTag());
+        Tag childTag = child.getTag();
+        boolean validAncestor = stackHasValidParent(childTag);
+
+        if (!validAncestor) {
+            // create implicit parent around this child
+            Tag parentTag = childTag.getImplicitParent();
+            StartTag parentStart = new StartTag(parentTag, baseUri);
+            Element implicit = new Element(parentStart);
+            // special case: make sure there's a head before putting in body
+            if (child.getTag().equals(bodyTag)) {
+                Element head = new Element(new StartTag(headTag, baseUri));
+                implicit.addChild(head);
+            }
+            implicit.addChild(child);
+
+            // recurse to ensure somewhere to put parent
+            Element root = addChildToParent(implicit);
+            stack.addLast(child);
+            return root;
+        }
+
+        parent.addChild(child);
+
+        if (!childTag.isEmpty())
+            stack.addLast(child);
+        return parent;
+    }
+
+    private boolean stackHasValidParent(Tag childTag) {
+        if (stack.size() == 1 && childTag.equals(htmlTag))
+            return true; // root is valid for html node
+        
+        for (int i = stack.size() -1; i > 0; i--) { // not all the way to end
+            Element el = stack.get(i);
+            Tag parent2 = el.getTag();
+            if (parent2.isValidParent(childTag)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Element popStackToSuitableContainer(Tag tag) {
+        while (!stack.isEmpty()) {
+            if (last().getTag().canContain(tag))
+                return last();
+            else
+                stack.removeLast();
+        }
         return null;
     }
 
-    static final String getString(ResourceBundle rb, String key, String def)
-    {
-        try
-        {
-            return rb.getString(key);
+    private Element popStackToClose(Tag tag) {
+        // first check to see if stack contains this tag; if so pop to there, otherwise ignore
+        int counter = 0;
+        Element elToClose = null;
+        for (int i = stack.size() -1; i > 0; i--) {
+            counter++;
+            Element el = stack.get(i);
+            if (el.getTag().equals(tag)) {
+                elToClose = el;
+                break;
+            }
         }
-        catch (Throwable t)
-        {
-            return def;
+        if (elToClose != null) {
+            for (int i = 0; i < counter; i++) {
+                stack.removeLast();
+            }
         }
+        return elToClose;
     }
 
-    public ObjectClassDefinition getObjectClassDefinition( String id, String locale )
-    {
-        if ( !pid.equals( id ) )
-        {
-            return null;
-        }
-
-        if (locale == null) locale = Locale.ENGLISH.getLanguage();
-
-        // check if OCD is already initialized and it's locale is the same as the requested one
-        synchronized (ocdLock)
-        {
-            if ( ocd != null && ocdLocale != null && ocdLocale.equals(locale) )
-            {
-                return ocd;
-            }
-        }
-
-        ObjectClassDefinition xocd = null;
-        final Locale localeObj = Util.parseLocaleString(locale);
-        final ResourceBundle rb = osgiManager.resourceBundleManager.getResourceBundle(osgiManager.getBundleContext().getBundle(), localeObj);
-
-        // simple configuration properties
-        final ArrayList<AttributeDefinition> adList = new ArrayList<AttributeDefinition>();
-        for (int i = 0; i < CONF_PROPS.length; i++)
-        {
-            final String key = CONF_PROPS[i++];
-            final String defaultValue = CONF_PROPS[i];
-            final String name = getString(rb, "metadata." + key + ".name", key); //$NON-NLS-1$ //$NON-NLS-2$
-            final String descr = getString(rb, "metadata." + key + ".description", key); //$NON-NLS-1$ //$NON-NLS-2$
-            adList.add( new AttributeDefinitionImpl(key, name, descr, defaultValue) );
-        }
-
-        // log level is select - so no simple default value; requires localized option labels
-        adList.add( new AttributeDefinitionImpl( OsgiManager.PROP_LOG_LEVEL,
-            getString(rb, "metadata.loglevel.name", OsgiManager.PROP_LOG_LEVEL), //$NON-NLS-1$
-            getString(rb, "metadata.loglevel.description", OsgiManager.PROP_LOG_LEVEL), //$NON-NLS-1$
-            AttributeDefinition.INTEGER, // type
-            new String[] { String.valueOf( OsgiManager.DEFAULT_LOG_LEVEL ) }, // default values
-            0, // cardinality
-            new String[] { // option labels
-                getString(rb, "log.level.debug", "Debug"), //$NON-NLS-1$ //$NON-NLS-2$
-                getString(rb, "log.level.info", "Information"), //$NON-NLS-1$ //$NON-NLS-2$
-                getString(rb, "log.level.warn", "Warn"), //$NON-NLS-1$ //$NON-NLS-2$
-                getString(rb, "log.level.error", "Error"), //$NON-NLS-1$ //$NON-NLS-2$
-            },
-            new String[] { "4", "3", "2", "1" } ) ); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-
-        // list plugins - requires localized plugin titles
-        final TreeMap<String, String> namesByClassName = new TreeMap<String, String>();
-        final String[] defaultPluginsClasses = OsgiManager.PLUGIN_MAP;
-        for ( int i = 0; i < defaultPluginsClasses.length; i++ )
-        {
-            final String clazz = defaultPluginsClasses[i++];
-            final String label = defaultPluginsClasses[i];
-            final String name = getString(rb, label + ".pluginTitle", label); //$NON-NLS-1$
-            namesByClassName.put(clazz, name);
-        }
-        final String[] classes = namesByClassName.keySet().toArray(
-            new String[namesByClassName.size()] );
-        final String[] names = namesByClassName.values().toArray( new String[namesByClassName.size()] );
-
-        adList.add( new AttributeDefinitionImpl( OsgiManager.PROP_ENABLED_PLUGINS,
-            getString(rb, "metadata.plugins.name", OsgiManager.PROP_ENABLED_PLUGINS), //$NON-NLS-1$
-            getString(rb, "metadata.plugins.description", OsgiManager.PROP_ENABLED_PLUGINS), //$NON-NLS-1$
-            AttributeDefinition.STRING, classes, Integer.MIN_VALUE, names, classes ) );
-
-        xocd = new ObjectClassDefinition()
-        {
-
-            private final AttributeDefinition[] attrs = adList
-                .toArray( new AttributeDefinition[adList.size()] );
-
-
-            public String getName()
-            {
-                return getString(rb, "metadata.name", "Apache Felix OSGi Management Console"); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-
-
-            public InputStream getIcon( int arg0 )
-            {
-                return null;
-            }
-
-
-            public String getID()
-            {
-                return pid;
-            }
-
-
-            public String getDescription()
-            {
-                return getString(rb, "metadata.description", "Configuration of the Apache Felix OSGi Management Console."); //$NON-NLS-1$ //$NON-NLS-2$
-            }
-
-
-            public AttributeDefinition[] getAttributeDefinitions( int filter )
-            {
-                return ( filter == OPTIONAL ) ? null : attrs;
-            }
-        };
-
-        synchronized(ocdLock) {
-            this.ocd = xocd;
-            this.ocdLocale = locale;
-        }
-
-        return ocd;
-    }
-
-    private static class AttributeDefinitionImpl implements AttributeDefinition
-    {
-
-        private final String id;
-        private final String name;
-        private final String description;
-        private final int type;
-        private final String[] defaultValues;
-        private final int cardinality;
-        private final String[] optionLabels;
-        private final String[] optionValues;
-
-
-        AttributeDefinitionImpl( final String id, final String name, final String description, final String defaultValue )
-        {
-            this( id, name, description, STRING, new String[]
-                { defaultValue }, 0, null, null );
-        }
-
-
-        AttributeDefinitionImpl( final String id, final String name, final String description, final int type,
-            final String[] defaultValues, final int cardinality, final String[] optionLabels,
-            final String[] optionValues )
-        {
-            this.id = id;
-            this.name = name;
-            this.description = description;
-            this.type = type;
-            this.defaultValues = defaultValues;
-            this.cardinality = cardinality;
-            this.optionLabels = optionLabels;
-            this.optionValues = optionValues;
-        }
-
-
-        public int getCardinality()
-        {
-            return cardinality;
-        }
-
-
-        public String[] getDefaultValue()
-        {
-            return defaultValues;
-        }
-
-
-        public String getDescription()
-        {
-            return description;
-        }
-
-
-        public String getID()
-        {
-            return id;
-        }
-
-
-        public String getName()
-        {
-            return name;
-        }
-
-
-        public String[] getOptionLabels()
-        {
-            return optionLabels;
-        }
-
-
-        public String[] getOptionValues()
-        {
-            return optionValues;
-        }
-
-
-        public int getType()
-        {
-            return type;
-        }
-
-
-        public String validate( String arg0 )
-        {
-            return null;
-        }
+    private Element last() {
+        return stack.getLast();
     }
 }

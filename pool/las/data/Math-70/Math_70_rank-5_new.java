@@ -1,285 +1,417 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
-package org.apache.accumulo.test.functional;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+package org.apache.flume.channel.file;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map.Entry;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.accumulo.core.cli.BatchWriterOpts;
-import org.apache.accumulo.core.client.BatchScanner;
-import org.apache.accumulo.core.client.BatchWriter;
-import org.apache.accumulo.core.client.BatchWriterConfig;
-import org.apache.accumulo.core.client.Connector;
-import org.apache.accumulo.core.client.IteratorSetting;
-import org.apache.accumulo.core.client.MutationsRejectedException;
-import org.apache.accumulo.core.conf.Property;
-import org.apache.accumulo.core.data.Key;
-import org.apache.accumulo.core.data.Mutation;
-import org.apache.accumulo.core.data.Value;
-import org.apache.accumulo.core.iterators.user.AgeOffFilter;
-import org.apache.accumulo.core.iterators.user.SummingCombiner;
-import org.apache.accumulo.core.security.Authorizations;
-import org.apache.accumulo.core.util.CachedConfiguration;
-import org.apache.accumulo.core.util.UtilWaitThread;
-import org.apache.accumulo.examples.simple.client.Flush;
-import org.apache.accumulo.examples.simple.client.RandomBatchScanner;
-import org.apache.accumulo.examples.simple.client.RandomBatchWriter;
-import org.apache.accumulo.examples.simple.client.ReadWriteExample;
-import org.apache.accumulo.examples.simple.client.RowOperations;
-import org.apache.accumulo.examples.simple.client.SequentialBatchWriter;
-import org.apache.accumulo.examples.simple.client.TraceDumpExample;
-import org.apache.accumulo.examples.simple.client.TracingExample;
-import org.apache.accumulo.examples.simple.constraints.MaxMutationSize;
-import org.apache.accumulo.examples.simple.dirlist.Ingest;
-import org.apache.accumulo.examples.simple.dirlist.QueryUtil;
-import org.apache.accumulo.examples.simple.helloworld.InsertWithBatchWriter;
-import org.apache.accumulo.examples.simple.helloworld.ReadData;
-import org.apache.accumulo.examples.simple.isolation.InterferenceTest;
-import org.apache.accumulo.examples.simple.mapreduce.RegexExample;
-import org.apache.accumulo.examples.simple.mapreduce.RowHash;
-import org.apache.accumulo.examples.simple.mapreduce.TableToFile;
-import org.apache.accumulo.examples.simple.mapreduce.TeraSortIngest;
-import org.apache.accumulo.examples.simple.mapreduce.WordCount;
-import org.apache.accumulo.examples.simple.mapreduce.bulk.BulkIngestExample;
-import org.apache.accumulo.examples.simple.mapreduce.bulk.GenerateTestData;
-import org.apache.accumulo.examples.simple.mapreduce.bulk.SetupTable;
-import org.apache.accumulo.examples.simple.shard.ContinuousQuery;
-import org.apache.accumulo.examples.simple.shard.Index;
-import org.apache.accumulo.examples.simple.shard.Query;
-import org.apache.accumulo.examples.simple.shard.Reverse;
-import org.apache.accumulo.minicluster.MemoryUnit;
-import org.apache.accumulo.minicluster.MiniAccumuloCluster.LogWriter;
-import org.apache.accumulo.minicluster.MiniAccumuloConfig;
-import org.apache.accumulo.server.util.Admin;
-import org.apache.accumulo.test.TestIngest;
-import org.apache.accumulo.test.VerifyIngest;
-import org.apache.accumulo.tracer.TraceServer;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.Text;
-import org.junit.Test;
+import org.apache.flume.Channel;
+import org.apache.flume.ChannelException;
+import org.apache.flume.Context;
+import org.apache.flume.Event;
+import org.apache.flume.channel.BasicChannelSemantics;
+import org.apache.flume.channel.BasicTransactionSemantics;
+import org.apache.flume.channel.file.Log.Builder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public class ExamplesIT extends ConfigurableMacIT {
+import com.google.common.base.Preconditions;
 
-  BatchWriterOpts bwOpts = new BatchWriterOpts();
+/**
+ * <p>
+ * A durable {@link Channel} implementation that uses the local file system for
+ * its storage.
+ * </p>
+ * <p>
+ * FileChannel works by writing all transactions to a set of directories
+ * specified in the configuration. Additionally, when a commit occurs
+ * the transaction is synced to disk. Pointers to events put on the
+ * channel are stored in memory. As such, each event on the queue
+ * will require 8 bytes of DirectMemory (non-heap). However, the channel
+ * will only allow a configurable number messages into the channel.
+ * The appropriate amount of direct memory for said capacity,
+ * must be allocated to the JVM via the JVM property: -XX:MaxDirectMemorySize
+ * </p>
+ * <br>
+ * <p>
+ * Memory Consumption:
+ * <ol>
+ * <li>200GB of data in queue at 100 byte messages: 16GB</li>
+ * <li>200GB of data in queue at 500 byte messages: 3.2GB</li>
+ * <li>200GB of data in queue at 1000 byte messages: 1.6GB</li>
+ * </ol>
+ * </p>
+ */
+public class FileChannel extends BasicChannelSemantics {
+
+  private static final Logger LOG = LoggerFactory
+      .getLogger(FileChannel.class);
+
+  private int capacity;
+  private int keepAlive;
+  private int transactionCapacity;
+  private long checkpointInterval;
+  private long maxFileSize;
+  private File checkpointDir;
+  private File[] dataDirs;
+  private Log log;
+  private boolean shutdownHookAdded;
+  private Thread shutdownHook;
+  private volatile boolean open;
+  private Semaphore queueRemaining;
+  private final ThreadLocal<FileBackedTransaction> transactions =
+      new ThreadLocal<FileBackedTransaction>();
+  private int logWriteTimeout;
+
+  /**
+   * Transaction IDs should unique within a file channel
+   * across JVM restarts.
+   */
+  private static final AtomicLong TRANSACTION_ID =
+      new AtomicLong(System.currentTimeMillis());
 
   @Override
-  public void configure(MiniAccumuloConfig cfg) {
-    cfg.setDefaultMemory(cfg.getDefaultMemory() * 2, MemoryUnit.BYTE);
+  public void configure(Context context) {
+
+    String homePath = System.getProperty("user.home").replace('\\', '/');
+
+    String strCheckpointDir =
+        context.getString(FileChannelConfiguration.CHECKPOINT_DIR,
+            homePath + "/.flume/file-channel/checkpoint");
+
+    String[] strDataDirs = context.getString(FileChannelConfiguration.DATA_DIRS,
+        homePath + "/.flume/file-channel/data").split(",");
+
+    if(checkpointDir == null) {
+      checkpointDir = new File(strCheckpointDir);
+    } else if(!checkpointDir.getAbsolutePath().
+        equals(new File(strCheckpointDir).getAbsolutePath())) {
+      LOG.warn("An attempt was made to change the checkpoint " +
+          "directory after start, this is not supported.");
+    }
+    if(dataDirs == null) {
+      dataDirs = new File[strDataDirs.length];
+      for (int i = 0; i < strDataDirs.length; i++) {
+        dataDirs[i] = new File(strDataDirs[i]);
+      }
+    } else {
+      boolean changed = false;
+      if(dataDirs.length != strDataDirs.length) {
+        changed = true;
+      } else {
+        for (int i = 0; i < strDataDirs.length; i++) {
+          if(!dataDirs[i].getAbsolutePath().
+              equals(new File(strDataDirs[i]).getAbsolutePath())) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if(changed) {
+        LOG.warn("An attempt was made to change the data " +
+            "directories after start, this is not supported.");
+      }
+    }
+
+    int newCapacity = context.getInteger(FileChannelConfiguration.CAPACITY,
+        FileChannelConfiguration.DEFAULT_CAPACITY);
+    if(capacity > 0 && newCapacity != capacity) {
+      LOG.warn("Capacity of this channel cannot be sized on the fly due " +
+          "the requirement we have enough DirectMemory for the queue and " +
+          "downsizing of the queue cannot be guranteed due to the " +
+          "fact there maybe more items on the queue than the new capacity.");
+    } else {
+      capacity = newCapacity;
+    }
+
+    keepAlive =
+        context.getInteger(FileChannelConfiguration.KEEP_ALIVE,
+            FileChannelConfiguration.DEFAULT_KEEP_ALIVE);
+    transactionCapacity =
+        context.getInteger(FileChannelConfiguration.TRANSACTION_CAPACITY,
+            FileChannelConfiguration.DEFAULT_TRANSACTION_CAPACITY);
+
+    checkpointInterval =
+        context.getLong(FileChannelConfiguration.CHECKPOINT_INTERVAL,
+            FileChannelConfiguration.DEFAULT_CHECKPOINT_INTERVAL);
+
+    // cannot be over FileChannelConfiguration.DEFAULT_MAX_FILE_SIZE
+    maxFileSize = Math.min(
+        context.getLong(FileChannelConfiguration.MAX_FILE_SIZE,
+            FileChannelConfiguration.DEFAULT_MAX_FILE_SIZE),
+            FileChannelConfiguration.DEFAULT_MAX_FILE_SIZE);
+
+    logWriteTimeout = context.getInteger(
+        FileChannelConfiguration.LOG_WRITE_TIMEOUT,
+        FileChannelConfiguration.DEFAULT_WRITE_TIMEOUT);
+
+    if (logWriteTimeout < 0) {
+      LOG.warn("Log write time out is invalid: " + logWriteTimeout
+          + ", using default: "
+          + FileChannelConfiguration.DEFAULT_WRITE_TIMEOUT);
+
+      logWriteTimeout = FileChannelConfiguration.DEFAULT_WRITE_TIMEOUT;
+    }
+
+
+    if(queueRemaining == null) {
+      queueRemaining = new Semaphore(capacity, true);
+    }
+    if(log != null) {
+      log.setCheckpointInterval(checkpointInterval);
+      log.setMaxFileSize(maxFileSize);
+    }
   }
 
-  @Test(timeout = 10 * 60 * 1000)
-  public void test() throws Exception {
-    Connector c = getConnector();
-    String instance = c.getInstance().getInstanceName();
-    String keepers = c.getInstance().getZooKeepers();
-    String user = "root";
-    String passwd = ROOT_PASSWORD;
-    String visibility = "A|B";
-    String auths = "A,B";
-    BatchWriterConfig bwc = new BatchWriterConfig();
-    BatchWriter bw;
-    IteratorSetting is;
-    String dir = cluster.getConfig().getDir().getAbsolutePath();
-    FileSystem fs = FileSystem.get(CachedConfiguration.getInstance());
-
-    Process trace = cluster.exec(TraceServer.class);
-    while (!c.tableOperations().exists("trace"))
-      UtilWaitThread.sleep(500);
-
-    log.info("trace example");
-    Process p = cluster.exec(TracingExample.class, "-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-C", "-D", "-c");
-    assertEquals(0, p.waitFor());
-    for (LogWriter writer : cluster.getLogWriters()) {
-      writer.flush();
-    }
-    String result = FunctionalTestUtils.readAll(cluster, TracingExample.class, p);
-    Pattern pattern = Pattern.compile("TraceID: ([0-9a-f]+)");
-    Matcher matcher = pattern.matcher(result);
-    int count = 0;
-    while (matcher.find()) {
-      p = cluster.exec(TraceDumpExample.class, "-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--traceid", matcher.group(1));
-      assertEquals(0, p.waitFor());
-      count++;
-    }
-    assertTrue(count > 0);
-    result = FunctionalTestUtils.readAll(cluster, TraceDumpExample.class, p);
-    assertTrue(result.contains("myHost@myApp"));
-    trace.destroy();
-
-    log.info("testing dirlist example (a little)");
-    c.securityOperations().changeUserAuthorizations(user, new Authorizations(auths.split(",")));
-    assertEquals(
-        0,
-        cluster.exec(Ingest.class, "-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--dirTable", "dirTable", "--indexTable", "indexTable",
-            "--dataTable", "dataTable", "--vis", visibility, "--chunkSize", 10000 + "", cluster.getConfig().getDir().getAbsolutePath()).waitFor());
-    p = cluster.exec(QueryUtil.class, "-i", instance, "-z", keepers, "-p", passwd, "-u", user, "-t", "indexTable", "--auths", auths, "--search", "--path",
-        "accumulo-site.xml");
-    assertEquals(0, p.waitFor());
-    for (LogWriter writer : cluster.getLogWriters()) {
-      writer.flush();
-    }
-    result = FunctionalTestUtils.readAll(cluster, QueryUtil.class, p);
-    System.out.println("result " + result);
-    assertTrue(result.contains("accumulo-site.xml"));
-
-    log.info("Testing ageoff filtering");
-    c.tableOperations().create("filtertest");
-    is = new IteratorSetting(10, AgeOffFilter.class);
-    AgeOffFilter.setTTL(is, 1000L);
-    c.tableOperations().attachIterator("filtertest", is);
-    bw = c.createBatchWriter("filtertest", bwc);
-    Mutation m = new Mutation("foo");
-    m.put("a", "b", "c");
-    bw.addMutation(m);
-    UtilWaitThread.sleep(1000);
-    count = 0;
-    for (@SuppressWarnings("unused")
-    Entry<Key,Value> line : c.createScanner("filtertest", Authorizations.EMPTY))
-      count++;
-    assertEquals(0, count);
-
-    log.info("Testing bloom filters are fast for missing data");
-    c.tableOperations().create("bloom_test");
-    c.tableOperations().setProperty("bloom_test", Property.TABLE_BLOOM_ENABLED.getKey(), "true");
-    assertEquals(
-        0,
-        cluster.exec(RandomBatchWriter.class, "--seed", "7", "-i", instance, "-z", keepers, "-u", user, "-p", ROOT_PASSWORD, "--num", "100000", "--min", "0",
-            "--max", "1000000000", "--size", "50", "--batchMemory", "2M", "--batchLatency", "60s", "--batchThreads", "3", "-t", "bloom_test").waitFor());
-    c.tableOperations().flush("bloom_test", null, null, true);
-    long diff = 0, diff2 = 0;
-    // try the speed test a couple times in case the system is loaded with other tests
-    for (int i = 0; i < 2; i++) {
-      long now = System.currentTimeMillis();
-      assertEquals(0,  cluster.exec(RandomBatchScanner.class,"--seed", "7", "-i", instance, "-z",
-          keepers, "-u", user, "-p", ROOT_PASSWORD, "--num", "10000", "--min", "0", "--max", "1000000000", "--size", "50",
-          "--scanThreads", "4","-t", "bloom_test").waitFor());
-      diff = System.currentTimeMillis() - now;
-      now = System.currentTimeMillis();
-      assertEquals(1,  cluster.exec(RandomBatchScanner.class,"--seed", "8", "-i", instance, "-z",
-          keepers, "-u", user, "-p", ROOT_PASSWORD, "--num", "10000", "--min", "0", "--max", "1000000000", "--size", "50",
-          "--scanThreads", "4","-t", "bloom_test").waitFor());
-      diff2 = System.currentTimeMillis() - now;
-      if (diff2 < diff)
-        break;
-    }
-    assertTrue(diff2 < diff);
-
-    log.info("Creating a sharded index of the accumulo java files");
-    c.tableOperations().create("shard");
-    c.tableOperations().create("doc2term");
-    bw = c.createBatchWriter("shard", bwc);
-    Index.index(30, new File(System.getProperty("user.dir") + "/src"), "\\W+", bw);
-    bw.close();
-    BatchScanner bs = c.createBatchScanner("shard", Authorizations.EMPTY, 4);
-    List<String> found = Query.query(bs, Arrays.asList("foo", "bar"));
-    bs.close();
-    // should find ourselves
-    boolean thisFile = false;
-    for (String file : found) {
-      if (file.endsWith("/ExamplesIT.java"))
-        thisFile = true;
-    }
-    assertTrue(thisFile);
-    // create a reverse index
-    c.tableOperations().create("doc2Term");
-    assertEquals(0, cluster.exec(Reverse.class, "-i", instance, "-z", keepers, "--shardTable", "shard", "--doc2Term", "doc2Term", "-u", "root", "-p", passwd).waitFor());
-    // run some queries
-    assertEquals(
-        0,
-        cluster.exec(ContinuousQuery.class, "-i", instance, "-z", keepers, "--shardTable", "shard", "--doc2Term", "doc2Term", "-u", "root", "-p", passwd, "--terms", "5", "--count",
-            "1000").waitFor());
-
-    log.info("Testing MaxMutation constraint");
-    c.tableOperations().create("test_ingest");
-    c.tableOperations().addConstraint("test_ingest", MaxMutationSize.class.getName());
-    TestIngest.Opts opts = new TestIngest.Opts();
-    opts.rows = 1;
-    opts.cols = 1000;
+  @Override
+  public synchronized void start() {
+    LOG.info("Starting FileChannel with dataDir "  + Arrays.toString(dataDirs));
     try {
-      TestIngest.ingest(c, opts, bwOpts);
-    } catch (MutationsRejectedException ex) {
-      assertEquals(1, ex.getConstraintViolationSummaries().size());
+      Builder builder = new Log.Builder();
+      builder.setCheckpointInterval(checkpointInterval);
+      builder.setMaxFileSize(maxFileSize);
+      builder.setQueueSize(capacity);
+      builder.setLogWriteTimeout(logWriteTimeout);
+      builder.setCheckpointDir(checkpointDir);
+      builder.setLogDirs(dataDirs);
+
+      log = builder.build();
+
+      log.replay();
+      open = true;
+
+      int depth = getDepth();
+      Preconditions.checkState(queueRemaining.tryAcquire(depth),
+          "Unable to acquire " + depth + " permits");
+      LOG.info("Queue Size after replay: " + depth);
+      // shutdown hook flushes all data to disk and closes
+      // file descriptors along with setting all closed flags
+      if(!shutdownHookAdded) {
+        shutdownHookAdded = true;
+        final FileChannel fileChannel = this;
+        LOG.info("Adding shutdownhook for " + fileChannel);
+        shutdownHook = new Thread() {
+          @Override
+          public void run() {
+            String desc = Arrays.toString(fileChannel.dataDirs);
+            LOG.info("Closing FileChannel " + desc);
+            try {
+              fileChannel.close();
+            } catch (Exception e) {
+              LOG.error("Error closing fileChannel " + desc, e);
+            }
+          }
+        };
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
+      }
+    } catch (Exception ex) {
+      open = false;
+      LOG.error("Failed to start the file channel", ex);
     }
-
-    log.info("Starting bulk ingest example");
-    assertEquals(0, cluster.exec(GenerateTestData.class, "--start-row", "0", "--count", "10000", "--output", dir + "/tmp/input/data").waitFor());
-    assertEquals(0, cluster.exec(SetupTable.class, "-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--table", "bulkTable").waitFor());
-    assertEquals(0, cluster.exec(BulkIngestExample.class, "-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--table", "bulkTable", "--inputDir", dir + "/tmp/input", "--workDir", dir + "/tmp").waitFor());
-
-    log.info("Running TeraSortIngest example");
-    exec(TeraSortIngest.class, new String[] {"--count", (1000 * 1000) + "", "-nk", "10", "-xk", "10", "-nv", "10", "-xv", "10", "-t", "sorted", "-i", instance,
-        "-z", keepers, "-u", user, "-p", passwd, "--splits", "4"});
-    log.info("Running Regex example");
-    exec(RegexExample.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "sorted", "--rowRegex", ".*999.*", "--output",
-        dir + "/tmp/nines"});
-    log.info("Running RowHash example");
-    exec(RowHash.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "sorted", "--column", "c:"});
-    log.info("Running TableToFile example");
-    exec(TableToFile.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "sorted", "--output", dir + "/tmp/tableFile"});
-
-    log.info("Running word count example");
-    c.tableOperations().create("wordCount");
-    is = new IteratorSetting(10, SummingCombiner.class);
-    SummingCombiner.setColumns(is, Collections.singletonList(new IteratorSetting.Column(new Text("count"))));
-    SummingCombiner.setEncodingType(is, SummingCombiner.Type.STRING);
-    c.tableOperations().attachIterator("wordCount", is);
-    fs.copyFromLocalFile(new Path(new Path(System.getProperty("user.dir")).getParent(), "README"), new Path(dir + "/tmp/wc/README"));
-    exec(WordCount.class, new String[] {"-i", instance, "-u", user, "-p", passwd, "-z", keepers, "--input", dir + "/tmp/wc", "-t", "wordCount"});
-
-    log.info("Inserting data with a batch writer");
-    exec(InsertWithBatchWriter.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "helloBatch"});
-    log.info("Reading data");
-    exec(ReadData.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "helloBatch"});
-    log.info("Running isolated scans");
-    exec(InterferenceTest.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "itest1", "--iterations", "100000", "--isolated"});
-    log.info("Running scans without isolation");
-    exec(InterferenceTest.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "itest2", "--iterations", "100000",});
-    log.info("Performing some row operations");
-    exec(RowOperations.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd,});
-    log.info("Using the batch writer");
-    c.tableOperations().create("test");
-    exec(SequentialBatchWriter.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "-t", "test", "--start", "0", "--num", "100000",
-        "--size", "50", "--batchMemory", "10000000", "--batchLatency", "1000", "--batchThreads", "4", "--vis", visibility});
-
-    log.info("Reading and writing some data");
-    exec(ReadWriteExample.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--auths", auths, "--table", "test2", "--createtable",
-        "-c", "--debug"});
-    log.info("Deleting some data");
-    exec(ReadWriteExample.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--auths", auths, "--table", "test2", "-d", "--debug"});
-    log.info("Writing some data with the batch writer");
-    c.tableOperations().create("test3");
-    exec(RandomBatchWriter.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--table", "test3", "--num", "100000", "--min", "0",
-        "--max", "99999", "--size", "100", "--batchMemory", "1000000", "--batchLatency", "1000", "--batchThreads", "4", "--vis", visibility});
-    log.info("Reading some data with the batch scanner");
-    exec(RandomBatchScanner.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--table", "test3", "--num", "10000", "--min", "0",
-        "--max", "99999", "--size", "100", "--scanThreads", "4", "--auths", auths});
-    log.info("Running an example table operation (Flush)");
-    exec(Flush.class, new String[] {"-i", instance, "-z", keepers, "-u", user, "-p", passwd, "--table", "test3",});
-    assertEquals(0, cluster.exec(Admin.class, "stopAll").waitFor());
-
+    super.start();
   }
 
+  @Override
+  public synchronized void stop() {
+    LOG.info("Stopping FileChannel with dataDir " +  Arrays.toString(dataDirs));
+    try {
+      if(shutdownHookAdded && shutdownHook != null) {
+        Runtime.getRuntime().removeShutdownHook(shutdownHook);
+        shutdownHookAdded = false;
+        shutdownHook = null;
+      }
+    } catch (Exception ex) {
+      LOG.debug("Failed to remove shutdown hook", ex);
+    } finally {
+      close();
+    }
+    super.stop();
+  }
+
+  @Override
+  protected BasicTransactionSemantics createTransaction() {
+    Preconditions.checkState(open, "Channel closed");
+    FileBackedTransaction trans = transactions.get();
+    if(trans != null && !trans.isClosed()) {
+      Preconditions.checkState(false,
+          "Thread has transaction which is still open: " +
+              trans.getStateAsString());
+    }
+    trans = new FileBackedTransaction(log, TRANSACTION_ID.incrementAndGet(),
+        transactionCapacity, keepAlive, queueRemaining);
+    transactions.set(trans);
+    return trans;
+  }
+
+  int getDepth() {
+    Preconditions.checkState(open, "Channel closed");
+    Preconditions.checkNotNull(log, "log");
+    FlumeEventQueue queue = log.getFlumeEventQueue();
+    Preconditions.checkNotNull(queue, "queue");
+    return queue.getSize();
+  }
+  void close() {
+    if(open) {
+      open = false;
+      log.close();
+      log = null;
+      queueRemaining = null;
+    }
+  }
+
+  boolean isOpen() {
+    return open;
+  }
+
+  /**
+   * Transaction backed by a file. This transaction supports either puts
+   * or takes but not both.
+   */
+  static class FileBackedTransaction extends BasicTransactionSemantics {
+    private final LinkedBlockingDeque<FlumeEventPointer> takeList;
+    private final LinkedBlockingDeque<FlumeEventPointer> putList;
+    private final long transactionID;
+    private final int keepAlive;
+    private final Log log;
+    private final FlumeEventQueue queue;
+    private final Semaphore queueRemaining;
+    public FileBackedTransaction(Log log, long transactionID,
+        int transCapacity, int keepAlive, Semaphore queueRemaining) {
+      this.log = log;
+      queue = log.getFlumeEventQueue();
+      this.transactionID = transactionID;
+      this.keepAlive = keepAlive;
+      this.queueRemaining = queueRemaining;
+      putList = new LinkedBlockingDeque<FlumeEventPointer>(transCapacity);
+      takeList = new LinkedBlockingDeque<FlumeEventPointer>(transCapacity);
+    }
+    private boolean isClosed() {
+      return State.CLOSED.equals(getState());
+    }
+    private String getStateAsString() {
+      return String.valueOf(getState());
+    }
+    @Override
+    protected void doPut(Event event) throws InterruptedException {
+      if(putList.remainingCapacity() == 0) {
+        throw new ChannelException("Put queue for FileBackedTransaction " +
+            "of capacity " + putList.size() + " full, consider " +
+            "committing more frequently, increasing capacity or " +
+            "increasing thread count");
+      }
+      if(!queueRemaining.tryAcquire(keepAlive, TimeUnit.SECONDS)) {
+        throw new ChannelException("Cannot acquire capacity");
+      }
+      try {
+        FlumeEventPointer ptr = log.put(transactionID, event);
+        Preconditions.checkState(putList.offer(ptr));
+      } catch (IOException e) {
+        throw new ChannelException("Put failed due to IO error", e);
+      }
+    }
+
+    @Override
+    protected Event doTake() throws InterruptedException {
+      if(takeList.remainingCapacity() == 0) {
+        throw new ChannelException("Take list for FileBackedTransaction, capacity " +
+            takeList.size() + " full, consider committing more frequently, " +
+            "increasing capacity, or increasing thread count");
+      }
+      FlumeEventPointer ptr = queue.removeHead();
+      if(ptr != null) {
+        try {
+          // first add to takeList so that if write to disk
+          // fails rollback actually does it's work
+          Preconditions.checkState(takeList.offer(ptr));
+          log.take(transactionID, ptr); // write take to disk
+          Event event = log.get(ptr);
+          return event;
+        } catch (IOException e) {
+          throw new ChannelException("Take failed due to IO error", e);
+        }
+      }
+      return null;
+    }
+
+    @Override
+    protected void doCommit() throws InterruptedException {
+      int puts = putList.size();
+      int takes = takeList.size();
+      if(puts > 0) {
+        Preconditions.checkState(takes == 0);
+        synchronized (queue) {
+          while(!putList.isEmpty()) {
+            if(!queue.addTail(putList.removeFirst())) {
+              StringBuilder msg = new StringBuilder();
+              msg.append("Queue add failed, this shouldn't be able to ");
+              msg.append("happen. A portion of the transaction has been ");
+              msg.append("added to the queue but the remaining portion ");
+              msg.append("cannot be added. Those messages will be consumed ");
+              msg.append("despite this transaction failing. Please report.");
+              LOG.error(msg.toString());
+              Preconditions.checkState(false, msg.toString());
+            }
+          }
+        }
+        try {
+          log.commitPut(transactionID);
+        } catch (IOException e) {
+          throw new ChannelException("Commit failed due to IO error", e);
+        }
+      } else if(takes > 0) {
+        try {
+          log.commitTake(transactionID);
+        } catch (IOException e) {
+          throw new ChannelException("Commit failed due to IO error", e);
+        }
+        queueRemaining.release(takes);
+      }
+      putList.clear();
+      takeList.clear();
+    }
+
+    @Override
+    protected void doRollback() throws InterruptedException {
+      int puts = putList.size();
+      int takes = takeList.size();
+      if(takes > 0) {
+        Preconditions.checkState(puts == 0);
+        while(!takeList.isEmpty()) {
+          Preconditions.checkState(queue.addHead(takeList.removeLast()),
+              "Queue add failed, this shouldn't be able to happen");
+        }
+      }
+      queueRemaining.release(puts);
+      try {
+        log.rollback(transactionID);
+      } catch (IOException e) {
+        throw new ChannelException("Commit failed due to IO error", e);
+      }
+      putList.clear();
+      takeList.clear();
+    }
+
+  }
 }

@@ -1,1237 +1,612 @@
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.drill.exec.store.parquet;
 
-package org.apache.xerces.impl;
+import org.apache.drill.common.expression.SchemaPath;
+import org.apache.drill.common.types.TypeProtos;
+import org.apache.drill.metastore.statistics.BaseStatisticsKind;
+import org.apache.drill.metastore.metadata.MetadataInfo;
+import org.apache.drill.metastore.metadata.MetadataType;
+import org.apache.drill.metastore.metadata.TableInfo;
+import org.apache.drill.metastore.statistics.TableStatisticsKind;
+import org.apache.drill.metastore.statistics.Statistic;
+import org.apache.drill.exec.record.metadata.TupleMetadata;
+import org.apache.drill.exec.record.metadata.TupleSchema;
+import org.apache.drill.exec.resolver.TypeCastRules;
+import org.apache.drill.exec.server.options.OptionManager;
+import org.apache.drill.exec.store.ColumnExplorer;
+import org.apache.drill.exec.store.parquet.metadata.MetadataBase;
+import org.apache.drill.exec.store.parquet.metadata.MetadataVersion;
+import org.apache.drill.exec.store.parquet.metadata.Metadata_V4;
+import org.apache.drill.metastore.statistics.CollectableColumnStatisticsKind;
+import org.apache.drill.metastore.statistics.ColumnStatistics;
+import org.apache.drill.metastore.statistics.ColumnStatisticsKind;
+import org.apache.drill.metastore.metadata.FileMetadata;
+import org.apache.drill.metastore.metadata.NonInterestingColumnsMetadata;
+import org.apache.drill.metastore.metadata.PartitionMetadata;
+import org.apache.drill.metastore.metadata.RowGroupMetadata;
+import org.apache.drill.metastore.statistics.StatisticsHolder;
+import org.apache.drill.metastore.util.SchemaPathUtils;
+import org.apache.drill.metastore.util.TableMetadataUtils;
+import org.apache.drill.metastore.statistics.ExactStatisticsConstants;
+import org.apache.drill.exec.expr.StatisticsProvider;
+import org.apache.drill.shaded.guava.com.google.common.base.Preconditions;
+import org.apache.drill.shaded.guava.com.google.common.collect.ImmutableList;
+import org.apache.drill.shaded.guava.com.google.common.collect.LinkedListMultimap;
+import org.apache.drill.shaded.guava.com.google.common.collect.Multimap;
+import org.apache.drill.shaded.guava.com.google.common.primitives.Longs;
+import org.apache.hadoop.fs.Path;
+import org.apache.parquet.io.api.Binary;
+import org.apache.parquet.schema.OriginalType;
+import org.apache.parquet.schema.PrimitiveType;
+import org.joda.time.DateTimeConstants;
 
-import java.io.CharConversionException;
-import java.io.EOFException;
-import java.io.IOException;
-
-import org.apache.xerces.impl.io.MalformedByteSequenceException;
-import org.apache.xerces.impl.validation.ValidationManager;
-import org.apache.xerces.util.NamespaceSupport;
-import org.apache.xerces.util.XMLChar;
-import org.apache.xerces.util.XMLEntityDescriptionImpl;
-import org.apache.xerces.util.XMLStringBuffer;
-import org.apache.xerces.xni.Augmentations;
-import org.apache.xerces.xni.NamespaceContext;
-import org.apache.xerces.xni.XMLResourceIdentifier;
-import org.apache.xerces.xni.XMLString;
-import org.apache.xerces.xni.XNIException;
-import org.apache.xerces.xni.parser.XMLComponentManager;
-import org.apache.xerces.xni.parser.XMLConfigurationException;
-import org.apache.xerces.xni.parser.XMLDTDScanner;
-import org.apache.xerces.xni.parser.XMLInputSource;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * This class is responsible for scanning XML document structure
- * and content. The scanner acts as the source for the document
- * information which is communicated to the document handler.
- * <p>
- * This component requires the following features and properties from the
- * component manager that uses it:
- * <ul>
- *  <li>http://xml.org/sax/features/namespaces</li>
- *  <li>http://xml.org/sax/features/validation</li>
- *  <li>http://apache.org/xml/features/nonvalidating/load-external-dtd</li>
- *  <li>http://apache.org/xml/features/scanner/notify-char-refs</li>
- *  <li>http://apache.org/xml/features/scanner/notify-builtin-refs</li>
- *  <li>http://apache.org/xml/properties/internal/symbol-table</li>
- *  <li>http://apache.org/xml/properties/internal/error-reporter</li>
- *  <li>http://apache.org/xml/properties/internal/entity-manager</li>
- *  <li>http://apache.org/xml/properties/internal/dtd-scanner</li>
- * </ul>
- *
- * @author Glenn Marcy, IBM
- * @author Andy Clark, IBM
- * @author Arnaud  Le Hors, IBM
- * @author Eric Ye, IBM
- *
- * @version $Id$
+ * Utility class for converting parquet metadata classes to metastore metadata classes.
  */
-public class XMLDocumentScannerImpl
-    extends XMLDocumentFragmentScannerImpl {
+@SuppressWarnings("WeakerAccess")
+public class ParquetTableMetadataUtils {
 
-    //
-    // Constants
-    //
+  static final List<CollectableColumnStatisticsKind> PARQUET_COLUMN_STATISTICS =
+          ImmutableList.of(
+              ColumnStatisticsKind.MAX_VALUE,
+              ColumnStatisticsKind.MIN_VALUE,
+              ColumnStatisticsKind.NULLS_COUNT);
 
-    // scanner states
+  private ParquetTableMetadataUtils() {
+    throw new IllegalStateException("Utility class");
+  }
 
-    /** Scanner state: XML declaration. */
-    protected static final int SCANNER_STATE_XML_DECL = 0;
+  /**
+   * Creates new map based on specified {@code columnStatistics} with added statistics
+   * for implicit and partition (dir) columns.
+   *
+   * @param columnsStatistics           map of column statistics to expand
+   * @param columns                     list of all columns including implicit or partition ones
+   * @param partitionValues             list of partition values
+   * @param optionManager               option manager
+   * @param location                    location of metadata part
+   * @param supportsFileImplicitColumns whether implicit columns are supported
+   * @return map with added statistics for implicit and partition (dir) columns
+   */
+  public static Map<SchemaPath, ColumnStatistics> addImplicitColumnsStatistics(
+      Map<SchemaPath, ColumnStatistics> columnsStatistics, List<SchemaPath> columns,
+      List<String> partitionValues, OptionManager optionManager, Path location, boolean supportsFileImplicitColumns) {
+    ColumnExplorer columnExplorer = new ColumnExplorer(optionManager, columns);
 
-    /** Scanner state: prolog. */
-    protected static final int SCANNER_STATE_PROLOG = 5;
+    Map<String, String> implicitColValues = columnExplorer.populateImplicitColumns(
+        location, partitionValues, supportsFileImplicitColumns);
+    columnsStatistics = new HashMap<>(columnsStatistics);
+    for (Map.Entry<String, String> partitionValue : implicitColValues.entrySet()) {
+      columnsStatistics.put(SchemaPath.getCompoundPath(partitionValue.getKey()),
+          StatisticsProvider.getConstantColumnStatistics(partitionValue.getValue(), TypeProtos.MinorType.VARCHAR));
+    }
+    return columnsStatistics;
+  }
 
-    /** Scanner state: trailing misc. */
-    protected static final int SCANNER_STATE_TRAILING_MISC = 12;
-
-    /** Scanner state: DTD internal declarations. */
-    protected static final int SCANNER_STATE_DTD_INTERNAL_DECLS = 17;
-
-    /** Scanner state: open DTD external subset. */
-    protected static final int SCANNER_STATE_DTD_EXTERNAL = 18;
-
-    /** Scanner state: DTD external declarations. */
-    protected static final int SCANNER_STATE_DTD_EXTERNAL_DECLS = 19;
-
-    // feature identifiers
-
-    /** Feature identifier: load external DTD. */
-    protected static final String LOAD_EXTERNAL_DTD =
-        Constants.XERCES_FEATURE_PREFIX + Constants.LOAD_EXTERNAL_DTD_FEATURE;
-
-    /** Feature identifier: load external DTD. */
-    protected static final String DISALLOW_DOCTYPE_DECL_FEATURE =
-        Constants.XERCES_FEATURE_PREFIX + Constants.DISALLOW_DOCTYPE_DECL_FEATURE;
-
-    // property identifiers
-
-    /** Property identifier: DTD scanner. */
-    protected static final String DTD_SCANNER =
-        Constants.XERCES_PROPERTY_PREFIX + Constants.DTD_SCANNER_PROPERTY;
-
-    /** property identifier:  ValidationManager */
-    protected static final String VALIDATION_MANAGER =
-        Constants.XERCES_PROPERTY_PREFIX + Constants.VALIDATION_MANAGER_PROPERTY;
-
-    /** property identifier:  NamespaceContext */
-    protected static final String NAMESPACE_CONTEXT =
-        Constants.XERCES_PROPERTY_PREFIX + Constants.NAMESPACE_CONTEXT_PROPERTY;
-        
-
-
-    // recognized features and properties
-
-    /** Recognized features. */
-    private static final String[] RECOGNIZED_FEATURES = {
-        LOAD_EXTERNAL_DTD,
-        DISALLOW_DOCTYPE_DECL_FEATURE,
-    };
-
-    /** Feature defaults. */
-    private static final Boolean[] FEATURE_DEFAULTS = {
-        Boolean.TRUE,
-        Boolean.FALSE,
-    };
-
-    /** Recognized properties. */
-    private static final String[] RECOGNIZED_PROPERTIES = {
-        DTD_SCANNER,
-        VALIDATION_MANAGER,
-        NAMESPACE_CONTEXT,
-    };
-
-    /** Property defaults. */
-    private static final Object[] PROPERTY_DEFAULTS = {
-        null,
-        null,
-        null,
-    };
-
-    //
-    // Data
-    //
-
-    // properties
-
-    /** DTD scanner. */
-    protected XMLDTDScanner fDTDScanner;
-    /** Validation manager . */
-    protected ValidationManager fValidationManager;
-
-    // protected data
-
-    /** Scanning DTD. */
-    protected boolean fScanningDTD;
-
-    // other info
-
-    /** Doctype name. */
-    protected String fDoctypeName;
-
-    /** Doctype declaration public identifier. */
-    protected String fDoctypePublicId;
-
-    /** Doctype declaration system identifier. */
-    protected String fDoctypeSystemId;
-
-    /** Namespace support. */
-    protected NamespaceContext fNamespaceContext = new NamespaceSupport();
-
-    // features
-
-    /** Load external DTD. */
-    protected boolean fLoadExternalDTD = true;
-
-    /** Disallow doctype declaration. */
-    protected boolean fDisallowDoctype = false;
-
-    // state
-
-    /** Seen doctype declaration. */
-    protected boolean fSeenDoctypeDecl;
-
-    // dispatchers
-
-    /** XML declaration dispatcher. */
-    protected Dispatcher fXMLDeclDispatcher = new XMLDeclDispatcher();
-
-    /** Prolog dispatcher. */
-    protected Dispatcher fPrologDispatcher = new PrologDispatcher();
-
-    /** DTD dispatcher. */
-    protected Dispatcher fDTDDispatcher = new DTDDispatcher();
-
-    /** Trailing miscellaneous section dispatcher. */
-    protected Dispatcher fTrailingMiscDispatcher = new TrailingMiscDispatcher();
-
-    // temporary variables
-
-    /** Array of 3 strings. */
-    private String[] fStrings = new String[3];
-
-    /** String. */
-    private XMLString fString = new XMLString();
-
-    /** String buffer. */
-    private XMLStringBuffer fStringBuffer = new XMLStringBuffer();
-
-    //
-    // Constructors
-    //
-
-    /** Default constructor. */
-    public XMLDocumentScannerImpl() {} // <init>()
-
-    //
-    // XMLDocumentScanner methods
-    //
-
-    /**
-     * Sets the input source.
-     *
-     * @param inputSource The input source.
-     *
-     * @throws IOException Thrown on i/o error.
-     */
-    public void setInputSource(XMLInputSource inputSource) throws IOException {
-        fEntityManager.setEntityHandler(this);
-        fEntityManager.startDocumentEntity(inputSource);
-        //fDocumentSystemId = fEntityManager.expandSystemId(inputSource.getSystemId());
-    } // setInputSource(XMLInputSource)
-
-    //
-    // XMLComponent methods
-    //
-
-    /**
-     * Resets the component. The component can query the component manager
-     * about any features and properties that affect the operation of the
-     * component.
-     *
-     * @param componentManager The component manager.
-     *
-     * @throws SAXException Thrown by component on initialization error.
-     *                      For example, if a feature or property is
-     *                      required for the operation of the component, the
-     *                      component manager may throw a
-     *                      SAXNotRecognizedException or a
-     *                      SAXNotSupportedException.
-     */
-    public void reset(XMLComponentManager componentManager)
-        throws XMLConfigurationException {
-
-        super.reset(componentManager);
-
-        // other settings
-        fDoctypeName = null;
-        fDoctypePublicId = null;
-        fDoctypeSystemId = null;
-        fSeenDoctypeDecl = false;
-		fScanningDTD = false;
-       
-
-		if (!fParserSettings) {
-			// parser settings have not been changed
-			fNamespaceContext.reset();
-			// setup dispatcher
-			setScannerState(SCANNER_STATE_XML_DECL);
-			setDispatcher(fXMLDeclDispatcher);
-			return;
-		}
-
-        // xerces features
-        try {
-            fLoadExternalDTD = componentManager.getFeature(LOAD_EXTERNAL_DTD);
+  /**
+   * Returns list of {@link RowGroupMetadata} received by converting parquet row groups metadata
+   * taken from the specified tableMetadata.
+   * Assigns index to row groups based on their position in files metadata.
+   * For empty / fake row groups assigns '-1' index.
+   *
+   * @param tableMetadata the source of row groups to be converted
+   * @return list of {@link RowGroupMetadata}
+   */
+  public static Multimap<Path, RowGroupMetadata> getRowGroupsMetadata(MetadataBase.ParquetTableMetadataBase tableMetadata) {
+    Multimap<Path, RowGroupMetadata> rowGroups = LinkedListMultimap.create();
+    for (MetadataBase.ParquetFileMetadata file : tableMetadata.getFiles()) {
+      int index = 0;
+      for (MetadataBase.RowGroupMetadata rowGroupMetadata : file.getRowGroups()) {
+        int newIndex;
+        if (rowGroupMetadata.isEmpty()) {
+          Preconditions.checkState(file.getRowGroups().size() == 1, "Only one empty / fake row group is allowed per file");
+          newIndex = -1;
+        } else {
+          newIndex = index++;
         }
-        catch (XMLConfigurationException e) {
-            fLoadExternalDTD = true;
+        rowGroups.put(file.getPath(), getRowGroupMetadata(tableMetadata, rowGroupMetadata, newIndex, file.getPath()));
+      }
+    }
+
+    return rowGroups;
+  }
+
+  /**
+   * Returns {@link RowGroupMetadata} instance converted from specified parquet {@code rowGroupMetadata}.
+   *
+   * @param tableMetadata    table metadata which contains row group metadata to convert
+   * @param rowGroupMetadata row group metadata to convert
+   * @param rgIndexInFile    index of current row group within the file
+   * @param location         location of file with current row group
+   * @return {@link RowGroupMetadata} instance converted from specified parquet {@code rowGroupMetadata}
+   */
+  public static RowGroupMetadata getRowGroupMetadata(MetadataBase.ParquetTableMetadataBase tableMetadata,
+      MetadataBase.RowGroupMetadata rowGroupMetadata, int rgIndexInFile, Path location) {
+    Map<SchemaPath, ColumnStatistics> columnsStatistics = getRowGroupColumnStatistics(tableMetadata, rowGroupMetadata);
+    List<StatisticsHolder> rowGroupStatistics = new ArrayList<>();
+    rowGroupStatistics.add(new StatisticsHolder<>(rowGroupMetadata.getRowCount(), TableStatisticsKind.ROW_COUNT));
+    rowGroupStatistics.add(new StatisticsHolder<>(rowGroupMetadata.getStart(), new BaseStatisticsKind(ExactStatisticsConstants.START, true)));
+    rowGroupStatistics.add(new StatisticsHolder<>(rowGroupMetadata.getLength(), new BaseStatisticsKind(ExactStatisticsConstants.LENGTH, true)));
+
+    Map<SchemaPath, TypeProtos.MajorType> columns = getRowGroupFields(tableMetadata, rowGroupMetadata);
+    Map<SchemaPath, TypeProtos.MajorType> intermediateColumns = getIntermediateFields(tableMetadata, rowGroupMetadata);
+
+    TupleSchema schema = new TupleSchema();
+    columns.forEach(
+        (schemaPath, majorType) -> SchemaPathUtils.addColumnMetadata(schema, schemaPath, majorType, intermediateColumns)
+    );
+
+    MetadataInfo metadataInfo = MetadataInfo.builder().type(MetadataType.ROW_GROUP).build();
+
+    return RowGroupMetadata.builder()
+        .tableInfo(TableInfo.UNKNOWN_TABLE_INFO)
+        .metadataInfo(metadataInfo)
+        .schema(schema)
+        .columnsStatistics(columnsStatistics)
+        .metadataStatistics(rowGroupStatistics)
+        .hostAffinity(rowGroupMetadata.getHostAffinity())
+        .rowGroupIndex(rgIndexInFile)
+        .path(location)
+        .build();
+  }
+
+  /**
+   * Returns {@link FileMetadata} instance received by merging specified {@link RowGroupMetadata} list.
+   *
+   * @param rowGroups collection of {@link RowGroupMetadata} to be merged
+   * @return {@link FileMetadata} instance
+   */
+  public static FileMetadata getFileMetadata(Collection<RowGroupMetadata> rowGroups) {
+    if (rowGroups.isEmpty()) {
+      return null;
+    }
+    List<StatisticsHolder> fileStatistics = new ArrayList<>();
+    fileStatistics.add(new StatisticsHolder<>(TableStatisticsKind.ROW_COUNT.mergeStatistics(rowGroups), TableStatisticsKind.ROW_COUNT));
+
+    RowGroupMetadata rowGroupMetadata = rowGroups.iterator().next();
+    TupleMetadata schema = rowGroupMetadata.getSchema();
+
+    Set<SchemaPath> columns = rowGroupMetadata.getColumnsStatistics().keySet();
+
+    MetadataInfo metadataInfo = MetadataInfo.builder().type(MetadataType.FILE).build();
+
+    return FileMetadata.builder()
+        .tableInfo(rowGroupMetadata.getTableInfo())
+        .metadataInfo(metadataInfo)
+        .path(rowGroupMetadata.getPath())
+        .schema(schema)
+        .columnsStatistics(TableMetadataUtils.mergeColumnsStatistics(rowGroups, columns, PARQUET_COLUMN_STATISTICS))
+        .metadataStatistics(fileStatistics)
+        .build();
+  }
+
+  /**
+   * Returns {@link PartitionMetadata} instance received by merging specified {@link FileMetadata} list.
+   *
+   * @param partitionColumn partition column
+   * @param files           list of files to be merged
+   * @return {@link PartitionMetadata} instance
+   */
+  public static PartitionMetadata getPartitionMetadata(SchemaPath partitionColumn, List<FileMetadata> files) {
+    Set<Path> locations = new HashSet<>();
+    Set<SchemaPath> columns = new HashSet<>();
+
+    for (FileMetadata file : files) {
+      columns.addAll(file.getColumnsStatistics().keySet());
+      locations.add(file.getPath());
+    }
+
+    FileMetadata fileMetadata = files.iterator().next();
+
+    MetadataInfo metadataInfo = MetadataInfo.builder().type(MetadataType.PARTITION).build();
+
+    return PartitionMetadata.builder()
+        .tableInfo(fileMetadata.getTableInfo())
+        .metadataInfo(metadataInfo)
+        .column(partitionColumn)
+        .schema(fileMetadata.getSchema())
+        .columnsStatistics(TableMetadataUtils.mergeColumnsStatistics(files, columns, PARQUET_COLUMN_STATISTICS))
+        .metadataStatistics(Collections.singletonList(new StatisticsHolder<>(TableStatisticsKind.ROW_COUNT.mergeStatistics(files), TableStatisticsKind.ROW_COUNT)))
+        .partitionValues(Collections.emptyList())
+        .locations(locations)
+        .build();
+  }
+
+  /**
+   * Converts specified {@link MetadataBase.RowGroupMetadata} into the map of {@link ColumnStatistics}
+   * instances with column names as keys.
+   *
+   * @param tableMetadata    the source of column types
+   * @param rowGroupMetadata metadata to convert
+   * @return map with converted row group metadata
+   */
+  public static Map<SchemaPath, ColumnStatistics> getRowGroupColumnStatistics(
+      MetadataBase.ParquetTableMetadataBase tableMetadata, MetadataBase.RowGroupMetadata rowGroupMetadata) {
+
+    Map<SchemaPath, ColumnStatistics> columnsStatistics = new HashMap<>();
+
+    for (MetadataBase.ColumnMetadata column : rowGroupMetadata.getColumns()) {
+      SchemaPath colPath = SchemaPath.getCompoundPath(column.getName());
+
+      Long nulls = column.getNulls();
+      if (!column.isNumNullsSet() || nulls == null) {
+        nulls = Statistic.NO_COLUMN_STATS;
+      }
+      PrimitiveType.PrimitiveTypeName primitiveType = getPrimitiveTypeName(tableMetadata, column);
+      OriginalType originalType = getOriginalType(tableMetadata, column);
+      TypeProtos.MinorType type = ParquetReaderUtility.getMinorType(primitiveType, originalType);
+
+      List<StatisticsHolder> statistics = new ArrayList<>();
+      statistics.add(new StatisticsHolder<>(getValue(column.getMinValue(), primitiveType, originalType), ColumnStatisticsKind.MIN_VALUE));
+      statistics.add(new StatisticsHolder<>(getValue(column.getMaxValue(), primitiveType, originalType), ColumnStatisticsKind.MAX_VALUE));
+      statistics.add(new StatisticsHolder<>(nulls, ColumnStatisticsKind.NULLS_COUNT));
+      columnsStatistics.put(colPath, new ColumnStatistics<>(statistics, type));
+    }
+    return columnsStatistics;
+  }
+
+  /**
+   * Returns the non-interesting column's metadata
+   * @param parquetTableMetadata the source of column metadata for non-interesting column's statistics
+   * @return returns non-interesting columns metadata
+   */
+  public static NonInterestingColumnsMetadata getNonInterestingColumnsMeta(MetadataBase.ParquetTableMetadataBase parquetTableMetadata) {
+    Map<SchemaPath, ColumnStatistics> columnsStatistics = new HashMap<>();
+    if (parquetTableMetadata instanceof Metadata_V4.ParquetTableMetadata_v4) {
+      Map<Metadata_V4.ColumnTypeMetadata_v4.Key, Metadata_V4.ColumnTypeMetadata_v4> columnTypeInfoMap =
+              ((Metadata_V4.ParquetTableMetadata_v4) parquetTableMetadata).getColumnTypeInfoMap();
+
+      if (columnTypeInfoMap == null) {
+        return new NonInterestingColumnsMetadata(columnsStatistics);
+      } // in some cases for runtime pruning
+
+      for (Metadata_V4.ColumnTypeMetadata_v4 columnTypeMetadata : columnTypeInfoMap.values()) {
+        if (!columnTypeMetadata.isInteresting) {
+          SchemaPath schemaPath = SchemaPath.getCompoundPath(columnTypeMetadata.name);
+          List<StatisticsHolder> statistics = new ArrayList<>();
+          statistics.add(new StatisticsHolder<>(Statistic.NO_COLUMN_STATS, ColumnStatisticsKind.NULLS_COUNT));
+          PrimitiveType.PrimitiveTypeName primitiveType = columnTypeMetadata.primitiveType;
+          OriginalType originalType = columnTypeMetadata.originalType;
+          TypeProtos.MinorType type = ParquetReaderUtility.getMinorType(primitiveType, originalType);
+          columnsStatistics.put(schemaPath, new ColumnStatistics<>(statistics, type));
         }
-        try {
-            fDisallowDoctype = componentManager.getFeature(DISALLOW_DOCTYPE_DECL_FEATURE);
-        }
-        catch (XMLConfigurationException e) {
-            fDisallowDoctype = false;
-        }
-
-        // xerces properties
-        fDTDScanner = (XMLDTDScanner)componentManager.getProperty(DTD_SCANNER);
-        try {
-            fValidationManager = (ValidationManager)componentManager.getProperty(VALIDATION_MANAGER);
-        }
-        catch (XMLConfigurationException e) {
-            fValidationManager = null;
-        }
-
-        try {
-            fNamespaceContext = (NamespaceContext)componentManager.getProperty(NAMESPACE_CONTEXT);
-        }
-        catch (XMLConfigurationException e) { }
-        if (fNamespaceContext == null) {
-            fNamespaceContext = new NamespaceSupport();
-        }
-        fNamespaceContext.reset();
-        
-        // setup dispatcher
-        setScannerState(SCANNER_STATE_XML_DECL);
-        setDispatcher(fXMLDeclDispatcher);
-
-    } // reset(XMLComponentManager)
-
-    /**
-     * Returns a list of feature identifiers that are recognized by
-     * this component. This method may return null if no features
-     * are recognized by this component.
-     */
-    public String[] getRecognizedFeatures() {
-        String[] featureIds = super.getRecognizedFeatures();
-        int length = featureIds != null ? featureIds.length : 0;
-        String[] combinedFeatureIds = new String[length + RECOGNIZED_FEATURES.length];
-        if (featureIds != null) {
-            System.arraycopy(featureIds, 0, combinedFeatureIds, 0, featureIds.length);
-        }
-        System.arraycopy(RECOGNIZED_FEATURES, 0, combinedFeatureIds, length, RECOGNIZED_FEATURES.length);
-        return combinedFeatureIds;
-    } // getRecognizedFeatures():String[]
-
-    /**
-     * Sets the state of a feature. This method is called by the component
-     * manager any time after reset when a feature changes state.
-     * <p>
-     * <strong>Note:</strong> Components should silently ignore features
-     * that do not affect the operation of the component.
-     *
-     * @param featureId The feature identifier.
-     * @param state     The state of the feature.
-     *
-     * @throws SAXNotRecognizedException The component should not throw
-     *                                   this exception.
-     * @throws SAXNotSupportedException The component should not throw
-     *                                  this exception.
-     */
-    public void setFeature(String featureId, boolean state)
-        throws XMLConfigurationException {
-
-        super.setFeature(featureId, state);
-
-        // Xerces properties
-        if (featureId.startsWith(Constants.XERCES_FEATURE_PREFIX)) {
-            final int suffixLength = featureId.length() - Constants.XERCES_FEATURE_PREFIX.length();
-        	
-            if (suffixLength == Constants.LOAD_EXTERNAL_DTD_FEATURE.length() && 
-                featureId.endsWith(Constants.LOAD_EXTERNAL_DTD_FEATURE)) {
-                fLoadExternalDTD = state;
-                return;
-            }
-            else if (suffixLength == Constants.DISALLOW_DOCTYPE_DECL_FEATURE.length() && 
-                featureId.endsWith(Constants.DISALLOW_DOCTYPE_DECL_FEATURE)) {
-                fDisallowDoctype = state;
-                return;
-            }
-        }
-
-    } // setFeature(String,boolean)
-
-    /**
-     * Returns a list of property identifiers that are recognized by
-     * this component. This method may return null if no properties
-     * are recognized by this component.
-     */
-    public String[] getRecognizedProperties() {
-        String[] propertyIds = super.getRecognizedProperties();
-        int length = propertyIds != null ? propertyIds.length : 0;
-        String[] combinedPropertyIds = new String[length + RECOGNIZED_PROPERTIES.length];
-        if (propertyIds != null) {
-            System.arraycopy(propertyIds, 0, combinedPropertyIds, 0, propertyIds.length);
-        }
-        System.arraycopy(RECOGNIZED_PROPERTIES, 0, combinedPropertyIds, length, RECOGNIZED_PROPERTIES.length);
-        return combinedPropertyIds;
-    } // getRecognizedProperties():String[]
-
-    /**
-     * Sets the value of a property. This method is called by the component
-     * manager any time after reset when a property changes value.
-     * <p>
-     * <strong>Note:</strong> Components should silently ignore properties
-     * that do not affect the operation of the component.
-     *
-     * @param propertyId The property identifier.
-     * @param value      The value of the property.
-     *
-     * @throws SAXNotRecognizedException The component should not throw
-     *                                   this exception.
-     * @throws SAXNotSupportedException The component should not throw
-     *                                  this exception.
-     */
-    public void setProperty(String propertyId, Object value)
-        throws XMLConfigurationException {
-
-        super.setProperty(propertyId, value);
-
-        // Xerces properties
-        if (propertyId.startsWith(Constants.XERCES_PROPERTY_PREFIX)) {
-            final int suffixLength = propertyId.length() - Constants.XERCES_PROPERTY_PREFIX.length();
-            
-            if (suffixLength == Constants.DTD_SCANNER_PROPERTY.length() && 
-                propertyId.endsWith(Constants.DTD_SCANNER_PROPERTY)) {
-                fDTDScanner = (XMLDTDScanner)value;
-            }
-            if (suffixLength == Constants.NAMESPACE_CONTEXT_PROPERTY.length() && 
-                propertyId.endsWith(Constants.NAMESPACE_CONTEXT_PROPERTY)) {
-                if (value != null) {
-                    fNamespaceContext = (NamespaceContext)value;
-                }
-            }
-
-            return;
-        }
-
-    } // setProperty(String,Object)
-
-    /** 
-     * Returns the default state for a feature, or null if this
-     * component does not want to report a default value for this
-     * feature.
-     *
-     * @param featureId The feature identifier.
-     *
-     * @since Xerces 2.2.0
-     */
-    public Boolean getFeatureDefault(String featureId) {
-
-        for (int i = 0; i < RECOGNIZED_FEATURES.length; i++) {
-            if (RECOGNIZED_FEATURES[i].equals(featureId)) {
-                return FEATURE_DEFAULTS[i];
-            }
-        }
-        return super.getFeatureDefault(featureId);
-    } // getFeatureDefault(String):Boolean
-
-    /** 
-     * Returns the default state for a property, or null if this
-     * component does not want to report a default value for this
-     * property. 
-     *
-     * @param propertyId The property identifier.
-     *
-     * @since Xerces 2.2.0
-     */
-    public Object getPropertyDefault(String propertyId) {
-        for (int i = 0; i < RECOGNIZED_PROPERTIES.length; i++) {
-            if (RECOGNIZED_PROPERTIES[i].equals(propertyId)) {
-                return PROPERTY_DEFAULTS[i];
-            }
-        }
-        return super.getPropertyDefault(propertyId);
-    } // getPropertyDefault(String):Object
-
-    //
-    // XMLEntityHandler methods
-    //
-
-    /**
-     * This method notifies of the start of an entity. The DTD has the
-     * pseudo-name of "[dtd]" parameter entity names start with '%'; and
-     * general entities are just specified by their name.
-     *
-     * @param name     The name of the entity.
-     * @param identifier The resource identifier.
-     * @param encoding The auto-detected IANA encoding name of the entity
-     *                 stream. This value will be null in those situations
-     *                 where the entity encoding is not auto-detected (e.g.
-     *                 internal entities or a document entity that is
-     *                 parsed from a java.io.Reader).
-     *
-     * @throws XNIException Thrown by handler to signal an error.
-     */
-    public void startEntity(String name,
-                            XMLResourceIdentifier identifier,
-                            String encoding, Augmentations augs) throws XNIException {
-
-        super.startEntity(name, identifier, encoding, augs);
-
-        // prepare to look for a TextDecl if external general entity
-        if (!name.equals("[xml]") && fEntityScanner.isExternal()) {
-            setScannerState(SCANNER_STATE_TEXT_DECL);
-        } 
-
-        // call handler
-        if (fDocumentHandler != null && name.equals("[xml]")) {
-            fDocumentHandler.startDocument(fEntityScanner, encoding, fNamespaceContext, null);
-        }
-
-    } // startEntity(String,identifier,String)
-
-    /**
-     * This method notifies the end of an entity. The DTD has the pseudo-name
-     * of "[dtd]" parameter entity names start with '%'; and general entities
-     * are just specified by their name.
-     *
-     * @param name The name of the entity.
-     *
-     * @throws XNIException Thrown by handler to signal an error.
-     */
-    public void endEntity(String name, Augmentations augs) throws XNIException {
-
-        super.endEntity(name, augs);
-
-        // call handler
-        if (fDocumentHandler != null && name.equals("[xml]")) {
-            fDocumentHandler.endDocument(null);
-        }
-
-    } // endEntity(String)
-
-    //
-    // Protected methods
-    //
-
-    // dispatcher factory methods
-
-    /** Creates a content dispatcher. */
-    protected Dispatcher createContentDispatcher() {
-        return new ContentDispatcher();
-    } // createContentDispatcher():Dispatcher
-
-    // scanning methods
-
-    /** Scans a doctype declaration. */
-    protected boolean scanDoctypeDecl() throws IOException, XNIException {
-
-        // spaces
-        if (!fEntityScanner.skipSpaces()) {
-            reportFatalError("MSG_SPACE_REQUIRED_BEFORE_ROOT_ELEMENT_TYPE_IN_DOCTYPEDECL",
-                             null);
-        }
-
-        // root element name
-        fDoctypeName = fEntityScanner.scanName();
-        if (fDoctypeName == null) {
-            reportFatalError("MSG_ROOT_ELEMENT_TYPE_REQUIRED", null);
-        }
-
-        // external id
-        if (fEntityScanner.skipSpaces()) {
-            scanExternalID(fStrings, false);
-            fDoctypeSystemId = fStrings[0];
-            fDoctypePublicId = fStrings[1];
-            fEntityScanner.skipSpaces();
-        }
-
-        fHasExternalDTD = fDoctypeSystemId != null;
-
-        // call handler
-        if (fDocumentHandler != null) {
-            // NOTE: I don't like calling the doctypeDecl callback until
-            //       end of the *full* doctype line (including internal
-            //       subset) is parsed correctly but SAX2 requires that
-            //       it knows the root element name and public and system
-            //       identifier for the startDTD call. -Ac
-            fDocumentHandler.doctypeDecl(fDoctypeName, fDoctypePublicId, fDoctypeSystemId,
-                                         null);
-        }
-
-        // is there an internal subset?
-        boolean internalSubset = true;
-        if (!fEntityScanner.skipChar('[')) {
-            internalSubset = false;
-            fEntityScanner.skipSpaces();
-            if (!fEntityScanner.skipChar('>')) {
-                reportFatalError("DoctypedeclUnterminated", new Object[]{fDoctypeName});
-            }
-            fMarkupDepth--;
-        }
-
-        return internalSubset;
-
-    } // scanDoctypeDecl():boolean
-
-    //
-    // Private methods
-    //
-
-    /** Returns the scanner state name. */
-    protected String getScannerStateName(int state) {
-
-        switch (state) {
-            case SCANNER_STATE_XML_DECL: return "SCANNER_STATE_XML_DECL";
-            case SCANNER_STATE_PROLOG: return "SCANNER_STATE_PROLOG";
-            case SCANNER_STATE_TRAILING_MISC: return "SCANNER_STATE_TRAILING_MISC";
-            case SCANNER_STATE_DTD_INTERNAL_DECLS: return "SCANNER_STATE_DTD_INTERNAL_DECLS";
-            case SCANNER_STATE_DTD_EXTERNAL: return "SCANNER_STATE_DTD_EXTERNAL";
-            case SCANNER_STATE_DTD_EXTERNAL_DECLS: return "SCANNER_STATE_DTD_EXTERNAL_DECLS";
-        }
-        return super.getScannerStateName(state);
-
-    } // getScannerStateName(int):String
-
-    //
-    // Classes
-    //
-
-    /**
-     * Dispatcher to handle XMLDecl scanning.
-     *
-     * @author Andy Clark, IBM
-     */
-    protected final class XMLDeclDispatcher
-        implements Dispatcher {
-
-        //
-        // Dispatcher methods
-        //
-
-        /**
-         * Dispatch an XML "event".
-         *
-         * @param complete True if this dispatcher is intended to scan
-         *                 and dispatch as much as possible.
-         *
-         * @return True if there is more to dispatch either from this
-         *          or a another dispatcher.
-         *
-         * @throws IOException  Thrown on i/o error.
-         * @throws XNIException Thrown on parse error.
-         */
-        public boolean dispatch(boolean complete)
-            throws IOException, XNIException {
-
-            // next dispatcher is prolog regardless of whether there
-            // is an XMLDecl in this document
-            setScannerState(SCANNER_STATE_PROLOG);
-            setDispatcher(fPrologDispatcher);
-
-            // scan XMLDecl
-            try {
-                if (fEntityScanner.skipString("<?xml")) {
-                    fMarkupDepth++;
-                    // NOTE: special case where document starts with a PI
-                    //       whose name starts with "xml" (e.g. "xmlfoo")
-                    if (XMLChar.isName(fEntityScanner.peekChar())) {
-                        fStringBuffer.clear();
-                        fStringBuffer.append("xml");
-                        if (fNamespaces) {
-                            while (XMLChar.isNCName(fEntityScanner.peekChar())) {
-                                fStringBuffer.append((char)fEntityScanner.scanChar());
-                            }
-                        }
-                        else {
-                            while (XMLChar.isName(fEntityScanner.peekChar())) {
-                                fStringBuffer.append((char)fEntityScanner.scanChar());
-                            }
-                        }
-                        String target = fSymbolTable.addSymbol(fStringBuffer.ch, fStringBuffer.offset, fStringBuffer.length);
-                        scanPIData(target, fString);
-                    }
-
-                    // standard XML declaration
-                    else {
-                        scanXMLDeclOrTextDecl(false);
-                    }
-                }
-                fEntityManager.fCurrentEntity.mayReadChunks = true;
-
-                // if no XMLDecl, then scan piece of prolog
-                return true;
-            }
-            // encoding errors
-            catch (MalformedByteSequenceException e) {
-                fErrorReporter.reportError(e.getDomain(), e.getKey(), 
-                    e.getArguments(), XMLErrorReporter.SEVERITY_FATAL_ERROR);
-                return false;
-            }
-            catch (CharConversionException e) {
-                reportFatalError("CharConversionFailure", null);
-                return false;
-            }
-            // premature end of file
-            catch (EOFException e) {
-                reportFatalError("PrematureEOF", null);
-                return false;
-                //throw e;
-            }
-
-
-        } // dispatch(boolean):boolean
-
-    } // class XMLDeclDispatcher
-
-    /**
-     * Dispatcher to handle prolog scanning.
-     *
-     * @author Andy Clark, IBM
-     */
-    protected final class PrologDispatcher
-        implements Dispatcher {
-
-        //
-        // Dispatcher methods
-        //
-
-        /**
-         * Dispatch an XML "event".
-         *
-         * @param complete True if this dispatcher is intended to scan
-         *                 and dispatch as much as possible.
-         *
-         * @return True if there is more to dispatch either from this
-         *          or a another dispatcher.
-         *
-         * @throws IOException  Thrown on i/o error.
-         * @throws XNIException Thrown on parse error.
-         */
-        public boolean dispatch(boolean complete)
-            throws IOException, XNIException {
-
-            try {
-                boolean again;
-                do {
-                    again = false;
-                    switch (fScannerState) {
-                        case SCANNER_STATE_PROLOG: {
-                            fEntityScanner.skipSpaces();
-                            if (fEntityScanner.skipChar('<')) {
-                                setScannerState(SCANNER_STATE_START_OF_MARKUP);
-                                again = true;
-                            }
-                            else if (fEntityScanner.skipChar('&')) {
-                                setScannerState(SCANNER_STATE_REFERENCE);
-                                again = true;
-                            }
-                            else {
-                                setScannerState(SCANNER_STATE_CONTENT);
-                                again = true;
-                            }
-                            break;
-                        }
-                        case SCANNER_STATE_START_OF_MARKUP: {
-                            fMarkupDepth++;
-                            if (fEntityScanner.skipChar('!')) {
-                                if (fEntityScanner.skipChar('-')) {
-                                    if (!fEntityScanner.skipChar('-')) {
-                                        reportFatalError("InvalidCommentStart",
-                                                         null);
-                                    }
-                                    setScannerState(SCANNER_STATE_COMMENT);
-                                    again = true;
-                                }
-                                else if (fEntityScanner.skipString("DOCTYPE")) {
-                                    setScannerState(SCANNER_STATE_DOCTYPE);
-                                    again = true;
-                                }
-                                else {
-                                    reportFatalError("MarkupNotRecognizedInProlog",
-                                                     null);
-                                }
-                            }
-                            else if (isValidNameStartChar(fEntityScanner.peekChar())) {
-                                setScannerState(SCANNER_STATE_ROOT_ELEMENT);
-                                setDispatcher(fContentDispatcher);
-                                return true;
-                            }
-                            else if (fEntityScanner.skipChar('?')) {
-                                setScannerState(SCANNER_STATE_PI);
-                                again = true;
-                            }
-                            else if (isValidNameStartHighSurrogate(fEntityScanner.peekChar())) {
-                                setScannerState(SCANNER_STATE_ROOT_ELEMENT);
-                                setDispatcher(fContentDispatcher);
-                                return true;
-                            }
-                            else {
-                                reportFatalError("MarkupNotRecognizedInProlog",
-                                                 null);
-                            }
-                            break;
-                        }
-                        case SCANNER_STATE_COMMENT: {
-                            scanComment();
-                            setScannerState(SCANNER_STATE_PROLOG);
-                            break;
-                        }
-                        case SCANNER_STATE_PI: {
-                            scanPI();
-                            setScannerState(SCANNER_STATE_PROLOG);
-                            break;
-                        }
-                        case SCANNER_STATE_DOCTYPE: {
-                            if (fDisallowDoctype) {
-                                reportFatalError("DoctypeNotAllowed", null);
-                            }
-                            if (fSeenDoctypeDecl) {
-                                reportFatalError("AlreadySeenDoctype", null);
-                            }
-                            fSeenDoctypeDecl = true;
-
-                            // scanDoctypeDecl() sends XNI doctypeDecl event that 
-                            // in SAX is converted to startDTD() event.
-                            if (scanDoctypeDecl()) {
-                                setScannerState(SCANNER_STATE_DTD_INTERNAL_DECLS);
-                                setDispatcher(fDTDDispatcher);
-                                return true;
-                            }
-                            if (fDoctypeSystemId != null && ((fValidation || fLoadExternalDTD) 
-                                    && (fValidationManager == null || !fValidationManager.isCachedDTD()))) {
-                                setScannerState(SCANNER_STATE_DTD_EXTERNAL);
-                                setDispatcher(fDTDDispatcher);
-                                return true;
-                            } 
-                            else {
-                                // Send endDTD() call if: 
-                                // a) systemId is null
-                                // b) "load-external-dtd" and validation are false
-                                // c) DTD grammar is cached
-                                
-                                // in XNI this results in 3 events:  doctypeDecl, startDTD, endDTD
-                                // in SAX this results in 2 events: startDTD, endDTD
-                                fDTDScanner.setInputSource(null);
-                            }
-                            setScannerState(SCANNER_STATE_PROLOG);
-                            break;
-                        }
-                        case SCANNER_STATE_CONTENT: {
-                            reportFatalError("ContentIllegalInProlog", null);
-                            fEntityScanner.scanChar();
-                        }
-                        case SCANNER_STATE_REFERENCE: {
-                            reportFatalError("ReferenceIllegalInProlog", null);
-                        }
-                    }
-                } while (complete || again);
-
-                if (complete) {
-                    if (fEntityScanner.scanChar() != '<') {
-                        reportFatalError("RootElementRequired", null);
-                    }
-                    setScannerState(SCANNER_STATE_ROOT_ELEMENT);
-                    setDispatcher(fContentDispatcher);
-                }
-            }
-            // encoding errors
-            catch (MalformedByteSequenceException e) {
-                fErrorReporter.reportError(e.getDomain(), e.getKey(), 
-                    e.getArguments(), XMLErrorReporter.SEVERITY_FATAL_ERROR);
-                return false;
-            }
-            catch (CharConversionException e) {
-                reportFatalError("CharConversionFailure", null);
-                return false;
-            }
-            // premature end of file
-            catch (EOFException e) {
-                reportFatalError("PrematureEOF", null);
-                return false;
-                //throw e;
-            }
-
-            return true;
-
-        } // dispatch(boolean):boolean
-
-    } // class PrologDispatcher
-
-    /**
-     * Dispatcher to handle the internal and external DTD subsets.
-     *
-     * @author Andy Clark, IBM
-     */
-    protected final class DTDDispatcher
-        implements Dispatcher {
-
-        //
-        // Dispatcher methods
-        //
-
-        /**
-         * Dispatch an XML "event".
-         *
-         * @param complete True if this dispatcher is intended to scan
-         *                 and dispatch as much as possible.
-         *
-         * @return True if there is more to dispatch either from this
-         *          or a another dispatcher.
-         *
-         * @throws IOException  Thrown on i/o error.
-         * @throws XNIException Thrown on parse error.
-         */
-        public boolean dispatch(boolean complete)
-            throws IOException, XNIException {
-            fEntityManager.setEntityHandler(null);
-            try {
-                boolean again;
-                XMLEntityDescriptionImpl entityDescription = new XMLEntityDescriptionImpl();
-                do {
-                    again = false;
-                    switch (fScannerState) {
-                        case SCANNER_STATE_DTD_INTERNAL_DECLS: {
-                            // REVISIT: Should there be a feature for
-                            //          the "complete" parameter?
-                            boolean completeDTD = true;
-
-                            boolean moreToScan = fDTDScanner.scanDTDInternalSubset(completeDTD, fStandalone, fHasExternalDTD && fLoadExternalDTD);
-                            if (!moreToScan) {
-                                // end doctype declaration
-                                if (!fEntityScanner.skipChar(']')) {
-                                    reportFatalError("EXPECTED_SQUARE_BRACKET_TO_CLOSE_INTERNAL_SUBSET",
-                                                     null);
-                                }
-                                fEntityScanner.skipSpaces();
-                                if (!fEntityScanner.skipChar('>')) {
-                                    reportFatalError("DoctypedeclUnterminated", new Object[]{fDoctypeName});
-                                }
-                                fMarkupDepth--;
-
-                                // scan external subset next
-                                if (fDoctypeSystemId != null && (fValidation || fLoadExternalDTD) 
-                                        && (fValidationManager == null || !fValidationManager.isCachedDTD())) {
-                                    setScannerState(SCANNER_STATE_DTD_EXTERNAL);
-                                }
-
-                                // break out of here
-                                else {
-                                    setScannerState(SCANNER_STATE_PROLOG);
-                                    setDispatcher(fPrologDispatcher);
-                                    fEntityManager.setEntityHandler(XMLDocumentScannerImpl.this);
-                                    return true;
-                                }
-                            }
-                            break;
-                        }
-                        case SCANNER_STATE_DTD_EXTERNAL: {
-                            entityDescription.setDescription("[dtd]", fDoctypePublicId, fDoctypeSystemId, null, null);
-                            XMLInputSource xmlInputSource =
-                                fEntityManager.resolveEntity(entityDescription);
-                            fDTDScanner.setInputSource(xmlInputSource);
-                            setScannerState(SCANNER_STATE_DTD_EXTERNAL_DECLS);
-                            again = true;
-                            break;
-                        }
-                        case SCANNER_STATE_DTD_EXTERNAL_DECLS: {
-                            // REVISIT: Should there be a feature for
-                            //          the "complete" parameter?
-                            boolean completeDTD = true;
-                            boolean moreToScan = fDTDScanner.scanDTDExternalSubset(completeDTD);
-                            if (!moreToScan) {
-                                setScannerState(SCANNER_STATE_PROLOG);
-                                setDispatcher(fPrologDispatcher);
-                                fEntityManager.setEntityHandler(XMLDocumentScannerImpl.this);
-                                return true;
-                            }
-                            break;
-                        }
-                        default: {
-                            throw new XNIException("DTDDispatcher#dispatch: scanner state="+fScannerState+" ("+getScannerStateName(fScannerState)+')');
-                        }
-                    }
-                } while (complete || again);
-            }
-            // encoding errors
-            catch (MalformedByteSequenceException e) {
-                fErrorReporter.reportError(e.getDomain(), e.getKey(), 
-                    e.getArguments(), XMLErrorReporter.SEVERITY_FATAL_ERROR);
-                return false;
-            }
-            catch (CharConversionException e) {
-                reportFatalError("CharConversionFailure", null);
-                return false;
-            }
-            // premature end of file
-            catch (EOFException e) {
-                reportFatalError("PrematureEOF", null);
-                return false;
-                //throw e;
-            }
-
-            // cleanup
-            finally {
-                fEntityManager.setEntityHandler(XMLDocumentScannerImpl.this);
-            }
-
-            return true;
-
-        } // dispatch(boolean):boolean
-
-    } // class DTDDispatcher
-
-    /**
-     * Dispatcher to handle content scanning.
-     *
-     * @author Andy Clark, IBM
-     * @author Eric Ye, IBM
-     */
-    protected class ContentDispatcher
-        extends FragmentContentDispatcher {
-
-        //
-        // Protected methods
-        //
-
-        // hooks
-
-        // NOTE: These hook methods are added so that the full document
-        //       scanner can share the majority of code with this class.
-
-        /**
-         * Scan for DOCTYPE hook. This method is a hook for subclasses
-         * to add code to handle scanning for a the "DOCTYPE" string
-         * after the string "<!" has been scanned.
-         *
-         * @return True if the "DOCTYPE" was scanned; false if "DOCTYPE"
-         *          was not scanned.
-         */
-        protected boolean scanForDoctypeHook()
-            throws IOException, XNIException {
-
-            if (fEntityScanner.skipString("DOCTYPE")) {
-                setScannerState(SCANNER_STATE_DOCTYPE);
-                return true;
-            }
-            return false;
-
-        } // scanForDoctypeHook():boolean
-
-        /**
-         * Element depth iz zero. This methos is a hook for subclasses
-         * to add code to handle when the element depth hits zero. When
-         * scanning a document fragment, an element depth of zero is
-         * normal. However, when scanning a full XML document, the
-         * scanner must handle the trailing miscellanous section of
-         * the document after the end of the document's root element.
-         *
-         * @return True if the caller should stop and return true which
-         *          allows the scanner to switch to a new scanning
-         *          dispatcher. A return value of false indicates that
-         *          the content dispatcher should continue as normal.
-         */
-        protected boolean elementDepthIsZeroHook()
-            throws IOException, XNIException {
-
-            setScannerState(SCANNER_STATE_TRAILING_MISC);
-            setDispatcher(fTrailingMiscDispatcher);
-            return true;
-
-        } // elementDepthIsZeroHook():boolean
-
-        /**
-         * Scan for root element hook. This method is a hook for
-         * subclasses to add code that handles scanning for the root
-         * element. When scanning a document fragment, there is no
-         * "root" element. However, when scanning a full XML document,
-         * the scanner must handle the root element specially.
-         *
-         * @return True if the caller should stop and return true which
-         *          allows the scanner to switch to a new scanning
-         *          dispatcher. A return value of false indicates that
-         *          the content dispatcher should continue as normal.
-         */
-        protected boolean scanRootElementHook()
-            throws IOException, XNIException {
-
-            if (scanStartElement()) {
-                setScannerState(SCANNER_STATE_TRAILING_MISC);
-                setDispatcher(fTrailingMiscDispatcher);
-                return true;
-            }
-            return false;
-
-        } // scanRootElementHook():boolean
-
-        /**
-         * End of file hook. This method is a hook for subclasses to
-         * add code that handles the end of file. The end of file in
-         * a document fragment is OK if the markup depth is zero.
-         * However, when scanning a full XML document, an end of file
-         * is always premature.
-         */
-        protected void endOfFileHook(EOFException e)
-            throws IOException, XNIException {
-
-            reportFatalError("PrematureEOF", null);
-            // in case continue-after-fatal-error set, should not do this...
-            //throw e;
-
-        } // endOfFileHook()
-
-    } // class ContentDispatcher
-
-    /**
-     * Dispatcher to handle trailing miscellaneous section scanning.
-     *
-     * @author Andy Clark, IBM
-     * @author Eric Ye, IBM
-     */
-    protected final class TrailingMiscDispatcher
-        implements Dispatcher {
-
-        //
-        // Dispatcher methods
-        //
-
-        /**
-         * Dispatch an XML "event".
-         *
-         * @param complete True if this dispatcher is intended to scan
-         *                 and dispatch as much as possible.
-         *
-         * @return True if there is more to dispatch either from this
-         *          or a another dispatcher.
-         *
-         * @throws IOException  Thrown on i/o error.
-         * @throws XNIException Thrown on parse error.
-         */
-        public boolean dispatch(boolean complete)
-            throws IOException, XNIException {
-
-            try {
-                boolean again;
-                do {
-                    again = false;
-                    switch (fScannerState) {
-                        case SCANNER_STATE_TRAILING_MISC: {
-                            fEntityScanner.skipSpaces();
-                            if (fEntityScanner.skipChar('<')) {
-                                setScannerState(SCANNER_STATE_START_OF_MARKUP);
-                                again = true;
-                            }
-                            else {
-                                setScannerState(SCANNER_STATE_CONTENT);
-                                again = true;
-                            }
-                            break;
-                        }
-                        case SCANNER_STATE_START_OF_MARKUP: {
-                            fMarkupDepth++;
-                            if (fEntityScanner.skipChar('?')) {
-                                setScannerState(SCANNER_STATE_PI);
-                                again = true;
-                            }
-                            else if (fEntityScanner.skipChar('!')) {
-                                setScannerState(SCANNER_STATE_COMMENT);
-                                again = true;
-                            }
-                            else if (fEntityScanner.skipChar('/')) {
-                                reportFatalError("MarkupNotRecognizedInMisc",
-                                                 null);
-                                again = true;
-                            }
-                            else if (isValidNameStartChar(fEntityScanner.peekChar())) {
-                                reportFatalError("MarkupNotRecognizedInMisc",
-                                                 null);
-                                scanStartElement();
-                                setScannerState(SCANNER_STATE_CONTENT);
-                            }
-                            else if (isValidNameStartHighSurrogate(fEntityScanner.peekChar())) {
-                                reportFatalError("MarkupNotRecognizedInMisc",
-                                                 null);
-                                scanStartElement();
-                                setScannerState(SCANNER_STATE_CONTENT);
-                            }
-                            else {
-                                reportFatalError("MarkupNotRecognizedInMisc",
-                                                 null);
-                            }
-                            break;
-                        }
-                        case SCANNER_STATE_PI: {
-                            scanPI();
-                            setScannerState(SCANNER_STATE_TRAILING_MISC);
-                            break;
-                        }
-                        case SCANNER_STATE_COMMENT: {
-                            if (!fEntityScanner.skipString("--")) {
-                                reportFatalError("InvalidCommentStart", null);
-                            }
-                            scanComment();
-                            setScannerState(SCANNER_STATE_TRAILING_MISC);
-                            break;
-                        }
-                        case SCANNER_STATE_CONTENT: {
-                            int ch = fEntityScanner.peekChar();
-                            if (ch == -1) {
-                                setScannerState(SCANNER_STATE_TERMINATED);
-                                return false;
-                            }
-                            reportFatalError("ContentIllegalInTrailingMisc",
-                                             null);
-                            fEntityScanner.scanChar();
-                            setScannerState(SCANNER_STATE_TRAILING_MISC);
-                            break;
-                        }
-                        case SCANNER_STATE_REFERENCE: {
-                            reportFatalError("ReferenceIllegalInTrailingMisc",
-                                             null);
-                            setScannerState(SCANNER_STATE_TRAILING_MISC);
-                            break;
-                        }
-                        case SCANNER_STATE_TERMINATED: {
-                            return false;
-                        }
-                    }
-                } while (complete || again);
-            }
-            // encoding errors
-            catch (MalformedByteSequenceException e) {
-                fErrorReporter.reportError(e.getDomain(), e.getKey(), 
-                    e.getArguments(), XMLErrorReporter.SEVERITY_FATAL_ERROR);
-                return false;
-            }
-            catch (CharConversionException e) {
-                reportFatalError("CharConversionFailure", null);
-                return false;
-            }
-            catch (EOFException e) {
-                // NOTE: This is the only place we're allowed to reach
-                //       the real end of the document stream. Unless the
-                //       end of file was reached prematurely.
-                if (fMarkupDepth != 0) {
-                    reportFatalError("PrematureEOF", null);
-                    return false;
-                    //throw e;
-                }
-
-                setScannerState(SCANNER_STATE_TERMINATED);
-                return false;
-            }
-
-            return true;
-
-        } // dispatch(boolean):boolean
-
-    } // class TrailingMiscDispatcher
-
-} // class XMLDocumentScannerImpl
+      }
+      return new NonInterestingColumnsMetadata(columnsStatistics);
+    }
+    return new NonInterestingColumnsMetadata(columnsStatistics);
+  }
+
+  /**
+   * Handles passed value considering its type and specified {@code primitiveType} with {@code originalType}.
+   *
+   * @param value         value to handle
+   * @param primitiveType primitive type of the column whose value should be handled
+   * @param originalType  original type of the column whose value should be handled
+   * @return handled value
+   */
+  public static Object getValue(Object value, PrimitiveType.PrimitiveTypeName primitiveType, OriginalType originalType) {
+    if (value != null) {
+      switch (primitiveType) {
+        case BOOLEAN:
+          return Boolean.parseBoolean(value.toString());
+
+        case INT32:
+          if (originalType == OriginalType.DATE) {
+            return convertToDrillDateValue(getInt(value));
+          } else if (originalType == OriginalType.DECIMAL) {
+            return BigInteger.valueOf(getInt(value));
+          }
+          return getInt(value);
+
+        case INT64:
+          if (originalType == OriginalType.DECIMAL) {
+            return BigInteger.valueOf(getLong(value));
+          } else {
+            return getLong(value);
+          }
+
+        case FLOAT:
+          return getFloat(value);
+
+        case DOUBLE:
+          return getDouble(value);
+
+        case INT96:
+          return new String(getBytes(value));
+
+        case BINARY:
+        case FIXED_LEN_BYTE_ARRAY:
+          if (originalType == OriginalType.DECIMAL) {
+            return new BigInteger(getBytes(value));
+          } else if (originalType == OriginalType.INTERVAL) {
+            return getBytes(value);
+          } else {
+            return new String(getBytes(value));
+          }
+      }
+    }
+    return null;
+  }
+
+  private static byte[] getBytes(Object value) {
+    if (value instanceof Binary) {
+      return ((Binary) value).getBytes();
+    } else if (value instanceof byte[]) {
+      return (byte[]) value;
+    } else if (value instanceof String) { // value is obtained from metadata cache v2+
+      return ((String) value).getBytes();
+    } else if (value instanceof Map) { // value is obtained from metadata cache v1
+      String bytesString = (String) ((Map) value).get("bytes");
+      if (bytesString != null) {
+        return bytesString.getBytes();
+      }
+    } else if (value instanceof Long) {
+      return Longs.toByteArray((Long) value);
+    } else if (value instanceof Integer) {
+      return Longs.toByteArray((Integer) value);
+    } else if (value instanceof Float) {
+      return BigDecimal.valueOf((Float) value).unscaledValue().toByteArray();
+    } else if (value instanceof Double) {
+      return BigDecimal.valueOf((Double) value).unscaledValue().toByteArray();
+    }
+    throw new UnsupportedOperationException(String.format("Cannot obtain bytes using value %s", value));
+  }
+
+  private static Integer getInt(Object value) {
+    if (value instanceof Number) {
+      return ((Number) value).intValue();
+    } else if (value instanceof String) {
+      return Integer.parseInt(value.toString());
+    } else if (value instanceof byte[]) {
+      return new BigInteger((byte[]) value).intValue();
+    } else if (value instanceof Binary) {
+      return new BigInteger(((Binary) value).getBytes()).intValue();
+    }
+    throw new UnsupportedOperationException(String.format("Cannot obtain Integer using value %s", value));
+  }
+
+  private static Long getLong(Object value) {
+    if (value instanceof Number) {
+      return ((Number) value).longValue();
+    } else if (value instanceof String) {
+      return Long.parseLong(value.toString());
+    } else if (value instanceof byte[]) {
+      return new BigInteger((byte[]) value).longValue();
+    } else if (value instanceof Binary) {
+      return new BigInteger(((Binary) value).getBytes()).longValue();
+    }
+    throw new UnsupportedOperationException(String.format("Cannot obtain Integer using value %s", value));
+  }
+
+  private static Float getFloat(Object value) {
+    if (value instanceof Number) {
+      return ((Number) value).floatValue();
+    } else if (value instanceof String) {
+      return Float.parseFloat(value.toString());
+    }
+    // TODO: allow conversion form bytes only when actual type of data is known (to obtain scale)
+    /* else if (value instanceof byte[]) {
+      return new BigInteger((byte[]) value).floatValue();
+    } else if (value instanceof Binary) {
+      return new BigInteger(((Binary) value).getBytes()).floatValue();
+    }*/
+    throw new UnsupportedOperationException(String.format("Cannot obtain Integer using value %s", value));
+  }
+
+  private static Double getDouble(Object value) {
+    if (value instanceof Number) {
+      return ((Number) value).doubleValue();
+    } else if (value instanceof String) {
+      return Double.parseDouble(value.toString());
+    }
+    // TODO: allow conversion form bytes only when actual type of data is known (to obtain scale)
+    /* else if (value instanceof byte[]) {
+      return new BigInteger((byte[]) value).doubleValue();
+    } else if (value instanceof Binary) {
+      return new BigInteger(((Binary) value).getBytes()).doubleValue();
+    }*/
+    throw new UnsupportedOperationException(String.format("Cannot obtain Integer using value %s", value));
+  }
+
+  private static long convertToDrillDateValue(int dateValue) {
+    return dateValue * (long) DateTimeConstants.MILLIS_PER_DAY;
+  }
+
+  /**
+   * Returns map of column names with their drill types for specified {@code file}.
+   *
+   * @param parquetTableMetadata the source of primitive and original column types
+   * @param file                 file whose columns should be discovered
+   * @return map of column names with their drill types
+   */
+  public static Map<SchemaPath, TypeProtos.MajorType> getFileFields(
+    MetadataBase.ParquetTableMetadataBase parquetTableMetadata, MetadataBase.ParquetFileMetadata file) {
+
+    // does not resolve types considering all row groups, just takes type from the first row group.
+    return getRowGroupFields(parquetTableMetadata, file.getRowGroups().iterator().next());
+  }
+
+  /**
+   * Returns map of column names with their drill types for specified {@code rowGroup}.
+   *
+   * @param parquetTableMetadata the source of primitive and original column types
+   * @param rowGroup             row group whose columns should be discovered
+   * @return map of column names with their drill types
+   */
+  public static Map<SchemaPath, TypeProtos.MajorType> getRowGroupFields(
+      MetadataBase.ParquetTableMetadataBase parquetTableMetadata, MetadataBase.RowGroupMetadata rowGroup) {
+    Map<SchemaPath, TypeProtos.MajorType> columns = new LinkedHashMap<>();
+    for (MetadataBase.ColumnMetadata column : rowGroup.getColumns()) {
+
+      PrimitiveType.PrimitiveTypeName primitiveType = getPrimitiveTypeName(parquetTableMetadata, column);
+      OriginalType originalType = getOriginalType(parquetTableMetadata, column);
+      int precision = 0;
+      int scale = 0;
+      int definitionLevel = 1;
+      int repetitionLevel = 0;
+      MetadataVersion metadataVersion = new MetadataVersion(parquetTableMetadata.getMetadataVersion());
+      // only ColumnTypeMetadata_v3 and ColumnTypeMetadata_v4 store information about scale, precision, repetition level and definition level
+      if (parquetTableMetadata.hasColumnMetadata() && (metadataVersion.compareTo(new MetadataVersion(3, 0)) >= 0)) {
+        scale = parquetTableMetadata.getScale(column.getName());
+        precision = parquetTableMetadata.getPrecision(column.getName());
+        repetitionLevel = parquetTableMetadata.getRepetitionLevel(column.getName());
+        definitionLevel = parquetTableMetadata.getDefinitionLevel(column.getName());
+      }
+      TypeProtos.DataMode mode;
+      if (repetitionLevel >= 1) {
+        mode = TypeProtos.DataMode.REPEATED;
+      } else if (repetitionLevel == 0 && definitionLevel == 0) {
+        mode = TypeProtos.DataMode.REQUIRED;
+      } else {
+        mode = TypeProtos.DataMode.OPTIONAL;
+      }
+      TypeProtos.MajorType columnType =
+          TypeProtos.MajorType.newBuilder(ParquetReaderUtility.getType(primitiveType, originalType, precision, scale))
+              .setMode(mode)
+              .build();
+
+      SchemaPath columnPath = SchemaPath.getCompoundPath(column.getName());
+      putType(columns, columnPath, columnType);
+    }
+    return columns;
+  }
+
+  /**
+   * Returns map of column names with their Drill types for every {@code NameSegment} in {@code SchemaPath}
+   * in specified {@code rowGroup}. The type for a {@code SchemaPath} can be {@code null} in case when
+   * it is not possible to determine its type. Actually, as of now this hierarchy is of interest solely
+   * because there is a need to account for {@link org.apache.drill.common.types.TypeProtos.MinorType#DICT}
+   * to make sure filters used on {@code DICT}'s values (get by key) are not pruned out before actual filtering
+   * happens.
+   *
+   * @param parquetTableMetadata the source of column types
+   * @param rowGroup row group whose columns should be discovered
+   * @return map of column names with their drill types
+   */
+  public static Map<SchemaPath, TypeProtos.MajorType> getIntermediateFields(
+      MetadataBase.ParquetTableMetadataBase parquetTableMetadata, MetadataBase.RowGroupMetadata rowGroup) {
+    Map<SchemaPath, TypeProtos.MajorType> columns = new LinkedHashMap<>();
+
+    MetadataVersion metadataVersion = new MetadataVersion(parquetTableMetadata.getMetadataVersion());
+    boolean hasParentTypes = parquetTableMetadata.hasColumnMetadata()
+        && metadataVersion.compareTo(new MetadataVersion(4, 1)) >= 0;
+
+    if (!hasParentTypes) {
+      return Collections.emptyMap();
+    }
+
+    for (MetadataBase.ColumnMetadata column : rowGroup.getColumns()) {
+      Metadata_V4.ColumnTypeMetadata_v4 columnTypeMetadata =
+          ((Metadata_V4.ParquetTableMetadata_v4) parquetTableMetadata).getColumnTypeInfo(column.getName());
+      List<OriginalType> parentTypes = columnTypeMetadata.parentTypes;
+      List<TypeProtos.MajorType> drillTypes = ParquetReaderUtility.getComplexTypes(parentTypes);
+
+      for (int i = 0; i < drillTypes.size(); i++) {
+        SchemaPath columnPath = SchemaPath.getCompoundPath(i + 1, column.getName());
+        TypeProtos.MajorType drillType = drillTypes.get(i);
+        putType(columns, columnPath, drillType);
+      }
+    }
+    return columns;
+  }
+
+  /**
+   * Returns {@link OriginalType} type for the specified column.
+   *
+   * @param parquetTableMetadata the source of column type
+   * @param column               column whose {@link OriginalType} should be returned
+   * @return {@link OriginalType} type for the specified column
+   */
+  public static OriginalType getOriginalType(MetadataBase.ParquetTableMetadataBase parquetTableMetadata, MetadataBase.ColumnMetadata column) {
+    OriginalType originalType = column.getOriginalType();
+    // for the case of parquet metadata v1 version, type information isn't stored in parquetTableMetadata, but in ColumnMetadata
+    if (originalType == null) {
+      originalType = parquetTableMetadata.getOriginalType(column.getName());
+    }
+    return originalType;
+  }
+
+  /**
+   * Returns {@link PrimitiveType.PrimitiveTypeName} type for the specified column.
+   *
+   * @param parquetTableMetadata the source of column type
+   * @param column               column whose {@link PrimitiveType.PrimitiveTypeName} should be returned
+   * @return {@link PrimitiveType.PrimitiveTypeName} type for the specified column
+   */
+  public static PrimitiveType.PrimitiveTypeName getPrimitiveTypeName(MetadataBase.ParquetTableMetadataBase parquetTableMetadata, MetadataBase.ColumnMetadata column) {
+    PrimitiveType.PrimitiveTypeName primitiveType = column.getPrimitiveType();
+    // for the case of parquet metadata v1 version, type information isn't stored in parquetTableMetadata, but in ColumnMetadata
+    if (primitiveType == null) {
+      primitiveType = parquetTableMetadata.getPrimitiveType(column.getName());
+    }
+    return primitiveType;
+  }
+
+  /**
+   * Returns map of column names with their drill types for specified {@code parquetTableMetadata}
+   * with resolved types for the case of schema evolution.
+   *
+   * @param parquetTableMetadata table metadata whose columns should be discovered
+   * @return map of column names with their drill types
+   */
+  static Map<SchemaPath, TypeProtos.MajorType> resolveFields(MetadataBase.ParquetTableMetadataBase parquetTableMetadata) {
+    Map<SchemaPath, TypeProtos.MajorType> columns = new LinkedHashMap<>();
+    for (MetadataBase.ParquetFileMetadata file : parquetTableMetadata.getFiles()) {
+      // row groups in the file have the same schema, so using the first one
+      Map<SchemaPath, TypeProtos.MajorType> fileColumns = getFileFields(parquetTableMetadata, file);
+      fileColumns.forEach((columnPath, type) -> putType(columns, columnPath, type));
+    }
+    return columns;
+  }
+
+  static Map<SchemaPath, TypeProtos.MajorType> resolveIntermediateFields(MetadataBase.ParquetTableMetadataBase parquetTableMetadata) {
+    Map<SchemaPath, TypeProtos.MajorType> columns = new LinkedHashMap<>();
+    for (MetadataBase.ParquetFileMetadata file : parquetTableMetadata.getFiles()) {
+      // row groups in the file have the same schema, so using the first one
+      Map<SchemaPath, TypeProtos.MajorType> fileColumns = getIntermediateFields(parquetTableMetadata, file.getRowGroups().iterator().next());
+      fileColumns.forEach((columnPath, type) -> putType(columns, columnPath, type));
+    }
+    return columns;
+  }
+
+  private static void putType(Map<SchemaPath, TypeProtos.MajorType> columns, SchemaPath columnPath, TypeProtos.MajorType type) {
+    TypeProtos.MajorType majorType = columns.get(columnPath);
+    if (majorType == null) {
+      columns.put(columnPath, type);
+    } else if (!majorType.equals(type)) {
+      TypeProtos.MinorType leastRestrictiveType = TypeCastRules.getLeastRestrictiveType(Arrays.asList(majorType.getMinorType(), type.getMinorType()));
+      if (leastRestrictiveType != majorType.getMinorType()) {
+        columns.put(columnPath, type);
+      }
+    }
+  }
+}

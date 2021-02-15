@@ -1,717 +1,381 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to you under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//dbcp/src/java/org/apache/commons/dbcp/DelegatingResultSet.java,v 1.8 2003/08/11 23:54:59 dirkv Exp $
+ * $Revision: 1.8 $
+ * $Date: 2003/08/11 23:54:59 $
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
  */
-package org.apache.calcite.sql;
+package org.apache.commons.dbcp;
 
-import org.apache.calcite.rel.type.RelDataType;
-import org.apache.calcite.sql.fun.SqlStdOperatorTable;
-import org.apache.calcite.sql.fun.SqlTrimFunction;
-import org.apache.calcite.sql.parser.SqlParserPos;
-import org.apache.calcite.sql.type.OperandTypes;
-import org.apache.calcite.sql.validate.SqlValidator;
-import org.apache.calcite.sql.validate.SqlValidatorScope;
-
-import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableMap;
-
+import java.sql.ResultSet;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.io.InputStream;
+import java.sql.SQLWarning;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.io.Reader;
+import java.sql.Statement;
 import java.util.Map;
-
-import static org.apache.calcite.util.Static.RESOURCE;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
 
 /**
- * A <code>SqlJdbcFunctionCall</code> is a node of a parse tree which represents
- * a JDBC function call. A JDBC call is of the form <code>{fn NAME(arg0, arg1,
- * ...)}</code>.
+ * A base delegating implementation of {@link ResultSet}.
+ * <p>
+ * All of the methods from the {@link ResultSet} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement result set tracking and
+ * logging of code which created the ResultSet. Tracking the
+ * ResultSet ensures that the Statment which created it can
+ * close any open ResultSet's on Statement close.
  *
- * <p>See <a href="http://java.sun.com/products/jdbc/driverdevs.html">Sun's
- * documentation for writers of JDBC drivers</a>.*
- *
- * <table>
- * <caption>Supported JDBC functions</caption>
- * <tr>
- * <th>Function Name</th>
- * <th>Function Returns</th>
- * </tr>
- * <tr>
- * <td colspan="2"><br>
- *
- * <h3>NUMERIC FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>ABS(number)</td>
- * <td>Absolute value of number</td>
- * </tr>
- * <tr>
- * <td>ACOS(float)</td>
- * <td>Arccosine, in radians, of float</td>
- * </tr>
- * <tr>
- * <td>ASIN(float)</td>
- * <td>Arcsine, in radians, of float</td>
- * </tr>
- * <tr>
- * <td>ATAN(float)</td>
- * <td>Arctangent, in radians, of float</td>
- * </tr>
- * <tr>
- * <td>ATAN2(float1, float2)</td>
- * <td>Arctangent, in radians, of float2 / float1</td>
- * </tr>
- * <tr>
- * <td>CEILING(number)</td>
- * <td>Smallest integer &gt;= number</td>
- * </tr>
- * <tr>
- * <td>COS(float)</td>
- * <td>Cosine of float radians</td>
- * </tr>
- * <tr>
- * <td>COT(float)</td>
- * <td>Cotangent of float radians</td>
- * </tr>
- * <tr>
- * <td>DEGREES(number)</td>
- * <td>Degrees in number radians</td>
- * </tr>
- * <tr>
- * <td>EXP(float)</td>
- * <td>Exponential function of float</td>
- * </tr>
- * <tr>
- * <td>FLOOR(number)</td>
- * <td>Largest integer &lt;= number</td>
- * </tr>
- * <tr>
- * <td>LOG(float)</td>
- * <td>Base e logarithm of float</td>
- * </tr>
- * <tr>
- * <td>LOG10(float)</td>
- * <td>Base 10 logarithm of float</td>
- * </tr>
- * <tr>
- * <td>MOD(integer1, integer2)</td>
- * <td>Rh3ainder for integer1 / integer2</td>
- * </tr>
- * <tr>
- * <td>PI()</td>
- * <td>The constant pi</td>
- * </tr>
- * <tr>
- * <td>POWER(number, power)</td>
- * <td>number raised to (integer) power</td>
- * </tr>
- * <tr>
- * <td>RADIANS(number)</td>
- * <td>Radians in number degrees</td>
- * </tr>
- * <tr>
- * <td>RAND(integer)</td>
- * <td>Random floating point for seed integer</td>
- * </tr>
- * <tr>
- * <td>ROUND(number, places)</td>
- * <td>number rounded to places places</td>
- * </tr>
- * <tr>
- * <td>SIGN(number)</td>
- * <td>-1 to indicate number is &lt; 0; 0 to indicate number is = 0; 1 to
- * indicate number is &gt; 0</td>
- * </tr>
- * <tr>
- * <td>SIN(float)</td>
- * <td>Sine of float radians</td>
- * </tr>
- * <tr>
- * <td>SQRT(float)</td>
- * <td>Square root of float</td>
- * </tr>
- * <tr>
- * <td>TAN(float)</td>
- * <td>Tangent of float radians</td>
- * </tr>
- * <tr>
- * <td>TRUNCATE(number, places)</td>
- * <td>number truncated to places places</td>
- * </tr>
- * <tr>
- * <td colspan="2"><br>
- *
- * <h3>STRING FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>ASCII(string)</td>
- * <td>Integer representing the ASCII code value of the leftmost character in
- * string</td>
- * </tr>
- * <tr>
- * <td>CHAR(code)</td>
- * <td>Character with ASCII code value code, where code is between 0 and
- * 255</td>
- * </tr>
- * <tr>
- * <td>CONCAT(string1, string2)</td>
- * <td>Character string formed by appending string2 to string1; if a string is
- * null, the result is DBMS-dependent</td>
- * </tr>
- * <tr>
- * <td>DIFFERENCE(string1, string2)</td>
- * <td>Integer indicating the difference between the values returned by the
- * function SOUNDEX for string1 and string2</td>
- * </tr>
- * <tr>
- * <td>INSERT(string1, start, length, string2)</td>
- * <td>A character string formed by deleting length characters from string1
- * beginning at start, and inserting string2 into string1 at start</td>
- * </tr>
- * <tr>
- * <td>LCASE(string)</td>
- * <td>Converts all uppercase characters in string to lowercase</td>
- * </tr>
- * <tr>
- * <td>LEFT(string, count)</td>
- * <td>The count leftmost characters from string</td>
- * </tr>
- * <tr>
- * <td>LENGTH(string)</td>
- * <td>Number of characters in string, excluding trailing blanks</td>
- * </tr>
- * <tr>
- * <td>LOCATE(string1, string2[, start])</td>
- * <td>Position in string2 of the first occurrence of string1, searching from
- * the beginning of string2; if start is specified, the search begins from
- * position start. 0 is returned if string2 does not contain string1. Position 1
- * is the first character in string2.</td>
- * </tr>
- * <tr>
- * <td>LTRIM(string)</td>
- * <td>Characters of string with leading blank spaces rh3oved</td>
- * </tr>
- * <tr>
- * <td>REPEAT(string, count)</td>
- * <td>A character string formed by repeating string count times</td>
- * </tr>
- * <tr>
- * <td>REPLACE(string1, string2, string3)</td>
- * <td>Replaces all occurrences of string2 in string1 with string3</td>
- * </tr>
- * <tr>
- * <td>RIGHT(string, count)</td>
- * <td>The count rightmost characters in string</td>
- * </tr>
- * <tr>
- * <td>RTRIM(string)</td>
- * <td>The characters of string with no trailing blanks</td>
- * </tr>
- * <tr>
- * <td>SOUNDEX(string)</td>
- * <td>A character string, which is data source-dependent, representing the
- * sound of the words in string; this could be a four-digit SOUNDEX code, a
- * phonetic representation of each word, etc.</td>
- * </tr>
- * <tr>
- * <td>SPACE(count)</td>
- * <td>A character string consisting of count spaces</td>
- * </tr>
- * <tr>
- * <td>SUBSTRING(string, start, length)</td>
- * <td>A character string formed by extracting length characters from string
- * beginning at start</td>
- * </tr>
- * <tr>
- * <td>UCASE(string)</td>
- * <td>Converts all lowercase characters in string to uppercase</td>
- * </tr>
- * <tr>
- * <td colspan="2"><br>
- *
- * <h3>TIME and DATE FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>CURDATE()</td>
- * <td>The current date as a date value</td>
- * </tr>
- * <tr>
- * <td>CURTIME()</td>
- * <td>The current local time as a time value</td>
- * </tr>
- * <tr>
- * <td>DAYNAME(date)</td>
- * <td>A character string representing the day component of date; the name for
- * the day is specific to the data source</td>
- * </tr>
- * <tr>
- * <td>DAYOFMONTH(date)</td>
- * <td>An integer from 1 to 31 representing the day of the month in date</td>
- * </tr>
- * <tr>
- * <td>DAYOFWEEK(date)</td>
- * <td>An integer from 1 to 7 representing the day of the week in date; 1
- * represents Sunday</td>
- * </tr>
- * <tr>
- * <td>DAYOFYEAR(date)</td>
- * <td>An integer from 1 to 366 representing the day of the year in date</td>
- * </tr>
- * <tr>
- * <td>HOUR(time)</td>
- * <td>An integer from 0 to 23 representing the hour component of time</td>
- * </tr>
- * <tr>
- * <td>MINUTE(time)</td>
- * <td>An integer from 0 to 59 representing the minute component of time</td>
- * </tr>
- * <tr>
- * <td>MONTH(date)</td>
- * <td>An integer from 1 to 12 representing the month component of date</td>
- * </tr>
- * <tr>
- * <td>MONTHNAME(date)</td>
- * <td>A character string representing the month component of date; the name for
- * the month is specific to the data source</td>
- * </tr>
- * <tr>
- * <td>NOW()</td>
- * <td>A timestamp value representing the current date and time</td>
- * </tr>
- * <tr>
- * <td>QUARTER(date)</td>
- * <td>An integer from 1 to 4 representing the quarter in date; 1 represents
- * January 1 through March 31</td>
- * </tr>
- * <tr>
- * <td>SECOND(time)</td>
- * <td>An integer from 0 to 59 representing the second component of time</td>
- * </tr>
- * <tr>
- * <td>TIMESTAMPADD(interval,count, timestamp)</td>
- * <td>A timestamp calculated by adding count number of interval(s) to
- * timestamp; interval may be one of the following: SQL_TSI_FRAC_SECOND,
- * SQL_TSI_SECOND, SQL_TSI_MINUTE, SQL_TSI_HOUR, SQL_TSI_DAY, SQL_TSI_WEEK,
- * SQL_TSI_MONTH, SQL_TSI_QUARTER, or SQL_TSI_YEAR</td>
- * </tr>
- * <tr>
- * <td>TIMESTAMPDIFF(interval,timestamp1, timestamp2)</td>
- * <td>An integer representing the number of interval(s) by which timestamp2 is
- * greater than timestamp1; interval may be one of the following:
- * SQL_TSI_FRAC_SECOND, SQL_TSI_SECOND, SQL_TSI_MINUTE, SQL_TSI_HOUR,
- * SQL_TSI_DAY, SQL_TSI_WEEK, SQL_TSI_MONTH, SQL_TSI_QUARTER, or
- * SQL_TSI_YEAR</td>
- * </tr>
- * <tr>
- * <td>WEEK(date)</td>
- * <td>An integer from 1 to 53 representing the week of the year in date</td>
- * </tr>
- * <tr>
- * <td>YEAR(date)</td>
- * <td>An integer representing the year component of date</td>
- * </tr>
- * <tr>
- * <td colspan="2"><br>
- *
- * <h3>SYSTEM FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>DATABASE()</td>
- * <td>Name of the database</td>
- * </tr>
- * <tr>
- * <td>IFNULL(expression, value)</td>
- * <td>value if expression is null; expression if expression is not null</td>
- * </tr>
- * <tr>
- * <td>USER()</td>
- * <td>User name in the DBMS
- *
- * <tr>
- * <td colspan="2"><br>
- *
- * <h3>CONVERSION FUNCTIONS</h3>
- * </td>
- * </tr>
- * <tr>
- * <td>CONVERT(value, SQLtype)</td>
- * <td>value converted to SQLtype where SQLtype may be one of the following SQL
- * types: BIGINT, BINARY, BIT, CHAR, DATE, DECIMAL, DOUBLE, FLOAT, INTEGER,
- * LONGVARBINARY, LONGVARCHAR, REAL, SMALLINT, TIME, TIMESTAMP, TINYINT,
- * VARBINARY, or VARCHAR</td>
- * </tr>
- * </table>
+ * @author Glenn L. Nielsen
+ * @author James House (<a href="mailto:james@interobjective.com">james@interobjective.com</a>)
  */
-public class SqlJdbcFunctionCall extends SqlFunction {
-  //~ Static fields/initializers ---------------------------------------------
+public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
 
-  /** List of all numeric function names defined by JDBC. */
-  private static final String NUMERIC_FUNCTIONS = constructFuncList(
-      "ABS", "ACOS", "ASIN", "ATAN", "ATAN2", "CEILING", "COS", "COT",
-      "DEGREES", "EXP", "FLOOR", "LOG", "LOG10", "MOD", "PI",
-      "POWER", "RADIANS", "RAND", "ROUND", "SIGN", "SIN", "SQRT",
-      "TAN", "TRUNCATE");
+    /** My delegate. **/
+    private ResultSet _res;
 
-  /** List of all string function names defined by JDBC. */
-  private static final String STRING_FUNCTIONS = constructFuncList(
-      "ASCII", "CHAR", "CONCAT", "DIFFERENCE", "INSERT", "LCASE",
-      "LEFT", "LENGTH", "LOCATE", "LTRIM", "REPEAT", "REPLACE",
-      "RIGHT", "RTRIM", "SOUNDEX", "SPACE", "SUBSTRING", "UCASE");
-      // "ASCII", "CHAR", "DIFFERENCE", "LOWER",
-      // "LEFT", "TRIM", "REPEAT", "REPLACE",
-      // "RIGHT", "SPACE", "SUBSTRING", "UPPER", "INITCAP", "OVERLAY"
-
-  /** List of all time/date function names defined by JDBC. */
-  private static final String TIME_DATE_FUNCTIONS = constructFuncList(
-      "CURDATE", "CURTIME", "DAYNAME", "DAYOFMONTH", "DAYOFWEEK",
-      "DAYOFYEAR", "HOUR", "MINUTE", "MONTH", "MONTHNAME", "NOW",
-      "QUARTER", "SECOND", "TIMESTAMPADD", "TIMESTAMPDIFF",
-      "WEEK", "YEAR");
-
-  /** List of all system function names defined by JDBC. */
-  private static final String SYSTEM_FUNCTIONS = constructFuncList(
-      "DATABASE", "IFNULL", "USER");
-
-  //~ Instance fields --------------------------------------------------------
-
-  private final String jdbcName;
-  private final MakeCall lookupMakeCallObj;
-  private SqlCall lookupCall;
-
-  private SqlNode[] thisOperands;
-
-  //~ Constructors -----------------------------------------------------------
-
-  public SqlJdbcFunctionCall(String name) {
-    super(
-        "{fn " + name + "}",
-        SqlKind.JDBC_FN,
-        null,
-        null,
-        OperandTypes.VARIADIC,
-        SqlFunctionCategory.SYSTEM);
-    jdbcName = name;
-    lookupMakeCallObj = JdbcToInternalLookupTable.INSTANCE.lookup(name);
-    lookupCall = null;
-  }
-
-  //~ Methods ----------------------------------------------------------------
-
-  private static String constructFuncList(String... functionNames) {
-    StringBuilder sb = new StringBuilder();
-    int n = 0;
-    for (String funcName : functionNames) {
-      if (JdbcToInternalLookupTable.INSTANCE.lookup(funcName) == null) {
-        continue;
-      }
-      if (n++ > 0) {
-        sb.append(",");
-      }
-      sb.append(funcName);
-    }
-    return sb.toString();
-  }
-
-  public SqlCall createCall(
-      SqlLiteral functionQualifier,
-      SqlParserPos pos,
-      SqlNode... operands) {
-    thisOperands = operands;
-    return super.createCall(functionQualifier, pos, operands);
-  }
-
-  public SqlCall getLookupCall() {
-    if (null == lookupCall) {
-      lookupCall =
-          lookupMakeCallObj.createCall(SqlParserPos.ZERO, thisOperands);
-    }
-    return lookupCall;
-  }
-
-  public String getAllowedSignatures(String name) {
-    return lookupMakeCallObj.getOperator().getAllowedSignatures(name);
-  }
-
-  public RelDataType deriveType(
-      SqlValidator validator,
-      SqlValidatorScope scope,
-      SqlCall call) {
-    // Override SqlFunction.deriveType, because function-resolution is
-    // not relevant to a JDBC function call.
-    // REVIEW: jhyde, 2006/4/18: Should SqlJdbcFunctionCall even be a
-    // subclass of SqlFunction?
-
-    for (SqlNode operand : call.getOperandList()) {
-      RelDataType nodeType = validator.deriveType(scope, operand);
-      validator.setValidatedNodeType(operand, nodeType);
-    }
-    return validateOperands(validator, scope, call);
-  }
-
-  public RelDataType inferReturnType(
-      SqlOperatorBinding opBinding) {
-    // only expected to come here if validator called this method
-    SqlCallBinding callBinding = (SqlCallBinding) opBinding;
-
-    if (null == lookupMakeCallObj) {
-      throw callBinding.newValidationError(
-          RESOURCE.functionUndefined(getName()));
-    }
-
-    final String message = lookupMakeCallObj.isValidArgCount(callBinding);
-    if (message != null) {
-      throw callBinding.newValidationError(
-          RESOURCE.wrongNumberOfParam(getName(), thisOperands.length,
-              message));
-    }
-
-    final SqlCall newCall = getLookupCall();
-    final SqlCallBinding newBinding =
-        new SqlCallBinding(callBinding.getValidator(), callBinding.getScope(),
-            newCall);
-
-    final SqlOperator operator = lookupMakeCallObj.getOperator();
-    if (!operator.checkOperandTypes(newBinding, false)) {
-      throw callBinding.newValidationSignatureError();
-    }
-
-    return operator.validateOperands(callBinding.getValidator(),
-        callBinding.getScope(), newCall);
-  }
-
-  public void unparse(
-      SqlWriter writer,
-      SqlCall call,
-      int leftPrec,
-      int rightPrec) {
-    writer.print("{fn ");
-    writer.print(jdbcName);
-    final SqlWriter.Frame frame = writer.startList("(", ")");
-    for (SqlNode operand : call.getOperandList()) {
-      writer.sep(",");
-      operand.unparse(writer, leftPrec, rightPrec);
-    }
-    writer.endList(frame);
-    writer.print("}");
-  }
-
-  /**
-   * @see java.sql.DatabaseMetaData#getNumericFunctions
-   */
-  public static String getNumericFunctions() {
-    return NUMERIC_FUNCTIONS;
-  }
-
-  /**
-   * @see java.sql.DatabaseMetaData#getStringFunctions
-   */
-  public static String getStringFunctions() {
-    return STRING_FUNCTIONS;
-  }
-
-  /**
-   * @see java.sql.DatabaseMetaData#getTimeDateFunctions
-   */
-  public static String getTimeDateFunctions() {
-    return TIME_DATE_FUNCTIONS;
-  }
-
-  /**
-   * @see java.sql.DatabaseMetaData#getSystemFunctions
-   */
-  public static String getSystemFunctions() {
-    return SYSTEM_FUNCTIONS;
-  }
-
-  //~ Inner Classes ----------------------------------------------------------
-
-  /** Converts a call to a JDBC function to a call to a regular function. */
-  private interface MakeCall {
-    /**
-     * Creates and return a {@link SqlCall}. If the MakeCall strategy object
-     * was created with a reording specified the call will be created with
-     * the operands reordered, otherwise no change of ordering is applied
-     *
-     * @param operands Operands
-     */
-    SqlCall createCall(SqlParserPos pos, SqlNode... operands);
-
-    SqlOperator getOperator();
-
-    String isValidArgCount(SqlCallBinding binding);
-  }
-
-  /** Converter that calls a built-in function with the same arguments. */
-  public static class SimpleMakeCall implements SqlJdbcFunctionCall.MakeCall {
-    final SqlOperator operator;
-
-    public SimpleMakeCall(SqlOperator operator) {
-      this.operator = operator;
-    }
-
-    public SqlOperator getOperator() {
-      return operator;
-    }
-
-    public SqlCall createCall(SqlParserPos pos, SqlNode... operands) {
-      return operator.createCall(pos, operands);
-    }
-
-    public String isValidArgCount(SqlCallBinding binding) {
-      return null; // any number of arguments is valid
-    }
-  }
-
-  /** Implementation of {@link MakeCall} that can re-order or ignore operands. */
-  private static class PermutingMakeCall extends SimpleMakeCall {
-    final int[] order;
+    /** The Statement that created me, if any. **/
+    private Statement _stmt;
 
     /**
-     * Creates a MakeCall strategy object with reordering of operands.
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Statement which created it and the
+     * code which created it.
      *
-     * <p>The reordering is specified by an int array where the value of
-     * element at position <code>i</code> indicates to which element in a
-     * new SqlNode[] array the operand goes.
-     *  @param operator Operator
-     * @param order    Order
+     * @param Statement stmt which create this ResultSet
+     * @param ResultSet to wrap
      */
-    PermutingMakeCall(SqlOperator operator, int[] order) {
-      super(operator);
-      this.order = Preconditions.checkNotNull(order);
+    public DelegatingResultSet(Statement stmt, ResultSet res) {
+        super((AbandonedTrace)stmt);
+        this._stmt = stmt;
+        this._res = res;
     }
-
-    @Override public SqlCall createCall(SqlParserPos pos,
-        SqlNode... operands) {
-      return super.createCall(pos, reorder(operands));
-    }
-
-    @Override public String isValidArgCount(SqlCallBinding binding) {
-      if (order.length == binding.getOperandCount()) {
-        return null; // operand count is valid
-      } else {
-        return getArgCountMismatchMsg(order.length);
-      }
-    }
-
-    private String getArgCountMismatchMsg(int... possible) {
-      StringBuilder ret = new StringBuilder();
-      for (int i = 0; i < possible.length; i++) {
-        if (i > 0) {
-          ret.append(" or ");
+    
+    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
+        if(null == rset) {
+            return null;
+        } else {
+            return new DelegatingResultSet(stmt,rset);
         }
-        ret.append(possible[i]);
-      }
-      ret.append(" parameter(s)");
-      return ret.toString();
+    }
+
+    public ResultSet getDelegate() {
+        return _res;
+    }
+
+    public boolean equals(Object obj) {
+        ResultSet delegate = getInnermostDelegate();
+        if (delegate == null) {
+            return false;
+        }
+        if (obj instanceof DelegatingResultSet) {
+            DelegatingResultSet s = (DelegatingResultSet) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
+    }
+
+    public int hashCode() {
+        Object obj = getInnermostDelegate();
+        if (obj == null) {
+            return 0;
+        }
+        return obj.hashCode();
     }
 
     /**
-     * Uses the data in {@link #order} to reorder a SqlNode[] array.
-     *
-     * @param operands Operands
+     * If my underlying {@link ResultSet} is not a
+     * <tt>DelegatingResultSet</tt>, returns it,
+     * otherwise recursively invokes this method on
+     * my delegate.
+     * <p>
+     * Hence this method will return the first
+     * delegate that is not a <tt>DelegatingResultSet</tt>,
+     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
+     * delegate can be found by transversing this chain.
+     * <p>
+     * This method is useful when you may have nested
+     * <tt>DelegatingResultSet</tt>s, and you want to make
+     * sure to obtain a "genuine" {@link ResultSet}.
      */
-    protected SqlNode[] reorder(SqlNode[] operands) {
-      assert operands.length == order.length;
-      SqlNode[] newOrder = new SqlNode[operands.length];
-      for (int i = 0; i < operands.length; i++) {
-        assert operands[i] != null;
-        int joyDivision = order[i];
-        assert newOrder[joyDivision] == null : "mapping is not 1:1";
-        newOrder[joyDivision] = operands[i];
-      }
-      return newOrder;
-    }
-  }
-
-  /**
-   * Lookup table between JDBC functions and internal representation
-   */
-  private static class JdbcToInternalLookupTable {
-    /**
-     * The {@link org.apache.calcite.util.Glossary#SINGLETON_PATTERN singleton}
-     * instance.
-     */
-    static final JdbcToInternalLookupTable INSTANCE =
-        new JdbcToInternalLookupTable();
-
-    private final Map<String, MakeCall> map;
-
-    private JdbcToInternalLookupTable() {
-      // A table of all functions can be found at
-      // http://java.sun.com/products/jdbc/driverdevs.html
-      // which is also provided in the javadoc for this class.
-      // See also SqlOperatorTests.testJdbcFn, which contains the list.
-      ImmutableMap.Builder<String, MakeCall> map = ImmutableMap.builder();
-      map.put("ABS", simple(SqlStdOperatorTable.ABS));
-      map.put("EXP", simple(SqlStdOperatorTable.EXP));
-      map.put("LOG", simple(SqlStdOperatorTable.LN));
-      map.put("LOG10", simple(SqlStdOperatorTable.LOG10));
-      map.put("MOD", simple(SqlStdOperatorTable.MOD));
-      map.put("POWER", simple(SqlStdOperatorTable.POWER));
-      map.put("CONCAT", simple(SqlStdOperatorTable.CONCAT));
-      map.put("INSERT",
-          new PermutingMakeCall(SqlStdOperatorTable.OVERLAY, new int[]{0, 2, 3, 1}));
-      map.put("LCASE", simple(SqlStdOperatorTable.LOWER));
-      map.put("LENGTH", simple(SqlStdOperatorTable.CHARACTER_LENGTH));
-      map.put("LOCATE", simple(SqlStdOperatorTable.POSITION));
-      map.put("LTRIM",
-          new SimpleMakeCall(SqlStdOperatorTable.TRIM) {
-            @Override public SqlCall createCall(SqlParserPos pos,
-                SqlNode... operands) {
-              assert 1 == operands.length;
-              return super.createCall(pos,
-                  SqlTrimFunction.Flag.LEADING.symbol(SqlParserPos.ZERO),
-                  SqlLiteral.createCharString(" ", null),
-                  operands[0]);
+    public ResultSet getInnermostDelegate() {
+        ResultSet r = _res;
+        while(r != null && r instanceof DelegatingResultSet) {
+            r = ((DelegatingResultSet)r).getDelegate();
+            if(this == r) {
+                return null;
             }
-          });
-      map.put("QUARTER", simple(SqlStdOperatorTable.QUARTER));
-      map.put("RTRIM",
-          new SimpleMakeCall(SqlStdOperatorTable.TRIM) {
-            @Override public SqlCall createCall(SqlParserPos pos,
-                SqlNode... operands) {
-              assert 1 == operands.length;
-              return super.createCall(pos,
-                  SqlTrimFunction.Flag.TRAILING.symbol(SqlParserPos.ZERO),
-                  SqlLiteral.createCharString(" ", null),
-                  operands[0]);
-            }
-          });
-      map.put("SUBSTRING", simple(SqlStdOperatorTable.SUBSTRING));
-      map.put("UCASE", simple(SqlStdOperatorTable.UPPER));
-      map.put("CURDATE", simple(SqlStdOperatorTable.CURRENT_DATE));
-      map.put("CURTIME", simple(SqlStdOperatorTable.LOCALTIME));
-      map.put("NOW", simple(SqlStdOperatorTable.CURRENT_TIMESTAMP));
-      map.put("TIMESTAMPADD", simple(SqlStdOperatorTable.TIMESTAMP_ADD));
-      map.put("TIMESTAMPDIFF", simple(SqlStdOperatorTable.TIMESTAMP_DIFF));
-      this.map = map.build();
+        }
+        return r;
     }
-
-    private MakeCall simple(SqlOperator operator) {
-      return new SimpleMakeCall(operator);
+    
+    public Statement getStatement() throws SQLException {
+        return _stmt;
     }
 
     /**
-     * Tries to lookup a given function name JDBC to an internal
-     * representation. Returns null if no function defined.
+     * Wrapper for close of ResultSet which removes this
+     * result set from being traced then calls close on
+     * the original ResultSet.
      */
-    public MakeCall lookup(String name) {
-      return map.get(name);
+    public void close() throws SQLException {
+        if(_stmt != null) {
+            ((AbandonedTrace)_stmt).removeTrace(this);
+            _stmt = null;
+        }
+        _res.close();
     }
-  }
+
+    public boolean next() throws SQLException { return _res.next();  }
+    public boolean wasNull() throws SQLException { return _res.wasNull();  }
+    public String getString(int columnIndex) throws SQLException { return _res.getString(columnIndex);  }
+    public boolean getBoolean(int columnIndex) throws SQLException { return _res.getBoolean(columnIndex);  }
+    public byte getByte(int columnIndex) throws SQLException { return _res.getByte(columnIndex); }
+    public short getShort(int columnIndex) throws SQLException { return _res.getShort(columnIndex); }
+    public int getInt(int columnIndex) throws SQLException { return _res.getInt(columnIndex); }
+    public long getLong(int columnIndex) throws SQLException { return _res.getLong(columnIndex); }
+    public float getFloat(int columnIndex) throws SQLException { return _res.getFloat(columnIndex); }
+    public double getDouble(int columnIndex) throws SQLException { return _res.getDouble(columnIndex); }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException { return _res.getBigDecimal(columnIndex); }
+    public byte[] getBytes(int columnIndex) throws SQLException { return _res.getBytes(columnIndex); }
+    public Date getDate(int columnIndex) throws SQLException { return _res.getDate(columnIndex); }
+    public Time getTime(int columnIndex) throws SQLException { return _res.getTime(columnIndex); }
+    public Timestamp getTimestamp(int columnIndex) throws SQLException { return _res.getTimestamp(columnIndex); }
+    public InputStream getAsciiStream(int columnIndex) throws SQLException { return _res.getAsciiStream(columnIndex); }
+    /** @deprecated */
+    public InputStream getUnicodeStream(int columnIndex) throws SQLException { return _res.getUnicodeStream(columnIndex); }
+    public InputStream getBinaryStream(int columnIndex) throws SQLException { return _res.getBinaryStream(columnIndex); }
+    public String getString(String columnName) throws SQLException { return _res.getString(columnName); }
+    public boolean getBoolean(String columnName) throws SQLException { return _res.getBoolean(columnName); }
+    public byte getByte(String columnName) throws SQLException { return _res.getByte(columnName); }
+    public short getShort(String columnName) throws SQLException { return _res.getShort(columnName); }
+    public int getInt(String columnName) throws SQLException { return _res.getInt(columnName); }
+    public long getLong(String columnName) throws SQLException { return _res.getLong(columnName); }
+    public float getFloat(String columnName) throws SQLException { return _res.getFloat(columnName); }
+    public double getDouble(String columnName) throws SQLException { return _res.getDouble(columnName); }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException { return _res.getBigDecimal(columnName); }
+    public byte[] getBytes(String columnName) throws SQLException { return _res.getBytes(columnName); }
+    public Date getDate(String columnName) throws SQLException { return _res.getDate(columnName); }
+    public Time getTime(String columnName) throws SQLException { return _res.getTime(columnName); }
+    public Timestamp getTimestamp(String columnName) throws SQLException { return _res.getTimestamp(columnName); }
+    public InputStream getAsciiStream(String columnName) throws SQLException { return _res.getAsciiStream(columnName); }
+    /** @deprecated */
+    public InputStream getUnicodeStream(String columnName) throws SQLException { return _res.getUnicodeStream(columnName); }
+    public InputStream getBinaryStream(String columnName) throws SQLException { return _res.getBinaryStream(columnName); }
+    public SQLWarning getWarnings() throws SQLException { return _res.getWarnings();  }
+    public void clearWarnings() throws SQLException { _res.clearWarnings();  }
+    public String getCursorName() throws SQLException { return _res.getCursorName();  }
+    public ResultSetMetaData getMetaData() throws SQLException { return _res.getMetaData();  }
+    public Object getObject(int columnIndex) throws SQLException { return _res.getObject(columnIndex);  }
+    public Object getObject(String columnName) throws SQLException { return _res.getObject(columnName);  }
+    public int findColumn(String columnName) throws SQLException { return _res.findColumn(columnName);  }
+    public Reader getCharacterStream(int columnIndex) throws SQLException { return _res.getCharacterStream(columnIndex);  }
+    public Reader getCharacterStream(String columnName) throws SQLException { return _res.getCharacterStream(columnName);  }
+    public BigDecimal getBigDecimal(int columnIndex) throws SQLException { return _res.getBigDecimal(columnIndex);  }
+    public BigDecimal getBigDecimal(String columnName) throws SQLException { return _res.getBigDecimal(columnName);  }
+    public boolean isBeforeFirst() throws SQLException { return _res.isBeforeFirst();  }
+    public boolean isAfterLast() throws SQLException { return _res.isAfterLast();  }
+    public boolean isFirst() throws SQLException { return _res.isFirst();  }
+    public boolean isLast() throws SQLException { return _res.isLast();  }
+    public void beforeFirst() throws SQLException { _res.beforeFirst();  }
+    public void afterLast() throws SQLException { _res.afterLast();  }
+    public boolean first() throws SQLException { return _res.first();  }
+    public boolean last() throws SQLException { return _res.last();  }
+    public int getRow() throws SQLException { return _res.getRow();  }
+    public boolean absolute(int row) throws SQLException { return _res.absolute(row);  }
+    public boolean relative(int rows) throws SQLException { return _res.relative(rows);  }
+    public boolean previous() throws SQLException { return _res.previous();  }
+    public void setFetchDirection(int direction) throws SQLException { _res.setFetchDirection(direction);  }
+    public int getFetchDirection() throws SQLException { return _res.getFetchDirection();  }
+    public void setFetchSize(int rows) throws SQLException { _res.setFetchSize(rows); }
+    public int getFetchSize() throws SQLException { return _res.getFetchSize();  }
+    public int getType() throws SQLException { return _res.getType();  }
+    public int getConcurrency() throws SQLException { return _res.getConcurrency();  }
+    public boolean rowUpdated() throws SQLException { return _res.rowUpdated();  }
+    public boolean rowInserted() throws SQLException { return _res.rowInserted();  }
+    public boolean rowDeleted() throws SQLException { return _res.rowDeleted();  }
+    public void updateNull(int columnIndex) throws SQLException {  _res.updateNull(columnIndex);  }
+    public void updateBoolean(int columnIndex, boolean x) throws SQLException {  _res.updateBoolean(columnIndex, x);  }
+    public void updateByte(int columnIndex, byte x) throws SQLException {  _res.updateByte(columnIndex, x);  }
+    public void updateShort(int columnIndex, short x) throws SQLException {  _res.updateShort(columnIndex, x);  }
+    public void updateInt(int columnIndex, int x) throws SQLException {  _res.updateInt(columnIndex, x);  }
+    public void updateLong(int columnIndex, long x) throws SQLException {  _res.updateLong(columnIndex, x); }
+    public void updateFloat(int columnIndex, float x) throws SQLException {  _res.updateFloat(columnIndex, x);  }
+    public void updateDouble(int columnIndex, double x) throws SQLException {  _res.updateDouble(columnIndex, x);  }
+    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnIndex, x);  }
+    public void updateString(int columnIndex, String x) throws SQLException {  _res.updateString(columnIndex, x);  }
+    public void updateBytes(int columnIndex, byte[] x) throws SQLException {  _res.updateBytes(columnIndex, x); }
+    public void updateDate(int columnIndex, Date x) throws SQLException {  _res.updateDate(columnIndex, x);  }
+    public void updateTime(int columnIndex, Time x) throws SQLException {  _res.updateTime(columnIndex, x); }
+    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException {  _res.updateTimestamp(columnIndex, x);  }
+    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnIndex, x, length);  }
+    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnIndex, x, length); }
+    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {  _res.updateCharacterStream(columnIndex, x, length); }
+    public void updateObject(int columnIndex, Object x, int scale) throws SQLException {  _res.updateObject(columnIndex, x);  }
+    public void updateObject(int columnIndex, Object x) throws SQLException {  _res.updateObject(columnIndex, x);  }
+    public void updateNull(String columnName) throws SQLException {  _res.updateNull(columnName);  }
+    public void updateBoolean(String columnName, boolean x) throws SQLException {  _res.updateBoolean(columnName, x);  }
+    public void updateByte(String columnName, byte x) throws SQLException {  _res.updateByte(columnName, x);  }
+    public void updateShort(String columnName, short x) throws SQLException {  _res.updateShort(columnName, x);  }
+    public void updateInt(String columnName, int x) throws SQLException {  _res.updateInt(columnName, x);  }
+    public void updateLong(String columnName, long x) throws SQLException {  _res.updateLong(columnName, x);  }
+    public void updateFloat(String columnName, float x) throws SQLException {  _res.updateFloat(columnName, x);  }
+    public void updateDouble(String columnName, double x) throws SQLException { _res.updateDouble(columnName, x);  }
+    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnName, x);  }
+    public void updateString(String columnName, String x) throws SQLException {  _res.updateString(columnName, x);  }
+    public void updateBytes(String columnName, byte[] x) throws SQLException {  _res.updateBytes(columnName, x);  }
+    public void updateDate(String columnName, Date x) throws SQLException {  _res.updateDate(columnName, x);  }
+    public void updateTime(String columnName, Time x) throws SQLException {  _res.updateTime(columnName, x);  }
+    public void updateTimestamp(String columnName, Timestamp x) throws SQLException {  _res.updateTimestamp(columnName, x);  }
+    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnName, x, length);  }
+    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnName, x, length);  }
+    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException {  _res.updateCharacterStream(columnName, reader, length);  }
+    public void updateObject(String columnName, Object x, int scale) throws SQLException {  _res.updateObject(columnName, x);  }
+    public void updateObject(String columnName, Object x) throws SQLException {  _res.updateObject(columnName, x);  }
+    public void insertRow() throws SQLException {  _res.insertRow();  }
+    public void updateRow() throws SQLException {  _res.updateRow();  }
+    public void deleteRow() throws SQLException {  _res.deleteRow();  }
+    public void refreshRow() throws SQLException {  _res.refreshRow();  }
+    public void cancelRowUpdates() throws SQLException {  _res.cancelRowUpdates();  }
+    public void moveToInsertRow() throws SQLException {  _res.moveToInsertRow();  }
+    public void moveToCurrentRow() throws SQLException {  _res.moveToCurrentRow();  }
+    public Object getObject(int i, Map map) throws SQLException { return _res.getObject(i, map);  }
+    public Ref getRef(int i) throws SQLException { return _res.getRef(i);  }
+    public Blob getBlob(int i) throws SQLException { return _res.getBlob(i);  }
+    public Clob getClob(int i) throws SQLException { return _res.getClob(i);  }
+    public Array getArray(int i) throws SQLException { return _res.getArray(i);  }
+    public Object getObject(String colName, Map map) throws SQLException { return _res.getObject(colName, map);  }
+    public Ref getRef(String colName) throws SQLException { return _res.getRef(colName);  }
+    public Blob getBlob(String colName) throws SQLException { return _res.getBlob(colName);  }
+    public Clob getClob(String colName) throws SQLException { return _res.getClob(colName);  }
+    public Array getArray(String colName) throws SQLException { return _res.getArray(colName);  }
+    public Date getDate(int columnIndex, Calendar cal) throws SQLException { return _res.getDate(columnIndex, cal);  }
+    public Date getDate(String columnName, Calendar cal) throws SQLException { return _res.getDate(columnName, cal);  }
+    public Time getTime(int columnIndex, Calendar cal) throws SQLException { return _res.getTime(columnIndex, cal);  }
+    public Time getTime(String columnName, Calendar cal) throws SQLException { return _res.getTime(columnName, cal);  }
+    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException { return _res.getTimestamp(columnIndex, cal);  }
+    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException { return _res.getTimestamp(columnName, cal);  }
+
+    // ------------------- JDBC 3.0 -----------------------------------------
+    // Will be commented by the build process on a JDBC 2.0 system
+
+/* JDBC_3_ANT_KEY_BEGIN */
+
+    public java.net.URL getURL(int columnIndex) throws SQLException {
+        return _res.getURL(columnIndex);
+    }
+
+    public java.net.URL getURL(String columnName) throws SQLException {
+        return _res.getURL(columnName);
+    }
+
+    public void updateRef(int columnIndex, java.sql.Ref x)
+        throws SQLException {
+        _res.updateRef(columnIndex, x);
+    }
+
+    public void updateRef(String columnName, java.sql.Ref x)
+        throws SQLException {
+        _res.updateRef(columnName, x);
+    }
+
+    public void updateBlob(int columnIndex, java.sql.Blob x)
+        throws SQLException {
+        _res.updateBlob(columnIndex, x);
+    }
+
+    public void updateBlob(String columnName, java.sql.Blob x)
+        throws SQLException {
+        _res.updateBlob(columnName, x);
+    }
+
+    public void updateClob(int columnIndex, java.sql.Clob x)
+        throws SQLException {
+        _res.updateClob(columnIndex, x);
+    }
+
+    public void updateClob(String columnName, java.sql.Clob x)
+        throws SQLException {
+        _res.updateClob(columnName, x);
+    }
+
+    public void updateArray(int columnIndex, java.sql.Array x)
+        throws SQLException {
+        _res.updateArray(columnIndex, x);
+    }
+
+    public void updateArray(String columnName, java.sql.Array x)
+        throws SQLException {
+        _res.updateArray(columnName, x);
+    }
+
+/* JDBC_3_ANT_KEY_END */
 }
-
-// End SqlJdbcFunctionCall.java

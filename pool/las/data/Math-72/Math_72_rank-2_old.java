@@ -1,64 +1,136 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.beam.sdk.schemas;
+package org.mockitoutil;
 
-import org.apache.beam.sdk.annotations.Experimental;
-import org.apache.beam.sdk.annotations.Experimental.Kind;
-import org.apache.beam.sdk.schemas.utils.JavaBeanGetterFactory;
-import org.apache.beam.sdk.schemas.utils.JavaBeanSetterFactory;
-import org.apache.beam.sdk.schemas.utils.JavaBeanTypeInformationFactory;
-import org.apache.beam.sdk.schemas.utils.JavaBeanUtils;
-import org.apache.beam.sdk.transforms.SerializableFunctions;
-import org.apache.beam.sdk.values.TypeDescriptor;
+import static java.util.Arrays.asList;
+import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-/**
- * A {@link SchemaProvider} for Java Bean objects.
- *
- * <p>This provider finds (recursively) all public getters and setters in a Java object, and creates
- * schemas and rows that bind to those fields. The field order in the schema is not guaranteed to
- * match the method order in the class. The Java object is expected to have implemented a correct
- * .equals() and .hashCode methods The equals method must be completely determined by the schema
- * fields. i.e. if the object has hidden fields that are not reflected in the schema but are
- * compared in equals, then results will be incorrect.
- *
- * <p>TODO: Validate equals() method is provided, and if not generate a "slow" equals method based
- * on the schema.
- */
-@Experimental(Kind.SCHEMAS)
-public class JavaBeanSchema extends GetterBasedSchemaProvider {
-  @Override
-  public <T> Schema schemaFor(TypeDescriptor<T> typeDescriptor) {
-    return JavaBeanUtils.schemaFromJavaBeanClass(
-        typeDescriptor.getRawType(), SerializableFunctions.identity());
-  }
+public abstract class ClassLoaders {
+    protected ClassLoaders() {}
 
-  @Override
-  public FieldValueGetterFactory fieldValueGetterFactory() {
-    return new JavaBeanGetterFactory();
-  }
+    public static IsolatedURLClassLoaderBuilder isolatedClassLoader() {
+        return new IsolatedURLClassLoaderBuilder();
+    }
 
-  @Override
-  UserTypeCreatorFactory schemaTypeCreatorFactory() {
-    return new SetterBasedCreatorFactory(new JavaBeanSetterFactory());
-  }
+    public static InMemoryClassLoaderBuilder inMemoryClassLoader() {
+        return new InMemoryClassLoaderBuilder();
+    }
 
-  @Override
-  public FieldValueTypeInformationFactory fieldValueTypeInformationFactory() {
-    return new JavaBeanTypeInformationFactory();
-  }
+
+    public static class IsolatedURLClassLoaderBuilder extends ClassLoaders {
+        private final ArrayList<String> privateCopyPrefixes = new ArrayList<String>();
+        private final ArrayList<URL> codeSourceUrls = new ArrayList<URL>();
+
+        public IsolatedURLClassLoaderBuilder withPrivateCopyOf(String... privatePrefixes) {
+            privateCopyPrefixes.addAll(asList(privatePrefixes));
+            return this;
+        }
+
+        public IsolatedURLClassLoaderBuilder withCodeSourceUrls(String... urls) {
+            codeSourceUrls.addAll(pathsToURLs(urls));
+            return this;
+        }
+
+        public IsolatedURLClassLoaderBuilder withCurrentCodeSourceUrls() {
+            codeSourceUrls.add(obtainClassPathOf(ClassLoaders.class.getName()));
+            return this;
+        }
+
+        public ClassLoader build() {
+            return new LocalIsolatedURLClassLoader(
+                    codeSourceUrls.toArray(new URL[codeSourceUrls.size()]),
+                    privateCopyPrefixes
+            );
+        }
+    }
+
+    static class LocalIsolatedURLClassLoader extends URLClassLoader {
+        private final ArrayList<String> privateCopyPrefixes;
+
+        public LocalIsolatedURLClassLoader(URL[] urls, ArrayList<String> privateCopyPrefixes) {
+            super(urls, null);
+            this.privateCopyPrefixes = privateCopyPrefixes;
+        }
+
+        @Override
+        public Class<?> findClass(String name) throws ClassNotFoundException {
+            if(classShouldBePrivate(name)) return super.findClass(name);
+            throw new ClassNotFoundException("Can only load classes with prefix : " + privateCopyPrefixes);
+        }
+
+        private boolean classShouldBePrivate(String name) {
+            for (String prefix : privateCopyPrefixes) {
+                if (name.startsWith(prefix)) return true;
+            }
+            return false;
+        }
+    }
+
+    public static class InMemoryClassLoaderBuilder extends ClassLoaders {
+        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
+
+        public InMemoryClassLoaderBuilder withClassDefinition(String name, byte[] classDefinition) {
+            inMemoryClassObjects.put(name, classDefinition);
+            return this;
+        }
+
+        public ClassLoader build() {
+            return new InMemoryClassLoader(inMemoryClassObjects);
+        }
+    }
+
+    static class InMemoryClassLoader extends ClassLoader {
+        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
+
+        public InMemoryClassLoader(Map<String, byte[]> inMemoryClassObjects) {
+            this.inMemoryClassObjects = inMemoryClassObjects;
+        }
+
+        protected Class findClass(String name) throws ClassNotFoundException {
+            byte[] classDefinition = inMemoryClassObjects.get(name);
+            if (classDefinition != null) {
+                return defineClass(name, classDefinition, 0, classDefinition.length);
+            }
+            throw new ClassNotFoundException(name);
+        }
+
+
+    }
+
+    protected URL obtainClassPathOf(String className) {
+        String path = className.replace('.', '/') + ".class";
+        String url = ClassLoaders.class.getClassLoader().getResource(path).toExternalForm();
+
+        try {
+            return new URL(url.substring(0, url.length() - path.length()));
+        } catch (MalformedURLException e) {
+            throw new RuntimeException("Classloader couldn't obtain a proper classpath URL", e);
+        }
+    }
+
+    protected List<URL> pathsToURLs(String... codeSourceUrls) {
+        return pathsToURLs(Arrays.asList(codeSourceUrls));
+    }
+    private List<URL> pathsToURLs(List<String> codeSourceUrls) {
+        ArrayList<URL> urls = new ArrayList<URL>(codeSourceUrls.size());
+        for (String codeSourceUrl : codeSourceUrls) {
+            URL url = pathToUrl(codeSourceUrl);
+            urls.add(url);
+        }
+        return urls;
+    }
+
+    private URL pathToUrl(String path) {
+        try {
+            return new File(path).getAbsoluteFile().toURI().toURL();
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("Path is malformed", e);
+        }
+    }
 }

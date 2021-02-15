@@ -1,126 +1,155 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package com.fasterxml.jackson.databind.ser.std;
 
-package org.apache.hadoop.hive.common;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.TimeZone;
 
-import java.util.Arrays;
+import com.fasterxml.jackson.annotation.JsonFormat;
 
-public class ValidTxnListImpl implements ValidTxnList {
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
 
-  private long[] exceptions;
-  private long highWatermark;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.*;
+import com.fasterxml.jackson.databind.ser.ContextualSerializer;
+import com.fasterxml.jackson.databind.util.StdDateFormat;
 
-  public ValidTxnListImpl() {
-    this(new long[0], Long.MAX_VALUE);
-  }
+@SuppressWarnings("serial")
+public abstract class DateTimeSerializerBase<T>
+    extends StdScalarSerializer<T>
+    implements ContextualSerializer
+{
+    /**
+     * Flag that indicates that serialization must be done as the
+     * Java timestamp, regardless of other settings.
+     */
+    protected final Boolean _useTimestamp;
 
-  public ValidTxnListImpl(long[] exceptions, long highWatermark) {
-    if (exceptions.length == 0) {
-      this.exceptions = exceptions;
-    } else {
-      this.exceptions = exceptions.clone();
-      Arrays.sort(this.exceptions);
-    }
-    this.highWatermark = highWatermark;
-  }
+    /**
+     * Specific format to use, if not default format: non null value
+     * also indicates that serialization is to be done as JSON String,
+     * not numeric timestamp, unless {@link #_useTimestamp} is true.
+     */
+    protected final DateFormat _customFormat;
 
-  public ValidTxnListImpl(String value) {
-    readFromString(value);
-  }
-
-  @Override
-  public boolean isTxnCommitted(long txnid) {
-    if (highWatermark < txnid) {
-      return false;
-    }
-    return Arrays.binarySearch(exceptions, txnid) < 0;
-  }
-
-  @Override
-  public RangeResponse isTxnRangeCommitted(long minTxnId, long maxTxnId) {
-    // check the easy cases first
-    if (highWatermark < minTxnId) {
-      return RangeResponse.NONE;
-    } else if (exceptions.length > 0 && exceptions[0] > maxTxnId) {
-      return RangeResponse.ALL;
+    protected DateTimeSerializerBase(Class<T> type,
+            Boolean useTimestamp, DateFormat customFormat)
+    {
+        super(type);
+        _useTimestamp = useTimestamp;
+        _customFormat = customFormat;
     }
 
-    // since the exceptions and the range in question overlap, count the
-    // exceptions in the range
-    long count = Math.max(0, maxTxnId - highWatermark);
-    for(long txn: exceptions) {
-      if (minTxnId <= txn && txn <= maxTxnId) {
-        count += 1;
-      }
+    public abstract DateTimeSerializerBase<T> withFormat(Boolean timestamp, DateFormat customFormat);
+
+    @Override
+    public JsonSerializer<?> createContextual(SerializerProvider serializers,
+            BeanProperty property) throws JsonMappingException
+    {
+        if (property != null) {
+            JsonFormat.Value format = findFormatOverrides(serializers, property, handledType());
+            if (format != null) {
+            	// Simple case first: serialize as numeric timestamp?
+                JsonFormat.Shape shape = format.getShape();
+                if (shape.isNumeric()) {
+                    return withFormat(Boolean.TRUE, null);
+                }
+                if ((shape == JsonFormat.Shape.STRING) || format.hasPattern()
+                                || format.hasLocale() || format.hasTimeZone()) {
+                    TimeZone tz = format.getTimeZone();
+                    final String pattern = format.hasPattern()
+                                    ? format.getPattern()
+                                    : StdDateFormat.DATE_FORMAT_STR_ISO8601;
+                    final Locale loc = format.hasLocale()
+                                    ? format.getLocale()
+                                    : serializers.getLocale();
+                    SimpleDateFormat df = new SimpleDateFormat(pattern, loc);
+                    if (tz == null) {
+                        tz = serializers.getTimeZone();
+                    }
+                    df.setTimeZone(tz);
+                    return withFormat(Boolean.FALSE, df);
+                }
+            }
+        }
+        return this;
     }
 
-    if (count == 0) {
-      return RangeResponse.ALL;
-    } else if (count == (maxTxnId - minTxnId + 1)) {
-      return RangeResponse.NONE;
-    } else {
-      return RangeResponse.SOME;
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
+     */
+
+    @Deprecated
+    @Override
+    public boolean isEmpty(T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
     }
-  }
 
-  @Override
-  public String toString() {
-    return writeToString();
-  }
-
-  @Override
-  public String writeToString() {
-    StringBuilder buf = new StringBuilder();
-    buf.append(highWatermark);
-    if (exceptions.length == 0) {
-      buf.append(':');
-    } else {
-      for(long except: exceptions) {
-        buf.append(':');
-        buf.append(except);
-      }
+    @Override
+    public boolean isEmpty(SerializerProvider serializers, T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
     }
-    return buf.toString();
-  }
-
-  @Override
-  public void readFromString(String src) {
-    if (src == null) {
-      highWatermark = Long.MAX_VALUE;
-      exceptions = new long[0];
-    } else {
-      String[] values = src.split(":");
-      highWatermark = Long.parseLong(values[0]);
-      exceptions = new long[values.length - 1];
-      for(int i = 1; i < values.length; ++i) {
-        exceptions[i-1] = Long.parseLong(values[i]);
-      }
+    
+    protected abstract long _timestamp(T value);
+    
+    @Override
+    public JsonNode getSchema(SerializerProvider serializers, Type typeHint) {
+        //todo: (ryan) add a format for the date in the schema?
+        return createSchemaNode(_asTimestamp(serializers) ? "number" : "string", true);
     }
-  }
 
-  @Override
-  public long getHighWatermark() {
-    return highWatermark;
-  }
+    @Override
+    public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws JsonMappingException
+    {
+        _acceptJsonFormatVisitor(visitor, typeHint, _asTimestamp(visitor.getProvider()));
+    }
 
-  @Override
-  public long[] getOpenTransactions() {
-    return exceptions;
-  }
+    /*
+    /**********************************************************
+    /* Actual serialization
+    /**********************************************************
+     */
+
+    @Override
+    public abstract void serialize(T value, JsonGenerator gen, SerializerProvider serializers)
+        throws IOException;
+
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+    
+    protected boolean _asTimestamp(SerializerProvider serializers)
+    {
+        if (_useTimestamp != null) {
+            return _useTimestamp.booleanValue();
+        }
+        if (_customFormat == null) {
+            if (serializers != null) {
+                return serializers.isEnabled(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            }
+            // 12-Jun-2014, tatu: Is it legal not to have provider? Was NPE:ing earlier so leave a check
+            throw new IllegalArgumentException("Null SerializerProvider passed for "+handledType().getName());
+        }
+        return false;
+    }
+
+    protected void _acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint,
+		boolean asNumber) throws JsonMappingException
+    {
+        if (asNumber) {
+            visitIntFormat(visitor, typeHint,
+                    JsonParser.NumberType.LONG, JsonValueFormat.UTC_MILLISEC);
+        } else {
+            visitStringFormat(visitor, typeHint, JsonValueFormat.DATE_TIME);
+        }
+    }
 }
-

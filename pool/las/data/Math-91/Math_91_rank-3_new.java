@@ -1,11 +1,9 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/*
+ * Copyright 2003-2007 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -15,200 +13,436 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.hadoop.gateway.pac4j.filter;
+package groovy.servlet;
 
-import org.apache.hadoop.gateway.i18n.messages.MessagesFactory;
-import org.apache.hadoop.gateway.pac4j.Pac4jMessages;
-import org.apache.hadoop.gateway.pac4j.session.KnoxSessionStore;
-import org.apache.hadoop.gateway.services.GatewayServices;
-import org.apache.hadoop.gateway.services.security.KeystoreService;
-import org.apache.hadoop.gateway.services.security.MasterService;
-import org.apache.hadoop.gateway.services.security.AliasService;
-import org.apache.hadoop.gateway.services.security.AliasServiceException;
-import org.apache.hadoop.gateway.services.security.CryptoService;
-import org.pac4j.config.client.PropertiesConfigFactory;
-import org.pac4j.core.client.Client;
-import org.pac4j.core.config.Config;
-import org.pac4j.core.config.ConfigSingleton;
-import org.pac4j.core.context.J2EContext;
-import org.pac4j.core.util.CommonHelper;
-import org.pac4j.http.client.indirect.IndirectBasicAuthClient;
-import org.pac4j.http.credentials.authenticator.test.SimpleTestUsernamePasswordAuthenticator;
-import org.pac4j.j2e.filter.CallbackFilter;
-import org.pac4j.j2e.filter.SecurityFilter;
+import groovy.text.SimpleTemplateEngine;
+import groovy.text.Template;
+import groovy.text.TemplateEngine;
 
-import javax.servlet.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.Writer;
+import java.util.Date;
+import java.util.Map;
+import java.util.WeakHashMap;
+
+import javax.servlet.ServletConfig;
+import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.io.IOException;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
- * <p>This is the main filter for the pac4j provider. The pac4j provider module heavily relies on the j2e-pac4j library (https://github.com/pac4j/j2e-pac4j).</p>
- * <p>This filter dispatches the HTTP calls between the j2e-pac4j filters:</p>
- * <ul>
- *     <li>to the {@link CallbackFilter} if the <code>client_name</code> parameter exists: it finishes the authentication process</li>
- *     <li>to the {@link RequiresAuthenticationFilter} otherwise: it starts the authentication process (redirection to the identity provider) if the user is not authenticated</li>
- * </ul>
- * <p>It uses the {@link KnoxSessionStore} to manage session data. The generated cookies are defined on a domain name
- * which can be configured via the domain suffix parameter: <code>pac4j.cookie.domain.suffix</code>.</p>
- * <p>The callback url must be defined to the current protected url (KnoxSSO service for example) via the parameter: <code>pac4j.callbackUrl</code>.</p>
+ * A generic servlet for serving (mostly HTML) templates.
+ * <p/>
+ * <p/>
+ * It delegates work to a <code>groovy.text.TemplateEngine</code> implementation
+ * processing HTTP requests.
+ * <p/>
+ * <h4>Usage</h4>
+ * <p/>
+ * <code>helloworld.html</code> is a headless HTML-like template
+ * <pre><code>
+ *  &lt;html&gt;
+ *    &lt;body&gt;
+ *      &lt;% 3.times { %&gt;
+ *        Hello World!
+ *      &lt;% } %&gt;
+ *      &lt;br&gt;
+ *    &lt;/body&gt;
+ *  &lt;/html&gt;
+ * </code></pre>
+ * <p/>
+ * Minimal <code>web.xml</code> example serving HTML-like templates
+ * <pre><code>
+ * &lt;web-app&gt;
+ *   &lt;servlet&gt;
+ *     &lt;servlet-name&gt;template&lt;/servlet-name&gt;
+ *     &lt;servlet-class&gt;groovy.servlet.TemplateServlet&lt;/servlet-class&gt;
+ *   &lt;/servlet&gt;
+ *   &lt;servlet-mapping&gt;
+ *     &lt;servlet-name&gt;template&lt;/servlet-name&gt;
+ *     &lt;url-pattern&gt;*.html&lt;/url-pattern&gt;
+ *   &lt;/servlet-mapping&gt;
+ * &lt;/web-app&gt;
+ * </code></pre>
+ * <p/>
+ * <h4>Template engine configuration</h4>
+ * <p/>
+ * <p/>
+ * By default, the TemplateServer uses the {@link groovy.text.SimpleTemplateEngine}
+ * which interprets JSP-like templates. The init parameter <code>template.engine</code>
+ * defines the fully qualified class name of the template to use:
+ * <pre>
+ *   template.engine = [empty] - equals groovy.text.SimpleTemplateEngine
+ *   template.engine = groovy.text.SimpleTemplateEngine
+ *   template.engine = groovy.text.GStringTemplateEngine
+ *   template.engine = groovy.text.XmlTemplateEngine
+ * </pre>
+ * <p/>
+ * <h3>Servlet Init Parameters</h3>
+ * <p/>
+ * <h4>Logging and extra-output options</h4>
+ * <p/>
+ * <p/>
+ * This implementation provides a verbosity flag switching log statements.
+ * The servlet init parameter name is:
+ * <pre>
+ *   generated.by = true(default) | false
+ * </pre>
+ * <p/>
+ * <h4>Groovy Source Encoding Parameter</h4>
+ * <p/>
+ * <p/>
+ * The following servlet init parameter name can be used to specify the encoding TemplateServlet will use
+ * to read the template groovy source files:
+ * <pre>
+ *   groovy.source.encoding
+ * </pre>
  *
- * @since 0.8.0
+ * @author Christian Stein
+ * @author Guillaume Laforge
+ * @version 2.0
+ * @see TemplateServlet#setVariables(ServletBinding)
  */
-public class Pac4jDispatcherFilter implements Filter {
+public class TemplateServlet extends AbstractHttpServlet {
 
-  private static Pac4jMessages log = MessagesFactory.get(Pac4jMessages.class);
+    /**
+     * Simple cache entry that validates against last modified and length
+     * attributes of the specified file.
+     *
+     * @author Christian Stein
+     */
+    private static class TemplateCacheEntry {
 
-  public static final String TEST_BASIC_AUTH = "testBasicAuth";
+        Date date;
+        long hit;
+        long lastModified;
+        long length;
+        Template template;
 
-  public static final String PAC4J_CALLBACK_URL = "pac4j.callbackUrl";
+        public TemplateCacheEntry(File file, Template template) {
+            this(file, template, false); // don't get time millis for sake of speed
+        }
 
-  public static final String PAC4J_CALLBACK_PARAMETER = "pac4jCallback";
+        public TemplateCacheEntry(File file, Template template, boolean timestamp) {
+            if (file == null) {
+                throw new NullPointerException("file");
+            }
+            if (template == null) {
+                throw new NullPointerException("template");
+            }
+            if (timestamp) {
+                this.date = new Date(System.currentTimeMillis());
+            } else {
+                this.date = null;
+            }
+            this.hit = 0;
+            this.lastModified = file.lastModified();
+            this.length = file.length();
+            this.template = template;
+        }
 
-  private static final String PAC4J_COOKIE_DOMAIN_SUFFIX_PARAM = "pac4j.cookie.domain.suffix";
+        /**
+         * Checks the passed file attributes against those cached ones.
+         *
+         * @param file Other file handle to compare to the cached values.
+         * @return <code>true</code> if all measured values match, else <code>false</code>
+         */
+        public boolean validate(File file) {
+            if (file == null) {
+                throw new NullPointerException("file");
+            }
+            if (file.lastModified() != this.lastModified) {
+                return false;
+            }
+            if (file.length() != this.length) {
+                return false;
+            }
+            hit++;
+            return true;
+        }
 
-  private CallbackFilter callbackFilter;
+        public String toString() {
+            if (date == null) {
+                return "Hit #" + hit;
+            }
+            return "Hit #" + hit + " since " + date;
+        }
 
-  private SecurityFilter securityFilter;
-  private MasterService masterService = null;
-  private KeystoreService keystoreService = null;
-  private AliasService aliasService = null;
-
-  @Override
-  public void init( FilterConfig filterConfig ) throws ServletException {
-    // JWT service
-    final ServletContext context = filterConfig.getServletContext();
-    CryptoService cryptoService = null;
-    String clusterName = null;
-    if (context != null) {
-      GatewayServices services = (GatewayServices) context.getAttribute(GatewayServices.GATEWAY_SERVICES_ATTRIBUTE);
-      clusterName = (String) context.getAttribute(GatewayServices.GATEWAY_CLUSTER_ATTRIBUTE);
-      if (services != null) {
-        keystoreService = (KeystoreService) services.getService(GatewayServices.KEYSTORE_SERVICE);
-        cryptoService = (CryptoService) services.getService(GatewayServices.CRYPTO_SERVICE);
-        aliasService = (AliasService) services.getService(GatewayServices.ALIAS_SERVICE);
-        masterService = (MasterService) services.getService("MasterService");
-      }
-    }
-    // crypto service, alias service and cluster name are mandatory
-    if (cryptoService == null || aliasService == null || clusterName == null) {
-      log.cryptoServiceAndAliasServiceAndClusterNameRequired();
-      throw new ServletException("The crypto service, alias service and cluster name are required.");
-    }
-    try {
-      aliasService.getPasswordFromAliasForCluster(clusterName, KnoxSessionStore.PAC4J_PASSWORD, true);
-    } catch (AliasServiceException e) {
-      log.unableToGenerateAPasswordForEncryption(e);
-      throw new ServletException("Unable to generate a password for encryption.");
-    }
-
-    // url to SSO authentication provider
-    String pac4jCallbackUrl = filterConfig.getInitParameter(PAC4J_CALLBACK_URL);
-    if (pac4jCallbackUrl == null) {
-      log.ssoAuthenticationProviderUrlRequired();
-      throw new ServletException("Required pac4j callback URL is missing.");
-    }
-    // add the callback parameter to know it's a callback
-    pac4jCallbackUrl = CommonHelper.addParameter(pac4jCallbackUrl, PAC4J_CALLBACK_PARAMETER, "true");
-
-    final Config config;
-    final String clientName;
-    // client name from servlet parameter (mandatory)
-    final String clientNameParameter = filterConfig.getInitParameter("clientName");
-    if (clientNameParameter == null) {
-      log.clientNameParameterRequired();
-      throw new ServletException("Required pac4j clientName parameter is missing.");
-    }
-    if (TEST_BASIC_AUTH.equalsIgnoreCase(clientNameParameter)) {
-      // test configuration
-      final IndirectBasicAuthClient indirectBasicAuthClient = new IndirectBasicAuthClient(new SimpleTestUsernamePasswordAuthenticator());
-      indirectBasicAuthClient.setRealmName("Knox TEST");
-      config = new Config(pac4jCallbackUrl, indirectBasicAuthClient);
-      clientName = "IndirectBasicAuthClient";
-    } else {
-      // get clients from the init parameters
-      final Map<String, String> properties = new HashMap<>();
-      final Enumeration<String> names = filterConfig.getInitParameterNames();
-      addDefaultConfig(clientNameParameter, properties);
-      while (names.hasMoreElements()) {
-        final String key = names.nextElement();
-        properties.put(key, filterConfig.getInitParameter(key));
-      }
-      final PropertiesConfigFactory propertiesConfigFactory = new PropertiesConfigFactory(pac4jCallbackUrl, properties);
-      config = propertiesConfigFactory.build();
-      final List<Client> clients = config.getClients().getClients();
-      if (clients == null || clients.size() == 0) {
-        log.atLeastOnePac4jClientMustBeDefined();
-        throw new ServletException("At least one pac4j client must be defined.");
-      }
-      if (CommonHelper.isBlank(clientNameParameter)) {
-        clientName = clients.get(0).getName();
-      } else {
-        clientName = clientNameParameter;
-      }
     }
 
-    callbackFilter = new CallbackFilter();
-    securityFilter = new SecurityFilter();
-    securityFilter.setClients(clientName);
-    securityFilter.setConfig(config);
+    /**
+     * Simple file name to template cache map.
+     */
+    private final Map cache;
 
-    final String domainSuffix = filterConfig.getInitParameter(PAC4J_COOKIE_DOMAIN_SUFFIX_PARAM);
-    config.setSessionStore(new KnoxSessionStore(cryptoService, clusterName, domainSuffix));
-    ConfigSingleton.setConfig(config);
-  }
+    /**
+     * Underlying template engine used to evaluate template source files.
+     */
+    private TemplateEngine engine;
 
-  private void addDefaultConfig(String clientNameParameter, Map<String, String> properties) {
-    // add default saml params
-    if (clientNameParameter.contains("SAML2Client")) {
-      properties.put(PropertiesConfigFactory.SAML_KEYSTORE_PATH,
-          keystoreService.getKeystorePath());
+    /**
+     * Flag that controls the appending of the "Generated by ..." comment.
+     */
+    private boolean generateBy;
 
-      properties.put(PropertiesConfigFactory.SAML_KEYSTORE_PASSWORD,
-          new String(masterService.getMasterSecret()));
+    private String fileEncodingParamVal;
 
-      // check for provisioned alias for private key
-      char[] gip = null;
-      try {
-        gip = aliasService.getGatewayIdentityPassphrase();
-      }
-      catch(AliasServiceException ase) {
-        log.noPrivateKeyPasshraseProvisioned(ase);
-      }
-      if (gip != null) {
-        properties.put(PropertiesConfigFactory.SAML_PRIVATE_KEY_PASSWORD,
-            new String(gip));
-      }
-      else {
-        // no alias provisioned then use the master
-        properties.put(PropertiesConfigFactory.SAML_PRIVATE_KEY_PASSWORD,
-            new String(masterService.getMasterSecret()));
-      }
+    private static final String GROOVY_SOURCE_ENCODING = "groovy.source.encoding";
+
+    /**
+     * Create new TemplateServlet.
+     */
+    public TemplateServlet() {
+        this.cache = new WeakHashMap();
+        this.engine = null; // assigned later by init()
+        this.generateBy = true; // may be changed by init()
+        this.fileEncodingParamVal = null; // may be changed by init()
     }
-  }
 
-  @Override
-  public void doFilter( ServletRequest servletRequest, ServletResponse servletResponse, FilterChain filterChain) throws IOException, ServletException {
+    /**
+     * Gets the template created by the underlying engine parsing the request.
+     * <p/>
+     * <p>
+     * This method looks up a simple (weak) hash map for an existing template
+     * object that matches the source file. If the source file didn't change in
+     * length and its last modified stamp hasn't changed compared to a precompiled
+     * template object, this template is used. Otherwise, there is no or an
+     * invalid template object cache entry, a new one is created by the underlying
+     * template engine. This new instance is put to the cache for consecutive
+     * calls.
+     * </p>
+     *
+     * @param file The HttpServletRequest.
+     * @return The template that will produce the response text.
+     * @throws ServletException If the request specified an invalid template source file
+     */
+    protected Template getTemplate(File file) throws ServletException {
 
-    final HttpServletRequest request = (HttpServletRequest) servletRequest;
-    final HttpServletResponse response = (HttpServletResponse) servletResponse;
-    final J2EContext context = new J2EContext(request, response, ConfigSingleton.getConfig().getSessionStore());
+        String key = file.getAbsolutePath();
+        Template template = null;
 
-    // it's a callback from an identity provider
-    if (request.getParameter(PAC4J_CALLBACK_PARAMETER) != null) {
-      // apply CallbackFilter
-      callbackFilter.doFilter(servletRequest, servletResponse, filterChain);
-    } else {
-      // otherwise just apply security and requires authentication
-      // apply RequiresAuthenticationFilter
-      securityFilter.doFilter(servletRequest, servletResponse, filterChain);
+        /*
+         * Test cache for a valid template bound to the key.
+         */
+        if (verbose) {
+            log("Looking for cached template by key \"" + key + "\"");
+        }
+        TemplateCacheEntry entry = (TemplateCacheEntry) cache.get(key);
+        if (entry != null) {
+            if (entry.validate(file)) {
+                if (verbose) {
+                    log("Cache hit! " + entry);
+                }
+                template = entry.template;
+            } else {
+                if (verbose) {
+                    log("Cached template needs recompilation!");
+                }
+            }
+        } else {
+            if (verbose) {
+                log("Cache miss.");
+            }
+        }
+
+        //
+        // Template not cached or the source file changed - compile new template!
+        //
+        if (template == null) {
+            if (verbose) {
+                log("Creating new template from file " + file + "...");
+            }
+
+            String fileEncoding = (fileEncodingParamVal != null) ? fileEncodingParamVal :
+                    System.getProperty(GROOVY_SOURCE_ENCODING);
+
+            Reader reader = null;
+            try {
+                reader = fileEncoding == null ? new FileReader(file) : new InputStreamReader(new FileInputStream(file), fileEncoding);
+                template = engine.createTemplate(reader);
+            } catch (Exception e) {
+                throw new ServletException("Creation of template failed: " + e, e);
+            } finally {
+                if (reader != null) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignore) {
+                        // e.printStackTrace();
+                    }
+                }
+            }
+            cache.put(key, new TemplateCacheEntry(file, template, verbose));
+            if (verbose) {
+                log("Created and added template to cache. [key=" + key + "]");
+            }
+        }
+
+        //
+        // Last sanity check.
+        //
+        if (template == null) {
+            throw new ServletException("Template is null? Should not happen here!");
+        }
+
+        return template;
+
     }
-  }
 
-  @Override
-  public void destroy() { }
+    /**
+     * Initializes the servlet from hints the container passes.
+     * <p/>
+     * Delegates to sub-init methods and parses the following parameters:
+     * <ul>
+     * <li> <tt>"generatedBy"</tt> : boolean, appends "Generated by ..." to the
+     * HTML response text generated by this servlet.
+     * </li>
+     * </ul>
+     *
+     * @param config Passed by the servlet container.
+     * @throws ServletException if this method encountered difficulties
+     * @see TemplateServlet#initTemplateEngine(ServletConfig)
+     */
+    public void init(ServletConfig config) throws ServletException {
+        super.init(config);
+        this.engine = initTemplateEngine(config);
+        if (engine == null) {
+            throw new ServletException("Template engine not instantiated.");
+        }
+        String value = config.getInitParameter("generated.by");
+        if (value != null) {
+            this.generateBy = Boolean.valueOf(value);
+        }
+        value = config.getInitParameter(GROOVY_SOURCE_ENCODING);
+        if (value != null) {
+            this.fileEncodingParamVal = value;
+        }
+        log("Servlet " + getClass().getName() + " initialized on " + engine.getClass());
+    }
+
+    /**
+     * Creates the template engine.
+     * <p/>
+     * Called by {@link TemplateServlet#init(ServletConfig)} and returns just
+     * <code>new groovy.text.SimpleTemplateEngine()</code> if the init parameter
+     * <code>template.engine</code> is not set by the container configuration.
+     *
+     * @param config Current servlet configuration passed by the container.
+     * @return The underlying template engine or <code>null</code> on error.
+     */
+    protected TemplateEngine initTemplateEngine(ServletConfig config) {
+        String name = config.getInitParameter("template.engine");
+        if (name == null) {
+            return new SimpleTemplateEngine();
+        }
+        try {
+            return (TemplateEngine) Class.forName(name).newInstance();
+        } catch (InstantiationException e) {
+            log("Could not instantiate template engine: " + name, e);
+        } catch (IllegalAccessException e) {
+            log("Could not access template engine class: " + name, e);
+        } catch (ClassNotFoundException e) {
+            log("Could not find template engine class: " + name, e);
+        }
+        return null;
+    }
+
+    /**
+     * Services the request with a response.
+     * <p>
+     * First the request is parsed for the source file uri. If the specified file
+     * could not be found or can not be read an error message is sent as response.
+     * <p/>
+     * </p>
+     *
+     * @param request  The http request.
+     * @param response The http response.
+     * @throws IOException      if an input or output error occurs while the servlet is
+     *                          handling the HTTP request
+     * @throws ServletException if the HTTP request cannot be handled
+     */
+    public void service(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+
+        if (verbose) {
+            log("Creating/getting cached template...");
+        }
+
+        //
+        // Get the template source file handle.
+        //
+        File file = super.getScriptUriAsFile(request);
+        String name = file.getName();
+        if (!file.exists()) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return; // throw new IOException(file.getAbsolutePath());
+        }
+        if (!file.canRead()) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Can not read \"" + name + "\"!");
+            return; // throw new IOException(file.getAbsolutePath());
+        }
+
+        //
+        // Get the requested template.
+        //
+        long getMillis = System.currentTimeMillis();
+        Template template = getTemplate(file);
+        getMillis = System.currentTimeMillis() - getMillis;
+
+        //
+        // Create new binding for the current request.
+        //
+        ServletBinding binding = new ServletBinding(request, response, servletContext);
+        setVariables(binding);
+
+        //
+        // Prepare the response buffer content type _before_ getting the writer.
+        // and set status code to ok
+        //
+        response.setContentType(CONTENT_TYPE_TEXT_HTML + "; charset=" + encoding);
+        response.setStatus(HttpServletResponse.SC_OK);
+
+        //
+        // Get the output stream writer from the binding.
+        //
+        Writer out = (Writer) binding.getVariable("out");
+        if (out == null) {
+            out = response.getWriter();
+        }
+
+        //
+        // Evaluate the template.
+        //
+        if (verbose) {
+            log("Making template \"" + name + "\"...");
+        }
+        // String made = template.make(binding.getVariables()).toString();
+        // log(" = " + made);
+        long makeMillis = System.currentTimeMillis();
+        template.make(binding.getVariables()).writeTo(out);
+        makeMillis = System.currentTimeMillis() - makeMillis;
+
+        if (generateBy) {
+            StringBuffer sb = new StringBuffer(100);
+            sb.append("\n<!-- Generated by Groovy TemplateServlet [create/get=");
+            sb.append(Long.toString(getMillis));
+            sb.append(" ms, make=");
+            sb.append(Long.toString(makeMillis));
+            sb.append(" ms] -->\n");
+            out.write(sb.toString());
+        }
+
+        //
+        // flush the response buffer.
+        //
+        response.flushBuffer();
+
+        if (verbose) {
+            log("Template \"" + name + "\" request responded. [create/get=" + getMillis + " ms, make=" + makeMillis + " ms]");
+        }
+
+    }
 }

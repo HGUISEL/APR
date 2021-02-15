@@ -1,200 +1,81 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
-package org.apache.accumulo.start.classloader.vfs;
+package org.apache.syncope.core.provisioning.java;
 
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
+import org.apache.syncope.core.provisioning.api.AuditManager;
+import org.apache.syncope.common.lib.types.AuditElements;
+import org.apache.syncope.common.lib.types.AuditElements.Result;
+import org.apache.syncope.common.lib.types.AuditLoggerName;
+import org.apache.syncope.common.lib.types.LoggerLevel;
+import org.apache.syncope.common.lib.types.LoggerType;
+import org.apache.syncope.core.spring.security.AuthContextUtils;
+import org.apache.syncope.core.provisioning.api.serialization.POJOHelper;
+import org.apache.syncope.core.persistence.api.dao.LoggerDAO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
-import org.apache.commons.vfs2.FileSystemException;
-import org.apache.commons.vfs2.FileSystemManager;
+@Component
+public class AuditManagerImpl implements AuditManager {
 
-public class ContextManager {
+    @Autowired
+    private LoggerDAO loggerDAO;
 
-  // there is a lock per context so that one context can initialize w/o blocking another context
-  private class Context {
-    AccumuloReloadingVFSClassLoader loader;
-    ContextConfig cconfig;
-    boolean closed = false;
-
-    Context(ContextConfig cconfig) {
-      this.cconfig = cconfig;
+    public static String getDomainAuditLoggerName(final String domain) {
+        return LoggerType.AUDIT.getPrefix() + "." + domain;
     }
 
-    synchronized ClassLoader getClassLoader() throws FileSystemException {
-      if (closed)
-        return null;
-
-      if (loader == null) {
-        loader = new AccumuloReloadingVFSClassLoader(cconfig.uris, vfs, parent, cconfig.preDelegation);
-      }
-
-      return loader.getClassLoader();
-    }
-
-    synchronized void close() {
-      closed = true;
-      if (loader != null) {
-        loader.close();
-      }
-      loader = null;
-    }
-  }
-
-  private Map<String,Context> contexts = new HashMap<>();
-
-  private volatile ContextsConfig config;
-  private FileSystemManager vfs;
-  private ReloadingClassLoader parent;
-
-  ContextManager(FileSystemManager vfs, ReloadingClassLoader parent) {
-    this.vfs = vfs;
-    this.parent = parent;
-  }
-
-  public static class ContextConfig {
-    String uris;
-    boolean preDelegation;
-
-    public ContextConfig(String uris, boolean preDelegation) {
-      this.uris = uris;
-      this.preDelegation = preDelegation;
-    }
-
+    @Transactional(readOnly = true)
     @Override
-    public boolean equals(Object o) {
-      if (o instanceof ContextConfig) {
-        ContextConfig oc = (ContextConfig) o;
+    public void audit(
+            final AuditElements.EventCategoryType type,
+            final String category,
+            final String subcategory,
+            final String event,
+            final Result result,
+            final Object before,
+            final Object output,
+            final Object... input) {
 
-        return uris.equals(oc.uris) && preDelegation == oc.preDelegation;
-      }
+        Throwable throwable = null;
+        if (output instanceof Throwable) {
+            throwable = (Throwable) output;
+        }
 
-      return false;
+        AuditEntry auditEntry = new AuditEntry(
+                AuthContextUtils.getUsername(),
+                new AuditLoggerName(type, category, subcategory, event, result),
+                before,
+                throwable == null ? output : throwable.getMessage(),
+                input);
+
+        org.apache.syncope.core.persistence.api.entity.Logger syncopeLogger =
+                loggerDAO.find(auditEntry.getLogger().toLoggerName());
+        if (syncopeLogger != null && syncopeLogger.getLevel() == LoggerLevel.DEBUG) {
+            Logger logger = LoggerFactory.getLogger(getDomainAuditLoggerName(AuthContextUtils.getDomain()));
+            if (throwable == null) {
+                logger.debug(POJOHelper.serialize(auditEntry));
+            } else {
+                logger.debug(POJOHelper.serialize(auditEntry), throwable);
+            }
+        }
     }
-
-    @Override
-    public int hashCode() {
-      return uris.hashCode() + (preDelegation ? Boolean.TRUE : Boolean.FALSE).hashCode();
-    }
-  }
-
-  public interface ContextsConfig {
-    ContextConfig getContextConfig(String context);
-  }
-
-  public static abstract class DefaultContextsConfig implements ContextsConfig {
-
-    public abstract String getProperty(String key);
-
-    @Override
-    public ContextConfig getContextConfig(String context) {
-
-      String key = AccumuloVFSClassLoader.VFS_CONTEXT_CLASSPATH_PROPERTY + context;
-
-      String uris = getProperty(key);
-
-      if (uris == null) {
-        return null;
-      }
-
-      String delegate = getProperty(key + ".delegation");
-
-      boolean preDelegate = true;
-
-      if (delegate != null && delegate.trim().equalsIgnoreCase("post")) {
-        preDelegate = false;
-      }
-
-      return new ContextConfig(uris, preDelegate);
-    }
-  }
-
-  /**
-   * configuration must be injected for ContextManager to work
-   */
-  public synchronized void setContextConfig(ContextsConfig config) {
-    if (this.config != null)
-      throw new IllegalStateException("Context manager config already set");
-    this.config = config;
-  }
-
-  public ClassLoader getClassLoader(String contextName) throws FileSystemException {
-
-    ContextConfig cconfig = config.getContextConfig(contextName);
-
-    if (cconfig == null)
-      throw new IllegalArgumentException("Unknown context " + contextName);
-
-    Context context = null;
-    Context contextToClose = null;
-
-    synchronized (this) {
-      // only manipulate internal data structs in this sync block... avoid creating or closing classloader, reading config, etc... basically avoid operations
-      // that may block
-      context = contexts.get(contextName);
-
-      if (context == null) {
-        context = new Context(cconfig);
-        contexts.put(contextName, context);
-      } else if (!context.cconfig.equals(cconfig)) {
-        contextToClose = context;
-        context = new Context(cconfig);
-        contexts.put(contextName, context);
-      }
-    }
-
-    if (contextToClose != null)
-      contextToClose.close();
-
-    ClassLoader loader = context.getClassLoader();
-    if (loader == null) {
-      // oops, context was closed by another thread, try again
-      return getClassLoader(contextName);
-    }
-
-    return loader;
-
-  }
-
-  public <U> Class<? extends U> loadClass(String context, String classname, Class<U> extension) throws ClassNotFoundException {
-    try {
-      return getClassLoader(context).loadClass(classname).asSubclass(extension);
-    } catch (IOException e) {
-      throw new ClassNotFoundException("IO Error loading class " + classname, e);
-    }
-  }
-
-  public void removeUnusedContexts(Set<String> configuredContexts) {
-
-    Map<String,Context> unused;
-
-    // ContextManager knows of some set of contexts. This method will be called with
-    // the set of currently configured contexts. We will close the contexts that are
-    // no longer in the configuration.
-    synchronized (this) {
-      unused = new HashMap<>(contexts);
-      unused.keySet().removeAll(configuredContexts);
-      contexts.keySet().removeAll(unused.keySet());
-    }
-
-    for (Context context : unused.values()) {
-      // close outside of lock
-      context.close();
-    }
-  }
 }

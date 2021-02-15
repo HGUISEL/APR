@@ -1,6 +1,6 @@
-package org.apache.maven.archiva.web.action;
-
-/*
+/**
+ * Copyright 2010 The Apache Software Foundation
+ *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -9,313 +9,88 @@ package org.apache.maven.archiva.web.action;
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.hadoop.hbase.master.handler;
 
-import java.util.ArrayList;
+import java.io.IOException;
 import java.util.List;
 
-import com.opensymphony.xwork2.Validateable;
-import org.apache.archiva.metadata.model.Dependency;
-import org.apache.archiva.metadata.model.MailingList;
-import org.apache.archiva.metadata.model.ProjectVersionMetadata;
-import org.apache.archiva.metadata.model.ProjectVersionReference;
-import org.apache.archiva.metadata.repository.MetadataResolver;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.Server;
+import org.apache.hadoop.hbase.catalog.MetaEditor;
+import org.apache.hadoop.hbase.ipc.HMasterInterface;
+import org.apache.hadoop.hbase.master.AssignmentManager;
+import org.apache.hadoop.hbase.master.MasterServices;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Threads;
+import org.apache.zookeeper.KeeperException;
 
-/**
- * Browse the repository.
- *
- * TODO change name to ShowVersionedAction to conform to terminology.
- *
- * @plexus.component role="com.opensymphony.xwork2.Action" role-hint="showArtifactAction" instantiation-strategy="per-lookup"
- */
-public class ShowArtifactAction
-    extends AbstractRepositoryBasedAction
-    implements Validateable
-{
-    /* .\ Not Exposed \._____________________________________________ */
+@InterfaceAudience.Private
+public class DeleteTableHandler extends TableEventHandler {
+  private static final Log LOG = LogFactory.getLog(DeleteTableHandler.class);
 
-    /**
-     * @plexus.requirement
-     */
-    private MetadataResolver metadataResolver;
+  public DeleteTableHandler(byte [] tableName, Server server,
+      final MasterServices masterServices, HMasterInterface masterInterface,
+      boolean instantChange)
+  throws IOException {
+    super(EventType.C_M_DELETE_TABLE, tableName, server, masterServices,
+        masterInterface, instantChange);
+    // The next call fails if no such table.
+    getTableDescriptor();
+  }
 
-    /* .\ Exposed Output Objects \.__________________________________ */
-
-    private String groupId;
-
-    private String artifactId;
-
-    private String version;
-
-    private String repositoryId;
-
-    /**
-     * The model of this versioned project.
-     */
-    private ProjectVersionMetadata model;
-
-    /**
-     * The list of artifacts that depend on this versioned project.
-     */
-    private List<ProjectVersionReference> dependees;
-
-    private List<MailingList> mailingLists;
-
-    private List<Dependency> dependencies;
-
-    private List<String> snapshotVersions;
-
-    /**
-     * Show the versioned project information tab.
-     * TODO: Change name to 'project' - we are showing project versions here, not specific artifact information (though
-     * that is rendered in the download box).
-     */
-    public String artifact()
-    {
-        // In the future, this should be replaced by the repository grouping mechanism, so that we are only making
-        // simple resource requests here and letting the resolver take care of it
-        ProjectVersionMetadata versionMetadata = null;
-        snapshotVersions = new ArrayList<String>();
-        for ( String repoId : getObservableRepos() )
-        {
-            if ( versionMetadata == null )
-            {
-                // TODO: though we have a simple mapping now, do we want to support paths like /1.0-20090111.123456-1/
-                //   again by mapping it to /1.0-SNAPSHOT/? Currently, the individual versions are not supported as we
-                //   are only displaying the project's single version.
-
-                // we don't want the implementation being that intelligent - so another resolver to do the
-                // "just-in-time" nature of picking up the metadata (if appropriate for the repository type) is used
-                versionMetadata = metadataResolver.getProjectVersion( repoId, groupId, artifactId, version );
-                if ( versionMetadata != null )
-                {
-                    repositoryId = repoId;
-
-                    snapshotVersions.addAll(
-                        metadataResolver.getArtifactVersions( repoId, groupId, artifactId, versionMetadata.getId() ) );
-                    snapshotVersions.remove( version );
-                }
-            }
-        }
-
-        if ( versionMetadata == null )
-        {
-            addActionError( "Artifact not found" );
-            return ERROR;
-        }
-        model = versionMetadata;
-
-        return SUCCESS;
+  @Override
+  protected void handleTableOperation(List<HRegionInfo> regions)
+  throws IOException, KeeperException {
+    AssignmentManager am = this.masterServices.getAssignmentManager();
+    long waitTime = server.getConfiguration().
+      getLong("hbase.master.wait.on.region", 5 * 60 * 1000);
+    for (HRegionInfo region : regions) {
+      long done = System.currentTimeMillis() + waitTime;
+      while (System.currentTimeMillis() < done) {
+        AssignmentManager.RegionState rs = am.isRegionInTransition(region);
+        if (rs == null) break;
+        Threads.sleep(waitingTimeForEvents);
+        LOG.debug("Waiting on  region to clear regions in transition; " + rs);
+      }
+      if (am.isRegionInTransition(region) != null) {
+        throw new IOException("Waited hbase.master.wait.on.region (" +
+          waitTime + "ms) for region to leave region " +
+          region.getRegionNameAsString() + " in transitions");
+      }
+      LOG.debug("Deleting region " + region.getRegionNameAsString() +
+        " from META and FS");
+      // Remove region from META
+      MetaEditor.deleteRegion(this.server.getCatalogTracker(), region);
+      // Delete region from FS
+      this.masterServices.getMasterFileSystem().deleteRegion(region);
     }
+    // Delete table from FS
+    this.masterServices.getMasterFileSystem().deleteTable(tableName);
+    // Update table descriptor cache
+    this.masterServices.getTableDescriptors().remove(Bytes.toString(tableName));
 
-    /**
-     * Show the artifact information tab.
-     */
-    public String dependencies()
-    {
-        ProjectVersionMetadata versionMetadata = null;
-        for ( String repoId : getObservableRepos() )
-        {
-            if ( versionMetadata == null )
-            {
-                versionMetadata = metadataResolver.getProjectVersion( repoId, groupId, artifactId, version );
-            }
-        }
-
-        if ( versionMetadata == null )
-        {
-            addActionError( "Artifact not found" );
-            return ERROR;
-        }
-        model = versionMetadata;
-
-        this.dependencies = model.getDependencies();
-
-        return SUCCESS;
+    // If entry for this table in zk, and up in AssignmentManager, remove it.
+    // Call to undisableTable does this. TODO: Make a more formal purge table.
+    am.getZKTable().setEnabledTable(Bytes.toString(tableName));
+  }
+  
+  @Override
+  public String toString() {
+    String name = "UnknownServerName";
+    if(server != null && server.getServerName() != null) {
+      name = server.getServerName().toString();
     }
-
-    /**
-     * Show the mailing lists information tab.
-     */
-    public String mailingLists()
-    {
-        ProjectVersionMetadata versionMetadata = null;
-        for ( String repoId : getObservableRepos() )
-        {
-            if ( versionMetadata == null )
-            {
-                versionMetadata = metadataResolver.getProjectVersion( repoId, groupId, artifactId, version );
-            }
-        }
-
-        if ( versionMetadata == null )
-        {
-            addActionError( "Artifact not found" );
-            return ERROR;
-        }
-        model = versionMetadata;
-
-        this.mailingLists = model.getMailingLists();
-
-        return SUCCESS;
-    }
-
-    /**
-     * Show the reports tab.
-     */
-    public String reports()
-    {
-        // TODO: hook up reports on project
-
-        return SUCCESS;
-    }
-
-    /**
-     * Show the dependees (other artifacts that depend on this project) tab.
-     */
-    public String dependees()
-    {
-        ProjectVersionMetadata versionMetadata = null;
-        for ( String repoId : getObservableRepos() )
-        {
-            if ( versionMetadata == null )
-            {
-                versionMetadata = metadataResolver.getProjectVersion( repoId, groupId, artifactId, version );
-            }
-        }
-
-        if ( versionMetadata == null )
-        {
-            addActionError( "Artifact not found" );
-            return ERROR;
-        }
-        model = versionMetadata;
-
-        List<ProjectVersionReference> references = new ArrayList<ProjectVersionReference>();
-        // TODO: what if we get duplicates across repositories?
-        for ( String repoId : getObservableRepos() )
-        {
-            // TODO: what about if we want to see this irrespective of version?
-            references.addAll( metadataResolver.getProjectReferences( repoId, groupId, artifactId, version ) );
-        }
-
-        this.dependees = references;
-
-        // TODO: may need to note on the page that references will be incomplete if the other artifacts are not yet stored in the content repository
-        // (especially in the case of pre-population import)
-
-        return SUCCESS;
-    }
-
-    /**
-     * Show the dependencies of this versioned project tab.
-     */
-    public String dependencyTree()
-    {
-        // temporarily use this as we only need the model for the tag to perform, but we should be resolving the
-        // graph here instead
-
-        // TODO: may need to note on the page that tree will be incomplete if the other artifacts are not yet stored in the content repository
-        // (especially in the case of pre-population import)
-
-        return artifact();
-    }
-
-    @Override
-    public void validate()
-    {
-        if ( StringUtils.isBlank( groupId ) )
-        {
-            addActionError( "You must specify a group ID to browse" );
-        }
-
-        if ( StringUtils.isBlank( artifactId ) )
-        {
-            addActionError( "You must specify a artifact ID to browse" );
-        }
-
-        if ( StringUtils.isBlank( version ) )
-        {
-            addActionError( "You must specify a version to browse" );
-        }
-    }
-
-    public ProjectVersionMetadata getModel()
-    {
-        return model;
-    }
-
-    public String getGroupId()
-    {
-        return groupId;
-    }
-
-    public void setGroupId( String groupId )
-    {
-        this.groupId = groupId;
-    }
-
-    public String getArtifactId()
-    {
-        return artifactId;
-    }
-
-    public void setArtifactId( String artifactId )
-    {
-        this.artifactId = artifactId;
-    }
-
-    public String getVersion()
-    {
-        return version;
-    }
-
-    public void setVersion( String version )
-    {
-        this.version = version;
-    }
-
-    public List<MailingList> getMailingLists()
-    {
-        return mailingLists;
-    }
-
-    public List<Dependency> getDependencies()
-    {
-        return dependencies;
-    }
-
-    public List<ProjectVersionReference> getDependees()
-    {
-        return dependees;
-    }
-
-    public String getRepositoryId()
-    {
-        return repositoryId;
-    }
-
-    public void setRepositoryId( String repositoryId )
-    {
-        this.repositoryId = repositoryId;
-    }
-
-    public List<String> getSnapshotVersions()
-    {
-        return snapshotVersions;
-    }
-
-    public MetadataResolver getMetadataResolver()
-    {
-        return metadataResolver;
-    }
+    return getClass().getSimpleName() + "-" + name + "-" + getSeqid() + "-" + tableNameStr;
+  }
 }

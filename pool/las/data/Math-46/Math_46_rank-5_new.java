@@ -1,187 +1,122 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package com.fasterxml.jackson.databind.jsontype.impl;
 
-package org.apache.flink.streaming.examples.windowing;
+import java.io.IOException;
 
-import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.java.tuple.Tuple4;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.source.SourceFunction;
-import org.apache.flink.streaming.api.windowing.deltafunction.DeltaFunction;
-import org.apache.flink.streaming.api.windowing.helper.Delta;
-import org.apache.flink.streaming.api.windowing.helper.Time;
-import org.apache.flink.streaming.api.windowing.helper.Timestamp;
-
-import java.util.Arrays;
-import java.util.Random;
+import com.fasterxml.jackson.annotation.JsonTypeInfo.As;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.util.JsonParserSequence;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
 
 /**
- * An example of grouped stream windowing where different eviction and trigger
- * policies can be used. A source fetches events from cars every 1 sec
- * containing their id, their current speed (kmh), overall elapsed distance (m)
- * and a timestamp. The streaming example triggers the top speed of each car
- * every x meters elapsed for the last y seconds.
+ * Type deserializer used with {@link As#WRAPPER_OBJECT}
+ * inclusion mechanism. Simple since JSON structure used is always
+ * the same, regardless of structure used for actual value: wrapping
+ * is done using a single-element JSON Object where type id is the key,
+ * and actual object data as the value.
  */
-public class TopSpeedWindowing {
+public class AsWrapperTypeDeserializer
+    extends TypeDeserializerBase
+    implements java.io.Serializable
+{
+    private static final long serialVersionUID = 5345570420394408290L;
 
-	private static final int NUM_CAR_EVENTS = 100;
+    public AsWrapperTypeDeserializer(JavaType bt, TypeIdResolver idRes,
+            String typePropertyName, boolean typeIdVisible, Class<?> defaultImpl)
+    {
+        super(bt, idRes, typePropertyName, typeIdVisible, defaultImpl);
+    }
 
-	// *************************************************************************
-	// PROGRAM
-	// *************************************************************************
+    protected AsWrapperTypeDeserializer(AsWrapperTypeDeserializer src, BeanProperty property) {
+        super(src, property);
+    }
+    
+    @Override
+    public TypeDeserializer forProperty(BeanProperty prop) {
+        return (prop == _property) ? this : new AsWrapperTypeDeserializer(this, prop);
+    }
+    
+    @Override
+    public As getTypeInclusion() { return As.WRAPPER_OBJECT; }
 
-	public static void main(String[] args) throws Exception {
+    /**
+     * Deserializing type id enclosed using WRAPPER_OBJECT style is straightforward
+     */
+    @Override
+    public Object deserializeTypedFromObject(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }    
 
-		if (!parseParameters(args)) {
-			return;
-		}
+    @Override
+    public Object deserializeTypedFromArray(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }
 
-		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+    @Override
+    public Object deserializeTypedFromScalar(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }
 
-		@SuppressWarnings({"rawtypes", "serial"})
-		DataStream<Tuple4<Integer, Integer, Double, Long>> carData;
-		if (fileInput) {
-			carData = env.readTextFile(inputPath).map(new ParseCarData());
-		} else {
-			carData = env.addSource(CarSource.create(numOfCars));
-		}
-		DataStream<Tuple4<Integer, Integer, Double, Long>> topSpeeds = carData.groupBy(0)
-				.window(Time.of(evictionSec, new CarTimestamp()))
-				.every(Delta.of(triggerMeters,
-						new DeltaFunction<Tuple4<Integer, Integer, Double, Long>>() {
-							private static final long serialVersionUID = 1L;
+    @Override
+    public Object deserializeTypedFromAny(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }
+    
+    /*
+    /***************************************************************
+    /* Internal methods
+    /***************************************************************
+     */
 
+    /**
+     * Method that handles type information wrapper, locates actual
+     * subtype deserializer to use, and calls it to do actual
+     * deserialization.
+     */
+    @SuppressWarnings("resource")
+    private final Object _deserialize(JsonParser jp, DeserializationContext ctxt) throws IOException
+    {
+        // 02-Aug-2013, tatu: May need to use native type ids
+        if (jp.canReadTypeId()) {
+            Object typeId = jp.getTypeId();
+            if (typeId != null) {
+                return _deserializeWithNativeTypeId(jp, ctxt, typeId);
+            }
+        }
 
-							@Override
-							public double getDelta(
-									Tuple4<Integer, Integer, Double, Long> oldDataPoint,
-									Tuple4<Integer, Integer, Double, Long> newDataPoint) {
-								return newDataPoint.f2 - oldDataPoint.f2;
-							}
-						}, new Tuple4<Integer, Integer, Double, Long>(0, 0, 0d, 0l))).local().maxBy(1).flatten();
-		if (fileOutput) {
-			topSpeeds.writeAsText(outputPath);
-		} else {
-			topSpeeds.print();
-		}
+        // first, sanity checks
+        if (jp.getCurrentToken() != JsonToken.START_OBJECT) {
+            throw ctxt.wrongTokenException(jp, JsonToken.START_OBJECT,
+                    "need JSON Object to contain As.WRAPPER_OBJECT type information for class "+baseTypeName());
+        }
+        // should always get field name, but just in case...
+        if (jp.nextToken() != JsonToken.FIELD_NAME) {
+            throw ctxt.wrongTokenException(jp, JsonToken.FIELD_NAME,
+                    "need JSON String that contains type id (for subtype of "+baseTypeName()+")");
+        }
+        final String typeId = jp.getText();
+        JsonDeserializer<Object> deser = _findDeserializer(ctxt, typeId);
+        jp.nextToken();
 
-		env.execute("CarTopSpeedWindowingExample");
-	}
-
-	// *************************************************************************
-	// USER FUNCTIONS
-	// *************************************************************************
-
-	private static class CarSource implements SourceFunction<Tuple4<Integer, Integer, Double, Long>> {
-
-		private static final long serialVersionUID = 1L;
-		private Integer[] speeds;
-		private Double[] distances;
-
-		private Random rand = new Random();
-
-		private volatile boolean isRunning = true;
-		private int counter;
-
-		private CarSource(int numOfCars) {
-			speeds = new Integer[numOfCars];
-			distances = new Double[numOfCars];
-			Arrays.fill(speeds, 50);
-			Arrays.fill(distances, 0d);
-		}
-
-		public static CarSource create(int cars) {
-			return new CarSource(cars);
-		}
-
-		@Override
-		public void run(SourceContext<Tuple4<Integer, Integer, Double, Long>> ctx) throws Exception {
-
-			while (isRunning && counter < NUM_CAR_EVENTS) {
-				Thread.sleep(100);
-				for (int carId = 0; carId < speeds.length; carId++) {
-					if (rand.nextBoolean()) {
-						speeds[carId] = Math.min(100, speeds[carId] + 5);
-					} else {
-						speeds[carId] = Math.max(0, speeds[carId] - 5);
-					}
-					distances[carId] += speeds[carId] / 3.6d;
-					Tuple4<Integer, Integer, Double, Long> record = new Tuple4<Integer, Integer, Double, Long>(carId,
-							speeds[carId], distances[carId], System.currentTimeMillis());
-					ctx.collect(record);
-					counter++;
-				}
-			}
-		}
-
-		@Override
-		public void cancel() {
-			isRunning = false;
-		}
-	}
-
-	private static class ParseCarData extends
-			RichMapFunction<String, Tuple4<Integer, Integer, Double, Long>> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public Tuple4<Integer, Integer, Double, Long> map(String record) {
-			String rawData = record.substring(1, record.length() - 1);
-			String[] data = rawData.split(",");
-			return new Tuple4<Integer, Integer, Double, Long>(Integer.valueOf(data[0]),
-					Integer.valueOf(data[1]), Double.valueOf(data[2]), Long.valueOf(data[3]));
-		}
-	}
-
-	private static class CarTimestamp implements Timestamp<Tuple4<Integer, Integer, Double, Long>> {
-		private static final long serialVersionUID = 1L;
-
-		@Override
-		public long getTimestamp(Tuple4<Integer, Integer, Double, Long> value) {
-			return value.f3;
-		}
-	}
-
-	// *************************************************************************
-	// UTIL METHODS
-	// *************************************************************************
-
-	private static boolean fileInput = false;
-	private static boolean fileOutput = false;
-	private static int numOfCars = 2;
-	private static int evictionSec = 10;
-	private static double triggerMeters = 50;
-	private static String inputPath;
-	private static String outputPath;
-
-	private static boolean parseParameters(String[] args) {
-
-		if (args.length > 0) {
-			if (args.length == 2) {
-				fileInput = true;
-				fileOutput = true;
-				inputPath = args[0];
-				outputPath = args[1];
-			} else {
-				System.err.println("Usage: TopSpeedWindowingExample <input path> <output path>");
-				return false;
-			}
-		}
-		return true;
-	}
+        // Minor complication: we may need to merge type id in?
+        if (_typeIdVisible && jp.getCurrentToken() == JsonToken.START_OBJECT) {
+            // but what if there's nowhere to add it in? Error? Or skip? For now, skip.
+            TokenBuffer tb = new TokenBuffer(null, false);
+            tb.writeStartObject(); // recreate START_OBJECT
+            tb.writeFieldName(_typePropertyName);
+            tb.writeString(typeId);
+            jp = JsonParserSequence.createFlattened(tb.asParser(jp), jp);
+            jp.nextToken();
+        }
+        
+        Object value = deser.deserialize(jp, ctxt);
+        // And then need the closing END_OBJECT
+        if (jp.nextToken() != JsonToken.END_OBJECT) {
+            throw ctxt.wrongTokenException(jp, JsonToken.END_OBJECT,
+                    "expected closing END_OBJECT after type information and deserialized value");
+        }
+        return value;
+    }
 }

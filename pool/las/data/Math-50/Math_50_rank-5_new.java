@@ -1,443 +1,907 @@
+package com.fasterxml.jackson.databind.deser;
+
+import java.util.*;
+
+import com.fasterxml.jackson.annotation.*;
+
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder;
+import com.fasterxml.jackson.databind.cfg.DeserializerFactoryConfig;
+import com.fasterxml.jackson.databind.cfg.ConfigOverride;
+import com.fasterxml.jackson.databind.deser.impl.*;
+import com.fasterxml.jackson.databind.deser.std.ThrowableDeserializer;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.SimpleBeanPropertyDefinition;
+
 /**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Concrete deserializer factory class that adds full Bean deserializer
+ * construction logic using class introspection.
+ * Note that factories specifically do not implement any form of caching:
+ * aside from configuration they are stateless; caching is implemented
+ * by other components.
+ *<p>
+ * Instances of this class are fully immutable as all configuration is
+ * done by using "fluent factories" (methods that construct new factory
+ * instances with different configuration, instead of modifying instance).
  */
+public class BeanDeserializerFactory
+    extends BasicDeserializerFactory
+    implements java.io.Serializable // since 2.1
+{
+    private static final long serialVersionUID = 1;
 
-package org.apache.hadoop.hive.metastore;
+    /**
+     * Signature of <b>Throwable.initCause</b> method.
+     */
+    private final static Class<?>[] INIT_CAUSE_PARAMS = new Class<?>[] { Throwable.class };
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Enumeration;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Properties;
-import java.util.Map.Entry;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+    private final static Class<?>[] NO_VIEWS = new Class<?>[0];
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.metastore.api.Constants;
-import org.apache.hadoop.hive.metastore.api.FieldSchema;
-import org.apache.hadoop.hive.metastore.api.MetaException;
-import org.apache.hadoop.hive.metastore.api.SerDeInfo;
-import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
-import org.apache.hadoop.hive.metastore.api.Table;
-import org.apache.hadoop.hive.serde.SerDe;
-import org.apache.hadoop.hive.serde.SerDeUtils;
-import org.apache.hadoop.util.StringUtils;
-
-public class MetaStoreUtils {
-
-  protected static final Log LOG = LogFactory.getLog("hive.log");
-
-  public static final String DEFAULT_DATABASE_NAME = "default";
-
-  /**
-   * printStackTrace
-   *
-   * Helper function to print an exception stack trace to the log and not stderr
-   *
-   * @param e the exception
-   *
-   */
-  static public void printStackTrace(Exception e) {
-    for(StackTraceElement s: e.getStackTrace()) {
-      LOG.error(s);
+    /**
+     * Set of well-known "nasty classes", deserialization of which is considered dangerous
+     * and should (and is) prevented by default.
+     *
+     * @since 2.8.9
+     */
+    protected final static Set<String> DEFAULT_NO_DESER_CLASS_NAMES;
+    static {
+        Set<String> s = new HashSet<>();
+        // Courtesy of [https://github.com/kantega/notsoserial]:
+        // (and wrt [databind#1599]
+        s.add("org.apache.commons.collections.functors.InvokerTransformer");
+        s.add("org.apache.commons.collections.functors.InstantiateTransformer");
+        s.add("org.apache.commons.collections4.functors.InvokerTransformer");
+        s.add("org.apache.commons.collections4.functors.InstantiateTransformer");
+        s.add("org.codehaus.groovy.runtime.ConvertedClosure");
+        s.add("org.codehaus.groovy.runtime.MethodClosure");
+        s.add("org.springframework.beans.factory.ObjectFactory");
+        s.add("com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl");
+        s.add("org.apache.xalan.xsltc.trax.TemplatesImpl");
+        DEFAULT_NO_DESER_CLASS_NAMES = Collections.unmodifiableSet(s);
     }
-  }
 
-  public static Table createColumnsetSchema(String name, List<String> columns, List<String> partCols, Configuration conf) throws MetaException {
+    /**
+     * Set of class names of types that are never to be deserialized.
+     *
+     * @since 2.8.9
+     */
+    protected Set<String> _cfgIllegalClassNames = DEFAULT_NO_DESER_CLASS_NAMES;
 
-    if (columns == null) {
-      throw new MetaException("columns not specified for table " + name);
+    /*
+    /**********************************************************
+    /* Life-cycle
+    /**********************************************************
+     */
+    
+    /**
+     * Globally shareable thread-safe instance which has no additional custom deserializers
+     * registered
+     */
+    public final static BeanDeserializerFactory instance = new BeanDeserializerFactory(
+            new DeserializerFactoryConfig());
+
+    public BeanDeserializerFactory(DeserializerFactoryConfig config) {
+        super(config);
     }
     
-    Table tTable = new Table();
-    tTable.setTableName(name);
-    tTable.setSd(new StorageDescriptor());
-    tTable.getSd().setSerdeInfo(new SerDeInfo());
-    tTable.getSd().getSerdeInfo().setSerializationLib(org.apache.hadoop.hive.serde.simple_meta.MetadataTypedColumnsetSerDe.class.getName());
-    tTable.getSd().getSerdeInfo().setSerializationFormat("1");
+    /**
+     * Method used by module registration functionality, to construct a new bean
+     * deserializer factory
+     * with different configuration settings.
+     */
+    @Override
+    public DeserializerFactory withConfig(DeserializerFactoryConfig config)
+    {
+        if (_factoryConfig == config) {
+            return this;
+        }
+        /* 22-Nov-2010, tatu: Handling of subtypes is tricky if we do immutable-with-copy-ctor;
+         *    and we pretty much have to here either choose between losing subtype instance
+         *    when registering additional deserializers, or losing deserializers.
+         *    Instead, let's actually just throw an error if this method is called when subtype
+         *    has not properly overridden this method; this to indicate problem as soon as possible.
+         */
+        if (getClass() != BeanDeserializerFactory.class) {
+            throw new IllegalStateException("Subtype of BeanDeserializerFactory ("+getClass().getName()
+                    +") has not properly overridden method 'withAdditionalDeserializers': can not instantiate subtype with "
+                    +"additional deserializer definitions");
+        }
+        return new BeanDeserializerFactory(config);
+    }
     
-    List<FieldSchema>  fields = new ArrayList<FieldSchema>();
-    tTable.getSd().setCols(fields);
-    for (String col: columns) {
-      FieldSchema field = new FieldSchema(col, Constants.STRING_TYPE_NAME, "default string type");
-      fields.add(field);
-    }
+    /*
+    /**********************************************************
+    /* DeserializerFactory API implementation
+    /**********************************************************
+     */
 
-    tTable.setPartitionKeys(new ArrayList<FieldSchema>());
-    for (String partCol : partCols) {
-      FieldSchema part = new FieldSchema();
-      part.setName(partCol);
-      part.setType(Constants.STRING_TYPE_NAME); // default partition key
-      tTable.getPartitionKeys().add(part);
-    }
-    // not sure why these are needed
-    tTable.getSd().getSerdeInfo().setSerializationLib(org.apache.hadoop.hive.serde.simple_meta.MetadataTypedColumnsetSerDe.shortName());
-    tTable.getSd().setNumBuckets(-1);
-    return tTable;
-  }
-
-
-  /**
-   * recursiveDelete
-   *
-   * just recursively deletes a dir - you'd think Java would have something to do this??
-   *
-   * @param f - the file/dir to delete
-   * @exception IOException propogate f.delete() exceptions
-   *
-   */
-  static public void recursiveDelete(File f) throws IOException {
-    if(f.isDirectory()) {
-      File fs [] = f.listFiles();
-      for(File subf: fs) {
-        recursiveDelete(subf);
-      }
-    }
-    if(!f.delete()) {
-      throw new IOException("could not delete: " + f.getPath());
-    }
-  }
-
-
-  /**
-   * getSerDe
-   *
-   * Get the SerDe for a table given its name and properties.
-   *
-   * @param name the name of the table
-   * @param conf - hadoop config
-   * @param p - the properties to use to instantiate the schema
-   * @return the SerDe
-   * @exception MetaException if any problems instantiating the serde
-   *
-   * todo - this should move somewhere into serde.jar
-   *
-   */
-  static public SerDe getSerDe(Configuration conf, Properties schema) throws MetaException  {
-    String lib = schema.getProperty(org.apache.hadoop.hive.serde.Constants.SERIALIZATION_LIB);
-    try {
-      SerDe serDe = SerDeUtils.lookupSerDe(lib);
-      ((SerDe)serDe).initialize(conf, schema);
-      return serDe;
-    } catch (Exception e) {
-      LOG.error("error in initSerDe: " + e.getClass().getName() + " " + e.getMessage());
-      MetaStoreUtils.printStackTrace(e);
-      throw new MetaException(e.getClass().getName() + " " + e.getMessage());
-    }
-  }
-
-  /**
-   * getSerDe
-   *
-   * Get the SerDe for a table given its name and properties.
-   *
-   * @param name the name of the table
-   * @param conf - hadoop config
-   * @param p - SerDe info
-   * @return the SerDe
-   * @exception MetaException if any problems instantiating the serde
-   *
-   * todo - this should move somewhere into serde.jar
-   *
-   */
-  static public SerDe getSerDe(Configuration conf, org.apache.hadoop.hive.metastore.api.Table table) throws MetaException  {
-    String lib = table.getSd().getSerdeInfo().getSerializationLib();
-    try {
-      SerDe serDe = SerDeUtils.lookupSerDe(lib);
-      ((SerDe)serDe).initialize(conf, MetaStoreUtils.getSchema(table));
-      return serDe;
-    } catch (Exception e) {
-      LOG.error("error in initSerDe: " + e.getClass().getName() + " " + e.getMessage());
-      MetaStoreUtils.printStackTrace(e);
-      throw new MetaException(e.getClass().getName() + " " + e.getMessage());
-    }
-  }
-  
-  static public void deleteWHDirectory(Path path,Configuration conf, boolean use_trash) throws MetaException {
-
-    try {
-      if(!path.getFileSystem(conf).exists(path)) {
-        LOG.warn("drop data called on table/partition with no directory: " + path);
-        return;
-      }
-
-      if(use_trash) {
-
-        int count = 0;
-        Path newPath = new Path("/Trash/Current" + path.getParent().toUri().getPath());
-
-        if(path.getFileSystem(conf).exists(newPath) == false) {
-          path.getFileSystem(conf).mkdirs(newPath);
+    /**
+     * Method that {@link DeserializerCache}s call to create a new
+     * deserializer for types other than Collections, Maps, arrays and
+     * enums.
+     */
+    @Override
+    public JsonDeserializer<Object> createBeanDeserializer(DeserializationContext ctxt,
+            JavaType type, BeanDescription beanDesc)
+        throws JsonMappingException
+    {
+        final DeserializationConfig config = ctxt.getConfig();
+        // We may also have custom overrides:
+        JsonDeserializer<Object> custom = _findCustomBeanDeserializer(type, config, beanDesc);
+        if (custom != null) {
+            return custom;
+        }
+        /* One more thing to check: do we have an exception type
+         * (Throwable or its sub-classes)? If so, need slightly
+         * different handling.
+         */
+        if (type.isThrowable()) {
+            return buildThrowableDeserializer(ctxt, type, beanDesc);
+        }
+        /* Or, for abstract types, may have alternate means for resolution
+         * (defaulting, materialization)
+         */
+        // 29-Nov-2015, tatu: Also, filter out calls to primitive types, they are
+        //    not something we could materialize anything for
+        if (type.isAbstract() && !type.isPrimitive() && !type.isEnumType()) {
+            // Let's make it possible to materialize abstract types.
+            JavaType concreteType = materializeAbstractType(ctxt, type, beanDesc);
+            if (concreteType != null) {
+                /* important: introspect actual implementation (abstract class or
+                 * interface doesn't have constructors, for one)
+                 */
+                beanDesc = config.introspect(concreteType);
+                return buildBeanDeserializer(ctxt, concreteType, beanDesc);
+            }
+        }
+        // Otherwise, may want to check handlers for standard types, from superclass:
+        @SuppressWarnings("unchecked")
+        JsonDeserializer<Object> deser = (JsonDeserializer<Object>) findStdDeserializer(ctxt, type, beanDesc);
+        if (deser != null) {
+            return deser;
         }
 
-        do {
-          newPath = new Path("/Trash/Current" + path.toUri().getPath() + "." + count);
-          if(path.getFileSystem(conf).exists(newPath)) {
-            count++;
-            continue;
-          }
-          if(path.getFileSystem(conf).rename(path, newPath)) {
-            break;
-          }
-        } while(++count < 50) ;
-        if(count >= 50) {
-          throw new MetaException("Rename failed due to maxing out retries");
+        // Otherwise: could the class be a Bean class? If not, bail out
+        if (!isPotentialBeanType(type.getRawClass())) {
+            return null;
         }
-      } else {
-        // directly delete it
-        path.getFileSystem(conf).delete(path, true);
-      }
-    } catch(IOException e) {
-      LOG.error("Got exception trying to delete data dir: " + e);
-      throw new MetaException(e.getMessage());
-    } catch(MetaException e) {
-      LOG.error("Got exception trying to delete data dir: " + e);
-      throw e;
+        // For checks like [databind#1599]
+        checkIllegalTypes(ctxt, type, beanDesc);
+        // Use generic bean introspection to build deserializer
+        return buildBeanDeserializer(ctxt, type, beanDesc);
     }
-  }
 
-
-  /**
-   * validateTableName
-   *
-   * Checks the name conforms to our standars which are: "[a-zA-z-_.0-9]+".
-   * checks this is just characters and numbers and _ and . and -
-   *
-   * @param tableName the name to validate
-   * @return none
-   * @exception MetaException if it doesn't match the pattern.
-   */
-  static public boolean validateName(String name) {
-    Pattern tpat = Pattern.compile("[\\w_]+");
-    Matcher m = tpat.matcher(name);
-    if(m.matches()) {
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Change from old to new format properties of a schema file
-   *
-   * @param p - a schema
-   * @return the modified schema
-   *
-   */
-  public static Properties hive1Tohive3ClassNames(Properties p) {
-    for(Enumeration<?> e = p.propertyNames(); e.hasMoreElements() ; ) {
-      String key = (String)e.nextElement();
-      String oldName = p.getProperty(key);
-
-      oldName = oldName.replace("com.facebook.infrastructure.tprofiles","com.facebook.serde.tprofiles");
-
-      oldName = oldName.replace("com.facebook.infrastructure.hive_context","com.facebook.serde.hive_context");
-
-      oldName = oldName.replace("com.facebook.thrift.hive.MetadataTypedColumnsetSerDe",org.apache.hadoop.hive.serde.simple_meta.MetadataTypedColumnsetSerDe.class.getName());
-
-      // columnset serde
-      oldName = oldName.replace("com.facebook.thrift.hive.columnsetSerDe",org.apache.hadoop.hive.serde.thrift.columnsetSerDe.class.getName());
-
-      // thrift serde
-      oldName = oldName.replace("com.facebook.thrift.hive.ThriftHiveSerDe",org.apache.hadoop.hive.serde.thrift.ThriftSerDe.class.getName());
-
-      p.setProperty(key,oldName);
-    }
-    return p;
-  }
-
-  public static String getListType(String t) {
-    return "array<" + t + ">";
-  }
-
-  public static String getMapType(String k, String v) {
-    return "map<" + k +"," + v + ">";
-  }
-
-  public static Table getTable(Properties schema) {
-    Table t = new Table();
-    t.setSd(new StorageDescriptor());
-    t.setTableName(schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_NAME));
-    t.getSd().setLocation(schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_LOCATION));
-    t.getSd().setInputFormat(schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.FILE_INPUT_FORMAT,
-          org.apache.hadoop.mapred.SequenceFileInputFormat.class.getName())); 
-    t.getSd().setOutputFormat(schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.FILE_OUTPUT_FORMAT,
-          org.apache.hadoop.mapred.SequenceFileOutputFormat.class.getName())); 
-    t.setPartitionKeys(new ArrayList<FieldSchema>());
-    t.setDatabase(MetaStoreUtils.DEFAULT_DATABASE_NAME);
-    String part_cols_str = schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_PARTITION_COLUMNS);
-    t.setPartitionKeys(new ArrayList<FieldSchema>());
-    if (part_cols_str != null && (part_cols_str.trim().length() != 0)) {
-      String [] part_keys = part_cols_str.trim().split("/");
-      for (String key: part_keys) {
-        FieldSchema part = new FieldSchema();
-        part.setName(key);
-        part.setType(Constants.STRING_TYPE_NAME); // default partition key
-        t.getPartitionKeys().add(part);
-      }
-    }
-    t.getSd().setNumBuckets(Integer.parseInt(schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.BUCKET_COUNT, "-1")));
-    String bucketFieldName = schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.BUCKET_FIELD_NAME);
-    t.getSd().setBucketCols(new ArrayList<String>(1));
-    if ((bucketFieldName != null) && (bucketFieldName.trim().length() != 0)) {
-      t.getSd().setBucketCols(new ArrayList<String>(1));
-      t.getSd().getBucketCols().add(bucketFieldName);
+    @Override
+    public JsonDeserializer<Object> createBuilderBasedDeserializer(
+    		DeserializationContext ctxt, JavaType valueType, BeanDescription beanDesc,
+    		Class<?> builderClass)
+        throws JsonMappingException
+    {
+        // First: need a BeanDescription for builder class
+        JavaType builderType = ctxt.constructType(builderClass);
+        BeanDescription builderDesc = ctxt.getConfig().introspectForBuilder(builderType);
+        return buildBuilderBasedDeserializer(ctxt, valueType, builderDesc);
     }
     
-    t.getSd().setSerdeInfo(new SerDeInfo());
-    t.getSd().getSerdeInfo().setName(t.getTableName());
-    t.getSd().getSerdeInfo().setSerializationClass(schema.getProperty(org.apache.hadoop.hive.serde.Constants.SERIALIZATION_CLASS)); 
-    t.getSd().getSerdeInfo().setSerializationFormat(schema.getProperty(org.apache.hadoop.hive.serde.Constants.SERIALIZATION_FORMAT)); 
-    t.getSd().getSerdeInfo().setSerializationLib(schema.getProperty(org.apache.hadoop.hive.serde.Constants.SERIALIZATION_LIB));
-    if(t.getSd().getSerdeInfo().getSerializationClass() == null || (t.getSd().getSerdeInfo().getSerializationClass().length() == 0)) {
-      t.getSd().getSerdeInfo().setSerializationClass(schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_SERDE));
+    /**
+     * Method called by {@link BeanDeserializerFactory} to see if there might be a standard
+     * deserializer registered for given type.
+     */
+    protected JsonDeserializer<?> findStdDeserializer(DeserializationContext ctxt,
+            JavaType type, BeanDescription beanDesc)
+        throws JsonMappingException
+    {
+        // note: we do NOT check for custom deserializers here, caller has already
+        // done that
+        JsonDeserializer<?> deser = findDefaultDeserializer(ctxt, type, beanDesc);
+        // Also: better ensure these are post-processable?
+        if (deser != null) {
+            if (_factoryConfig.hasDeserializerModifiers()) {
+                for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                    deser = mod.modifyDeserializer(ctxt.getConfig(), beanDesc, deser);
+                }
+            }
+        }
+        return deser;
     }
     
-    String colstr = schema.getProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_COLUMNS);
-    List<FieldSchema>  fields = new ArrayList<FieldSchema>();
-    t.getSd().setCols(fields);
-    if(colstr != null) {
-      String[] cols =  colstr.split(",");
-      for (String colName : cols) {
-        FieldSchema col = new FieldSchema(colName, Constants.STRING_TYPE_NAME, "default string type");
-        fields.add(col);
-      }
-    } 
-    
-    if(fields.size() == 0) {
-      fields.add(new FieldSchema("__SERDE__", t.getSd().getSerdeInfo().getSerializationLib(), ""));
-    }
-    
-    // remove all the used up parameters to find out the remaining parameters
-    schema.remove(Constants.META_TABLE_NAME);
-    schema.remove(Constants.META_TABLE_LOCATION);
-    schema.remove(Constants.FILE_INPUT_FORMAT);
-    schema.remove(Constants.FILE_OUTPUT_FORMAT);
-    schema.remove(Constants.META_TABLE_PARTITION_COLUMNS);
-    schema.remove(Constants.BUCKET_COUNT);
-    schema.remove(Constants.BUCKET_FIELD_NAME);
-    schema.remove(Constants.SERIALIZATION_CLASS);
-    schema.remove(Constants.SERIALIZATION_FORMAT);
-    schema.remove(Constants.SERIALIZATION_LIB);
-    schema.remove(Constants.META_TABLE_SERDE);
-    schema.remove(Constants.META_TABLE_COLUMNS);
-    
-    // add the remaining unknown parameters to the table's parameters
-    t.setParameters(new HashMap<String, String>());
-    for(Entry<Object, Object> e : schema.entrySet()) {
-     t.getParameters().put(e.getKey().toString(), e.getValue().toString()); 
+    protected JavaType materializeAbstractType(DeserializationContext ctxt,
+            JavaType type, BeanDescription beanDesc)
+        throws JsonMappingException
+    {
+        // May have multiple resolvers, call in precedence order until one returns non-null
+        for (AbstractTypeResolver r : _factoryConfig.abstractTypeResolvers()) {
+            JavaType concrete = r.resolveAbstractType(ctxt.getConfig(), beanDesc);
+            if (concrete != null) {
+                return concrete;
+            }
+        }
+        return null;
     }
 
-    return t;
-  }
+    /*
+    /**********************************************************
+    /* Public construction method beyond DeserializerFactory API:
+    /* can be called from outside as well as overridden by
+    /* sub-classes
+    /**********************************************************
+     */
 
-  public static Properties getSchema(org.apache.hadoop.hive.metastore.api.Table tbl) {
-    Properties schema = new Properties();
-    String inputFormat = tbl.getSd().getInputFormat();
-    if(inputFormat == null || inputFormat.length() == 0) {
-      inputFormat = org.apache.hadoop.mapred.SequenceFileInputFormat.class.getName();
-    }
-    schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.FILE_INPUT_FORMAT, inputFormat);
-    String outputFormat = tbl.getSd().getOutputFormat();
-    if(outputFormat == null || outputFormat.length() == 0) {
-      outputFormat = org.apache.hadoop.mapred.SequenceFileOutputFormat.class.getName();
-    }
-    schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.FILE_OUTPUT_FORMAT, outputFormat);
-    schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_NAME, tbl.getTableName());
-    if(tbl.getSd().getLocation() != null) {
-      schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_LOCATION, tbl.getSd().getLocation());
-    }
-    schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.BUCKET_COUNT, Integer.toString(tbl.getSd().getNumBuckets()));
-    if (tbl.getSd().getBucketCols().size() > 0) {
-      schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.BUCKET_FIELD_NAME, tbl.getSd().getBucketCols().get(0));
-    }
-    if(tbl.getSd().getSerdeInfo().getSerializationClass() != null) {
-      schema.setProperty(org.apache.hadoop.hive.serde.Constants.SERIALIZATION_CLASS, tbl.getSd().getSerdeInfo().getSerializationClass());
-    }
-    if(tbl.getSd().getSerdeInfo().getSerializationFormat() != null) {
-      schema.setProperty(org.apache.hadoop.hive.serde.Constants.SERIALIZATION_FORMAT, tbl.getSd().getSerdeInfo().getSerializationFormat());
-    }
-    if(tbl.getSd().getSerdeInfo().getSerializationLib() != null) {
-      schema.setProperty(org.apache.hadoop.hive.serde.Constants.SERIALIZATION_LIB, tbl.getSd().getSerdeInfo().getSerializationLib());
-    }
-    StringBuffer buf = new StringBuffer();
-    boolean first = true;
-    for (FieldSchema col: tbl.getSd().getCols()) {
-      if (!first) {
-        buf.append(",");
-      }
-      buf.append(col.getName());
-      first = false;
-    }
-    String cols = buf.toString();
-    schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_COLUMNS, cols);
-    
-    String partString = "";
-    String partStringSep = "";
-    for (FieldSchema partKey : tbl.getPartitionKeys()) {
-      partString = partString.concat(partStringSep);
-      partString = partString.concat(partKey.getName());
-      if(partStringSep.length() == 0) {
-        partStringSep = "/";
-      }
-    }
-    if(partString.length() > 0) {
-      schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.META_TABLE_PARTITION_COLUMNS, partString);
-    }
-    
-    //TODO:pc field_to_dimension doesn't seem to be used anywhere so skipping for now
-    schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.BUCKET_FIELD_NAME, "");
-    schema.setProperty(org.apache.hadoop.hive.metastore.api.Constants.FIELD_TO_DIMENSION, "");
-    
-    for(Entry<String, String> e: tbl.getParameters().entrySet()) {
-      schema.setProperty(e.getKey(), e.getValue());
-    }
-    
-    return schema;
-  }
-  
-  public static void makeDir(Path path, HiveConf hiveConf) throws MetaException {
-    FileSystem fs;
-    try {
-      fs = path.getFileSystem(hiveConf);
-      if (!fs.exists(path)) {
-        fs.mkdirs(path);
-      }
-    } catch (IOException e) {
-      throw new MetaException("Unable to : " + path);
-    } 
+    /**
+     * Method that is to actually build a bean deserializer instance.
+     * All basic sanity checks have been done to know that what we have
+     * may be a valid bean type, and that there are no default simple
+     * deserializers.
+     */
+    @SuppressWarnings("unchecked")
+    public JsonDeserializer<Object> buildBeanDeserializer(DeserializationContext ctxt,
+            JavaType type, BeanDescription beanDesc)
+        throws JsonMappingException
+    {
+        // First: check what creators we can use, if any
+        ValueInstantiator valueInstantiator;
+        /* 04-Jun-2015, tatu: To work around [databind#636], need to catch the
+         *    issue, defer; this seems like a reasonable good place for now.
+         *   Note, however, that for non-Bean types (Collections, Maps) this
+         *   probably won't work and needs to be added elsewhere.
+         */
+        try {
+            valueInstantiator = findValueInstantiator(ctxt, beanDesc);
+        } catch (NoClassDefFoundError error) {
+            return new ErrorThrowingDeserializer(error);
+        }
+        BeanDeserializerBuilder builder = constructBeanDeserializerBuilder(ctxt, beanDesc);
+        builder.setValueInstantiator(valueInstantiator);
+         // And then setters for deserializing from JSON Object
+        addBeanProps(ctxt, beanDesc, builder);
+        addObjectIdReader(ctxt, beanDesc, builder);
 
-  }
+        // managed/back reference fields/setters need special handling... first part
+        addReferenceProperties(ctxt, beanDesc, builder);
+        addInjectables(ctxt, beanDesc, builder);
+        
+        final DeserializationConfig config = ctxt.getConfig();
+        if (_factoryConfig.hasDeserializerModifiers()) {
+            for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                builder = mod.updateBuilder(config, beanDesc, builder);
+            }
+        }
+        JsonDeserializer<?> deserializer;
 
-  /**
-   * Catches exceptions that can't be handled and bundles them to MetaException
-   * @param e
-   * @throws MetaException
-   */
-  static void logAndThrowMetaException(Exception e) throws MetaException {
-    LOG.error("Got exception: " + e.getClass().getName() + " " + e.getMessage());
-    LOG.error(StringUtils.stringifyException(e));
-    throw new MetaException("Got exception: " + e.getClass().getName() + " " + e.getMessage());
-  }
+        /* 19-Mar-2012, tatu: This check used to be done earlier; but we have to defer
+         *   it a bit to collect information on ObjectIdReader, for example.
+         */
+        if (type.isAbstract() && !valueInstantiator.canInstantiate()) {
+            deserializer = builder.buildAbstract();
+        } else {
+            deserializer = builder.build();
+        }
+
+        // [JACKSON-440]: may have modifier(s) that wants to modify or replace serializer we just built:
+        if (_factoryConfig.hasDeserializerModifiers()) {
+            for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                deserializer = mod.modifyDeserializer(config, beanDesc, deserializer);
+            }
+        }
+        return (JsonDeserializer<Object>) deserializer;
+    }
+    
+    /**
+     * Method for constructing a bean deserializer that uses specified
+     * intermediate Builder for binding data, and construction of the
+     * value instance.
+     * Note that implementation is mostly copied from the regular
+     * BeanDeserializer build method.
+     */
+    @SuppressWarnings("unchecked")
+    protected JsonDeserializer<Object> buildBuilderBasedDeserializer(
+    		DeserializationContext ctxt, JavaType valueType, BeanDescription builderDesc)
+        throws JsonMappingException
+    {
+    	// Creators, anyone? (to create builder itself)
+        ValueInstantiator valueInstantiator = findValueInstantiator(ctxt, builderDesc);
+        final DeserializationConfig config = ctxt.getConfig();
+        BeanDeserializerBuilder builder = constructBeanDeserializerBuilder(ctxt, builderDesc);
+        builder.setValueInstantiator(valueInstantiator);
+         // And then "with methods" for deserializing from JSON Object
+        addBeanProps(ctxt, builderDesc, builder);
+        addObjectIdReader(ctxt, builderDesc, builder);
+        
+        // managed/back reference fields/setters need special handling... first part
+        addReferenceProperties(ctxt, builderDesc, builder);
+        addInjectables(ctxt, builderDesc, builder);
+
+        JsonPOJOBuilder.Value builderConfig = builderDesc.findPOJOBuilderConfig();
+        final String buildMethodName = (builderConfig == null) ?
+                "build" : builderConfig.buildMethodName;
+        
+        // and lastly, find build method to use:
+        AnnotatedMethod buildMethod = builderDesc.findMethod(buildMethodName, null);
+        if (buildMethod != null) { // note: can't yet throw error; may be given build method
+            if (config.canOverrideAccessModifiers()) {
+            	ClassUtil.checkAndFixAccess(buildMethod.getMember(), config.isEnabled(MapperFeature.OVERRIDE_PUBLIC_ACCESS_MODIFIERS));
+            }
+        }
+        builder.setPOJOBuilder(buildMethod, builderConfig);
+        // this may give us more information...
+        if (_factoryConfig.hasDeserializerModifiers()) {
+            for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                builder = mod.updateBuilder(config, builderDesc, builder);
+            }
+        }
+        JsonDeserializer<?> deserializer = builder.buildBuilderBased(
+        		valueType, buildMethodName);
+
+        // [JACKSON-440]: may have modifier(s) that wants to modify or replace serializer we just built:
+        if (_factoryConfig.hasDeserializerModifiers()) {
+            for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                deserializer = mod.modifyDeserializer(config, builderDesc, deserializer);
+            }
+        }
+        return (JsonDeserializer<Object>) deserializer;
+    }
+    
+    protected void addObjectIdReader(DeserializationContext ctxt,
+            BeanDescription beanDesc, BeanDeserializerBuilder builder)
+        throws JsonMappingException
+    {
+        ObjectIdInfo objectIdInfo = beanDesc.getObjectIdInfo();
+        if (objectIdInfo == null) {
+            return;
+        }
+        Class<?> implClass = objectIdInfo.getGeneratorType();
+        JavaType idType;
+        SettableBeanProperty idProp;
+        ObjectIdGenerator<?> gen;
+
+        ObjectIdResolver resolver = ctxt.objectIdResolverInstance(beanDesc.getClassInfo(), objectIdInfo);
+
+        // Just one special case: Property-based generator is trickier
+        if (implClass == ObjectIdGenerators.PropertyGenerator.class) { // most special one, needs extra work
+            PropertyName propName = objectIdInfo.getPropertyName();
+            idProp = builder.findProperty(propName);
+            if (idProp == null) {
+                throw new IllegalArgumentException("Invalid Object Id definition for "
+                        +beanDesc.getBeanClass().getName()+": can not find property with name '"+propName+"'");
+            }
+            idType = idProp.getType();
+            gen = new PropertyBasedObjectIdGenerator(objectIdInfo.getScope());
+        } else {
+            JavaType type = ctxt.constructType(implClass);
+            idType = ctxt.getTypeFactory().findTypeParameters(type, ObjectIdGenerator.class)[0];
+            idProp = null;
+            gen = ctxt.objectIdGeneratorInstance(beanDesc.getClassInfo(), objectIdInfo);
+        }
+        // also: unlike with value deserializers, let's just resolve one we need here
+        JsonDeserializer<?> deser = ctxt.findRootValueDeserializer(idType);
+        builder.setObjectIdReader(ObjectIdReader.construct(idType,
+                objectIdInfo.getPropertyName(), gen, deser, idProp, resolver));
+    }
+    
+    @SuppressWarnings("unchecked")
+    public JsonDeserializer<Object> buildThrowableDeserializer(DeserializationContext ctxt,
+            JavaType type, BeanDescription beanDesc)
+        throws JsonMappingException
+    {
+        final DeserializationConfig config = ctxt.getConfig();
+        // first: construct like a regular bean deserializer...
+        BeanDeserializerBuilder builder = constructBeanDeserializerBuilder(ctxt, beanDesc);
+        builder.setValueInstantiator(findValueInstantiator(ctxt, beanDesc));
+
+        addBeanProps(ctxt, beanDesc, builder);
+        // (and assume there won't be any back references)
+
+        // But then let's decorate things a bit
+        /* To resolve [JACKSON-95], need to add "initCause" as setter
+         * for exceptions (sub-classes of Throwable).
+         */
+        AnnotatedMethod am = beanDesc.findMethod("initCause", INIT_CAUSE_PARAMS);
+        if (am != null) { // should never be null
+            SimpleBeanPropertyDefinition propDef = SimpleBeanPropertyDefinition.construct(ctxt.getConfig(), am,
+                    new PropertyName("cause"));
+            SettableBeanProperty prop = constructSettableProperty(ctxt, beanDesc, propDef,
+                    am.getParameterType(0));
+            if (prop != null) {
+                /* 21-Aug-2011, tatus: We may actually have found 'cause' property
+                 *   to set... but let's replace it just in case,
+                 *   otherwise can end up with odd errors.
+                 */
+                builder.addOrReplaceProperty(prop, true);
+            }
+        }
+
+        // And also need to ignore "localizedMessage"
+        builder.addIgnorable("localizedMessage");
+        // Java 7 also added "getSuppressed", skip if we have such data:
+        builder.addIgnorable("suppressed");
+        /* As well as "message": it will be passed via constructor,
+         * as there's no 'setMessage()' method
+        */
+        builder.addIgnorable("message");
+
+        // update builder now that all information is in?
+        if (_factoryConfig.hasDeserializerModifiers()) {
+            for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                builder = mod.updateBuilder(config, beanDesc, builder);
+            }
+        }
+        JsonDeserializer<?> deserializer = builder.build();
+        
+        /* At this point it ought to be a BeanDeserializer; if not, must assume
+         * it's some other thing that can handle deserialization ok...
+         */
+        if (deserializer instanceof BeanDeserializer) {
+            deserializer = new ThrowableDeserializer((BeanDeserializer) deserializer);
+        }
+
+        // may have modifier(s) that wants to modify or replace serializer we just built:
+        if (_factoryConfig.hasDeserializerModifiers()) {
+            for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                deserializer = mod.modifyDeserializer(config, beanDesc, deserializer);
+            }
+        }
+        return (JsonDeserializer<Object>) deserializer;
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods for Bean deserializer construction,
+    /* overridable by sub-classes
+    /**********************************************************
+     */
+
+    /**
+     * Overridable method that constructs a {@link BeanDeserializerBuilder}
+     * which is used to accumulate information needed to create deserializer
+     * instance.
+     */
+    protected BeanDeserializerBuilder constructBeanDeserializerBuilder(DeserializationContext ctxt,
+            BeanDescription beanDesc) {
+        return new BeanDeserializerBuilder(beanDesc, ctxt.getConfig());
+    }
+    
+    /**
+     * Method called to figure out settable properties for the
+     * bean deserializer to use.
+     *<p>
+     * Note: designed to be overridable, and effort is made to keep interface
+     * similar between versions.
+     */
+    protected void addBeanProps(DeserializationContext ctxt,
+            BeanDescription beanDesc, BeanDeserializerBuilder builder)
+        throws JsonMappingException
+    {
+        final boolean isConcrete = !beanDesc.getType().isAbstract();
+        final SettableBeanProperty[] creatorProps = isConcrete
+                ? builder.getValueInstantiator().getFromObjectArguments(ctxt.getConfig())
+                : null;
+        final boolean hasCreatorProps = (creatorProps != null);
+        
+        // 01-May-2016, tatu: Which base type to use here gets tricky, since
+        //   it may often make most sense to use general type for overrides,
+        //   but what we have here may be more specific impl type. But for now
+        //   just use it as is.
+        JsonIgnoreProperties.Value ignorals = ctxt.getConfig()
+                .getDefaultPropertyIgnorals(beanDesc.getBeanClass(),
+                        beanDesc.getClassInfo());
+        Set<String> ignored;
+
+        if (ignorals != null) {
+            boolean ignoreAny = ignorals.getIgnoreUnknown();
+            builder.setIgnoreUnknownProperties(ignoreAny);
+            // Or explicit/implicit definitions?
+            ignored = ignorals.getIgnored();
+            for (String propName : ignored) {
+                builder.addIgnorable(propName);
+            }
+        } else {
+            ignored = Collections.emptySet();
+        }
+
+        // Also, do we have a fallback "any" setter?
+        AnnotatedMethod anySetterMethod = beanDesc.findAnySetter();
+        AnnotatedMember anySetterField = null;
+        if (anySetterMethod != null) {
+            builder.setAnySetter(constructAnySetter(ctxt, beanDesc, anySetterMethod));
+        }
+        else {
+        	anySetterField = beanDesc.findAnySetterField();
+        	if(anySetterField != null) {
+        		builder.setAnySetter(constructAnySetter(ctxt, beanDesc, anySetterField));
+        	}
+        }
+        // NOTE: we do NOT add @JsonIgnore'd properties into blocked ones if there's any-setter
+        // Implicit ones via @JsonIgnore and equivalent?
+        if (anySetterMethod == null && anySetterField == null) {
+            Collection<String> ignored2 = beanDesc.getIgnoredPropertyNames();
+            if (ignored2 != null) {
+                for (String propName : ignored2) {
+                    // allow ignoral of similarly named JSON property, but do not force;
+                    // latter means NOT adding this to 'ignored':
+                    builder.addIgnorable(propName);
+                }
+            }
+        }
+        final boolean useGettersAsSetters = ctxt.isEnabled(MapperFeature.USE_GETTERS_AS_SETTERS)
+                && ctxt.isEnabled(MapperFeature.AUTO_DETECT_GETTERS);
+
+        // Ok: let's then filter out property definitions
+        List<BeanPropertyDefinition> propDefs = filterBeanProps(ctxt,
+                beanDesc, builder, beanDesc.findProperties(), ignored);
+
+        // After which we can let custom code change the set
+        if (_factoryConfig.hasDeserializerModifiers()) {
+            for (BeanDeserializerModifier mod : _factoryConfig.deserializerModifiers()) {
+                propDefs = mod.updateProperties(ctxt.getConfig(), beanDesc, propDefs);
+            }
+        }
+        
+        // At which point we still have all kinds of properties; not all with mutators:
+        for (BeanPropertyDefinition propDef : propDefs) {
+            SettableBeanProperty prop = null;
+            /* 18-Oct-2013, tatu: Although constructor parameters have highest precedence,
+             *   we need to do linkage (as per [databind#318]), and so need to start with
+             *   other types, and only then create constructor parameter, if any.
+             */
+            if (propDef.hasSetter()) {
+                JavaType propertyType = propDef.getSetter().getParameterType(0);
+                prop = constructSettableProperty(ctxt, beanDesc, propDef, propertyType);
+            } else if (propDef.hasField()) {
+                JavaType propertyType = propDef.getField().getType();
+                prop = constructSettableProperty(ctxt, beanDesc, propDef, propertyType);
+            } else if (useGettersAsSetters && propDef.hasGetter()) {
+                /* May also need to consider getters
+                 * for Map/Collection properties; but with lowest precedence
+                 */
+                AnnotatedMethod getter = propDef.getGetter();
+                // should only consider Collections and Maps, for now?
+                Class<?> rawPropertyType = getter.getRawType();
+                if (Collection.class.isAssignableFrom(rawPropertyType)
+                        || Map.class.isAssignableFrom(rawPropertyType)) {
+                    prop = constructSetterlessProperty(ctxt, beanDesc, propDef);
+                }
+            }
+            // 25-Sep-2014, tatu: No point in finding constructor parameters for abstract types
+            //   (since they are never used anyway)
+            if (hasCreatorProps && propDef.hasConstructorParameter()) {
+                /* If property is passed via constructor parameter, we must
+                 * handle things in special way. Not sure what is the most optimal way...
+                 * for now, let's just call a (new) method in builder, which does nothing.
+                 */
+                // but let's call a method just to allow custom builders to be aware...
+                final String name = propDef.getName();
+                CreatorProperty cprop = null;
+                if (creatorProps != null) {
+                    for (SettableBeanProperty cp : creatorProps) {
+                        if (name.equals(cp.getName()) && (cp instanceof CreatorProperty)) {
+                            cprop = (CreatorProperty) cp;
+                            break;
+                        }
+                    }
+                }
+                if (cprop == null) {
+                    List<String> n = new ArrayList<>();
+                    for (SettableBeanProperty cp : creatorProps) {
+                        n.add(cp.getName());
+                    }
+                    ctxt.reportBadPropertyDefinition(beanDesc, propDef,
+                            "Could not find creator property with name '%s' (known Creator properties: %s)",
+                            name, n);
+                    continue;
+                }
+                if (prop != null) {
+                    cprop.setFallbackSetter(prop);
+                }
+                prop = cprop;
+                builder.addCreatorProperty(cprop);
+                continue;
+            }
+
+            if (prop != null) {
+                Class<?>[] views = propDef.findViews();
+                if (views == null) {
+                    // one more twist: if default inclusion disabled, need to force empty set of views
+                    if (!ctxt.isEnabled(MapperFeature.DEFAULT_VIEW_INCLUSION)) {
+                        views = NO_VIEWS;
+                    }
+                }
+                // one more thing before adding to builder: copy any metadata
+                prop.setViews(views);
+                builder.addProperty(prop);
+            }
+        }
+    }
+    
+    /**
+     * Helper method called to filter out explicit ignored properties,
+     * as well as properties that have "ignorable types".
+     * Note that this will not remove properties that have no
+     * setters.
+     */
+    protected List<BeanPropertyDefinition> filterBeanProps(DeserializationContext ctxt,
+            BeanDescription beanDesc, BeanDeserializerBuilder builder,
+            List<BeanPropertyDefinition> propDefsIn,
+            Set<String> ignored)
+        throws JsonMappingException
+    {
+        ArrayList<BeanPropertyDefinition> result = new ArrayList<BeanPropertyDefinition>(
+                Math.max(4, propDefsIn.size()));
+        HashMap<Class<?>,Boolean> ignoredTypes = new HashMap<Class<?>,Boolean>();
+        // These are all valid setters, but we do need to introspect bit more
+        for (BeanPropertyDefinition property : propDefsIn) {
+            String name = property.getName();
+            if (ignored.contains(name)) { // explicit ignoral using @JsonIgnoreProperties needs to block entries
+                continue;
+            }
+            if (!property.hasConstructorParameter()) { // never skip constructor params
+                Class<?> rawPropertyType = null;
+                if (property.hasSetter()) {
+                    rawPropertyType = property.getSetter().getRawParameterType(0);
+                } else if (property.hasField()) {
+                    rawPropertyType = property.getField().getRawType();
+                }
+
+                // Some types are declared as ignorable as well
+                if ((rawPropertyType != null)
+                        && isIgnorableType(ctxt.getConfig(), beanDesc, rawPropertyType, ignoredTypes)) {
+                    // important: make ignorable, to avoid errors if value is actually seen
+                    builder.addIgnorable(name);
+                    continue;
+                }
+            }
+            result.add(property);
+        }
+        return result;
+    }
+
+    /**
+     * Method that will find if bean has any managed- or back-reference properties,
+     * and if so add them to bean, to be linked during resolution phase.
+     */
+    protected void addReferenceProperties(DeserializationContext ctxt,
+            BeanDescription beanDesc, BeanDeserializerBuilder builder)
+        throws JsonMappingException
+    {
+        // and then back references, not necessarily found as regular properties
+        Map<String,AnnotatedMember> refs = beanDesc.findBackReferenceProperties();
+        if (refs != null) {
+            for (Map.Entry<String, AnnotatedMember> en : refs.entrySet()) {
+                String name = en.getKey();
+                AnnotatedMember m = en.getValue();
+                JavaType type;
+                if (m instanceof AnnotatedMethod) {
+                    type = ((AnnotatedMethod) m).getParameterType(0);
+                } else {
+                    type = m.getType();
+                    // 30-Mar-2017, tatu: Unfortunately it is not yet possible to make back-refs
+                    //    work through constructors; but let's at least indicate the issue for now
+                    if (m instanceof AnnotatedParameter) {
+                        ctxt.reportBadTypeDefinition(beanDesc,
+"Can not bind back references as Creator parameters: type %s (reference '%s', parameter index #%d)",
+beanDesc.getBeanClass().getName(), name, ((AnnotatedParameter) m).getIndex());
+                    }
+                }
+                SimpleBeanPropertyDefinition propDef = SimpleBeanPropertyDefinition.construct(
+                        ctxt.getConfig(), m, PropertyName.construct(name));
+                builder.addBackReferenceProperty(name, constructSettableProperty(ctxt,
+                        beanDesc, propDef, type));
+            }
+        }
+    }
+
+    /**
+     * Method called locate all members used for value injection (if any),
+     * constructor {@link com.fasterxml.jackson.databind.deser.impl.ValueInjector} instances, and add them to builder.
+     */
+    protected void addInjectables(DeserializationContext ctxt,
+            BeanDescription beanDesc, BeanDeserializerBuilder builder)
+        throws JsonMappingException
+    {
+        Map<Object, AnnotatedMember> raw = beanDesc.findInjectables();
+        if (raw != null) {
+            for (Map.Entry<Object, AnnotatedMember> entry : raw.entrySet()) {
+                AnnotatedMember m = entry.getValue();
+                builder.addInjectable(PropertyName.construct(m.getName()),
+                        m.getType(),
+                        beanDesc.getClassAnnotations(), m, entry.getKey());
+            }
+        }
+    }
+
+    /**
+     * Method called to construct fallback {@link SettableAnyProperty}
+     * for handling unknown bean properties, given a method that
+     * has been designated as such setter.
+     * 
+     * @param mutator Either 2-argument method (setter, with key and value), or Field
+     *     that contains Map; either way accessor used for passing "any values"
+     */
+    @SuppressWarnings("unchecked")
+    protected SettableAnyProperty constructAnySetter(DeserializationContext ctxt,
+            BeanDescription beanDesc, AnnotatedMember mutator)
+        throws JsonMappingException
+    {
+        //find the java type based on the annotated setter method or setter field 
+        JavaType type = null;
+        if (mutator instanceof AnnotatedMethod) {
+            // we know it's a 2-arg method, second arg is the value
+            type = ((AnnotatedMethod) mutator).getParameterType(1);
+        } else if (mutator instanceof AnnotatedField) {
+            // get the type from the content type of the map object
+            type = ((AnnotatedField) mutator).getType().getContentType();
+        }
+        // First: various annotations on type itself, as well as type-overrides
+        // on accessor need to be resolved
+        type = resolveMemberAndTypeAnnotations(ctxt, mutator, type);
+        BeanProperty.Std prop = new BeanProperty.Std(PropertyName.construct(mutator.getName()),
+                type, null, beanDesc.getClassAnnotations(), mutator,
+                PropertyMetadata.STD_OPTIONAL);
+        // and then possible direct deserializer override on accessor
+        JsonDeserializer<Object> deser = findDeserializerFromAnnotation(ctxt, mutator);
+        if (deser == null) {
+            deser = type.getValueHandler();
+        }
+        if (deser != null) {
+            // As per [databind#462] need to ensure we contextualize deserializer before passing it on
+            deser = (JsonDeserializer<Object>) ctxt.handlePrimaryContextualization(deser, prop, type);
+        }
+        TypeDeserializer typeDeser = type.getTypeHandler();
+        return new SettableAnyProperty(prop, mutator, type, deser, typeDeser);
+    }
+
+    /**
+     * Method that will construct a regular bean property setter using
+     * the given setter method.
+     *
+     * @return Property constructed, if any; or null to indicate that
+     *   there should be no property based on given definitions.
+     */
+    protected SettableBeanProperty constructSettableProperty(DeserializationContext ctxt,
+            BeanDescription beanDesc, BeanPropertyDefinition propDef,
+            JavaType propType0)
+        throws JsonMappingException
+    {
+        // need to ensure method is callable (for non-public)
+        AnnotatedMember mutator = propDef.getNonConstructorMutator();
+        // 08-Sep-2016, tatu: issues like [databind#1342] suggest something fishy
+        //   going on; add sanity checks to try to pin down actual problem...
+        //   Possibly passing creator parameter?
+        if (mutator == null) {
+            ctxt.reportBadPropertyDefinition(beanDesc, propDef, "No non-constructor mutator available");
+        }
+        JavaType type = resolveMemberAndTypeAnnotations(ctxt, mutator, propType0);
+        // Does the Method specify the deserializer to use? If so, let's use it.
+        TypeDeserializer typeDeser = type.getTypeHandler();
+        SettableBeanProperty prop;
+        if (mutator instanceof AnnotatedMethod) {
+            prop = new MethodProperty(propDef, type, typeDeser,
+                    beanDesc.getClassAnnotations(), (AnnotatedMethod) mutator);
+        } else {
+            // 08-Sep-2016, tatu: wonder if we should verify it is `AnnotatedField` to be safe?
+            prop = new FieldProperty(propDef, type, typeDeser,
+                    beanDesc.getClassAnnotations(), (AnnotatedField) mutator);
+        }
+        JsonDeserializer<?> deser = findDeserializerFromAnnotation(ctxt, mutator);
+        if (deser == null) {
+            deser = type.getValueHandler();
+        }
+        if (deser != null) {
+            deser = ctxt.handlePrimaryContextualization(deser, prop, type);
+            prop = prop.withValueDeserializer(deser);
+        }
+        // need to retain name of managed forward references:
+        AnnotationIntrospector.ReferenceProperty ref = propDef.findReferenceType();
+        if (ref != null && ref.isManagedReference()) {
+            prop.setManagedReferenceName(ref.getName());
+        }
+        ObjectIdInfo objectIdInfo = propDef.findObjectIdInfo();
+        if (objectIdInfo != null){
+            prop.setObjectIdInfo(objectIdInfo);
+        }
+        return prop;
+    }
+
+    /**
+     * Method that will construct a regular bean property setter using
+     * the given setter method.
+     */
+    protected SettableBeanProperty constructSetterlessProperty(DeserializationContext ctxt,
+            BeanDescription beanDesc, BeanPropertyDefinition propDef)
+        throws JsonMappingException
+    {
+        final AnnotatedMethod getter = propDef.getGetter();
+        JavaType type = resolveMemberAndTypeAnnotations(ctxt, getter, getter.getType());
+        TypeDeserializer typeDeser = type.getTypeHandler();
+        SettableBeanProperty prop = new SetterlessProperty(propDef, type, typeDeser,
+                beanDesc.getClassAnnotations(), getter);
+        JsonDeserializer<?> deser = findDeserializerFromAnnotation(ctxt, getter);
+        if (deser == null) {
+            deser = type.getValueHandler();
+        }
+        if (deser != null) {
+            deser = ctxt.handlePrimaryContextualization(deser, prop, type);
+            prop = prop.withValueDeserializer(deser);
+        }
+        return prop;
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods for Bean deserializer, other
+    /**********************************************************
+     */
+
+    /**
+     * Helper method used to skip processing for types that we know
+     * can not be (i.e. are never consider to be) beans: 
+     * things like primitives, Arrays, Enums, and proxy types.
+     *<p>
+     * Note that usually we shouldn't really be getting these sort of
+     * types anyway; but better safe than sorry.
+     */
+    protected boolean isPotentialBeanType(Class<?> type)
+    {
+        String typeStr = ClassUtil.canBeABeanType(type);
+        if (typeStr != null) {
+            throw new IllegalArgumentException("Can not deserialize Class "+type.getName()+" (of type "+typeStr+") as a Bean");
+        }
+        if (ClassUtil.isProxyType(type)) {
+            throw new IllegalArgumentException("Can not deserialize Proxy class "+type.getName()+" as a Bean");
+        }
+        /* also: can't deserialize some local classes: static are ok; in-method not;
+         * other non-static inner classes are ok
+         */
+        typeStr = ClassUtil.isLocalType(type, true);
+        if (typeStr != null) {
+            throw new IllegalArgumentException("Can not deserialize Class "+type.getName()+" (of type "+typeStr+") as a Bean");
+        }
+        return true;
+    }
+
+    /**
+     * Helper method that will check whether given raw type is marked as always ignorable
+     * (for purpose of ignoring properties with type)
+     */
+    protected boolean isIgnorableType(DeserializationConfig config, BeanDescription beanDesc,
+            Class<?> type, Map<Class<?>,Boolean> ignoredTypes)
+    {
+        Boolean status = ignoredTypes.get(type);
+        if (status != null) {
+            return status.booleanValue();
+        }
+        // 21-Apr-2016, tatu: For 2.8, can specify config overrides
+        ConfigOverride override = config.findConfigOverride(type);
+        if (override != null) {
+            status = override.getIsIgnoredType();
+        }
+        if (status == null) {
+            BeanDescription desc = config.introspectClassAnnotations(type);
+            status = config.getAnnotationIntrospector().isIgnorableType(desc.getClassInfo());
+            // We default to 'false', i.e. not ignorable
+            if (status == null) {
+                status = Boolean.FALSE;
+            }
+        }
+        ignoredTypes.put(type, status);
+        return status.booleanValue();
+    }
+
+    /**
+     * @since 2.8.9
+     */
+    protected void checkIllegalTypes(DeserializationContext ctxt, JavaType type,
+            BeanDescription beanDesc)
+        throws JsonMappingException
+    {
+        // There are certain nasty classes that could cause problems, mostly
+        // via default typing -- catch them here.
+        String full = type.getRawClass().getName();
+
+        if (_cfgIllegalClassNames.contains(full)) {
+            ctxt.reportBadTypeDefinition(beanDesc,
+                    "Illegal type (%s) to deserialize: prevented for security reasons", full);
+        }
+    }
 }

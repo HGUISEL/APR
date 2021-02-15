@@ -1,247 +1,469 @@
+package com.fasterxml.jackson.databind.util;
+
+import java.text.DateFormat;
+import java.text.FieldPosition;
+import java.text.ParseException;
+import java.text.ParsePosition;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+import com.fasterxml.jackson.core.io.NumberInput;
+
 /**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Default {@link DateFormat} implementation used by standard Date
+ * serializers and deserializers. For serialization defaults to using
+ * an ISO-8601 compliant format (format String "yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+ * and for deserialization, both ISO-8601 and RFC-1123.
  */
-package org.apache.drill.exec.planner.sql.parser;
+@SuppressWarnings("serial")
+public class StdDateFormat
+    extends DateFormat
+{
+    /* TODO !!! 24-Nov-2009, tatu: Need to rewrite this class:
+     * JDK date parsing is awfully brittle, and ISO-8601 is quite
+     * permissive. The two don't mix, need to write a better one.
+     */
+    // 02-Oct-2014, tatu: Alas. While spit'n'polished a few times, still
+    //   not really robust. But still in use.
 
-import org.apache.drill.exec.ExecConstants;
-import org.apache.drill.exec.exception.UnsupportedOperatorCollector;
-import org.apache.drill.exec.ops.QueryContext;
-import org.apache.drill.exec.work.foreman.SqlUnsupportedException;
+    /**
+     * Defines a commonly used date format that conforms
+     * to ISO-8601 date formatting standard, when it includes basic undecorated
+     * timezone definition
+     */
+    protected final static String DATE_FORMAT_STR_ISO8601 = "yyyy-MM-dd'T'HH:mm:ss.SSSZ";
 
-import org.apache.calcite.sql.SqlIdentifier;
-import org.apache.calcite.sql.SqlSelect;
-import org.apache.calcite.sql.SqlWindow;
-import org.apache.calcite.sql.fun.SqlCountAggFunction;
-import org.apache.calcite.sql.SqlCall;
-import org.apache.calcite.sql.SqlKind;
-import org.apache.calcite.sql.SqlJoin;
-import org.apache.calcite.sql.JoinType;
-import org.apache.calcite.sql.SqlNode;
-import org.apache.calcite.sql.type.SqlTypeName;
-import org.apache.calcite.sql.util.SqlShuttle;
-import org.apache.calcite.sql.SqlDataTypeSpec;
-import org.apache.calcite.sql.SqlSetOperator;
+    /**
+     * Same as 'regular' 8601, but handles 'Z' as an alias for "+0000"
+     * (or "UTC")
+     */
+    protected final static String DATE_FORMAT_STR_ISO8601_Z = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'";
 
-import java.util.List;
+    /**
+     * ISO-8601 with just the Date part, no time
+     */
+    protected final static String DATE_FORMAT_STR_PLAIN = "yyyy-MM-dd";
 
-import com.google.common.collect.Lists;
+    /**
+     * This constant defines the date format specified by
+     * RFC 1123 / RFC 822.
+     */
+    protected final static String DATE_FORMAT_STR_RFC1123 = "EEE, dd MMM yyyy HH:mm:ss zzz";
 
-public class UnsupportedOperatorsVisitor extends SqlShuttle {
-  private QueryContext context;
-  private static List<String> disabledType = Lists.newArrayList();
-  private static List<String> disabledOperators = Lists.newArrayList();
+    /**
+     * For error messages we'll also need a list of all formats.
+     */
+    protected final static String[] ALL_FORMATS = new String[] {
+        DATE_FORMAT_STR_ISO8601,
+        DATE_FORMAT_STR_ISO8601_Z,
+        DATE_FORMAT_STR_RFC1123,
+        DATE_FORMAT_STR_PLAIN
+    };
 
-  static {
-    disabledType.add(SqlTypeName.TINYINT.name());
-    disabledType.add(SqlTypeName.SMALLINT.name());
-    disabledType.add(SqlTypeName.REAL.name());
-    disabledOperators.add("CARDINALITY");
-  }
-
-  private UnsupportedOperatorCollector unsupportedOperatorCollector;
-
-  private UnsupportedOperatorsVisitor(QueryContext context) {
-    this.context = context;
-    this.unsupportedOperatorCollector = new UnsupportedOperatorCollector();
-  }
-
-  public static UnsupportedOperatorsVisitor createVisitor(QueryContext context) {
-    return new UnsupportedOperatorsVisitor(context);
-  }
-
-  public void convertException() throws SqlUnsupportedException {
-    unsupportedOperatorCollector.convertException();
-  }
-
-  @Override
-  public SqlNode visit(SqlDataTypeSpec type) {
-    for(String strType : disabledType) {
-      if(type.getTypeName().getSimple().equalsIgnoreCase(strType)) {
-        unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.DATA_TYPE,
-            type.getTypeName().getSimple() + " is not supported\n" +
-            "See Apache Drill JIRA: DRILL-1959");
-        throw new UnsupportedOperationException();
-      }
+    /**
+     * By default we use UTC for everything, with Jackson 2.7 and later
+     * (2.6 and earlier relied on GMT)
+     */
+    private final static TimeZone DEFAULT_TIMEZONE;
+    static {
+        DEFAULT_TIMEZONE = TimeZone.getTimeZone("UTC"); // since 2.7
     }
 
-    return type;
-  }
+    private final static Locale DEFAULT_LOCALE = Locale.US;
+    
+    protected final static DateFormat DATE_FORMAT_RFC1123;
 
-  @Override
-  public SqlNode visit(SqlCall sqlCall) {
-    // Inspect the window functions
-    if(sqlCall instanceof SqlSelect) {
-      SqlSelect sqlSelect = (SqlSelect) sqlCall;
+    protected final static DateFormat DATE_FORMAT_ISO8601;
+    protected final static DateFormat DATE_FORMAT_ISO8601_Z;
 
-      // This is used to keep track of the window function which has been defined
-      SqlNode definedWindow = null;
-      for(SqlNode nodeInSelectList : sqlSelect.getSelectList()) {
-        if(nodeInSelectList.getKind() == SqlKind.OVER) {
-          // Throw exceptions if window functions are disabled
-          if(!context.getOptions().getOption(ExecConstants.ENABLE_WINDOW_FUNCTIONS).bool_val) {
-            unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-                "Window functions are disabled\n" +
-                "See Apache Drill JIRA: DRILL-2559");
-            throw new UnsupportedOperationException();
-          }
+    protected final static DateFormat DATE_FORMAT_PLAIN;
 
-          SqlNode window = ((SqlCall) nodeInSelectList).operand(1);
+    /* Let's construct "blueprint" date format instances: can not be used
+     * as is, due to thread-safety issues, but can be used for constructing
+     * actual instances more cheaply (avoids re-parsing).
+     */
+    static {
+        /* Another important thing: let's force use of default timezone for
+         * baseline DataFormat objects
+         */
 
-          // Partition window is referenced as a SqlIdentifier,
-          // which is defined in the window list
-          if(window instanceof SqlIdentifier) {
-            // Expand the SqlIdentifier as the expression defined in the window list
-            for(SqlNode sqlNode : sqlSelect.getWindowList()) {
-              if(((SqlWindow) sqlNode).getDeclName().equalsDeep(window, false)) {
-                window = sqlNode;
-                break;
-              }
+        DATE_FORMAT_RFC1123 = new SimpleDateFormat(DATE_FORMAT_STR_RFC1123, DEFAULT_LOCALE);
+        DATE_FORMAT_RFC1123.setTimeZone(DEFAULT_TIMEZONE);
+        DATE_FORMAT_ISO8601 = new SimpleDateFormat(DATE_FORMAT_STR_ISO8601, DEFAULT_LOCALE);
+        DATE_FORMAT_ISO8601.setTimeZone(DEFAULT_TIMEZONE);
+        DATE_FORMAT_ISO8601_Z = new SimpleDateFormat(DATE_FORMAT_STR_ISO8601_Z, DEFAULT_LOCALE);
+        DATE_FORMAT_ISO8601_Z.setTimeZone(DEFAULT_TIMEZONE);
+        DATE_FORMAT_PLAIN = new SimpleDateFormat(DATE_FORMAT_STR_PLAIN, DEFAULT_LOCALE);
+        DATE_FORMAT_PLAIN.setTimeZone(DEFAULT_TIMEZONE);
+    }
+    
+    /**
+     * A singleton instance can be used for cloning purposes, as a blueprint of sorts.
+     */
+    public final static StdDateFormat instance = new StdDateFormat();
+    
+    /**
+     * Caller may want to explicitly override timezone to use; if so,
+     * we will have non-null value here.
+     */
+    protected transient TimeZone _timezone;
+
+    protected final Locale _locale;
+    
+    protected transient DateFormat _formatRFC1123;
+    protected transient DateFormat _formatISO8601;
+    protected transient DateFormat _formatISO8601_z;
+    protected transient DateFormat _formatPlain;
+
+    /*
+    /**********************************************************
+    /* Life cycle, accessing singleton "standard" formats
+    /**********************************************************
+     */
+
+    public StdDateFormat() {
+        _locale = DEFAULT_LOCALE;
+    }
+
+    public StdDateFormat(TimeZone tz, Locale loc) {
+        _timezone = tz;
+        _locale = loc;
+    }
+
+    public static TimeZone getDefaultTimeZone() {
+        return DEFAULT_TIMEZONE;
+    }
+    
+    /**
+     * Method used for creating a new instance with specified timezone;
+     * if no timezone specified, defaults to the default timezone (UTC).
+     */
+    public StdDateFormat withTimeZone(TimeZone tz) {
+        if (tz == null) {
+            tz = DEFAULT_TIMEZONE;
+        }
+        if ((tz == _timezone) || tz.equals(_timezone)) {
+            return this;
+        }
+        return new StdDateFormat(tz, _locale);
+    }
+
+    public StdDateFormat withLocale(Locale loc) {
+        if (loc.equals(_locale)) {
+            return this;
+        }
+        return new StdDateFormat(_timezone, loc);
+    }
+    
+    @Override
+    public StdDateFormat clone() {
+        /* Although there is that much state to share, we do need to
+         * orchestrate a bit, mostly since timezones may be changed
+         */
+        return new StdDateFormat(_timezone, _locale);
+    }
+
+    /**
+     * @deprecated Since 2.4; use variant that takes Locale
+     */
+    @Deprecated
+    public static DateFormat getISO8601Format(TimeZone tz) {
+        return getISO8601Format(tz, DEFAULT_LOCALE);
+    }
+
+    /**
+     * Method for getting a non-shared DateFormat instance
+     * that uses specified timezone and can handle simple ISO-8601
+     * compliant date format.
+     * 
+     * @since 2.4
+     */
+    public static DateFormat getISO8601Format(TimeZone tz, Locale loc) {
+        return _cloneFormat(DATE_FORMAT_ISO8601, DATE_FORMAT_STR_ISO8601, tz, loc);
+    }
+
+    /**
+     * Method for getting a non-shared DateFormat instance
+     * that uses specific timezone and can handle RFC-1123
+     * compliant date format.
+     * 
+     * @since 2.4
+     */
+    public static DateFormat getRFC1123Format(TimeZone tz, Locale loc) {
+        return _cloneFormat(DATE_FORMAT_RFC1123, DATE_FORMAT_STR_RFC1123, tz, loc);
+    }
+
+    /**
+     * @deprecated Since 2.4; use variant that takes Locale
+     */
+    @Deprecated
+    public static DateFormat getRFC1123Format(TimeZone tz) {
+        return getRFC1123Format(tz, DEFAULT_LOCALE);
+    }
+    
+    /*
+    /**********************************************************
+    /* Public API
+    /**********************************************************
+     */
+
+    @Override // since 2.6
+    public TimeZone getTimeZone() {
+        return _timezone;
+    }
+    
+    @Override
+    public void setTimeZone(TimeZone tz)
+    {
+        /* DateFormats are timezone-specific (via Calendar contained),
+         * so need to reset instances if timezone changes:
+         */
+        if (!tz.equals(_timezone)) {
+            _formatRFC1123 = null;
+            _formatISO8601 = null;
+            _formatISO8601_z = null;
+            _formatPlain = null;
+            _timezone = tz;
+        }
+    }
+    
+    @Override
+    public Date parse(String dateStr) throws ParseException
+    {
+        dateStr = dateStr.trim();
+        ParsePosition pos = new ParsePosition(0);
+        Date result = parse(dateStr, pos);
+        if (result != null) {
+            return result;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        for (String f : ALL_FORMATS) {
+            if (sb.length() > 0) {
+                sb.append("\", \"");
+            } else {
+                sb.append('"');
             }
-
-            assert !(window instanceof SqlIdentifier) : "Identifier should have been expanded as a window defined in the window list";
-          }
-
-          // In a SELECT-SCOPE, only a partition can be defined
-          if(definedWindow == null) {
-            definedWindow = window;
-          } else {
-           if(!definedWindow.equalsDeep(window, false)) {
-             unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-                 "Multiple window definitions in a single SELECT list is not currently supported \n" +
-                 "See Apache Drill JIRA: DRILL-3196");
-             throw new UnsupportedOperationException();
-           }
-          }
+            sb.append(f);
         }
-      }
+        sb.append('"');
+        throw new ParseException
+            (String.format("Can not parse date \"%s\": not compatible with any of standard forms (%s)",
+                           dateStr, sb.toString()), pos.getErrorIndex());
     }
 
-    // Disable unsupported Intersect, Except
-    if(sqlCall.getKind() == SqlKind.INTERSECT || sqlCall.getKind() == SqlKind.EXCEPT) {
-      unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.RELATIONAL,
-          sqlCall.getOperator().getName() + " is not supported\n" +
-          "See Apache Drill JIRA: DRILL-1921");
-      throw new UnsupportedOperationException();
-    }
-
-    // Disable unsupported Union
-    if(sqlCall.getKind() == SqlKind.UNION) {
-      SqlSetOperator op = (SqlSetOperator) sqlCall.getOperator();
-      if(!op.isAll()) {
-        unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.RELATIONAL,
-            sqlCall.getOperator().getName() + " is not supported\n" +
-            "See Apache Drill JIRA: DRILL-1921");
-        throw new UnsupportedOperationException();
-      }
-    }
-
-    // Disable unsupported JOINs
-    if(sqlCall.getKind() == SqlKind.JOIN) {
-      SqlJoin join = (SqlJoin) sqlCall;
-
-      // Block Natural Join
-      if(join.isNatural()) {
-        unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.RELATIONAL,
-            "NATURAL JOIN is not supported\n" +
-            "See Apache Drill JIRA: DRILL-1986");
-        throw new UnsupportedOperationException();
-      }
-
-      // Block Cross Join
-      if(join.getJoinType() == JoinType.CROSS) {
-        unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.RELATIONAL,
-            "CROSS JOIN is not supported\n" +
-            "See Apache Drill JIRA: DRILL-1921");
-        throw new UnsupportedOperationException();
-      }
-    }
-
-    // Disable Function
-    for(String strOperator : disabledOperators) {
-      if(sqlCall.getOperator().isName(strOperator)) {
-        unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-            sqlCall.getOperator().getName() + " is not supported\n" +
-            "See Apache Drill JIRA: DRILL-2115");
-        throw new UnsupportedOperationException();
-      }
-    }
-
-    // Disable complex functions being present in any place other than Select-Clause
-    if(sqlCall instanceof SqlSelect) {
-      SqlSelect sqlSelect = (SqlSelect) sqlCall;
-      if(sqlSelect.hasOrderBy()) {
-        for (SqlNode sqlNode : sqlSelect.getOrderList()) {
-          if(containsFlatten(sqlNode)) {
-            unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-                "Flatten function is not supported in Order By\n" +
-                "See Apache Drill JIRA: DRILL-2181");
-            throw new UnsupportedOperationException();
-          }
+    @Override
+    public Date parse(String dateStr, ParsePosition pos)
+    {
+        if (looksLikeISO8601(dateStr)) { // also includes "plain"
+            return parseAsISO8601(dateStr, pos);
         }
-      }
-
-      if(sqlSelect.getGroup() != null) {
-        for(SqlNode sqlNode : sqlSelect.getGroup()) {
-          if(containsFlatten(sqlNode)) {
-            unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-                "Flatten function is not supported in Group By\n" +
-                "See Apache Drill JIRA: DRILL-2181");
-            throw new UnsupportedOperationException();
-          }
-        }
-      }
-
-      if(sqlSelect.isDistinct()) {
-        for(SqlNode column : sqlSelect.getSelectList()) {
-          if(column.getKind() ==  SqlKind.AS) {
-            if(containsFlatten(((SqlCall) column).getOperandList().get(0))) {
-              unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-                  "Flatten function is not supported in Distinct\n" +
-                  "See Apache Drill JIRA: DRILL-2181");
-              throw new UnsupportedOperationException();
+        // Also consider "stringified" simple time stamp
+        int i = dateStr.length();
+        while (--i >= 0) {
+            char ch = dateStr.charAt(i);
+            if (ch < '0' || ch > '9') {
+                // 07-Aug-2013, tatu: And [databind#267] points out that negative numbers should also work
+                if (i > 0 || ch != '-') {
+                    break;
+                }
             }
-          } else {
-            if(containsFlatten(column)) {
-              unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-                  "Flatten function is not supported in Distinct\n" +
-                  "See Apache Drill JIRA: DRILL-2181");
-              throw new UnsupportedOperationException();
+        }
+        if (i < 0) { // all digits
+            // let's just assume negative numbers are fine (can't be RFC-1123 anyway); check length for positive
+            if (dateStr.charAt(0) == '-' || NumberInput.inLongRange(dateStr, false)) {
+                return new Date(Long.parseLong(dateStr));
             }
-          }
         }
-      }
+        // Otherwise, fall back to using RFC 1123
+        return parseAsRFC1123(dateStr, pos);
     }
 
-    if(sqlCall.getOperator() instanceof SqlCountAggFunction) {
-      for(SqlNode sqlNode : sqlCall.getOperandList()) {
-        if(containsFlatten(sqlNode)) {
-          unsupportedOperatorCollector.setException(SqlUnsupportedException.ExceptionType.FUNCTION,
-              "Flatten function in aggregate functions is not supported\n" +
-              "See Apache Drill JIRA: DRILL-2181");
-          throw new UnsupportedOperationException();
+    @Override
+    public StringBuffer format(Date date, StringBuffer toAppendTo,
+            FieldPosition fieldPosition)
+    {
+        if (_formatISO8601 == null) {
+            _formatISO8601 = _cloneFormat(DATE_FORMAT_ISO8601, DATE_FORMAT_STR_ISO8601, _timezone, _locale);
         }
-      }
+        return _formatISO8601.format(date, toAppendTo, fieldPosition);
     }
 
-    return sqlCall.getOperator().acceptCall(this, sqlCall);
-  }
+    /*
+    /**********************************************************
+    /* Std overrides
+    /**********************************************************
+     */
+    
+    @Override
+    public String toString() {
+        String str = "DateFormat "+getClass().getName();
+        TimeZone tz = _timezone;
+        if (tz != null) {
+            str += " (timezone: "+tz+")";
+        }
+        str += "(locale: "+_locale+")";
+        return str;
+    }
+    
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
 
-  private boolean containsFlatten(SqlNode sqlNode) throws UnsupportedOperationException {
-    return sqlNode instanceof SqlCall
-        && ((SqlCall) sqlNode).getOperator().getName().toLowerCase().equals("flatten");
-  }
+    /**
+     * Overridable helper method used to figure out which of supported
+     * formats is the likeliest match.
+     */
+    protected boolean looksLikeISO8601(String dateStr)
+    {
+        if (dateStr.length() >= 5
+            && Character.isDigit(dateStr.charAt(0))
+            && Character.isDigit(dateStr.charAt(3))
+            && dateStr.charAt(4) == '-'
+            ) {
+            return true;
+        }
+        return false;
+    }
+
+    protected Date parseAsISO8601(String dateStr, ParsePosition pos)
+    {
+        /* 21-May-2009, tatu: DateFormat has very strict handling of
+         * timezone  modifiers for ISO-8601. So we need to do some scrubbing.
+         */
+
+        /* First: do we have "zulu" format ('Z' == "UTC")? If yes, that's
+         * quite simple because we already set date format timezone to be
+         * UTC, and hence can just strip out 'Z' altogether
+         */
+        int len = dateStr.length();
+        char c = dateStr.charAt(len-1);
+        DateFormat df;
+
+        // [JACKSON-200]: need to support "plain" date...
+        if (len <= 10 && Character.isDigit(c)) {
+            df = _formatPlain;
+            if (df == null) {
+                df = _formatPlain = _cloneFormat(DATE_FORMAT_PLAIN, DATE_FORMAT_STR_PLAIN, _timezone, _locale);
+            }
+        } else if (c == 'Z') {
+            df = _formatISO8601_z;
+            if (df == null) {
+                df = _formatISO8601_z = _cloneFormat(DATE_FORMAT_ISO8601_Z, DATE_FORMAT_STR_ISO8601_Z, _timezone, _locale);
+            }
+            // [JACKSON-334]: may be missing milliseconds... if so, add
+            if (dateStr.charAt(len-4) == ':') {
+                StringBuilder sb = new StringBuilder(dateStr);
+                sb.insert(len-1, ".000");
+                dateStr = sb.toString();
+            }
+        } else {
+            // Let's see if we have timezone indicator or not...
+            if (hasTimeZone(dateStr)) {
+                c = dateStr.charAt(len-3);
+                if (c == ':') { // remove optional colon
+                    // remove colon
+                    StringBuilder sb = new StringBuilder(dateStr);
+                    sb.delete(len-3, len-2);
+                    dateStr = sb.toString();
+                } else if (c == '+' || c == '-') { // missing minutes
+                    // let's just append '00'
+                    dateStr += "00";
+                }
+                // Milliseconds partial or missing; and even seconds are optional
+                len = dateStr.length();
+                // remove 'T', '+'/'-' and 4-digit timezone-offset
+                int timeLen = len - dateStr.lastIndexOf('T') - 6;
+                if (timeLen < 12) { // 8 for hh:mm:ss, 4 for .sss
+                    int offset = len - 5; // insertion offset, before tz-offset
+                    StringBuilder sb = new StringBuilder(dateStr);
+                    switch (timeLen) {
+                    case 11:
+                        sb.insert(offset, '0'); break;
+                    case 10:
+                        sb.insert(offset, "00"); break;
+                    case 9: // is this legal? (just second fraction marker)
+                        sb.insert(offset, "000"); break;
+                    case 8:
+                        sb.insert(offset, ".000"); break;
+                    case 7: // not legal to have single-digit second
+                        break;
+                    case 6: // probably not legal, but let's allow
+                        sb.insert(offset, "00.000");
+                    case 5: // is legal to omit seconds
+                        sb.insert(offset, ":00.000");
+                    }
+                    dateStr = sb.toString();
+                }
+                df = _formatISO8601;
+                if (_formatISO8601 == null) {
+                    df = _formatISO8601 = _cloneFormat(DATE_FORMAT_ISO8601, DATE_FORMAT_STR_ISO8601, _timezone, _locale);
+                }
+            } else {
+                // If not, plain date. Easiest to just patch 'Z' in the end?
+                StringBuilder sb = new StringBuilder(dateStr);
+                // And possible also millisecond part if missing
+                int timeLen = len - dateStr.lastIndexOf('T') - 1;
+                if (timeLen < 12) { // missing, or partial
+                    switch (timeLen) {
+                    case 11: sb.append('0');
+                    case 10: sb.append('0');
+                    case 9: sb.append('0');
+                        break;
+                    default:
+                        sb.append(".000");
+                    }
+                }
+                sb.append('Z');
+                dateStr = sb.toString();
+                df = _formatISO8601_z;
+                if (df == null) {
+                    df = _formatISO8601_z = _cloneFormat(DATE_FORMAT_ISO8601_Z, DATE_FORMAT_STR_ISO8601_Z,
+                            _timezone, _locale);
+                }
+            }
+        }
+        return df.parse(dateStr, pos);
+    }
+
+    protected Date parseAsRFC1123(String dateStr, ParsePosition pos)
+    {
+        if (_formatRFC1123 == null) {
+            _formatRFC1123 = _cloneFormat(DATE_FORMAT_RFC1123, DATE_FORMAT_STR_RFC1123, _timezone, _locale);
+        }
+        return _formatRFC1123.parse(dateStr, pos);
+    }
+
+    private final static boolean hasTimeZone(String str)
+    {
+        // Only accept "+hh", "+hhmm" and "+hh:mm" (and with minus), so
+        int len = str.length();
+        if (len >= 6) {
+            char c = str.charAt(len-6);
+            if (c == '+' || c == '-') return true;
+            c = str.charAt(len-5);
+            if (c == '+' || c == '-') return true;
+            c = str.charAt(len-3);
+            if (c == '+' || c == '-') return true;
+        }
+        return false;
+    }
+
+    private final static DateFormat _cloneFormat(DateFormat df, String format,
+            TimeZone tz, Locale loc)
+    {
+        if (!loc.equals(DEFAULT_LOCALE)) {
+            df = new SimpleDateFormat(format, loc);
+            df.setTimeZone((tz == null) ? DEFAULT_TIMEZONE : tz);
+        } else {
+            df = (DateFormat) df.clone();
+            if (tz != null) {
+                df.setTimeZone(tz);
+            }
+        }
+        return df;
+    }
 }
+

@@ -1,11 +1,10 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -15,446 +14,592 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.tez.mapreduce.input;
+package org.apache.openejb.core.ivm;
 
+import static org.apache.openejb.core.ivm.IntraVmCopyMonitor.State.COPY;
+import static org.apache.openejb.core.ivm.IntraVmCopyMonitor.State.CLASSLOADER_COPY;
+import static org.apache.openejb.core.ivm.IntraVmCopyMonitor.State.NONE;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.net.URI;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.ObjectStreamException;
+import java.io.Serializable;
+import java.io.NotSerializableException;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Method;
+import java.math.BigDecimal;
+import java.rmi.NoSuchObjectException;
+import java.rmi.RemoteException;
+import java.rmi.AccessException;
+import java.util.HashSet;
+import java.util.Hashtable;
 import java.util.List;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.ArrayList;
+import java.util.WeakHashMap;
+import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.classification.InterfaceAudience.Private;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.mapred.InputFormat;
-import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.split.JobSplit.TaskSplitIndex;
-import org.apache.hadoop.mapreduce.split.JobSplit.TaskSplitMetaInfo;
-import org.apache.hadoop.security.Credentials;
-import org.apache.tez.client.TezClientUtils;
-import org.apache.tez.common.counters.TaskCounter;
-import org.apache.tez.dag.api.DataSourceDescriptor;
-import org.apache.tez.dag.api.InputDescriptor;
-import org.apache.tez.dag.api.InputInitializerDescriptor;
-import org.apache.tez.dag.api.TezUncheckedException;
-import org.apache.tez.dag.api.VertexLocationHint;
-import org.apache.tez.mapreduce.common.MRInputAMSplitGenerator;
-import org.apache.tez.mapreduce.common.MRInputSplitDistributor;
-import org.apache.tez.mapreduce.hadoop.InputSplitInfo;
-import org.apache.tez.mapreduce.hadoop.MRHelpers;
-import org.apache.tez.mapreduce.hadoop.MRJobConfig;
-import org.apache.tez.mapreduce.input.base.MRInputBase;
-import org.apache.tez.mapreduce.lib.MRInputUtils;
-import org.apache.tez.mapreduce.lib.MRReader;
-import org.apache.tez.mapreduce.lib.MRReaderMapReduce;
-import org.apache.tez.mapreduce.lib.MRReaderMapred;
-import org.apache.tez.mapreduce.protos.MRRuntimeProtos.MRSplitProto;
-import org.apache.tez.runtime.api.Event;
-import org.apache.tez.runtime.api.Input;
-import org.apache.tez.runtime.api.InputContext;
-import org.apache.tez.runtime.api.events.InputDataInformationEvent;
-import org.apache.tez.runtime.library.api.KeyValueReader;
+import javax.ejb.EJBException;
+import javax.ejb.NoSuchObjectLocalException;
+import javax.ejb.TransactionRequiredLocalException;
+import javax.ejb.TransactionRolledbackLocalException;
+import javax.ejb.EJBTransactionRequiredException;
+import javax.ejb.EJBTransactionRolledbackException;
+import javax.ejb.NoSuchEJBException;
+import javax.ejb.AccessLocalException;
+import javax.transaction.TransactionRequiredException;
+import javax.transaction.TransactionRolledbackException;
 
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
+import org.apache.openejb.BeanContext;
+import org.apache.openejb.BeanType;
+import org.apache.openejb.InterfaceType;
+import org.apache.openejb.RpcContainer;
+import org.apache.openejb.core.ThreadContext;
+import org.apache.openejb.loader.SystemInstance;
+import org.apache.openejb.spi.ContainerSystem;
+import org.apache.openejb.spi.SecurityService;
+import java.lang.reflect.InvocationHandler;
+import org.apache.openejb.util.proxy.ProxyManager;
 
-/**
- * {@link MRInput} is an {@link Input} which provides key/values pairs
- * for the consumer.
- *
- * It is compatible with all standard Apache Hadoop MapReduce 
- * {@link InputFormat} implementations.
- * 
- * This class is not meant to be extended by external projects.
- */
+public abstract class BaseEjbProxyHandler implements InvocationHandler, Serializable {
+    private static final String OPENEJB_LOCALCOPY = "openejb.localcopy";
+    private IntraVmCopyMonitor.State strategy = NONE;
 
-public class MRInput extends MRInputBase {
+    private static class ProxyRegistry {
 
-  /**
-   * Helper class to configure {@link MRInput}
-   *
-   */
-  public static class MRInputConfigurer {
-    final Configuration conf;
-    final Class<?> inputFormat;
-    boolean useNewApi;
-    boolean groupSplitsInAM = true;
-    boolean generateSplitsInAM = true;
-    String inputClassName = MRInput.class.getName();
-    boolean getCredentialsForSourceFilesystem = true;
-    String inputPaths = null;
-    
-    private MRInputConfigurer(Configuration conf, Class<?> inputFormat) {
-      this.conf = conf;
-      this.inputFormat = inputFormat;
-      if (org.apache.hadoop.mapred.InputFormat.class.isAssignableFrom(inputFormat)) {
-        useNewApi = false;
-      } else if(org.apache.hadoop.mapreduce.InputFormat.class.isAssignableFrom(inputFormat)) {
-        useNewApi = true;
-      } else {
-        throw new TezUncheckedException("inputFormat must be assignable from either " +
-            "org.apache.hadoop.mapred.InputFormat or " +
-            "org.apache.hadoop.mapreduce.InputFormat" +
-            " Given: " + inputFormat.getName());
-      }
-    }
-    
-    MRInputConfigurer setInputClassName(String className) {
-      this.inputClassName = className;
-      return this;
+        protected final Hashtable liveHandleRegistry = new Hashtable();
     }
 
-    private MRInputConfigurer setInputPaths(String inputPaths) {
-      if (!(org.apache.hadoop.mapred.FileInputFormat.class.isAssignableFrom(inputFormat) || 
-          FileInputFormat.class.isAssignableFrom(inputFormat))) {
-        throw new TezUncheckedException("When setting inputPaths the inputFormat must be " + 
-            "assignable from either org.apache.hadoop.mapred.FileInputFormat or " +
-            "org.apache.hadoop.mapreduce.lib.input.FileInputFormat. " +
-            "Otherwise use the non-path configurer." +
-            " Given: " + inputFormat.getName());
-      }
-      conf.set(FileInputFormat.INPUT_DIR, inputPaths);
-      this.inputPaths = inputPaths;
-      return this;
-    }
-    
-    /**
-     * Set whether splits should be grouped in the Tez App Master (default true)
-     * @param value whether to group splits in the AM or not
-     * @return {@link MRInputConfigurer}
-     */
-    public MRInputConfigurer groupSplitsInAM(boolean value) {
-      groupSplitsInAM = value;
-      return this;
-    }
-    
-    /**
-     * Set whether splits should be generated in the Tez App Master (default true)
-     * @param value whether to generate splits in the AM or not
-     * @return {@link MRInputConfigurer}
-     */
-    public MRInputConfigurer generateSplitsInAM(boolean value) {
-      generateSplitsInAM = value;
-      return this;
-    }
-    
-    /**
-     * Get the credentials for the inputPaths from their {@link FileSystem}s
-     * Use the method to turn this off when not using a {@link FileSystem}
-     * or when {@link Credentials} are not supported
-     * @param value whether to get credentials or not. (true by default)
-     * @return {@link MRInputConfigurer}
-     */
-    public MRInputConfigurer getCredentialsForSourceFileSystem(boolean value) {
-      getCredentialsForSourceFilesystem = value;
-      return this;
-    }
+    public final Object deploymentID;
+
+    public final Object primaryKey;
+
+    public boolean inProxyMap = false;
+
+    private transient WeakReference<BeanContext> beanContextRef;
+
+    public transient RpcContainer container;
+
+    protected boolean isInvalidReference = false;
+
+    protected Object clientIdentity;
+
+    /*
+    * The EJB 1.1 specification requires that arguments and return values between beans adhere to the
+    * Java RMI copy semantics which requires that the all arguments be passed by value (copied) and 
+    * never passed as references.  However, it is possible for the system administrator to turn off the
+    * copy operation so that arguments and return values are passed by reference as performance optimization.
+    * Simply setting the org.apache.openejb.core.EnvProps.INTRA_VM_COPY property to FALSE will cause this variable to
+    * set to false, and therefor bypass the copy operations in the invoke( ) method of this class; arguments
+    * and return values will be passed by reference not value. 
+    *
+    * This property is, by default, always TRUE but it can be changed to FALSE by setting it as a System property
+    * or a property of the Property argument when invoking OpenEJB.init(props).  This variable is set to that
+    * property in the static block for this class.
+    */
+    private boolean doIntraVmCopy;
+    private boolean doCrossClassLoaderCopy;
+    private static final boolean REMOTE_COPY_ENABLED = parseRemoteCopySetting();
+    protected final InterfaceType interfaceType;
+    private transient WeakHashMap<Class,Object> interfaces;
+    private transient WeakReference<Class> mainInterface;
+
+    public BaseEjbProxyHandler(BeanContext beanContext, Object pk, InterfaceType interfaceType, List<Class> interfaces, Class mainInterface) {
+        this.container = (RpcContainer) beanContext.getContainer();
+        this.deploymentID = beanContext.getDeploymentID();
+        this.interfaceType = interfaceType;
+        this.primaryKey = pk;
+        this.setBeanContext(beanContext);
+
+        if (interfaces == null || interfaces.size() == 0) {
+            InterfaceType objectInterfaceType = (interfaceType.isHome()) ? interfaceType.getCounterpart() : interfaceType;
+            interfaces = new ArrayList<Class>(beanContext.getInterfaces(objectInterfaceType));
+        }
         
+        if (mainInterface == null && interfaces.size() == 1) {
+            mainInterface = interfaces.get(0);
+        }
+        
+        setInterfaces(interfaces);
+        setMainInterface(mainInterface);
+        if (mainInterface == null) {
+            throw new IllegalArgumentException("No mainInterface: otherwise di: " + beanContext + " InterfaceType: " + interfaceType + " interfaces: " + interfaces );
+        }
+        this.setDoIntraVmCopy(REMOTE_COPY_ENABLED && !interfaceType.isLocal() && !interfaceType.isLocalBean());
+    }
+
+    protected void setDoIntraVmCopy(boolean doIntraVmCopy) {
+        this.doIntraVmCopy = doIntraVmCopy;
+        setStrategy();
+    }
+
+    protected void setDoCrossClassLoaderCopy(boolean doCrossClassLoaderCopy) {
+        this.doCrossClassLoaderCopy = doCrossClassLoaderCopy;
+        setStrategy();
+    }
+
+    private void setStrategy() {
+        if (!doIntraVmCopy) strategy = NONE;
+        else if (doCrossClassLoaderCopy) strategy = CLASSLOADER_COPY;
+        else strategy = COPY;
+    }
+
     /**
-     * Create the {@link DataSourceDescriptor}
-     * @return {@link DataSourceDescriptor}
+     * This method should be called to determine the corresponding
+     * business interface class to name as the invoking interface.
+     * This method should NOT be called on non-business-interface
+     * methods the proxy has such as java.lang.Object or IntraVmProxy.
+     * @param method
+     * @return the business (or component) interface matching this method
      */
-    public DataSourceDescriptor create() {
-      try {
-        if (generateSplitsInAM) {
-          return createGeneratorDataSource();
-        } else {
-          return createDistributorDataSource();
+    protected Class<?> getInvokedInterface(Method method) {
+        // Home's only have one interface ever.  We don't
+        // need to verify that the method invoked is in
+        // it's interface.
+        Class mainInterface = getMainInterface();
+        if (interfaceType.isHome()) return mainInterface;
+        if (interfaceType.isLocalBean()) return mainInterface;
+
+        Class declaringClass = method.getDeclaringClass();
+
+        // If our "main" interface is or extends the method's declaring class
+        // then we're good.  We know the main interface has the method being
+        // invoked and it's safe to return it as the invoked interface.
+        if (mainInterface != null && declaringClass.isAssignableFrom(mainInterface)){
+            return mainInterface;
         }
-      } catch (Exception e) {
-        throw new TezUncheckedException(e);
-      } 
+
+        // If the method being invoked isn't in the "main" interface
+        // we need to find a suitable interface or throw an exception.
+        for (Class secondaryInterface : interfaces.keySet()) {
+            if (declaringClass.isAssignableFrom(secondaryInterface)){
+                return secondaryInterface;
+            }
+        }
+
+        // We couldn't find an implementing interface.  Where did this
+        // method come from???  Freak occurence.  Throw an exception.
+        throw new IllegalStateException("Received method invocation and cannot determine corresponding business interface: method=" + method);
     }
-    
-    private DataSourceDescriptor createDistributorDataSource() throws IOException {
-      Configuration inputConf = new JobConf(conf);
-      InputSplitInfo inputSplitInfo;
-      try {
-        inputSplitInfo = MRHelpers.generateInputSplitsToMem(inputConf, false, 0);
-      } catch (Exception e) {
-        throw new TezUncheckedException(e);
-      }
-      inputConf.setBoolean("mapred.mapper.new-api", useNewApi);
-      if (useNewApi) {
-        inputConf.set(MRJobConfig.INPUT_FORMAT_CLASS_ATTR, inputFormat.getName());
-      } else {
-        inputConf.set("mapred.input.format.class", inputFormat.getName());
-      }
-      MRHelpers.translateVertexConfToTez(inputConf);
-      MRHelpers.doJobClientMagic(inputConf);
-      byte[] payload = MRHelpers.createMRInputPayload(inputConf, inputSplitInfo.getSplitsProto());
-      Credentials credentials = null;
-      if (getCredentialsForSourceFilesystem && inputSplitInfo.getCredentials() != null) {
-        credentials = inputSplitInfo.getCredentials();
-      }
-      return new DataSourceDescriptor(
-          new InputDescriptor(inputClassName).setUserPayload(payload),
-          new InputInitializerDescriptor(MRInputSplitDistributor.class.getName()),
-          inputSplitInfo.getNumTasks(), credentials, 
-          new VertexLocationHint(inputSplitInfo.getTaskLocationHints()));
+
+    public Class getMainInterface() {
+        return mainInterface.get();
     }
-    
-    private DataSourceDescriptor createGeneratorDataSource() throws IOException {
-      Configuration inputConf = new JobConf(conf);
-      inputConf.setBoolean("mapred.mapper.new-api", useNewApi);
-      if (useNewApi) {
-        inputConf.set(MRJobConfig.INPUT_FORMAT_CLASS_ATTR, inputFormat.getName());
-      } else {
-        inputConf.set("mapred.input.format.class", inputFormat.getName());
-      }
-      MRHelpers.translateVertexConfToTez(inputConf);
-      MRHelpers.doJobClientMagic(inputConf);
-      
-      Credentials credentials = null;
-      if (getCredentialsForSourceFilesystem && inputPaths != null) {
+
+    private void setMainInterface(Class referent) {
+        mainInterface = new WeakReference<Class>(referent);
+    }
+
+    private void setInterfaces(List<Class> interfaces) {
+        this.interfaces = new WeakHashMap<Class,Object>(interfaces.size());
+        for (Class clazz : interfaces) {
+            this.interfaces.put(clazz, null);
+        }
+    }
+
+    public List<Class> getInterfaces() {
+        Set<Class> classes = interfaces.keySet();
+        return new ArrayList(classes);
+    }
+
+    private static boolean parseRemoteCopySetting() {
+        return SystemInstance.get().getOptions().get(OPENEJB_LOCALCOPY, true);
+    }
+
+    protected void checkAuthorization(Method method) throws org.apache.openejb.OpenEJBException {
+    }
+
+    public void setIntraVmCopyMode(boolean on) {
+        setDoIntraVmCopy(on);
+    }
+
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        isValidReference(method);
+
+        if (args == null) args = new Object[]{};
+        
+        if (method.getDeclaringClass() == Object.class) {
+            final String methodName = method.getName();
+
+            if (methodName.equals("toString")) return toString();
+            else if (methodName.equals("equals")) return equals(args[0]) ? Boolean.TRUE : Boolean.FALSE;
+            else if (methodName.equals("hashCode")) return new Integer(hashCode());
+            else throw new UnsupportedOperationException("Unknown method: " + method);
+        } else if (method.getDeclaringClass() == IntraVmProxy.class) {
+            final String methodName = method.getName();
+
+            if (methodName.equals("writeReplace")) return _writeReplace(proxy);
+            else throw new UnsupportedOperationException("Unknown method: " + method);
+        } else if (method.getDeclaringClass() == BeanContext.Removable.class) {
+            return _invoke(proxy, BeanContext.Removable.class, method, args);
+        }
+
+        Class interfce = getInvokedInterface(method);
+
+
+        ThreadContext callContext = ThreadContext.getThreadContext();
+        Object localClientIdentity = ClientSecurity.getIdentity();
         try {
-          List<URI> uris = Lists.newLinkedList();
-          for (String inputPath : inputPaths.split(",")) {
-            Path path = new Path(inputPath);
-            FileSystem fs;
-            fs = path.getFileSystem(conf);
-            Path qPath = fs.makeQualified(path);
-            uris.add(qPath.toUri());
-          }
-          credentials = new Credentials();
-          TezClientUtils.addFileSystemCredentialsFromURIs(uris, credentials, conf);
-        } catch (IOException e) {
-          throw new TezUncheckedException(e);
+            if (callContext == null && localClientIdentity != null) {
+                SecurityService securityService = SystemInstance.get().getComponent(SecurityService.class);
+                securityService.associate(localClientIdentity);
+            }
+            if (strategy == CLASSLOADER_COPY) {
+
+                IntraVmCopyMonitor.pre(strategy);
+                ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
+                Thread.currentThread().setContextClassLoader(getBeanContext().getClassLoader());
+                try {
+                    args = copyArgs(args);
+                    method = copyMethod(method);
+                    interfce = copyObj(interfce);
+                } finally {
+                    Thread.currentThread().setContextClassLoader(oldClassLoader);
+                    IntraVmCopyMonitor.post();
+                }
+
+            } else if (strategy == COPY && args != null && args.length > 0) {
+
+                IntraVmCopyMonitor.pre(strategy);
+                try {
+                    args = copyArgs(args);
+                } finally {
+                    IntraVmCopyMonitor.post();
+                }
+            }
+            IntraVmCopyMonitor.State oldStrategy =  strategy;
+            if (getBeanContext().isAsynchronous(method) || getBeanContext().getComponentType().equals(BeanType.MANAGED)){
+                strategy = IntraVmCopyMonitor.State.NONE;
+            }
+   
+            try {
+
+                Object returnValue = _invoke(proxy, interfce, method, args);
+                return copy(strategy, returnValue);
+            } catch (Throwable throwable) {
+                throwable = copy(strategy, throwable);
+                throw convertException(throwable, method, interfce);
+            } finally {
+                strategy = oldStrategy;
+            }
+        } finally {
+            
+            if (callContext == null && localClientIdentity != null) {
+                SecurityService securityService = SystemInstance.get().getComponent(SecurityService.class);
+                securityService.disassociate();
+            }
         }
-      }
-
-      byte[] payload = null;
-      if (groupSplitsInAM) {
-        payload = MRHelpers.createMRInputPayloadWithGrouping(inputConf);
-      } else {
-        payload = MRHelpers.createMRInputPayload(inputConf, null);
-      }
-      return new DataSourceDescriptor(
-          new InputDescriptor(inputClassName).setUserPayload(payload),
-          new InputInitializerDescriptor(MRInputAMSplitGenerator.class.getName()), credentials);
     }
-  }
-  
-  /**
-   * Create an {@link MRInputConfigurer}
-   * @param conf Configuration for the {@link MRInput}
-   * @param inputFormat InputFormat derived class
-   * @return {@link MRInputConfigurer}
-   */
-  public static MRInputConfigurer createConfigurer(Configuration conf, Class<?> inputFormat) {
-    return new MRInputConfigurer(conf, inputFormat);
-  }
 
-  /**
-   * Create an {@link MRInputConfigurer} for a FileInputFormat
-   * @param conf Configuration for the {@link MRInput}
-   * @param inputFormat FileInputFormat derived class
-   * @param inputPaths Comma separated input paths
-   * @return {@link MRInputConfigurer}
-   */
-  public static MRInputConfigurer createConfigurer(Configuration conf, Class<?> inputFormat,
-      String inputPaths) {
-    return new MRInputConfigurer(conf, inputFormat).setInputPaths(inputPaths);
-  }
-  
-  private static final Log LOG = LogFactory.getLog(MRInput.class);
-  
-  private final ReentrantLock rrLock = new ReentrantLock();
-  private final Condition rrInited = rrLock.newCondition();
-  
-  private volatile boolean eventReceived = false;
+    private <T> T copy(IntraVmCopyMonitor.State strategy, T object) throws IOException, ClassNotFoundException {
+        if (object == null || !strategy.isCopy()) return object;
 
-  private boolean readerCreated = false;
+        IntraVmCopyMonitor.pre(strategy);
+        try {
+            return (T) copyObj(object);
+        } finally {
+            IntraVmCopyMonitor.post();
+        }
+    }
 
-  protected MRReader mrReader;
+    private void isValidReference(Method method) throws NoSuchObjectException {
+        if (isInvalidReference) {
+            if (interfaceType.isComponent() && interfaceType.isLocal()){
+                throw new NoSuchObjectLocalException("reference is invalid");
+            } else if (interfaceType.isComponent() || java.rmi.Remote.class.isAssignableFrom(method.getDeclaringClass())) {
+                throw new NoSuchObjectException("reference is invalid");
+            } else {
+                throw new NoSuchEJBException("reference is invalid for " + deploymentID);
+            }
+        }
+        if (!(Object.class.equals(method.getDeclaringClass())
+                && method.getName().equals("finalize")
+                && method.getExceptionTypes().length == 1
+                && Throwable.class.equals(method.getExceptionTypes()[0]))) {
+            getBeanContext(); // will throw an exception if app has been undeployed.
+        }
+    }
 
-  protected TaskSplitIndex splitMetaInfo = new TaskSplitIndex();
+    /**
+     * Renamed method so it shows up with a much more understandable purpose as it
+     * will be the top element in the stacktrace
+     * @param e
+     * @param method
+     * @param interfce
+     */
+    protected Throwable convertException(Throwable e, Method method, Class interfce) {
+        boolean rmiRemote = java.rmi.Remote.class.isAssignableFrom(interfce);
+        if (e instanceof TransactionRequiredException) {
+            if (!rmiRemote && interfaceType.isBusiness()) {
+                return new EJBTransactionRequiredException(e.getMessage()).initCause(getCause(e));
+            } else if (interfaceType.isLocal()) {
+                return new TransactionRequiredLocalException(e.getMessage()).initCause(getCause(e));
+            } else {
+                return e;
+            }
+        }
+        if (e instanceof TransactionRolledbackException) {
+            if (!rmiRemote && interfaceType.isBusiness()) {
+                return new EJBTransactionRolledbackException(e.getMessage()).initCause(getCause(e));
+            } else if (interfaceType.isLocal()) {
+                return new TransactionRolledbackLocalException(e.getMessage()).initCause(getCause(e));
+            } else {
+                return e;
+            }
+        }
+        if (e instanceof NoSuchObjectException) {
+            if (!rmiRemote && interfaceType.isBusiness()) {
+                return new NoSuchEJBException(e.getMessage()).initCause(getCause(e));
+            } else if (interfaceType.isLocal()) {
+                return new NoSuchObjectLocalException(e.getMessage()).initCause(getCause(e));
+            } else {
+                return e;
+            }
+        }
+        if (e instanceof RemoteException) {
+            if (!rmiRemote && interfaceType.isBusiness()) {
+                return new EJBException(e.getMessage()).initCause(getCause(e));
+            } else if (interfaceType.isLocal()) {
+                return new EJBException(e.getMessage()).initCause(getCause(e));
+            } else {
+                return e;
+            }
+        }
+        if (e instanceof AccessException) {
+            if (!rmiRemote && interfaceType.isBusiness()) {
+                return new AccessLocalException(e.getMessage()).initCause(getCause(e));
+            } else if (interfaceType.isLocal()) {
+                return new AccessLocalException(e.getMessage()).initCause(getCause(e));
+            } else {
+                return e;
+            }
+        }
 
-  // Potential counters - #splits, #totalSize, #actualyBytesRead
-  
-  @Private
-  volatile boolean splitInfoViaEvents;
+        for (Class<?> type : method.getExceptionTypes()) {
+            if (type.isAssignableFrom(e.getClass())) {
+                return e;
+            }
+        }
 
-  public MRInput(InputContext inputContext, int numPhysicalInputs) {
-    super(inputContext, numPhysicalInputs);
-  }
+        // Exception is undeclared
+        // Try and find a runtime exception in there
+        while (e.getCause() != null && !(e instanceof RuntimeException)) {
+            e = e.getCause();
+        }
+        return e;
+    }
 
-  @Override
-  public List<Event> initialize() throws IOException {
-    super.initialize();
-    getContext().inputIsReady();
-    this.splitInfoViaEvents = jobConf.getBoolean(MRJobConfig.MR_TEZ_SPLITS_VIA_EVENTS,
-        MRJobConfig.MR_TEZ_SPLITS_VIA_EVENTS_DEFAULT);
-    LOG.info("Using New mapreduce API: " + useNewApi
-        + ", split information via event: " + splitInfoViaEvents);
-    initializeInternal();
-    return null;
-  }
+    /**
+     * Method instance on proxies that come from a classloader outside
+     * the bean's classloader need to be swapped out for the identical
+     * method in the bean's classloader.
+     *
+     * @param method
+     * @return return's the same method but loaded from the beans classloader
+     */
 
-  @Override
-  public void start() {
-    Preconditions.checkState(getNumPhysicalInputs() == 1, "Expecting only 1 physical input for MRInput");
-  }
+    private Method copyMethod(Method method) throws Exception {
+        int parameterCount = method.getParameterTypes().length;
+        Object[] types = new Object[1 + parameterCount];
+        types[0] = method.getDeclaringClass();
+        System.arraycopy(method.getParameterTypes(), 0, types, 1, parameterCount);
 
-  @Private
-  void initializeInternal() throws IOException {
-    // Primarily for visibility
-    rrLock.lock();
-    try {
-      
-      if (splitInfoViaEvents) {
-        if (useNewApi) {
-          mrReader = new MRReaderMapReduce(jobConf, getContext().getCounters(), inputRecordCounter,
-              getContext().getApplicationId().getClusterTimestamp(), getContext()
-                  .getTaskVertexIndex(), getContext().getApplicationId().getId(), getContext()
-                  .getTaskIndex(), getContext().getTaskAttemptNumber());
+        types = copyArgs(types);
+
+        Class targetClass = (Class) types[0];
+        Class[] targetParameters = new Class[parameterCount];
+        System.arraycopy(types, 1, targetParameters, 0, parameterCount);
+        Method targetMethod = targetClass.getMethod(method.getName(), targetParameters);
+        return targetMethod;
+    }
+
+    protected Throwable getCause(Throwable e) {
+        if (e != null && e.getCause() != null) {
+            return e.getCause();
+        }
+        return e;
+    }
+
+    public String toString() {
+        String name = null;
+        try {
+            name = getProxyInfo().getInterface().getName();
+        } catch (Exception e) {
+        }
+        return "proxy=" + name + ";deployment=" + this.deploymentID + ";pk=" + this.primaryKey;
+    }
+
+    public int hashCode() {
+        if (primaryKey == null) {
+
+            return deploymentID.hashCode();
         } else {
-          mrReader = new MRReaderMapred(jobConf, getContext().getCounters(), inputRecordCounter);
+            return primaryKey.hashCode();
         }
-      } else {
-        TaskSplitMetaInfo[] allMetaInfo = MRInputUtils.readSplits(jobConf);
-        TaskSplitMetaInfo thisTaskMetaInfo = allMetaInfo[getContext().getTaskIndex()];
-        TaskSplitIndex splitMetaInfo = new TaskSplitIndex(thisTaskMetaInfo.getSplitLocation(),
-            thisTaskMetaInfo.getStartOffset());
-        if (useNewApi) {
-          org.apache.hadoop.mapreduce.InputSplit newInputSplit = MRInputUtils
-              .getNewSplitDetailsFromDisk(splitMetaInfo, jobConf, getContext().getCounters()
-                  .findCounter(TaskCounter.SPLIT_RAW_BYTES));
-          mrReader = new MRReaderMapReduce(jobConf, newInputSplit, getContext().getCounters(),
-              inputRecordCounter, getContext().getApplicationId().getClusterTimestamp(),
-              getContext().getTaskVertexIndex(), getContext().getApplicationId().getId(),
-              getContext().getTaskIndex(), getContext().getTaskAttemptNumber());
+    }
+
+    public boolean equals(Object obj) {
+        if (obj == null) {
+            return false;
+        }
+        try {
+            obj = ProxyManager.getInvocationHandler(obj);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        if (this == obj) {
+            return true;
+        }
+        BaseEjbProxyHandler other = (BaseEjbProxyHandler) obj;
+        return equalHandler(other);
+    }
+
+    protected boolean equalHandler(BaseEjbProxyHandler other) {
+        return (primaryKey == null? other.primaryKey == null: primaryKey.equals(other.primaryKey))
+                && deploymentID.equals(other.deploymentID)
+                && getMainInterface().equals(other.getMainInterface());
+    }
+
+    protected abstract Object _invoke(Object proxy, Class interfce, Method method, Object[] args) throws Throwable;
+
+    protected Object[] copyArgs(Object[] objects) throws IOException, ClassNotFoundException {
+        if (objects == null) return objects;
+        /* 
+            while copying the arguments is necessary. Its not necessary to copy the array itself,
+            because they array is created by the Proxy implementation for the sole purpose of 
+            packaging the arguments for the InvocationHandler.invoke( ) method. Its ephemeral
+            and their for doesn't need to be copied.
+        */
+
+        for (int i = 0; i < objects.length; i++) {
+            objects[i] = copyObj(objects[i]);
+        }
+
+        return objects;
+    }
+
+    /* change dereference to copy */
+    protected <T> T copyObj(T object) throws IOException, ClassNotFoundException {
+    	// Check for primitive and other known class types that are immutable.  If detected
+    	// we can safely return them.
+    	if (object == null) return null;
+    	Class ooc = object.getClass();
+        if ((ooc == int.class         ) ||
+            (ooc == String.class      ) ||
+            (ooc == long.class        ) ||
+            (ooc == boolean.class     ) ||
+            (ooc == byte.class        ) ||
+            (ooc == float.class       ) ||
+            (ooc == double.class      ) ||
+            (ooc == short.class       ) ||
+            (ooc == Long.class        ) ||
+            (ooc == Boolean.class     ) ||
+            (ooc == Byte.class        ) ||
+            (ooc == Character.class   ) ||
+            (ooc == Float.class       ) ||
+            (ooc == Double.class      ) ||
+            (ooc == Short.class       ) ||
+            (ooc == BigDecimal.class  ))
+        {
+            return object;
+        }
+
+
+        ByteArrayOutputStream baos = null;
+        try {
+            baos = new ByteArrayOutputStream(128);
+            ObjectOutputStream out = new ObjectOutputStream(baos);
+            out.writeObject(object);
+            out.close();
+        } catch (NotSerializableException e) {
+            throw (IOException) new NotSerializableException(e.getMessage()+" : The EJB specification restricts remote interfaces to only serializable data types.  This can be disabled for in-vm use with the "+OPENEJB_LOCALCOPY+"=false system property.").initCause(e);
+        }
+
+        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
+        ObjectInputStream in = new EjbObjectInputStream(bais);
+        Object obj = in.readObject();
+        return (T) obj;
+    }
+
+    public void invalidateReference() {
+        this.container = null;
+        this.setBeanContext(null);
+        this.isInvalidReference = true;
+    }
+
+    protected void invalidateAllHandlers(Object key) {
+        HashSet<BaseEjbProxyHandler> set = (HashSet) getLiveHandleRegistry().remove(key);
+        if (set == null) return;
+        synchronized (set) {
+            for (BaseEjbProxyHandler handler : set) {
+                handler.invalidateReference();
+            }
+        }
+    }
+
+    protected abstract Object _writeReplace(Object proxy) throws ObjectStreamException;
+
+    protected void registerHandler(Object key, BaseEjbProxyHandler handler) {
+        HashSet set = (HashSet) getLiveHandleRegistry().get(key);
+        if (set != null) {
+            synchronized (set) {
+                set.add(handler);
+            }
         } else {
-          org.apache.hadoop.mapred.InputSplit oldInputSplit = MRInputUtils
-              .getOldSplitDetailsFromDisk(splitMetaInfo, jobConf, getContext().getCounters()
-                  .findCounter(TaskCounter.SPLIT_RAW_BYTES));
-          mrReader =
-              new MRReaderMapred(jobConf, oldInputSplit, getContext().getCounters(),
-                  inputRecordCounter);
+            set = new HashSet();
+            set.add(handler);
+            getLiveHandleRegistry().put(key, set);
         }
-      }
-    } finally {
-      rrLock.unlock();
-    }
-    LOG.info("Initialzed MRInput: " + getContext().getSourceVertexName());
-  }
-
-  @Override
-  public KeyValueReader getReader() throws IOException {
-    Preconditions
-        .checkState(readerCreated == false,
-            "Only a single instance of record reader can be created for this input.");
-    readerCreated = true;
-    rrLock.lock();
-    try {
-      if (!mrReader.isSetup())
-        checkAndAwaitRecordReaderInitialization();
-    } finally {
-      rrLock.unlock();
     }
 
-    return mrReader;
-  }
+    public abstract org.apache.openejb.ProxyInfo getProxyInfo();
 
-  @Override
-  public void handleEvents(List<Event> inputEvents) throws Exception {
-    if (eventReceived || inputEvents.size() != 1) {
-      throw new IllegalStateException(
-          "MRInput expects only a single input. Received: current eventListSize: "
-              + inputEvents.size() + "Received previous input: "
-              + eventReceived);
+    public BeanContext getBeanContext() {
+        BeanContext beanContext = beanContextRef.get();
+        if (beanContext == null|| beanContext.isDestroyed()){
+            invalidateReference();
+            throw new IllegalStateException("Bean '"+deploymentID+"' has been undeployed.");
+        }
+        return beanContext;
     }
-    Event event = inputEvents.iterator().next();
-    Preconditions.checkArgument(event instanceof InputDataInformationEvent,
-        getClass().getSimpleName()
-            + " can only handle a single event of type: "
-            + InputDataInformationEvent.class.getSimpleName());
 
-    processSplitEvent((InputDataInformationEvent)event);
-  }
-
-  @Override
-  public List<Event> close() throws IOException {
-    mrReader.close();
-    return null;
-  }
-
-  /**
-   * {@link MRInput} sets some additional parameters like split location when using
-   * the new API. This methods returns the list of additional updates, and
-   * should be used by Processors using the old MapReduce API with {@link MRInput}.
-   * 
-   * @return the additional fields set by {@link MRInput}
-   */
-  public Configuration getConfigUpdates() {
-    if (!useNewApi) {
-      return ((MRReaderMapred) mrReader).getConfigUpdates();
-    } else {
-      return null;
+    public void setBeanContext(BeanContext beanContext) {
+        this.beanContextRef = new WeakReference<BeanContext>(beanContext);
     }
-  }
 
-  public float getProgress() throws IOException, InterruptedException {
-    return mrReader.getProgress();
-  }
+    public Hashtable getLiveHandleRegistry() {
+        BeanContext beanContext = getBeanContext();
+        ProxyRegistry proxyRegistry = beanContext.get(ProxyRegistry.class);
+        if (proxyRegistry == null){
+            proxyRegistry = new ProxyRegistry();
+            beanContext.set(ProxyRegistry.class, proxyRegistry);
+        }
+        return proxyRegistry.liveHandleRegistry;
+    }
 
-  void processSplitEvent(InputDataInformationEvent event)
-      throws IOException {
-    rrLock.lock();
-    try {
-      initFromEventInternal(event);
-      LOG.info("Notifying on RecordReader Initialized");
-      rrInited.signal();
-    } finally {
-      rrLock.unlock();
-    }
-  }
-  
-  void checkAndAwaitRecordReaderInitialization() throws IOException {
-    assert rrLock.getHoldCount() == 1;
-    rrLock.lock();
-    try {
-      LOG.info("Awaiting RecordReader initialization");
-      rrInited.await();
-    } catch (Exception e) {
-      throw new IOException(
-          "Interrupted waiting for RecordReader initiailization");
-    } finally {
-      rrLock.unlock();
-    }
-  }
+    private void writeObject(java.io.ObjectOutputStream out) throws IOException {
+        out.defaultWriteObject();
 
-  @Private
-  void initFromEvent(InputDataInformationEvent initEvent)
-      throws IOException {
-    rrLock.lock();
-    try {
-      initFromEventInternal(initEvent);
-    } finally {
-      rrLock.unlock();
+        out.writeObject(getInterfaces());
+        out.writeObject(getMainInterface());
     }
-  }
-  
-  private void initFromEventInternal(InputDataInformationEvent initEvent) throws IOException {
-    LOG.info("Initializing RecordReader from event");
-    Preconditions.checkState(initEvent != null, "InitEvent must be specified");
-    MRSplitProto splitProto = MRSplitProto.parseFrom(initEvent.getUserPayload());
-    Object split = null;
-    if (useNewApi) {
-      split = MRInputUtils.getNewSplitDetailsFromEvent(splitProto, jobConf);
-      LOG.info("Split Details -> SplitClass: " + split.getClass().getName() + ", NewSplit: "
-          + split);
 
-    } else {
-      split = MRInputUtils.getOldSplitDetailsFromEvent(splitProto, jobConf);
-      LOG.info("Split Details -> SplitClass: " + split.getClass().getName() + ", OldSplit: "
-          + split);
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+
+        in.defaultReadObject();
+
+        ContainerSystem containerSystem = SystemInstance.get().getComponent(ContainerSystem.class);
+        setBeanContext(containerSystem.getBeanContext(deploymentID));
+        container = (RpcContainer) getBeanContext().getContainer();
+
+        if (IntraVmCopyMonitor.isCrossClassLoaderOperation()) {
+            setDoCrossClassLoaderCopy(true);
+        }
+
+        setInterfaces((List<Class>) in.readObject());
+        setMainInterface((Class) in.readObject());
     }
-    mrReader.setSplit(split);
-    LOG.info("Initialized RecordReader from event");
-  }
+
 }

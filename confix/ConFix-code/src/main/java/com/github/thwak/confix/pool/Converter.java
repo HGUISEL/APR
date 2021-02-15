@@ -41,6 +41,8 @@ public class Converter {
 		return polished;
 	}
 
+	//TE 
+	// 여기서 filter 수정홰서 튜닝 가능할듯
 	public static EditScript filter(EditScript editScript){
 		EditScript filtered = new EditScript();
 		for(EditOp op : editScript.getEditOps()){
@@ -65,7 +67,8 @@ public class Converter {
 							|| loc.equals(EnumConstantDeclaration.NAME_PROPERTY))
 						continue;
 				}
-			} else if(op.getType().equals(Change.MOVE) || op.getType().equals(Change.DELETE)) {
+				// TE 
+			} else if(op.getType().equals(Change.MOVE) ){ // || op.getType().equals(Change.DELETE)) {
 				//Discard delete / move operations.
 				continue;
 			}

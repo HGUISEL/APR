@@ -1,5 +1,6 @@
+package org.apache.velocity.runtime.parser.node;
+
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -8,893 +9,806 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.    
  */
-
-package org.apache.hadoop.hbase.rest.client;
 
 import java.io.IOException;
-import java.io.InterruptedIOException;
-import java.io.UnsupportedEncodingException;
-import java.net.URLEncoder;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
+import java.io.Writer;
+import java.lang.reflect.InvocationTargetException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellUtil;
-import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HTableDescriptor;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.classification.InterfaceAudience;
-import org.apache.hadoop.hbase.client.Append;
-import org.apache.hadoop.hbase.client.Delete;
-import org.apache.hadoop.hbase.client.Durability;
-import org.apache.hadoop.hbase.client.Get;
-import org.apache.hadoop.hbase.client.Increment;
-import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.Result;
-import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.client.Row;
-import org.apache.hadoop.hbase.client.RowMutations;
-import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.client.Table;
-import org.apache.hadoop.hbase.client.TableDescriptor;
-import org.apache.hadoop.hbase.client.coprocessor.Batch;
-import org.apache.hadoop.hbase.client.coprocessor.Batch.Callback;
-import org.apache.hadoop.hbase.client.metrics.ScanMetrics;
-import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
-import org.apache.hadoop.hbase.io.TimeRange;
-import org.apache.hadoop.hbase.ipc.CoprocessorRpcChannel;
-import org.apache.hadoop.hbase.rest.Constants;
-import org.apache.hadoop.hbase.rest.model.CellModel;
-import org.apache.hadoop.hbase.rest.model.CellSetModel;
-import org.apache.hadoop.hbase.rest.model.RowModel;
-import org.apache.hadoop.hbase.rest.model.ScannerModel;
-import org.apache.hadoop.hbase.rest.model.TableSchemaModel;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.util.StringUtils;
-
-import com.google.protobuf.Descriptors;
-import com.google.protobuf.Message;
-import com.google.protobuf.Service;
-import com.google.protobuf.ServiceException;
+import org.apache.velocity.app.event.EventHandlerUtil;
+import org.apache.velocity.context.Context;
+import org.apache.velocity.context.InternalContextAdapter;
+import org.apache.velocity.exception.MethodInvocationException;
+import org.apache.velocity.exception.TemplateInitException;
+import org.apache.velocity.exception.VelocityException;
+import org.apache.velocity.runtime.RuntimeConstants;
+import org.apache.velocity.runtime.Renderable;
+import org.apache.velocity.runtime.parser.Parser;
+import org.apache.velocity.runtime.parser.Token;
+import org.apache.velocity.util.introspection.Info;
+import org.apache.velocity.util.introspection.VelPropertySet;
 
 /**
- * HTable interface to remote tables accessed via REST gateway
- */
-@InterfaceAudience.Public
-public class RemoteHTable implements Table {
+ * This class is responsible for handling the references in
+ * VTL ($foo).
+ *
+ * Please look at the Parser.jjt file which is
+ * what controls the generation of this class.
+ *
+ * @author <a href="mailto:jvanzyl@apache.org">Jason van Zyl</a>
+ * @author <a href="mailto:geirm@optonline.net">Geir Magnusson Jr.</a>
+ * @author <a href="mailto:Christoph.Reck@dlr.de">Christoph Reck</a>
+ * @author <a href="mailto:kjohnson@transparent.com>Kent Johnson</a>
+ * @version $Id$
+*/
+public class ASTReference extends SimpleNode
+{
+    /* Reference types */
+    private static final int NORMAL_REFERENCE = 1;
+    private static final int FORMAL_REFERENCE = 2;
+    private static final int QUIET_REFERENCE = 3;
+    private static final int RUNT = 4;
 
-  private static final Log LOG = LogFactory.getLog(RemoteHTable.class);
+    private int referenceType;
+    private String nullString;
+    private String rootString;
+    private boolean escaped = false;
+    private boolean computableReference = true;
+    private boolean logOnNull = true;
+    private String escPrefix = "";
+    private String morePrefix = "";
+    private String identifier = "";
 
-  final Client client;
-  final Configuration conf;
-  final byte[] name;
-  final int maxRetries;
-  final long sleepTime;
+    private String literal = null;
 
-  @SuppressWarnings("rawtypes")
-  protected String buildRowSpec(final byte[] row, final Map familyMap,
-      final long startTime, final long endTime, final int maxVersions) {
-    StringBuffer sb = new StringBuffer();
-    sb.append('/');
-    sb.append(Bytes.toString(name));
-    sb.append('/');
-    sb.append(toURLEncodedBytes(row));
-    Set families = familyMap.entrySet();
-    if (families != null) {
-      Iterator i = familyMap.entrySet().iterator();
-      sb.append('/');
-      while (i.hasNext()) {
-        Map.Entry e = (Map.Entry)i.next();
-        Collection quals = (Collection)e.getValue();
-        if (quals == null || quals.isEmpty()) {
-          // this is an unqualified family. append the family name and NO ':'
-          sb.append(toURLEncodedBytes((byte[])e.getKey()));
-        } else {
-          Iterator ii = quals.iterator();
-          while (ii.hasNext()) {
-            sb.append(toURLEncodedBytes((byte[])e.getKey()));
-            sb.append(':');
-            Object o = ii.next();
-            // Puts use byte[] but Deletes use KeyValue
-            if (o instanceof byte[]) {
-              sb.append(toURLEncodedBytes((byte[])o));
-            } else if (o instanceof KeyValue) {
-              sb.append(toURLEncodedBytes(CellUtil.cloneQualifier((KeyValue)o)));
-            } else {
-              throw new RuntimeException("object type not handled");
+    private int numChildren = 0;
+
+    protected Info uberInfo;
+
+    /**
+     * @param id
+     */
+    public ASTReference(int id)
+    {
+        super(id);
+    }
+
+    /**
+     * @param p
+     * @param id
+     */
+    public ASTReference(Parser p, int id)
+    {
+        super(p, id);
+    }
+
+    /**
+     * @see org.apache.velocity.runtime.parser.node.SimpleNode#jjtAccept(org.apache.velocity.runtime.parser.node.ParserVisitor, java.lang.Object)
+     */
+    public Object jjtAccept(ParserVisitor visitor, Object data)
+    {
+        return visitor.visit(this, data);
+    }
+
+    /**
+     * @see org.apache.velocity.runtime.parser.node.SimpleNode#init(org.apache.velocity.context.InternalContextAdapter, java.lang.Object)
+     */
+    public Object init(InternalContextAdapter context, Object data)
+    throws TemplateInitException
+    {
+        /*
+         *  init our children
+         */
+
+        super.init(context, data);
+
+        /*
+         *  the only thing we can do in init() is getRoot()
+         *  as that is template based, not context based,
+         *  so it's thread- and context-safe
+         */
+
+        rootString = getRoot();
+
+        numChildren = jjtGetNumChildren();
+
+        /*
+         * and if appropriate...
+         */
+
+        if (numChildren > 0 )
+        {
+            identifier = jjtGetChild(numChildren - 1).getFirstToken().image;
+        }
+
+        /*
+         * make an uberinfo - saves new's later on
+         */
+
+        uberInfo = new Info(context.getCurrentTemplateName(),
+                getLine(),getColumn());
+
+        /*
+         * track whether we log invalid references
+         */
+        logOnNull =
+            rsvc.getBoolean(RuntimeConstants.RUNTIME_LOG_REFERENCE_LOG_INVALID, true);
+
+        return data;
+    }
+
+    /**
+     *  Returns the 'root string', the reference key
+     * @return the root string.
+     */
+     public String getRootString()
+     {
+        return rootString;
+     }
+
+    /**
+     *   gets an Object that 'is' the value of the reference
+     *
+     *   @param o   unused Object parameter
+     *   @param context context used to generate value
+     * @return The execution result.
+     * @throws MethodInvocationException
+     */
+    public Object execute(Object o, InternalContextAdapter context)
+        throws MethodInvocationException
+    {
+
+        if (referenceType == RUNT)
+            return null;
+
+        /*
+         *  get the root object from the context
+         */
+
+        Object result = getVariableValue(context, rootString);
+
+        if (result == null)
+        {
+            return EventHandlerUtil.invalidGetMethod(rsvc, context, 
+                    "$" + rootString, null, null, uberInfo);
+        }
+
+        /*
+         * Iteratively work 'down' (it's flat...) the reference
+         * to get the value, but check to make sure that
+         * every result along the path is valid. For example:
+         *
+         * $hashtable.Customer.Name
+         *
+         * The $hashtable may be valid, but there is no key
+         * 'Customer' in the hashtable so we want to stop
+         * when we find a null value and return the null
+         * so the error gets logged.
+         */
+
+        try
+        {
+            Object previousResult = result; 
+            int failedChild = -1;
+            for (int i = 0; i < numChildren; i++)
+            {
+                previousResult = result;
+                result = jjtGetChild(i).execute(result,context);
+                if (result == null)
+                {
+                    failedChild = i;
+                    break;
+                }
             }
-            if (ii.hasNext()) {
-              sb.append(',');
+
+            if (result == null)
+            {
+                if (failedChild == -1)
+                {
+                    result = EventHandlerUtil.invalidGetMethod(rsvc, context, 
+                            "$" + rootString, previousResult, null, uberInfo);                    
+                }
+                else
+                {
+                    StringBuffer name = new StringBuffer("$").append(rootString);
+                    for (int i = 0; i <= failedChild; i++)
+                    {
+                        Node node = jjtGetChild(i);
+                        if (node instanceof ASTMethod)
+                        {
+                            name.append(".").append(((ASTMethod) node).getMethodName()).append("()");
+                        }
+                        else
+                        {
+                            name.append(".").append(node.getFirstToken().image);
+                        }
+                    }
+                    
+                    if (jjtGetChild(failedChild) instanceof ASTMethod)
+                    {
+                        String methodName = ((ASTMethod) jjtGetChild(failedChild)).getMethodName();
+                        result = EventHandlerUtil.invalidMethod(rsvc, context, 
+                                name.toString(), previousResult, methodName, uberInfo);                                                                
+                    }
+                    else
+                    {
+                        String property = jjtGetChild(failedChild).getFirstToken().image;
+                        result = EventHandlerUtil.invalidGetMethod(rsvc, context, 
+                                name.toString(), previousResult, property, uberInfo);                        
+                    }
+                }
+                
             }
-          }
+            
+            return result;
         }
-        if (i.hasNext()) {
-          sb.append(',');
+        catch(MethodInvocationException mie)
+        {
+            /*
+             *  someone tossed their cookies
+             */
+
+            log.error("Method " + mie.getMethodName()
+                        + " threw exception for reference $"
+                        + rootString
+                        + " in template " + context.getCurrentTemplateName()
+                        + " at " +  " [" + this.getLine() + ","
+                        + this.getColumn() + "]");
+
+            mie.setReferenceName(rootString);
+            throw mie;
         }
-      }
     }
-    if (startTime >= 0 && endTime != Long.MAX_VALUE) {
-      sb.append('/');
-      sb.append(startTime);
-      if (startTime != endTime) {
-        sb.append(',');
-        sb.append(endTime);
-      }
-    } else if (endTime != Long.MAX_VALUE) {
-      sb.append('/');
-      sb.append(endTime);
-    }
-    if (maxVersions > 1) {
-      sb.append("?v=");
-      sb.append(maxVersions);
-    }
-    return sb.toString();
-  }
 
-  protected String buildMultiRowSpec(final byte[][] rows, int maxVersions) {
-    StringBuilder sb = new StringBuilder();
-    sb.append('/');
-    sb.append(Bytes.toString(name));
-    sb.append("/multiget/");
-    if (rows == null || rows.length == 0) {
-      return sb.toString();
-    }
-    sb.append("?");
-    for(int i=0; i<rows.length; i++) {
-      byte[] rk = rows[i];
-      if (i != 0) {
-        sb.append('&');
-      }
-      sb.append("row=");
-      sb.append(toURLEncodedBytes(rk));
-    }
-    sb.append("&v=");
-    sb.append(maxVersions);
+    /**
+     *  gets the value of the reference and outputs it to the
+     *  writer.
+     *
+     *  @param context  context of data to use in getting value
+     *  @param writer   writer to render to
+     * @return True if rendering was successful.
+     * @throws IOException
+     * @throws MethodInvocationException
+     */
+    public boolean render(InternalContextAdapter context, Writer writer) throws IOException,
+            MethodInvocationException
+    {
+        if (referenceType == RUNT)
+        {
+            if (context.getAllowRendering())
+            {
+                writer.write(rootString);
+            }
 
-    return sb.toString();
-  }
-
-  protected Result[] buildResultFromModel(final CellSetModel model) {
-    List<Result> results = new ArrayList<>();
-    for (RowModel row: model.getRows()) {
-      List<Cell> kvs = new ArrayList<>(row.getCells().size());
-      for (CellModel cell: row.getCells()) {
-        byte[][] split = KeyValue.parseColumn(cell.getColumn());
-        byte[] column = split[0];
-        byte[] qualifier = null;
-        if (split.length == 1) {
-          qualifier = HConstants.EMPTY_BYTE_ARRAY;
-        } else if (split.length == 2) {
-          qualifier = split[1];
-        } else {
-          throw new IllegalArgumentException("Invalid familyAndQualifier provided.");
+            return true;
         }
-        kvs.add(new KeyValue(row.getKey(), column, qualifier,
-          cell.getTimestamp(), cell.getValue()));
-      }
-      results.add(Result.create(kvs));
-    }
-    return results.toArray(new Result[results.size()]);
-  }
 
-  protected CellSetModel buildModelFromPut(Put put) {
-    RowModel row = new RowModel(put.getRow());
-    long ts = put.getTimeStamp();
-    for (List<Cell> cells: put.getFamilyCellMap().values()) {
-      for (Cell cell: cells) {
-        row.addCell(new CellModel(CellUtil.cloneFamily(cell), CellUtil.cloneQualifier(cell),
-          ts != HConstants.LATEST_TIMESTAMP ? ts : cell.getTimestamp(),
-          CellUtil.cloneValue(cell)));
-      }
-    }
-    CellSetModel model = new CellSetModel();
-    model.addRow(row);
-    return model;
-  }
+        Object value = execute(null, context);
 
-  /**
-   * Constructor
-   */
-  public RemoteHTable(Client client, String name) {
-    this(client, HBaseConfiguration.create(), Bytes.toBytes(name));
-  }
+        String localNullString = null;
 
-  /**
-   * Constructor
-   */
-  public RemoteHTable(Client client, Configuration conf, String name) {
-    this(client, conf, Bytes.toBytes(name));
-  }
+        /*
+         * if this reference is escaped (\$foo) then we want to do one of two things : 1) if this is
+         * a reference in the context, then we want to print $foo 2) if not, then \$foo (its
+         * considered schmoo, not VTL)
+         */
 
-  /**
-   * Constructor
-   */
-  public RemoteHTable(Client client, Configuration conf, byte[] name) {
-    this.client = client;
-    this.conf = conf;
-    this.name = name;
-    this.maxRetries = conf.getInt("hbase.rest.client.max.retries", 10);
-    this.sleepTime = conf.getLong("hbase.rest.client.sleep", 1000);
-  }
-
-  public byte[] getTableName() {
-    return name.clone();
-  }
-
-  @Override
-  public TableName getName() {
-    return TableName.valueOf(name);
-  }
-
-  @Override
-  public Configuration getConfiguration() {
-    return conf;
-  }
-
-  @Override
-  public HTableDescriptor getTableDescriptor() throws IOException {
-    StringBuilder sb = new StringBuilder();
-    sb.append('/');
-    sb.append(Bytes.toString(name));
-    sb.append('/');
-    sb.append("schema");
-    for (int i = 0; i < maxRetries; i++) {
-      Response response = client.get(sb.toString(), Constants.MIMETYPE_PROTOBUF);
-      int code = response.getCode();
-      switch (code) {
-      case 200:
-        TableSchemaModel schema = new TableSchemaModel();
-        schema.getObjectFromMessage(response.getBody());
-        return schema.getTableDescriptor();
-      case 509:
-        try {
-          Thread.sleep(sleepTime);
-        } catch (InterruptedException e) {
-          throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+        if (escaped)
+        {
+            localNullString = getNullString(context);
+            
+            if (value == null)
+            {
+                if (context.getAllowRendering())
+                {
+                    writer.write(escPrefix);
+                    writer.write("\\");
+                    writer.write(localNullString);
+                }
+            }
+            else
+            {
+                if (context.getAllowRendering())
+                {
+                    writer.write(escPrefix);
+                    writer.write(localNullString);
+                }
+            }
+            return true;
         }
-        break;
-      default:
-        throw new IOException("schema request returned " + code);
-      }
-    }
-    throw new IOException("schema request timed out");
-  }
 
-  @Override
-  public void close() throws IOException {
-    client.shutdown();
-  }
+        /*
+         * the normal processing
+         * 
+         * if we have an event cartridge, get a new value object
+         */
 
-  @Override
-  public Result get(Get get) throws IOException {
-    TimeRange range = get.getTimeRange();
-    String spec = buildRowSpec(get.getRow(), get.getFamilyMap(),
-      range.getMin(), range.getMax(), get.getMaxVersions());
-    if (get.getFilter() != null) {
-      LOG.warn("filters not supported on gets");
-    }
-    Result[] results = getResults(spec);
-    if (results.length > 0) {
-      if (results.length > 1) {
-        LOG.warn("too many results for get (" + results.length + ")");
-      }
-      return results[0];
-    } else {
-      return new Result();
-    }
-  }
+        value = EventHandlerUtil.referenceInsert(rsvc, context, literal(), value);
 
-  @Override
-  public Result[] get(List<Get> gets) throws IOException {
-    byte[][] rows = new byte[gets.size()][];
-    int maxVersions = 1;
-    int count = 0;
+        String toString = null;
+        if (value != null)
+        {
 
-    for(Get g:gets) {
+            if(value instanceof Renderable && ((Renderable)value).render(context,writer))
+            {
+                return true;
+            }
 
-      if ( count == 0 ) {
-        maxVersions = g.getMaxVersions();
-      } else if (g.getMaxVersions() != maxVersions) {
-        LOG.warn("MaxVersions on Gets do not match, using the first in the list ("+maxVersions+")");
-      }
-
-      if (g.getFilter() != null) {
-        LOG.warn("filters not supported on gets");
-      }
-
-      rows[count] = g.getRow();
-      count ++;
-    }
-
-    String spec = buildMultiRowSpec(rows, maxVersions);
-
-    return getResults(spec);
-  }
-
-  private Result[] getResults(String spec) throws IOException {
-    for (int i = 0; i < maxRetries; i++) {
-      Response response = client.get(spec, Constants.MIMETYPE_PROTOBUF);
-      int code = response.getCode();
-      switch (code) {
-        case 200:
-          CellSetModel model = new CellSetModel();
-          model.getObjectFromMessage(response.getBody());
-          Result[] results = buildResultFromModel(model);
-          if ( results.length > 0) {
-            return results;
-          }
-          // fall through
-        case 404:
-          return new Result[0];
-
-        case 509:
-          try {
-            Thread.sleep(sleepTime);
-          } catch (InterruptedException e) {
-            throw (InterruptedIOException)new InterruptedIOException().initCause(e);
-          }
-          break;
-        default:
-          throw new IOException("get request returned " + code);
-      }
-    }
-    throw new IOException("get request timed out");
-  }
-
-  @Override
-  public boolean exists(Get get) throws IOException {
-    LOG.warn("exists() is really get(), just use get()");
-    Result result = get(get);
-    return (result != null && !(result.isEmpty()));
-  }
-
-  /**
-   * exists(List) is really a list of get() calls. Just use get().
-   * @param gets list of Get to test for the existence
-   */
-  @Override
-  public boolean[] existsAll(List<Get> gets) throws IOException {
-    LOG.warn("exists(List<Get>) is really list of get() calls, just use get()");
-    boolean[] results = new boolean[gets.size()];
-    for (int i = 0; i < results.length; i++) {
-      results[i] = exists(gets.get(i));
-    }
-    return results;
-  }
-
-  @Deprecated
-  public Boolean[] exists(List<Get> gets) throws IOException {
-    boolean[] results = existsAll(gets);
-    Boolean[] objectResults = new Boolean[results.length];
-    for (int i = 0; i < results.length; ++i) {
-      objectResults[i] = results[i];
-    }
-    return objectResults;
-  }
-
-  @Override
-  public void put(Put put) throws IOException {
-    CellSetModel model = buildModelFromPut(put);
-    StringBuilder sb = new StringBuilder();
-    sb.append('/');
-    sb.append(Bytes.toString(name));
-    sb.append('/');
-    sb.append(toURLEncodedBytes(put.getRow()));
-    for (int i = 0; i < maxRetries; i++) {
-      Response response = client.put(sb.toString(), Constants.MIMETYPE_PROTOBUF,
-        model.createProtobufOutput());
-      int code = response.getCode();
-      switch (code) {
-      case 200:
-        return;
-      case 509:
-        try {
-          Thread.sleep(sleepTime);
-        } catch (InterruptedException e) {
-          throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+            toString = value.toString();
         }
-        break;
-      default:
-        throw new IOException("put request failed with " + code);
-      }
-    }
-    throw new IOException("put request timed out");
-  }
 
-  @Override
-  public void put(List<Put> puts) throws IOException {
-    // this is a trick: The gateway accepts multiple rows in a cell set and
-    // ignores the row specification in the URI
+        if (value == null || toString == null)
+        {
+            /*
+             * write prefix twice, because it's schmoo, so the \ don't escape each other...
+             */
 
-    // separate puts by row
-    TreeMap<byte[],List<Cell>> map = new TreeMap<>(Bytes.BYTES_COMPARATOR);
-    for (Put put: puts) {
-      byte[] row = put.getRow();
-      List<Cell> cells = map.get(row);
-      if (cells == null) {
-        cells = new ArrayList<>();
-        map.put(row, cells);
-      }
-      for (List<Cell> l: put.getFamilyCellMap().values()) {
-        cells.addAll(l);
-      }
-    }
+            if (context.getAllowRendering())
+            {
+                if (localNullString == null)
+                    localNullString = getNullString(context);
 
-    // build the cell set
-    CellSetModel model = new CellSetModel();
-    for (Map.Entry<byte[], List<Cell>> e: map.entrySet()) {
-      RowModel row = new RowModel(e.getKey());
-      for (Cell cell: e.getValue()) {
-        row.addCell(new CellModel(cell));
-      }
-      model.addRow(row);
-    }
+                writer.write(escPrefix);
+                writer.write(escPrefix);
+                writer.write(morePrefix);
+                writer.write(localNullString);
+            }
 
-    // build path for multiput
-    StringBuilder sb = new StringBuilder();
-    sb.append('/');
-    sb.append(Bytes.toString(name));
-    sb.append("/$multiput"); // can be any nonexistent row
-    for (int i = 0; i < maxRetries; i++) {
-      Response response = client.put(sb.toString(), Constants.MIMETYPE_PROTOBUF,
-        model.createProtobufOutput());
-      int code = response.getCode();
-      switch (code) {
-      case 200:
-        return;
-      case 509:
-        try {
-          Thread.sleep(sleepTime);
-        } catch (InterruptedException e) {
-          throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+            if (logOnNull && referenceType != QUIET_REFERENCE && log.isDebugEnabled())
+            {
+                log.debug("Null reference [template '" + context.getCurrentTemplateName()
+                        + "', line " + this.getLine() + ", column " + this.getColumn() + "] : "
+                        + this.literal() + " cannot be resolved.");
+            }
+            return true;
         }
-        break;
-      default:
-        throw new IOException("multiput request failed with " + code);
-      }
-    }
-    throw new IOException("multiput request timed out");
-  }
+        else
+        {
+            /*
+             * non-null processing
+             */
 
-  @Override
-  public void delete(Delete delete) throws IOException {
-    String spec = buildRowSpec(delete.getRow(), delete.getFamilyCellMap(),
-      delete.getTimeStamp(), delete.getTimeStamp(), 1);
-    for (int i = 0; i < maxRetries; i++) {
-      Response response = client.delete(spec);
-      int code = response.getCode();
-      switch (code) {
-      case 200:
-        return;
-      case 509:
-        try {
-          Thread.sleep(sleepTime);
-        } catch (InterruptedException e) {
-          throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+            if (context.getAllowRendering())
+            {
+                writer.write(escPrefix);
+                writer.write(morePrefix);
+                writer.write(toString);
+            }
+
+            return true;
         }
-        break;
-      default:
-        throw new IOException("delete request failed with " + code);
-      }
     }
-    throw new IOException("delete request timed out");
-  }
 
-  @Override
-  public void delete(List<Delete> deletes) throws IOException {
-    for (Delete delete: deletes) {
-      delete(delete);
+    /**
+     * This method helps to implement the "render literal if null" functionality.
+     * 
+     * VelocimacroProxy saves references to macro arguments (AST nodes) so that if we have a macro
+     * #foobar($a $b) then there is key "$a.literal" which points to the literal presentation of the
+     * argument provided to variable $a. If the value of $a is null, we render the string that was
+     * provided as the argument.
+     * 
+     * @param context
+     * @return
+     */
+    private String getNullString(InternalContextAdapter context)
+    {
+        Object callingArgument = context.get(".literal." + nullString);
+
+        if (callingArgument != null)
+            return ((Node) callingArgument).literal();
+        else
+            return nullString;
     }
-  }
 
-  public void flushCommits() throws IOException {
-    // no-op
-  }
+    /**
+     *   Computes boolean value of this reference
+     *   Returns the actual value of reference return type
+     *   boolean, and 'true' if value is not null
+     *
+     *   @param context context to compute value with
+     * @return True if evaluation was ok.
+     * @throws MethodInvocationException
+     */
+    public boolean evaluate(InternalContextAdapter context)
+        throws MethodInvocationException
+    {
+        Object value = execute(null, context);
 
-  @Override
-  public TableDescriptor getDescriptor() throws IOException {
-    return getTableDescriptor();
-  }
-
-  class Scanner implements ResultScanner {
-
-    String uri;
-
-    public Scanner(Scan scan) throws IOException {
-      ScannerModel model;
-      try {
-        model = ScannerModel.fromScan(scan);
-      } catch (Exception e) {
-        throw new IOException(e);
-      }
-      StringBuffer sb = new StringBuffer();
-      sb.append('/');
-      sb.append(Bytes.toString(name));
-      sb.append('/');
-      sb.append("scanner");
-      for (int i = 0; i < maxRetries; i++) {
-        Response response = client.post(sb.toString(),
-          Constants.MIMETYPE_PROTOBUF, model.createProtobufOutput());
-        int code = response.getCode();
-        switch (code) {
-        case 201:
-          uri = response.getLocation();
-          return;
-        case 509:
-          try {
-            Thread.sleep(sleepTime);
-          } catch (InterruptedException e) {
-            throw (InterruptedIOException)new InterruptedIOException().initCause(e);
-          }
-          break;
-        default:
-          throw new IOException("scan request failed with " + code);
+        if (value == null)
+        {
+            return false;
         }
-      }
-      throw new IOException("scan request timed out");
-    }
-
-    @Override
-    public Result[] next(int nbRows) throws IOException {
-      StringBuilder sb = new StringBuilder(uri);
-      sb.append("?n=");
-      sb.append(nbRows);
-      for (int i = 0; i < maxRetries; i++) {
-        Response response = client.get(sb.toString(),
-          Constants.MIMETYPE_PROTOBUF);
-        int code = response.getCode();
-        switch (code) {
-        case 200:
-          CellSetModel model = new CellSetModel();
-          model.getObjectFromMessage(response.getBody());
-          return buildResultFromModel(model);
-        case 204:
-        case 206:
-          return null;
-        case 509:
-          try {
-            Thread.sleep(sleepTime);
-          } catch (InterruptedException e) {
-            throw (InterruptedIOException)new InterruptedIOException().initCause(e);
-          }
-          break;
-        default:
-          throw new IOException("scanner.next request failed with " + code);
+        else if (value instanceof Boolean)
+        {
+            if (((Boolean) value).booleanValue())
+                return true;
+            else
+                return false;
         }
-      }
-      throw new IOException("scanner.next request timed out");
-    }
-
-    @Override
-    public Result next() throws IOException {
-      Result[] results = next(1);
-      if (results == null || results.length < 1) {
-        return null;
-      }
-      return results[0];
-    }
-
-    class Iter implements Iterator<Result> {
-
-      Result cache;
-
-      public Iter() {
-        try {
-          cache = Scanner.this.next();
-        } catch (IOException e) {
-          LOG.warn(StringUtils.stringifyException(e));
+        else if (value.toString() == null)
+        {
+            return false;
         }
-      }
+        else
+            return true;
+    }
 
-      @Override
-      public boolean hasNext() {
-        return cache != null;
-      }
+    /**
+     * @see org.apache.velocity.runtime.parser.node.SimpleNode#value(org.apache.velocity.context.InternalContextAdapter)
+     */
+    public Object value(InternalContextAdapter context)
+        throws MethodInvocationException
+    {
+        return (computableReference ? execute(null, context) : null);
+    }
 
-      @Override
-      public Result next() {
-        Result result = cache;
-        try {
-          cache = Scanner.this.next();
-        } catch (IOException e) {
-          LOG.warn(StringUtils.stringifyException(e));
-          cache = null;
+    /**
+     *  Sets the value of a complex reference (something like $foo.bar)
+     *  Currently used by ASTSetReference()
+     *
+     *  @see ASTSetDirective
+     *
+     *  @param context context object containing this reference
+     *  @param value Object to set as value
+     *  @return true if successful, false otherwise
+     * @throws MethodInvocationException
+     */
+    public boolean setValue( InternalContextAdapter context, Object value)
+      throws MethodInvocationException
+    {
+        if (jjtGetNumChildren() == 0)
+        {
+            context.put(rootString, value);
+            return true;
         }
-        return result;
-      }
 
-      @Override
-      public void remove() {
-        throw new RuntimeException("remove() not supported");
-      }
+        /*
+         *  The rootOfIntrospection is the object we will
+         *  retrieve from the Context. This is the base
+         *  object we will apply reflection to.
+         */
 
-    }
+        Object result = getVariableValue(context, rootString);
 
-    @Override
-    public Iterator<Result> iterator() {
-      return new Iter();
-    }
+        if (result == null)
+        {
+            String msg = "reference set : template = "
+                + context.getCurrentTemplateName() +
+                " [line " + getLine() + ",column " +
+                getColumn() + "] : " + literal() +
+                " is not a valid reference.";
+            
+            log.error(msg);
+            return false;
+        }
 
-    @Override
-    public void close() {
-      try {
-        client.delete(uri);
-      } catch (IOException e) {
-        LOG.warn(StringUtils.stringifyException(e));
-      }
-    }
+        /*
+         * How many child nodes do we have?
+         */
 
-    @Override
-    public boolean renewLease() {
-      throw new RuntimeException("renewLease() not supported");
-    }
+        for (int i = 0; i < numChildren - 1; i++)
+        {
+            result = jjtGetChild(i).execute(result, context);
 
-    @Override
-    public ScanMetrics getScanMetrics() {
-      throw new RuntimeException("getScanMetrics() not supported");
-    }
-  }
+            if (result == null)
+            {
+                String msg = "reference set : template = "
+                    + context.getCurrentTemplateName() +
+                    " [line " + getLine() + ",column " +
+                    getColumn() + "] : " + literal() +
+                    " is not a valid reference.";
+                
+                log.error(msg);
 
-  @Override
-  public ResultScanner getScanner(Scan scan) throws IOException {
-    return new Scanner(scan);
-  }
+                return false;
+            }
+        }
 
-  @Override
-  public ResultScanner getScanner(byte[] family) throws IOException {
-    Scan scan = new Scan();
-    scan.addFamily(family);
-    return new Scanner(scan);
-  }
+        /*
+         *  We support two ways of setting the value in a #set($ref.foo = $value ) :
+         *  1) ref.setFoo( value )
+         *  2) ref,put("foo", value ) to parallel the get() map introspection
+         */
 
-  @Override
-  public ResultScanner getScanner(byte[] family, byte[] qualifier)
-      throws IOException {
-    Scan scan = new Scan();
-    scan.addColumn(family, qualifier);
-    return new Scanner(scan);
-  }
+        try
+        {
+            VelPropertySet vs =
+                    rsvc.getUberspect().getPropertySet(result, identifier,
+                            value, uberInfo);
 
-  public boolean isAutoFlush() {
-    return true;
-  }
+            if (vs == null)
+                return false;
 
-  @Override
-  public boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier,
-      byte[] value, Put put) throws IOException {
-    // column to check-the-value
-    put.add(new KeyValue(row, family, qualifier, value));
+            vs.invoke(result, value);
+        }
+        catch(InvocationTargetException ite)
+        {
+            /*
+             *  this is possible
+             */
 
-    CellSetModel model = buildModelFromPut(put);
-    StringBuilder sb = new StringBuilder();
-    sb.append('/');
-    sb.append(Bytes.toString(name));
-    sb.append('/');
-    sb.append(toURLEncodedBytes(put.getRow()));
-    sb.append("?check=put");
+            throw  new MethodInvocationException(
+                "ASTReference : Invocation of method '"
+                + identifier + "' in  " + result.getClass()
+                + " threw exception "
+                + ite.getTargetException().toString(),
+               ite.getTargetException(), identifier, context.getCurrentTemplateName(), this.getLine(), this.getColumn());
+        }
+        /**
+         * pass through application level runtime exceptions
+         */
+        catch( RuntimeException e )
+        {
+            throw e;
+        }
+        catch(Exception e)
+        {
+            /*
+             *  maybe a security exception?
+             */
+            String msg = "ASTReference setValue() : exception : " + e
+                          + " template = " + context.getCurrentTemplateName()
+                          + " [" + this.getLine() + "," + this.getColumn() + "]";
+            log.error(msg, e);
+            throw new VelocityException(msg, e);
+         }
 
-    for (int i = 0; i < maxRetries; i++) {
-      Response response = client.put(sb.toString(),
-        Constants.MIMETYPE_PROTOBUF, model.createProtobufOutput());
-      int code = response.getCode();
-      switch (code) {
-      case 200:
         return true;
-      case 304: // NOT-MODIFIED
-        return false;
-      case 509:
-        try {
-          Thread.sleep(sleepTime);
-        } catch (final InterruptedException e) {
-          throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+    }
+
+    private String getRoot()
+    {
+        Token t = getFirstToken();
+
+        /*
+         *  we have a special case where something like
+         *  $(\\)*!, where the user want's to see something
+         *  like $!blargh in the output, but the ! prevents it from showing.
+         *  I think that at this point, this isn't a reference.
+         */
+
+        /* so, see if we have "\\!" */
+
+        int slashbang = t.image.indexOf("\\!");
+
+        if (slashbang != -1)
+        {
+            /*
+             *  lets do all the work here.  I would argue that if this occurrs,
+             *  it's not a reference at all, so preceeding \ characters in front
+             *  of the $ are just schmoo.  So we just do the escape processing
+             *  trick (even | odd) and move on.  This kind of breaks the rule
+             *  pattern of $ and # but '!' really tosses a wrench into things.
+             */
+
+             /*
+              *  count the escapes : even # -> not escaped, odd -> escaped
+              */
+
+            int i = 0;
+            int len = t.image.length();
+
+            i = t.image.indexOf('$');
+
+            if (i == -1)
+            {
+                /* yikes! */
+                log.error("ASTReference.getRoot() : internal error : "
+                            + "no $ found for slashbang.");
+                computableReference = false;
+                nullString = t.image;
+                return nullString;
+            }
+
+            while (i < len && t.image.charAt(i) != '\\')
+            {
+                i++;
+            }
+
+            /*  ok, i is the first \ char */
+
+            int start = i;
+            int count = 0;
+
+            while (i < len && t.image.charAt(i++) == '\\')
+            {
+                count++;
+            }
+
+            /*
+             *  now construct the output string.  We really don't care about
+             *  leading  slashes as this is not a reference.  It's quasi-schmoo
+             */
+
+            nullString = t.image.substring(0,start); // prefix up to the first
+            nullString += t.image.substring(start, start + count-1 ); // get the slashes
+            nullString += t.image.substring(start+count); // and the rest, including the
+
+            /*
+             *  this isn't a valid reference, so lets short circuit the value
+             *  and set calcs
+             */
+
+            computableReference = false;
+
+            return nullString;
         }
-        break;
-      default:
-        throw new IOException("checkAndPut request failed with " + code);
-      }
-    }
-    throw new IOException("checkAndPut request timed out");
-  }
 
-  @Override
-  public boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier,
-      CompareOp compareOp, byte[] value, Put put) throws IOException {
-    throw new IOException("checkAndPut for non-equal comparison not implemented");
-  }
+        /*
+         *  we need to see if this reference is escaped.  if so
+         *  we will clean off the leading \'s and let the
+         *  regular behavior determine if we should output this
+         *  as \$foo or $foo later on in render(). Lazyness..
+         */
 
-  @Override
-  public boolean checkAndDelete(byte[] row, byte[] family, byte[] qualifier,
-      byte[] value, Delete delete) throws IOException {
-    Put put = new Put(row);
-    put.setFamilyCellMap(delete.getFamilyCellMap());
-    // column to check-the-value
-    put.add(new KeyValue(row, family, qualifier, value));
-    CellSetModel model = buildModelFromPut(put);
-    StringBuilder sb = new StringBuilder();
-    sb.append('/');
-    sb.append(Bytes.toString(name));
-    sb.append('/');
-    sb.append(toURLEncodedBytes(row));
-    sb.append("?check=delete");
+        escaped = false;
 
-    for (int i = 0; i < maxRetries; i++) {
-      Response response = client.put(sb.toString(),
-        Constants.MIMETYPE_PROTOBUF, model.createProtobufOutput());
-      int code = response.getCode();
-      switch (code) {
-      case 200:
-        return true;
-      case 304: // NOT-MODIFIED
-        return false;
-      case 509:
-        try {
-          Thread.sleep(sleepTime);
-        } catch (final InterruptedException e) {
-          throw (InterruptedIOException)new InterruptedIOException().initCause(e);
+        if (t.image.startsWith("\\"))
+        {
+            /*
+             *  count the escapes : even # -> not escaped, odd -> escaped
+             */
+
+            int i = 0;
+            int len = t.image.length();
+
+            while (i < len && t.image.charAt(i) == '\\')
+            {
+                i++;
+            }
+
+            if ((i % 2) != 0)
+                escaped = true;
+
+            if (i > 0)
+                escPrefix = t.image.substring(0, i / 2 );
+
+            t.image = t.image.substring(i);
         }
-        break;
-      default:
-        throw new IOException("checkAndDelete request failed with " + code);
-      }
+
+        /*
+         *  Look for preceeding stuff like '#' and '$'
+         *  and snip it off, except for the
+         *  last $
+         */
+
+        int loc1 = t.image.lastIndexOf('$');
+
+        /*
+         *  if we have extra stuff, loc > 0
+         *  ex. '#$foo' so attach that to
+         *  the prefix.
+         */
+        if (loc1 > 0)
+        {
+            morePrefix = morePrefix + t.image.substring(0, loc1);
+            t.image = t.image.substring(loc1);
+        }
+
+        /*
+         *  Now it should be clean. Get the literal in case this reference
+         *  isn't backed by the context at runtime, and then figure out what
+         *  we are working with.
+         */
+
+        // FIXME: this is the key to render nulls as literals, we need to look at context(refname+".literal") 
+        nullString = literal();
+
+        if (t.image.startsWith("$!"))
+        {
+            referenceType = QUIET_REFERENCE;
+
+            /*
+             *  only if we aren't escaped do we want to null the output
+             */
+
+            if (!escaped)
+                nullString = "";
+
+            if (t.image.startsWith("$!{"))
+            {
+                /*
+                 *  ex : $!{provider.Title}
+                 */
+
+                return t.next.image;
+            }
+            else
+            {
+                /*
+                 *  ex : $!provider.Title
+                 */
+
+                return t.image.substring(2);
+            }
+        }
+        else if (t.image.equals("${"))
+        {
+            /*
+             *  ex : ${provider.Title}
+             */
+
+            referenceType = FORMAL_REFERENCE;
+            return t.next.image;
+        }
+        else if (t.image.startsWith("$"))
+        {
+            /*
+             *  just nip off the '$' so we have
+             *  the root
+             */
+
+            referenceType = NORMAL_REFERENCE;
+            return t.image.substring(1);
+        }
+        else
+        {
+            /*
+             * this is a 'RUNT', which can happen in certain circumstances where
+             *  the parser is fooled into believeing that an IDENTIFIER is a real
+             *  reference.  Another 'dreaded' MORE hack :).
+             */
+            referenceType = RUNT;
+            return t.image;
+        }
+
     }
-    throw new IOException("checkAndDelete request timed out");
-  }
 
-  @Override
-  public boolean checkAndDelete(byte[] row, byte[] family, byte[] qualifier,
-      CompareOp compareOp, byte[] value, Delete delete) throws IOException {
-    throw new IOException("checkAndDelete for non-equal comparison not implemented");
-  }
-
-  @Override
-  public Result increment(Increment increment) throws IOException {
-    throw new IOException("Increment not supported");
-  }
-
-  @Override
-  public Result append(Append append) throws IOException {
-    throw new IOException("Append not supported");
-  }
-
-  @Override
-  public long incrementColumnValue(byte[] row, byte[] family, byte[] qualifier,
-      long amount) throws IOException {
-    throw new IOException("incrementColumnValue not supported");
-  }
-
-  @Override
-  public long incrementColumnValue(byte[] row, byte[] family, byte[] qualifier,
-      long amount, Durability durability) throws IOException {
-    throw new IOException("incrementColumnValue not supported");
-  }
-
-  @Override
-  public void batch(List<? extends Row> actions, Object[] results) throws IOException {
-    throw new IOException("batch not supported");
-  }
-
-  @Override
-  public <R> void batchCallback(List<? extends Row> actions, Object[] results,
-      Batch.Callback<R> callback) throws IOException, InterruptedException {
-    throw new IOException("batchCallback not supported");
-  }
-
-  @Override
-  public CoprocessorRpcChannel coprocessorService(byte[] row) {
-    throw new UnsupportedOperationException("coprocessorService not implemented");
-  }
-
-  @Override
-  public <T extends Service, R> Map<byte[], R> coprocessorService(Class<T> service,
-      byte[] startKey, byte[] endKey, Batch.Call<T, R> callable)
-      throws ServiceException, Throwable {
-    throw new UnsupportedOperationException("coprocessorService not implemented");
-  }
-
-  @Override
-  public <T extends Service, R> void coprocessorService(Class<T> service,
-      byte[] startKey, byte[] endKey, Batch.Call<T, R> callable, Batch.Callback<R> callback)
-      throws ServiceException, Throwable {
-    throw new UnsupportedOperationException("coprocessorService not implemented");
-  }
-
-  @Override
-  public void mutateRow(RowMutations rm) throws IOException {
-    throw new IOException("atomicMutation not supported");
-  }
-
-  @Override
-  public <R extends Message> Map<byte[], R> batchCoprocessorService(
-      Descriptors.MethodDescriptor method, Message request,
-      byte[] startKey, byte[] endKey, R responsePrototype) throws ServiceException, Throwable {
-    throw new UnsupportedOperationException("batchCoprocessorService not implemented");
-  }
-
-  @Override
-  public <R extends Message> void batchCoprocessorService(
-      Descriptors.MethodDescriptor method, Message request,
-      byte[] startKey, byte[] endKey, R responsePrototype, Callback<R> callback)
-      throws ServiceException, Throwable {
-    throw new UnsupportedOperationException("batchCoprocessorService not implemented");
-  }
-
-  @Override public boolean checkAndMutate(byte[] row, byte[] family, byte[] qualifier,
-      CompareOp compareOp, byte[] value, RowMutations rm) throws IOException {
-    throw new UnsupportedOperationException("checkAndMutate not implemented");
-  }
-
-  @Override
-  public void setOperationTimeout(int operationTimeout) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public int getOperationTimeout() {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  @Deprecated
-  public void setRpcTimeout(int rpcTimeout) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  @Deprecated
-  public int getRpcTimeout() {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public int getReadRpcTimeout() {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public void setReadRpcTimeout(int readRpcTimeout) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public int getWriteRpcTimeout() {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public void setWriteRpcTimeout(int writeRpcTimeout) {
-    throw new UnsupportedOperationException();
-  }
-
-  /*
-   * Only a small subset of characters are valid in URLs.
-   *
-   * Row keys, column families, and qualifiers cannot be appended to URLs without first URL
-   * escaping. Table names are ok because they can only contain alphanumeric, ".","_", and "-"
-   * which are valid characters in URLs.
-   */
-  private static String toURLEncodedBytes(byte[] row) {
-    try {
-      return URLEncoder.encode(new String(row, "UTF-8"), "UTF-8");
-    } catch (UnsupportedEncodingException e) {
-      throw new IllegalStateException("URLEncoder doesn't support UTF-8", e);
+    /**
+     * @param context
+     * @param variable
+     * @return The evaluated value of the variable.
+     * @throws MethodInvocationException
+     */
+    public Object getVariableValue(Context context, String variable) throws MethodInvocationException
+    {
+        return context.get(variable);
     }
-  }
+
+
+    /**
+     *  Routine to allow the literal representation to be
+     *  externally overridden.  Used now in the VM system
+     *  to override a reference in a VM tree with the
+     *  literal of the calling arg to make it work nicely
+     *  when calling arg is null.  It seems a bit much, but
+     *  does keep things consistant.
+     *
+     *  Note, you can only set the literal once...
+     *
+     *  @param literal String to render to when null
+     */
+    public void setLiteral(String literal)
+    {
+        /*
+         * do only once
+         */
+
+        if( this.literal == null)
+            this.literal = literal;
+    }
+
+    /**
+     *  Override of the SimpleNode method literal()
+     *  Returns the literal representation of the
+     *  node.  Should be something like
+     *  $<token>.
+     * @return A literal string.
+     */
+    public String literal()
+    {
+        if (literal != null)
+            return literal;
+        
+        // this value could be cached in this.literal but it increases memory usage
+        return super.literal();
+    }
 }

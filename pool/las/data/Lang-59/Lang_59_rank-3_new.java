@@ -5,395 +5,559 @@
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-package org.apache.commons.csv;
+package org.apache.carbondata.core.scan.filter.executer;
 
 import java.io.IOException;
-import java.io.Reader;
-import java.io.Serializable;
-import java.io.StringWriter;
+import java.util.BitSet;
+import java.util.List;
 
-/**
- * The format specification of a CSV file.
- *
- * This class is immutable.
- */
-public class CSVFormat implements Serializable {
+import org.apache.carbondata.core.constants.CarbonCommonConstants;
+import org.apache.carbondata.core.datastore.block.SegmentProperties;
+import org.apache.carbondata.core.datastore.chunk.DimensionColumnPage;
+import org.apache.carbondata.core.datastore.chunk.impl.DimensionRawColumnChunk;
+import org.apache.carbondata.core.datastore.chunk.impl.MeasureRawColumnChunk;
+import org.apache.carbondata.core.datastore.page.ColumnPage;
+import org.apache.carbondata.core.keygenerator.directdictionary.DirectDictionaryGenerator;
+import org.apache.carbondata.core.keygenerator.directdictionary.DirectDictionaryKeyGeneratorFactory;
+import org.apache.carbondata.core.metadata.AbsoluteTableIdentifier;
+import org.apache.carbondata.core.metadata.datatype.DataType;
+import org.apache.carbondata.core.metadata.datatype.DataTypes;
+import org.apache.carbondata.core.metadata.encoder.Encoding;
+import org.apache.carbondata.core.metadata.schema.table.column.CarbonDimension;
+import org.apache.carbondata.core.metadata.schema.table.column.CarbonMeasure;
+import org.apache.carbondata.core.scan.executor.util.RestructureUtil;
+import org.apache.carbondata.core.scan.expression.Expression;
+import org.apache.carbondata.core.scan.expression.exception.FilterUnsupportedException;
+import org.apache.carbondata.core.scan.filter.FilterUtil;
+import org.apache.carbondata.core.scan.filter.intf.RowIntf;
+import org.apache.carbondata.core.scan.filter.resolver.resolverinfo.DimColumnResolvedFilterInfo;
+import org.apache.carbondata.core.scan.filter.resolver.resolverinfo.MeasureColumnResolvedFilterInfo;
+import org.apache.carbondata.core.scan.processor.RawBlockletColumnChunks;
+import org.apache.carbondata.core.util.BitSetGroup;
+import org.apache.carbondata.core.util.ByteUtil;
+import org.apache.carbondata.core.util.CarbonUtil;
+import org.apache.carbondata.core.util.DataTypeUtil;
+import org.apache.carbondata.core.util.comparator.Comparator;
+import org.apache.carbondata.core.util.comparator.SerializableComparator;
 
-    private final char delimiter;
-    private final char encapsulator;
-    private final char commentStart;
-    private final char escape;
-    private final boolean leadingSpacesIgnored;
-    private final boolean trailingSpacesIgnored;
-    private final boolean unicodeEscapesInterpreted;
-    private final boolean emptyLinesIgnored;
-    private final String lineSeparator;
+public class RowLevelRangeLessThanEqualFilterExecuterImpl extends RowLevelFilterExecuterImpl {
+  protected byte[][] filterRangeValues;
+  protected Object[] msrFilterRangeValues;
+  protected SerializableComparator comparator;
 
-
-    /**
-     * Constant char to be used for disabling comments, escapes and encapsulation.
-     * The value -2 is used because it won't be confused with an EOF signal (-1),
-     * and because the unicode value FFFE would be encoded as two chars (using surrogates)
-     * and thus there should never be a collision with a real text char.
-     */
-    static final char DISABLED = '\ufffe';
-
-    /** Standard comma separated format as defined by <a href="http://tools.ietf.org/html/rfc4180">RFC 4180</a>. */
-    public static final CSVFormat DEFAULT = new CSVFormat(',', '"', DISABLED, DISABLED, true, true, false, true, "\r\n");
-
-    /**
-     * Excel file format (using a comma as the value delimiter).
-     * Note that the actual value delimiter used by Excel is locale dependent,
-     * it might be necessary to customize this format to accomodate to your
-     * regional settings.
-     * <p/>
-     * For example for parsing or generating a CSV file on a French system
-     * the following format will be used:
-     * 
-     * <pre>CSVFormat fmt = CSVFormat.EXCEL.withDelimiter(';');</pre>
-     */
-    public static final CSVFormat EXCEL = new CSVFormat(',', '"', DISABLED, DISABLED, false, false, false, false, "\r\n");
-
-    /** Tab-delimited format, with quote; leading and trailing spaces ignored. */
-    public static final CSVFormat TDF = new CSVFormat('\t', '"', DISABLED, DISABLED, true, true, false, true, "\r\n");
-
-    /**
-     * Default MySQL format used by the <tt>SELECT INTO OUTFILE</tt> and
-     * <tt>LOAD DATA INFILE</tt> operations. This is a tab-delimited
-     * format with a LF character as the line separator. Values are not quoted
-     * and special characters are escaped with '\'.
-     * 
-     * @see <a href="http://dev.mysql.com/doc/refman/5.1/en/load-data.html">http://dev.mysql.com/doc/refman/5.1/en/load-data.html</a>
-     */
-    public static final CSVFormat MYSQL = new CSVFormat('\t', DISABLED, DISABLED, '\\', false, false, false, false, "\n");
-
-
-    /**
-     * Creates a customized CSV format.
-     *
-     * @param delimiter                 the char used for value separation
-     * @param encapsulator              the char used as value encapsulation marker
-     * @param commentStart              the char used for comment identification
-     * @param escape                    the char used to escape special characters in values
-     * @param leadingSpacesIgnored      <tt>true</tt> when leading whitespaces should be ignored
-     * @param trailingSpacesIgnored     <tt>true</tt> when trailing whitespaces should be ignored
-     * @param unicodeEscapesInterpreted <tt>true</tt> when unicode escapes should be interpreted
-     * @param emptyLinesIgnored         <tt>true</tt> when the parser should skip emtpy lines
-     * @param lineSeparator             the line separator to use.
-     */
-    CSVFormat(
-            char delimiter,
-            char encapsulator,
-            char commentStart,
-            char escape,
-            boolean leadingSpacesIgnored,
-            boolean trailingSpacesIgnored,
-            boolean unicodeEscapesInterpreted,
-            boolean emptyLinesIgnored,
-            String lineSeparator) {
-        this.delimiter = delimiter;
-        this.encapsulator = encapsulator;
-        this.commentStart = commentStart;
-        this.escape = escape;
-        this.leadingSpacesIgnored = leadingSpacesIgnored;
-        this.trailingSpacesIgnored = trailingSpacesIgnored;
-        this.unicodeEscapesInterpreted = unicodeEscapesInterpreted;
-        this.emptyLinesIgnored = emptyLinesIgnored;
-        this.lineSeparator = lineSeparator;
+  /**
+   * flag to check whether default values is present in the filter value list
+   */
+  private boolean isDefaultValuePresentInFilter;
+  public RowLevelRangeLessThanEqualFilterExecuterImpl(
+      List<DimColumnResolvedFilterInfo> dimColEvaluatorInfoList,
+      List<MeasureColumnResolvedFilterInfo> msrColEvalutorInfoList, Expression exp,
+      AbsoluteTableIdentifier tableIdentifier, byte[][] filterRangeValues,
+      Object[] msrFilterRangeValues, SegmentProperties segmentProperties) {
+    super(dimColEvaluatorInfoList, msrColEvalutorInfoList, exp, tableIdentifier, segmentProperties,
+        null);
+    this.filterRangeValues = filterRangeValues;
+    this.msrFilterRangeValues = msrFilterRangeValues;
+    if (!msrColEvalutorInfoList.isEmpty()) {
+      CarbonMeasure measure = this.msrColEvalutorInfoList.get(0).getMeasure();
+      comparator = Comparator.getComparatorByDataTypeForMeasure(measure.getDataType());
     }
-
-    /**
-     * Returns true if the given character is a line break character.
-     * 
-     * @param c the character to check
-     * 
-     * @return true if <code>c</code> is a line break character
-     */
-    private static boolean isLineBreak(char c) {
-        return c == '\n' || c == '\r';
+    ifDefaultValueMatchesFilter();
+    if (isDimensionPresentInCurrentBlock[0]) {
+      isNaturalSorted = dimColEvaluatorInfoList.get(0).getDimension().isUseInvertedIndex()
+          && dimColEvaluatorInfoList.get(0).getDimension().isSortColumn();
     }
+  }
 
-    /**
-     * Verifies the consistency of the parameters and throws an IllegalArgumentException if necessary.
-     */
-    void validate() throws IllegalArgumentException {
-        if (delimiter == encapsulator) {
-            throw new IllegalArgumentException("The encapsulator character and the delimiter cannot be the same (\"" + encapsulator + "\")");
+  /**
+   * This method will check whether default value is present in the given filter values
+   */
+  private void ifDefaultValueMatchesFilter() {
+    if (!dimColEvaluatorInfoList.isEmpty() && !isDimensionPresentInCurrentBlock[0]) {
+      CarbonDimension dimension = this.dimColEvaluatorInfoList.get(0).getDimension();
+      byte[] defaultValue = dimension.getDefaultValue();
+      if (null != defaultValue) {
+        for (int k = 0; k < filterRangeValues.length; k++) {
+          int maxCompare =
+              ByteUtil.UnsafeComparer.INSTANCE.compareTo(filterRangeValues[k], defaultValue);
+          if (maxCompare >= 0) {
+            isDefaultValuePresentInFilter = true;
+            break;
+          }
         }
-        
-        if (delimiter == escape) {
-            throw new IllegalArgumentException("The escape character and the delimiter cannot be the same (\"" + escape + "\")");
+      }
+    } else if (!msrColEvalutorInfoList.isEmpty() && !isMeasurePresentInCurrentBlock[0]) {
+      CarbonMeasure measure = this.msrColEvalutorInfoList.get(0).getMeasure();
+      byte[] defaultValue = measure.getDefaultValue();
+      SerializableComparator comparatorTmp =
+          Comparator.getComparatorByDataTypeForMeasure(measure.getDataType());
+      if (null != defaultValue) {
+        for (int k = 0; k < msrFilterRangeValues.length; k++) {
+          int maxCompare = comparatorTmp.compare(msrFilterRangeValues[k],
+              RestructureUtil.getMeasureDefaultValue(measure.getColumnSchema(),
+                  measure.getDefaultValue()));
+
+          if (maxCompare >= 0) {
+            isDefaultValuePresentInFilter = true;
+            break;
+          }
         }
-        
-        if (delimiter == commentStart) {
-            throw new IllegalArgumentException("The comment start character and the delimiter cannot be the same (\"" + commentStart + "\")");
+      }
+    }
+  }
+
+  @Override public BitSet isScanRequired(byte[][] blockMaxValue, byte[][] blockMinValue,
+      boolean[] isMinMaxSet) {
+    BitSet bitSet = new BitSet(1);
+    byte[] minValue = null;
+    boolean isScanRequired = false;
+    if (isMeasurePresentInCurrentBlock[0] || isDimensionPresentInCurrentBlock[0]) {
+      if (isMeasurePresentInCurrentBlock[0]) {
+        minValue = blockMinValue[measureChunkIndex[0]];
+        isScanRequired =
+            isScanRequired(minValue, msrFilterRangeValues, msrColEvalutorInfoList.get(0).getType());
+      } else {
+        minValue = blockMinValue[dimensionChunkIndex[0]];
+        DataType dataType = dimColEvaluatorInfoList.get(0).getDimension().getDataType();
+        // for no dictionary measure column comparison can be done
+        // on the original data as like measure column
+        if (DataTypeUtil.isPrimitiveColumn(dataType) && !dimColEvaluatorInfoList.get(0)
+            .getDimension().hasEncoding(Encoding.DICTIONARY)) {
+          isScanRequired = isScanRequired(minValue, filterRangeValues, dataType);
+        } else {
+          isScanRequired =
+            isScanRequired(minValue, filterRangeValues, isMinMaxSet[dimensionChunkIndex[0]]);
         }
-        
-        if (encapsulator != DISABLED && encapsulator == commentStart) {
-            throw new IllegalArgumentException("The comment start character and the encapsulator cannot be the same (\"" + commentStart + "\")");
+      }
+    } else {
+      isScanRequired = isDefaultValuePresentInFilter;
+    }
+    if (isScanRequired) {
+      bitSet.set(0);
+    }
+    return bitSet;
+  }
+
+  private boolean isScanRequired(byte[] blockMinValue, byte[][] filterValues, boolean isMinMaxSet) {
+    if (!isMinMaxSet) {
+      // scan complete data if min max is not written for a given column
+      return true;
+    }
+    boolean isScanRequired = false;
+    for (int k = 0; k < filterValues.length; k++) {
+      // and filter-min should be positive
+      int minCompare = ByteUtil.UnsafeComparer.INSTANCE.compareTo(filterValues[k], blockMinValue);
+
+      // if any filter applied is not in range of min and max of block
+      // then since its a less than equal to fiter validate whether the block
+      // min range is less than equal to applied filter member
+      if (minCompare >= 0) {
+        isScanRequired = true;
+        break;
+      }
+    }
+    return isScanRequired;
+  }
+
+  private boolean isScanRequired(byte[] blockMinValue, byte[][] filterValues, DataType dataType) {
+    boolean isScanRequired = false;
+    Object minValue =
+        DataTypeUtil.getDataBasedOnDataTypeForNoDictionaryColumn(blockMinValue, dataType);
+    for (int k = 0; k < filterValues.length; k++) {
+      if (ByteUtil.UnsafeComparer.INSTANCE
+          .compareTo(filterValues[k], CarbonCommonConstants.EMPTY_BYTE_ARRAY) == 0) {
+        return true;
+      }
+      // filter value should be in range of max and min value i.e
+      // max>filtervalue>min
+      // so filter-max should be negative
+      Object data =
+          DataTypeUtil.getDataBasedOnDataTypeForNoDictionaryColumn(filterValues[k], dataType);
+      SerializableComparator comparator = Comparator.getComparator(dataType);
+      int minCompare = comparator.compare(data, minValue);
+      // if any filter value is in range than this block needs to be
+      // scanned less than equal to max range.
+      if (minCompare >= 0) {
+        isScanRequired = true;
+        break;
+      }
+    }
+    return isScanRequired;
+  }
+
+  private boolean isScanRequired(byte[] minValue, Object[] filterValue,
+      DataType dataType) {
+    Object value =
+        DataTypeUtil.getMeasureObjectFromDataType(minValue, dataType);
+    for (int i = 0; i < filterValue.length; i++) {
+      // TODO handle min and max for null values.
+      if (filterValue[i] == null) {
+        return true;
+      }
+      if (comparator.compare(filterValue[i], value) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @Override
+  public BitSetGroup applyFilter(RawBlockletColumnChunks rawBlockletColumnChunks,
+      boolean useBitsetPipeLine) throws IOException {
+    // select all rows if dimension does not exists in the current block
+    if (!isDimensionPresentInCurrentBlock[0] && !isMeasurePresentInCurrentBlock[0]) {
+      int numberOfRows = rawBlockletColumnChunks.getDataBlock().numRows();
+      return FilterUtil
+          .createBitSetGroupWithDefaultValue(rawBlockletColumnChunks.getDataBlock().numberOfPages(),
+              numberOfRows, true);
+    }
+    if (isDimensionPresentInCurrentBlock[0]) {
+      int chunkIndex =
+          segmentProperties.getDimensionOrdinalToChunkMapping().get(dimensionChunkIndex[0]);
+      if (null == rawBlockletColumnChunks.getDimensionRawColumnChunks()[chunkIndex]) {
+        rawBlockletColumnChunks.getDimensionRawColumnChunks()[chunkIndex] =
+            rawBlockletColumnChunks.getDataBlock().readDimensionChunk(
+                rawBlockletColumnChunks.getFileReader(), chunkIndex);
+      }
+      DimensionRawColumnChunk rawColumnChunk =
+          rawBlockletColumnChunks.getDimensionRawColumnChunks()[chunkIndex];
+      BitSetGroup bitSetGroup = new BitSetGroup(rawColumnChunk.getPagesCount());
+      FilterExecuter filterExecuter = null;
+      boolean isExclude = false;
+      for (int i = 0; i < rawColumnChunk.getPagesCount(); i++) {
+        if (rawColumnChunk.getMinValues() != null) {
+          boolean scanRequired;
+          DataType dataType = dimColEvaluatorInfoList.get(0).getDimension().getDataType();
+          // for no dictionary measure column comparison can be done
+          // on the original data as like measure column
+          if (DataTypeUtil.isPrimitiveColumn(dataType) && !dimColEvaluatorInfoList.get(0)
+              .getDimension().hasEncoding(Encoding.DICTIONARY)) {
+            scanRequired =
+                isScanRequired(rawColumnChunk.getMinValues()[i], this.filterRangeValues, dataType);
+          } else {
+            scanRequired = isScanRequired(rawColumnChunk.getMinValues()[i], this.filterRangeValues,
+              rawColumnChunk.getMinMaxFlagArray()[i]);
+          }
+          if (scanRequired) {
+            BitSet bitSet;
+            DimensionColumnPage dimensionColumnPage = rawColumnChunk.decodeColumnPage(i);
+            if (null != rawColumnChunk.getLocalDictionary()) {
+              if (null == filterExecuter) {
+                filterExecuter = FilterUtil
+                    .getFilterExecutorForRangeFilters(rawColumnChunk, exp, isNaturalSorted);
+                if (filterExecuter instanceof ExcludeFilterExecuterImpl) {
+                  isExclude = true;
+                }
+              }
+              if (!isExclude) {
+                bitSet = ((IncludeFilterExecuterImpl) filterExecuter)
+                    .getFilteredIndexes(dimensionColumnPage,
+                        rawColumnChunk.getRowCount()[i], useBitsetPipeLine,
+                        rawBlockletColumnChunks.getBitSetGroup(), i);
+              } else {
+                bitSet = ((ExcludeFilterExecuterImpl) filterExecuter)
+                    .getFilteredIndexes(dimensionColumnPage,
+                        rawColumnChunk.getRowCount()[i], useBitsetPipeLine,
+                        rawBlockletColumnChunks.getBitSetGroup(), i);
+              }
+            } else {
+              bitSet = getFilteredIndexes(dimensionColumnPage,
+                  rawColumnChunk.getRowCount()[i]);
+            }
+            bitSetGroup.setBitSet(bitSet, i);
+          }
+        } else {
+          BitSet bitSet = getFilteredIndexes(rawColumnChunk.decodeColumnPage(i),
+              rawColumnChunk.getRowCount()[i]);
+          bitSetGroup.setBitSet(bitSet, i);
         }
-        
-        if (escape != DISABLED && escape == commentStart) {
-            throw new IllegalArgumentException("The comment start and the escape character cannot be the same (\"" + commentStart + "\")");
+      }
+      return bitSetGroup;
+    } else if (isMeasurePresentInCurrentBlock[0]) {
+      int chunkIndex = segmentProperties.getMeasuresOrdinalToChunkMapping()
+          .get(msrColEvalutorInfoList.get(0).getColumnIndex());
+      if (null == rawBlockletColumnChunks.getMeasureRawColumnChunks()[chunkIndex]) {
+        rawBlockletColumnChunks.getMeasureRawColumnChunks()[chunkIndex] =
+            rawBlockletColumnChunks.getDataBlock().readMeasureChunk(
+                rawBlockletColumnChunks.getFileReader(), chunkIndex);
+      }
+      MeasureRawColumnChunk rawColumnChunk =
+          rawBlockletColumnChunks.getMeasureRawColumnChunks()[chunkIndex];
+      BitSetGroup bitSetGroup = new BitSetGroup(rawColumnChunk.getPagesCount());
+      for (int i = 0; i < rawColumnChunk.getPagesCount(); i++) {
+        if (rawColumnChunk.getMinValues() != null) {
+          if (isScanRequired(rawColumnChunk.getMinValues()[i], this.msrFilterRangeValues,
+              msrColEvalutorInfoList.get(0).getType())) {
+            BitSet bitSet =
+                getFilteredIndexesForMeasures(rawColumnChunk.decodeColumnPage(i),
+                    rawColumnChunk.getRowCount()[i]);
+            bitSetGroup.setBitSet(bitSet, i);
+          }
+        } else {
+          BitSet bitSet =
+              getFilteredIndexesForMeasures(rawColumnChunk.decodeColumnPage(i),
+                  rawColumnChunk.getRowCount()[i]);
+          bitSetGroup.setBitSet(bitSet, i);
         }
+      }
+      return bitSetGroup;
+    }
+    return null;
+  }
+
+  @Override
+  public boolean applyFilter(RowIntf value, int dimOrdinalMax)
+      throws FilterUnsupportedException, IOException {
+    if (isDimensionPresentInCurrentBlock[0]) {
+      byte[] col =
+          (byte[]) value.getVal(dimColEvaluatorInfoList.get(0).getDimension().getOrdinal());
+      return ByteUtil.compare(filterRangeValues[0], col) >= 0;
     }
 
-    /**
-     * Returns the character delimiting the values (typically ';', ',' or '\t').
-     * 
-     * @return the delimiter character
-     */
-    public char getDelimiter() {
-        return delimiter;
+    if (isMeasurePresentInCurrentBlock[0]) {
+      Object col =
+          value.getVal(msrColEvalutorInfoList.get(0).getMeasure().getOrdinal() + dimOrdinalMax);
+      return comparator.compare(msrFilterRangeValues[0], col) >= 0;
     }
+    return false;
+  }
 
-    /**
-     * Returns a copy of this format using the specified delimiter character.
-     * 
-     * @param delimiter the delimiter character
-     * @return A copy of this format using the specified delimiter character
-     * @throws IllegalArgumentException thrown if the specified character is a line break
-     */
-    public CSVFormat withDelimiter(char delimiter) {
-        if (isLineBreak(delimiter)) {
-            throw new IllegalArgumentException("The delimiter cannot be a line break");
+  private BitSet getFilteredIndexesForMeasures(ColumnPage columnPage,
+      int numerOfRows) {
+    BitSet bitSet = new BitSet(numerOfRows);
+    Object[] filterValues = this.msrFilterRangeValues;
+    DataType msrType = msrColEvalutorInfoList.get(0).getType();
+    SerializableComparator comparator = Comparator.getComparatorByDataTypeForMeasure(msrType);
+    BitSet nullBitSet = columnPage.getNullBits();
+    for (int i = 0; i < filterValues.length; i++) {
+      if (filterValues[i] == null) {
+        for (int j = nullBitSet.nextSetBit(0); j >= 0; j = nullBitSet.nextSetBit(j + 1)) {
+          bitSet.set(j);
         }
+        continue;
+      }
+      for (int startIndex = 0; startIndex < numerOfRows; startIndex++) {
+        if (!nullBitSet.get(startIndex)) {
+          Object msrValue = DataTypeUtil
+              .getMeasureObjectBasedOnDataType(columnPage, startIndex,
+                  msrType, msrColEvalutorInfoList.get(0).getMeasure());
 
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    /**
-     * Returns the character used to encapsulate values containing special characters.
-     * 
-     * @return the encapsulator character
-     */
-    public char getEncapsulator() {
-        return encapsulator;
-    }
-
-    /**
-     * Returns a copy of this format using the specified encapsulator character.
-     * 
-     * @param encapsulator the encapsulator character
-     * @return A copy of this format using the specified encapsulator character
-     * @throws IllegalArgumentException thrown if the specified character is a line break
-     */
-    public CSVFormat withEncapsulator(char encapsulator) {
-        if (isLineBreak(encapsulator)) {
-            throw new IllegalArgumentException("The encapsulator cannot be a line break");
+          if (comparator.compare(msrValue, filterValues[i]) <= 0) {
+            // This is a match.
+            bitSet.set(startIndex);
+          }
         }
-        
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
+      }
     }
+    return bitSet;
+  }
 
-    boolean isEncapsulating() {
-        return this.encapsulator != DISABLED;
+  private BitSet getFilteredIndexes(DimensionColumnPage dimensionColumnPage,
+      int numerOfRows) {
+    byte[] defaultValue = null;
+    if (dimColEvaluatorInfoList.get(0).getDimension().hasEncoding(Encoding.DIRECT_DICTIONARY)) {
+      DirectDictionaryGenerator directDictionaryGenerator = DirectDictionaryKeyGeneratorFactory
+          .getDirectDictionaryGenerator(
+              dimColEvaluatorInfoList.get(0).getDimension().getDataType());
+      int key = directDictionaryGenerator.generateDirectSurrogateKey(null);
+      CarbonDimension currentBlockDimension =
+          segmentProperties.getDimensions().get(dimensionChunkIndex[0]);
+      if (currentBlockDimension.isSortColumn()) {
+        defaultValue = FilterUtil.getMaskKey(key, currentBlockDimension,
+            this.segmentProperties.getSortColumnsGenerator());
+      } else {
+        defaultValue = ByteUtil.toXorBytes(key);
+      }
+    } else if (dimColEvaluatorInfoList.get(0).getDimension().getDataType() != DataTypes.STRING) {
+      defaultValue = CarbonCommonConstants.EMPTY_BYTE_ARRAY;
     }
-
-    /**
-     * Returns the character marking the start of a line comment.
-     * 
-     * @return the comment start marker.
-     */
-    public char getCommentStart() {
-        return commentStart;
+    BitSet bitSet = null;
+    if (dimensionColumnPage.isExplicitSorted()) {
+      bitSet = setFilterdIndexToBitSetWithColumnIndex(dimensionColumnPage, numerOfRows,
+          defaultValue);
+    } else {
+      bitSet = setFilterdIndexToBitSet(dimensionColumnPage, numerOfRows, defaultValue);
     }
+    if (dimensionColumnPage.isNoDicitionaryColumn()) {
+      FilterUtil.removeNullValues(dimensionColumnPage, bitSet,
+          CarbonCommonConstants.MEMBER_DEFAULT_VAL_ARRAY);
+    }
+    return bitSet;
+  }
 
-    /**
-     * Returns a copy of this format using the specified character as the comment start marker.
-     * 
-     * @param commentStart the comment start marker
-     * @return A copy of this format using the specified character as the comment start marker
-     * @throws IllegalArgumentException thrown if the specified character is a line break
-     */
-    public CSVFormat withCommentStart(char commentStart) {
-        if (isLineBreak(commentStart)) {
-            throw new IllegalArgumentException("The comment start character cannot be a line break");
+  /**
+   * Method will scan the block and finds the range start index from which all members
+   * will be considered for applying range filters. this method will be called if the
+   * column is not supported by default so column index mapping  will be present for
+   * accesing the members from the block.
+   *
+   * @param dimensionColumnPage
+   * @param numerOfRows
+   * @return BitSet.
+   */
+  private BitSet setFilterdIndexToBitSetWithColumnIndex(
+      DimensionColumnPage dimensionColumnPage, int numerOfRows,
+      byte[] defaultValue) {
+    BitSet bitSet = new BitSet(numerOfRows);
+    int start = 0;
+    int last = 0;
+    int skip = 0;
+    int startIndex = 0;
+    byte[][] filterValues = this.filterRangeValues;
+    //find the number of default values to skip the null value in case of direct dictionary
+    if (null != defaultValue) {
+      start = CarbonUtil
+          .getFirstIndexUsingBinarySearch(dimensionColumnPage, startIndex, numerOfRows - 1,
+              defaultValue, true);
+      if (start < 0) {
+        skip = -(start + 1);
+        // end of block
+        if (skip == numerOfRows) {
+          return bitSet;
         }
-        
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
+      } else {
+        // as start will be last index of null value inclusive
+        // so adding 1 to skip last null value
+        skip = start + 1;
+      }
+      startIndex = skip;
     }
-
-    /**
-     * Tells if comments are supported by this format.
-     * 
-     * @return <tt>true</tt> is comments are supported, <tt>false</tt> otherwise
-     */
-    public boolean isCommentingDisabled() {
-        return this.commentStart == DISABLED;
-    }
-
-    /**
-     * Returns the escape character.
-     * 
-     * @return the escape character
-     */
-    public char getEscape() {
-        return escape;
-    }
-
-    /**
-     * Returns a copy of this format using the specified escape character.
-     * 
-     * @param escape the escape character
-     * @return A copy of this format using the specified escape character
-     * @throws IllegalArgumentException thrown if the specified character is a line break
-     */
-    public CSVFormat withEscape(char escape) {
-        if (isLineBreak(escape)) {
-            throw new IllegalArgumentException("The escape character cannot be a line break");
+    for (int i = 0; i < filterValues.length; i++) {
+      start = CarbonUtil
+          .getFirstIndexUsingBinarySearch(dimensionColumnPage, startIndex, numerOfRows - 1,
+              filterValues[i], true);
+      if (start < 0) {
+        start = -(start + 1);
+        if (start >= numerOfRows) {
+          start = start - 1;
         }
-        
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    boolean isEscaping() {
-        return this.escape != DISABLED;
-    }
-
-    /**
-     * Tells if the spaces characters at the beginning of the values are ignored when parsing a file.
-     * 
-     * @return <tt>true</tt> if leading spaces are removed, <tt>false</tt> if they are preserved.
-     */
-    public boolean isLeadingSpacesIgnored() {
-        return leadingSpacesIgnored;
-    }
-
-    /**
-     * Returns a copy of this format with the specified left trimming behavior.
-     *
-     * @param leadingSpacesIgnored the left trimming behavior, <tt>true</tt> to remove the leading spaces,
-     *                             <tt>false</tt> to leave the spaces as is.
-     * @return A copy of this format with the specified left trimming behavior.
-     */
-    public CSVFormat withLeadingSpacesIgnored(boolean leadingSpacesIgnored) {
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    /**
-     * Tells if the spaces characters at the end of the values are ignored when parsing a file.
-     * 
-     * @return <tt>true</tt> if trailing spaces are removed, <tt>false</tt> if they are preserved.
-     */
-    public boolean isTrailingSpacesIgnored() {
-        return trailingSpacesIgnored;
-    }
-
-    /**
-     * Returns a copy of this format with the specified right trimming behavior.
-     *
-     * @param trailingSpacesIgnored the right trimming behavior, <tt>true</tt> to remove the trailing spaces,
-     *                              <tt>false</tt> to leave the spaces as is.
-     * @return A copy of this format with the specified right trimming behavior.
-     */
-    public CSVFormat withTrailingSpacesIgnored(boolean trailingSpacesIgnored) {
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    /**
-     * Returns a copy of this format with the specified trimming behavior.
-     *
-     * @param surroundingSpacesIgnored the trimming behavior, <tt>true</tt> to remove the surrounding spaces,
-     *                                 <tt>false</tt> to leave the spaces as is.
-     * @return A copy of this format with the specified trimming behavior.
-     */
-    public CSVFormat withSurroundingSpacesIgnored(boolean surroundingSpacesIgnored) {
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, surroundingSpacesIgnored, surroundingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    /**
-     * Tells if unicode escape sequences (i.e <span>\</span>u1234) are turned into their corresponding character.
-     * 
-     * @return <tt>true</tt> if unicode escape sequences are interpreted, <tt>false</tt> if they are left as is.
-     */
-    public boolean isUnicodeEscapesInterpreted() {
-        return unicodeEscapesInterpreted;
-    }
-
-    /**
-     * Returns a copy of this format with the specified unicode escaping behavior.
-     *
-     * @param unicodeEscapesInterpreted the escaping behavior, <tt>true</tt> to interpret unicode escape sequences,
-     *                                  <tt>false</tt> to leave the escape sequences as is.
-     * @return A copy of this format with the specified unicode escaping behavior.
-     */
-    public CSVFormat withUnicodeEscapesInterpreted(boolean unicodeEscapesInterpreted) {
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    /**
-     * Tells if the empty lines between the records are ignored.
-     * 
-     * @return <tt>true</tt> if empty lines between records are ignore, <tt>false</tt> if they are turned into empty records.
-     */
-    public boolean isEmptyLinesIgnored() {
-        return emptyLinesIgnored;
-    }
-
-    /**
-     * Returns a copy of this format with the specified empty line skipping behavior.
-     *
-     * @param emptyLinesIgnored the empty line skipping behavior, <tt>true</tt> to ignore the empty lines
-     *                          between the records, <tt>false</tt> to translate empty lines to empty records.
-     * @return A copy of this format  with the specified empty line skipping behavior.
-     */
-    public CSVFormat withEmptyLinesIgnored(boolean emptyLinesIgnored) {
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    /**
-     * Returns the line separator delimiting output records.
-     * 
-     * @return the line separator
-     */
-    public String getLineSeparator() {
-        return lineSeparator;
-    }
-
-    /**
-     * Returns a copy of this format using the specified output line separator.
-     * 
-     * @param lineSeparator the line separator to be used for output.
-     * 
-     * @return A copy of this format using the specified output line separator
-     */
-    public CSVFormat withLineSeparator(String lineSeparator) {
-        return new CSVFormat(delimiter, encapsulator, commentStart, escape, leadingSpacesIgnored, trailingSpacesIgnored, unicodeEscapesInterpreted, emptyLinesIgnored, lineSeparator);
-    }
-
-    /**
-     * Parses the specified content.
-     * 
-     * @param in the input stream
-     */
-    public Iterable<String[]> parse(Reader in) {
-        return new CSVParser(in, this);
-    }
-
-    /**
-     * Format the specified values.
-     * 
-     * @param values the values to format
-     */
-    public String format(String... values) {
-        StringWriter out = new StringWriter();
-        try {
-            new CSVPrinter(out, this).println(values);
-        } catch (IOException e) {
-            // should not happen
+        // When negative value of start is returned from getFirstIndexUsingBinarySearch the Start
+        // will be pointing to the next consecutive position. So compare it again and point to the
+        // previous value returned from getFirstIndexUsingBinarySearch.
+        if (ByteUtil.compare(filterValues[i],
+            dimensionColumnPage.getChunkData(dimensionColumnPage.getInvertedIndex(start)))
+            < 0) {
+          start = start - 1;
         }
-        
-        return out.toString().trim();
+      }
+      last = start;
+      for (int j = start; j >= skip; j--) {
+        bitSet.set(dimensionColumnPage.getInvertedIndex(j));
+        last--;
+      }
+      startIndex = last;
+      if (startIndex <= 0) {
+        break;
+      }
     }
+    return bitSet;
+  }
+
+  /**
+   * Method will scan the block and finds the range start index from which all
+   * members will be considered for applying range filters. this method will
+   * be called if the column is sorted default so column index
+   * mapping will be present for accesing the members from the block.
+   *
+   * @param dimensionColumnPage
+   * @param numerOfRows
+   * @param defaultValue
+   * @return BitSet.
+   */
+  private BitSet setFilterdIndexToBitSet(DimensionColumnPage dimensionColumnPage,
+      int numerOfRows, byte[] defaultValue) {
+    BitSet bitSet = new BitSet(numerOfRows);
+    byte[][] filterValues = this.filterRangeValues;
+    // binary search can only be applied if column is sorted
+    if (isNaturalSorted && dimensionColumnPage.isExplicitSorted()) {
+      int start = 0;
+      int last = 0;
+      int startIndex = 0;
+      int skip = 0;
+      //find the number of default values to skip the null value in case of direct dictionary
+      if (null != defaultValue) {
+        start = CarbonUtil
+            .getFirstIndexUsingBinarySearch(dimensionColumnPage, startIndex,
+                numerOfRows - 1, defaultValue, true);
+        if (start < 0) {
+          skip = -(start + 1);
+          // end of block
+          if (skip == numerOfRows) {
+            return bitSet;
+          }
+        } else {
+          // as start will be last index of null value inclusive
+          // so adding 1 to skip last null value
+          skip = start + 1;
+        }
+        startIndex = skip;
+      }
+      for (int k = 0; k < filterValues.length; k++) {
+        start = CarbonUtil
+            .getFirstIndexUsingBinarySearch(dimensionColumnPage, startIndex,
+                numerOfRows - 1, filterValues[k], true);
+        if (start < 0) {
+          start = -(start + 1);
+          if (start >= numerOfRows) {
+            start = start - 1;
+          }
+          // When negative value of start is returned from getFirstIndexUsingBinarySearch the Start
+          // will be pointing to the next consecutive position. So compare it again and point to the
+          // previous value returned from getFirstIndexUsingBinarySearch.
+          if (ByteUtil.compare(filterValues[k], dimensionColumnPage.getChunkData(start)) < 0) {
+            start = start - 1;
+          }
+        }
+        last = start;
+        for (int j = start; j >= skip; j--) {
+          bitSet.set(j);
+          last--;
+        }
+        startIndex = last;
+        if (startIndex <= 0) {
+          break;
+        }
+      }
+    } else {
+      for (int k = 0; k < filterValues.length; k++) {
+        for (int i = 0; i < numerOfRows; i++) {
+          if (ByteUtil.compare(dimensionColumnPage.getChunkData(i), filterValues[k]) <= 0) {
+            bitSet.set(i);
+          }
+        }
+      }
+    }
+    return bitSet;
+  }
+
+  @Override public void readColumnChunks(RawBlockletColumnChunks rawBlockletColumnChunks)
+      throws IOException {
+    if (isDimensionPresentInCurrentBlock[0]) {
+      if (!dimColEvaluatorInfoList.get(0).getDimension().hasEncoding(Encoding.DICTIONARY)) {
+        super.readColumnChunks(rawBlockletColumnChunks);
+      }
+      int chunkIndex = dimensionChunkIndex[0];
+      if (null == rawBlockletColumnChunks.getDimensionRawColumnChunks()[chunkIndex]) {
+        rawBlockletColumnChunks.getDimensionRawColumnChunks()[chunkIndex] =
+            rawBlockletColumnChunks.getDataBlock().readDimensionChunk(
+                rawBlockletColumnChunks.getFileReader(), chunkIndex);
+      }
+    } else if (isMeasurePresentInCurrentBlock[0]) {
+      int chunkIndex = msrColEvalutorInfoList.get(0).getColumnIndex();
+      if (null == rawBlockletColumnChunks.getMeasureRawColumnChunks()[chunkIndex]) {
+        rawBlockletColumnChunks.getMeasureRawColumnChunks()[chunkIndex] =
+            rawBlockletColumnChunks.getDataBlock().readMeasureChunk(
+                rawBlockletColumnChunks.getFileReader(), chunkIndex);
+      }
+    }
+  }
 }

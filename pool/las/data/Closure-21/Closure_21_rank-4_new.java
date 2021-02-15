@@ -1,37 +1,69 @@
-/*****************************************************************
- *   Licensed to the Apache Software Foundation (ASF) under one
- *  or more contributor license agreements.  See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership.  The ASF licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License.  You may obtain a copy of the License at
+/*
+ * Copyright (c) 2007 Mockito contributors
+ * This program is made available under the terms of the MIT License.
+ */
+package org.mockito.internal.stubbing.defaultanswers;
+
+import org.mockito.Mockito;
+import org.mockito.internal.InternalMockHandler;
+import org.mockito.internal.stubbing.InvocationContainerImpl;
+import org.mockito.internal.stubbing.StubbedInvocationMatcher;
+import org.mockito.internal.util.MockCreationValidator;
+import org.mockito.internal.util.MockUtil;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
+
+import java.io.Serializable;
+
+/**
+ * Returning deep stub implementation.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * Will return previously created mock if the invocation matches.
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied.  See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
- ****************************************************************/
-package org.apache.cayenne.crypto.unit;
+ * @see Mockito#RETURNS_DEEP_STUBS
+ * @see org.mockito.Answers#RETURNS_DEEP_STUBS
+ */
+public class ReturnsDeepStubs implements Answer<Object>, Serializable {
+    
+    private static final long serialVersionUID = -6926328908792880098L;
+    
+    private Answer<Object> delegate = new ReturnsEmptyValues();
 
-import java.math.BigInteger;
-import java.util.Arrays;
+    public Object answer(InvocationOnMock invocation) throws Throwable {
+        Class<?> clz = invocation.getMethod().getReturnType();
 
-public class CryptoUnitUtils {
-
-    public static byte[] hexToBytes(String hexString) {
-        byte[] bytes = new BigInteger(hexString, 16).toByteArray();
-
-        // http://stackoverflow.com/questions/4407779/biginteger-to-byte
-        if (bytes.length > 0 && bytes[0] == 0) {
-            return Arrays.copyOfRange(bytes, 1, bytes.length);
-        } else {
-            return bytes;
+        if (!new MockCreationValidator().isTypeMockable(clz)) {
+            return delegate.answer(invocation);
         }
+
+        return getMock(invocation);
     }
 
+    private Object getMock(InvocationOnMock invocation) throws Throwable {
+    	InternalMockHandler<Object> handler = new MockUtil().getMockHandler(invocation.getMock());
+    	InvocationContainerImpl container = (InvocationContainerImpl) handler.getInvocationContainer();
+
+        // matches invocation for verification
+        for (StubbedInvocationMatcher stubbedInvocationMatcher : container.getStubbedInvocations()) {
+    		if(container.getInvocationForStubbing().matches(stubbedInvocationMatcher.getInvocation())) {
+    			return stubbedInvocationMatcher.answer(invocation);
+    		}
+		}
+
+        // deep stub
+        return recordDeepStubMock(invocation, container);
+    }
+
+    private Object recordDeepStubMock(InvocationOnMock invocation, InvocationContainerImpl container) {
+        Class<?> clz = invocation.getMethod().getReturnType();
+        final Object mock = Mockito.mock(clz, this);
+
+        container.addAnswer(new Answer<Object>() {
+            public Object answer(InvocationOnMock invocation) throws Throwable {
+                return mock;
+            }
+        }, false);
+
+        return mock;
+    }
 }

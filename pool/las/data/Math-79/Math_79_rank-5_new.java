@@ -1,802 +1,688 @@
-package org.apache.maven.project;
-
 /*
- * Copyright 2001-2005 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
+package org.apache.geronimo.blueprint.context;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.factory.ArtifactFactory;
-import org.apache.maven.artifact.metadata.ArtifactMetadataSource;
-import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.artifact.repository.ArtifactRepositoryFactory;
-import org.apache.maven.artifact.resolver.ArtifactResolutionException;
-import org.apache.maven.artifact.resolver.ArtifactResolutionResult;
-import org.apache.maven.artifact.resolver.ArtifactResolver;
-import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
-import org.apache.maven.artifact.versioning.VersionRange;
-import org.apache.maven.model.Build;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.model.DistributionManagement;
-import org.apache.maven.model.Model;
-import org.apache.maven.model.Parent;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.model.Profile;
-import org.apache.maven.model.ReportPlugin;
-import org.apache.maven.model.Repository;
-import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
-import org.apache.maven.profiles.activation.ProfileActivationCalculator;
-import org.apache.maven.project.artifact.MavenMetadataSource;
-import org.apache.maven.project.inheritance.ModelInheritanceAssembler;
-import org.apache.maven.project.injection.ModelDefaultsInjector;
-import org.apache.maven.project.interpolation.ModelInterpolationException;
-import org.apache.maven.project.interpolation.ModelInterpolator;
-import org.apache.maven.project.path.PathTranslator;
-import org.apache.maven.project.validation.ModelValidationResult;
-import org.apache.maven.project.validation.ModelValidator;
-import org.codehaus.plexus.PlexusConstants;
-import org.codehaus.plexus.PlexusContainer;
-import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
-import org.codehaus.plexus.context.Context;
-import org.codehaus.plexus.context.ContextException;
-import org.codehaus.plexus.logging.AbstractLogEnabled;
-import org.codehaus.plexus.personality.plexus.lifecycle.phase.Contextualizable;
-import org.codehaus.plexus.personality.plexus.lifecycle.phase.Initializable;
-import org.codehaus.plexus.util.IOUtil;
-import org.codehaus.plexus.util.StringUtils;
-import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.URL;
+import java.beans.BeanInfo;
+import java.beans.IntrospectionException;
+import java.beans.Introspector;
+import java.beans.PropertyDescriptor;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 
+import org.apache.geronimo.blueprint.BeanProcessor;
+import org.apache.geronimo.blueprint.namespace.ComponentDefinitionRegistryImpl;
+import org.apache.geronimo.blueprint.utils.ConversionUtils;
+import org.apache.geronimo.blueprint.utils.ReflectionUtils;
+import org.apache.xbean.recipe.AbstractRecipe;
+import org.apache.xbean.recipe.ConstructionException;
+import org.apache.xbean.recipe.ExecutionContext;
+import org.apache.xbean.recipe.Option;
+import org.apache.xbean.recipe.Recipe;
+import org.apache.xbean.recipe.RecipeHelper;
+import org.apache.xbean.recipe.ReferenceRecipe;
+import org.osgi.service.blueprint.convert.ConversionService;
+import org.osgi.service.blueprint.reflect.BeanArgument;
+
 /**
- * @version $Id: DefaultMavenProjectBuilder.java,v 1.37 2005/03/08 01:55:22
- *          trygvis Exp $
+ *
+ * @author <a href="mailto:dev@geronimo.apache.org">Apache Geronimo Project</a>
+ * @version $Rev$, $Date$
  */
-public class DefaultMavenProjectBuilder
-    extends AbstractLogEnabled
-    implements MavenProjectBuilder, Initializable, Contextualizable
-{
-    // TODO: remove
-    private PlexusContainer container;
+public class BlueprintObjectRecipe extends AbstractRecipe {
 
-    protected ArtifactResolver artifactResolver;
+    private Class typeClass;
+    private final LinkedHashMap<String,Object> properties = new LinkedHashMap<String,Object>();
+    private final EnumSet<Option> options = EnumSet.noneOf(Option.class);
+
+    private final BlueprintContextImpl blueprintContext;
+    private boolean keepRecipe = false;
+    private String initMethod;
+    private String destroyMethod;
+    private List<String> explicitDependencies;
     
-    protected ArtifactMetadataSource artifactMetadataSource;
-
-    private ArtifactFactory artifactFactory;
-
-    private ModelInheritanceAssembler modelInheritanceAssembler;
-
-    private ModelValidator validator;
+    private Recipe factory; // could be Recipe or actual object
+    private String factoryMethod;
+    private List<Object> arguments;
+    private List<BeanArgument> beanArguments;
+    private boolean reorderArguments;
     
-    // TODO: make it a component
-    private MavenXpp3Reader modelReader;
-
-    private PathTranslator pathTranslator;
-
-    private ModelDefaultsInjector modelDefaultsInjector;
-
-    private ModelInterpolator modelInterpolator;
-
-    private ArtifactRepositoryFactory artifactRepositoryFactory;
-
-    private ProfileActivationCalculator profileActivationCalculator;
-
-    private final Map modelCache = new HashMap();
-
-    public static final String MAVEN_MODEL_VERSION = "4.0.0";
-
-    public void initialize()
-    {
-        modelReader = new MavenXpp3Reader();
+    public BlueprintObjectRecipe(BlueprintContextImpl blueprintContext, Class typeClass) {
+        this.typeClass = typeClass;
+        this.blueprintContext = blueprintContext;
+        allow(Option.LAZY_ASSIGNMENT);
+    }
+    
+    public void allow(Option option){
+        options.add(option);
     }
 
-    // ----------------------------------------------------------------------
-    // MavenProjectBuilder Implementation
-    // ----------------------------------------------------------------------
+    public void disallow(Option option){
+        options.remove(option);
+    }
+
+    public Set<Option> getOptions() {
+        return Collections.unmodifiableSet(options);
+    }
+
+    public Object getProperty(String name) {
+        return properties.get(name);
+    }
+
+    public Map<String, Object> getProperties() {
+        return new LinkedHashMap<String, Object>(properties);
+    }
+
+    public void setProperty(String name, Object value) {
+        properties.put(name, value);
+    }
+
+    public void setAllProperties(Map<?,?> map) {
+        if (map == null) throw new NullPointerException("map is null");
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            String name = (String) entry.getKey();
+            Object value = entry.getValue();
+            setProperty(name, value);
+        }
+    }
+
+    public void setFactoryMethod(String method) {
+        this.factoryMethod = method;
+    }
+    
+    public void setFactoryComponent(Recipe factory) {
+        this.factory = factory;
+    }
+    
+    public void setBeanArguments(List<BeanArgument> arguments) {
+        this.beanArguments = arguments;
+    }
+    
+    public void setArguments(List<Object> arguments) {
+        this.arguments = arguments;
+    }
+    
+    public void setReorderArguments(boolean reorder) {
+        this.reorderArguments = reorder;
+    }
+    
+    public void setKeepRecipe(boolean keepRecipe) {
+        this.keepRecipe = keepRecipe;
+    }
+    
+    public boolean getKeepRecipe() {
+        return keepRecipe;
+    }
+    
+    public void setInitMethod(String initMethod) {
+        this.initMethod = initMethod;
+    }
+    
+    public String getInitMethod() {
+        return initMethod;
+    }
+    
+    public void setDestroyMethod(String destroyMethod) {
+        this.destroyMethod = destroyMethod;
+    }
+    
+    public String getDestroyMethod() {
+        return destroyMethod;
+    }
+
+    public List<String> getExplicitDependencies() {
+        return explicitDependencies;
+    }
+
+    public void setExplicitDependencies(List<String> explicitDependencies) {
+        this.explicitDependencies = explicitDependencies;
+    }
+
+    @Override
+    public List<Recipe> getNestedRecipes() {
+        List<Recipe> recipes = new ArrayList<Recipe>();
+        for (Object o : properties.values()) {
+            if (o instanceof Recipe) {
+                Recipe recipe = (Recipe) o;
+                recipes.add(recipe);
+            }
+        }
+        if (arguments != null) {
+            for (Object argument : arguments) {
+                if (argument instanceof Recipe) {
+                    recipes.add((Recipe)argument);
+                }
+            }
+        }
+        if (explicitDependencies != null) {
+            for (String name : explicitDependencies) {
+                recipes.add(new ReferenceRecipe(name));
+            }
+        }
+        return recipes; 
+    }
+
+    private void instantiateExplicitDependencies() {
+        if (explicitDependencies != null) {
+            for (String name : explicitDependencies) {
+                Recipe recipe = new ReferenceRecipe(name);
+                recipe.create(Object.class, false);
+            }
+        }
+    }
+    
+    private Class loadClass(String typeName) throws ConstructionException {
+        if (typeName == null) {
+            return null;
+        }
+        try {
+            return RecipeBuilder.loadClass(blueprintContext, typeName);
+        } catch (ClassNotFoundException e) {
+            throw new ConstructionException("Unable to load type class " + typeName);
+        }
+    }
+        
+    private Object getInstance(boolean refAllowed) throws ConstructionException {
+        Object instance = null;
+        
+        // Instanciate arguments
+        List<Object> args = new ArrayList<Object>();
+        List<Class> types = new ArrayList<Class>();
+        if (arguments != null) {
+            for (int i = 0; i < arguments.size(); i++) {
+                Object arg = arguments.get(i);
+                if (arg instanceof Recipe) {
+                    args.add(((Recipe) arg).create(Object.class, refAllowed));
+                } else {
+                    args.add(arg);
+                }
+                String valueType = beanArguments.get(i).getValueType();
+                if (valueType != null) {
+                    try {
+                        types.add(loadClass(valueType));
+                    } catch (Throwable t) {
+                        throw new ConstructionException("Error loading class " + valueType + " when instanciating bean " + getName());
+                    }
+                } else {
+                    types.add(null);
+                }
+            }
+        }
+
+        if (factory != null) {
+            // look for instance method on factory object
+            Object factoryObj = factory.create(Object.class, false);
+            // Map of matching methods
+            Map<Method, List<Object>> matches = findMatchingMethods(factoryObj.getClass(), factoryMethod, true, args, types, arguments);
+            if (matches.size() == 1) {
+                try {
+                    Map.Entry<Method, List<Object>> match = matches.entrySet().iterator().next();
+                    instance = match.getKey().invoke(factoryObj, match.getValue().toArray());
+                } catch (InvocationTargetException e) {
+                    Throwable root = e.getTargetException();
+                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), root);
+                } catch (Throwable e) {
+                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), e);
+                }
+            } else if (matches.size() == 0) {
+                throw new ConstructionException("Unable to find a matching factory method " + factoryMethod + " on class " + factoryObj.getClass() + " for arguments " + args + " when instanciating bean " + getName());
+            } else {
+                throw new ConstructionException("Multiple matching factory methods " + factoryMethod + " found on class " + factoryObj.getClass() + " for arguments " + args + " when instanciating bean " + getName());
+            }
+        } else if (factoryMethod != null) {
+            // Map of matching methods
+            Map<Method, List<Object>> matches = findMatchingMethods(getType(), factoryMethod, false, args, types, arguments);
+            if (matches.size() == 1) {
+                try {
+                    Map.Entry<Method, List<Object>> match = matches.entrySet().iterator().next();
+                    instance = match.getKey().invoke(null, match.getValue().toArray());
+                } catch (InvocationTargetException e) {
+                    Throwable root = e.getTargetException();
+                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), root);
+                } catch (Throwable e) {
+                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), e);
+                }
+            } else if (matches.size() == 0) {
+                throw new ConstructionException("Unable to find a matching factory method " + factoryMethod + " on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
+            } else {
+                throw new ConstructionException("Multiple matching factory methods " + factoryMethod + " found on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
+            }
+        } else {
+            // Map of matching constructors
+            Map<Constructor, List<Object>> matches = findMatchingConstructors(args, types, args);
+            if (matches.size() == 1) {
+                try {
+                    Map.Entry<Constructor, List<Object>> match = matches.entrySet().iterator().next();
+                    instance = match.getKey().newInstance(match.getValue().toArray());
+                } catch (InvocationTargetException e) {
+                    Throwable root = e.getTargetException();
+                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), root);
+                } catch (Throwable e) {
+                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), e);
+                }
+            } else if (matches.size() == 0) {
+                throw new ConstructionException("Unable to find a matching constructor on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
+            } else {
+                throw new ConstructionException("Multiple matching constructors found on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
+            }
+        }
+        
+        return instance;
+    }
+
+    private Object convert(Object obj, Type type) throws Exception {
+        return ConversionUtils.convert(obj, type, blueprintContext.getConversionService());
+    }
+
+    private Map<Method, List<Object>> findMatchingMethods(Class type, String name, boolean instance, List<Object> args, List<Class> types, List<Object> arguments) {
+        Map<Method, List<Object>> matches = new HashMap<Method, List<Object>>();
+        // Get constructors
+        List<Method> methods = new ArrayList<Method>(Arrays.asList(type.getMethods()));
+        // Discard any signature with wrong cardinality
+        for (Iterator<Method> it = methods.iterator(); it.hasNext();) {
+            Method mth = it.next();
+            if (!mth.getName().equals(name)) {
+                it.remove();
+            } else if (mth.getParameterTypes().length != args.size()) {
+                it.remove();
+            } else if (!instance ^ Modifier.isStatic(mth.getModifiers())) {
+                it.remove();
+            }
+        }
+        // Find a direct match
+        for (Method mth : methods) {
+            boolean found = true;
+            List<Object> match = new ArrayList<Object>();
+            for (int i = 0; i < args.size(); i++) {
+                if (types.get(i) != null && types.get(i) != mth.getParameterTypes()[i]) {
+                    found = false;
+                    break;
+                }
+                try {
+                    Object val = convert(args.get(i), mth.getGenericParameterTypes()[i]);
+                    match.add(val);
+                } catch (Throwable t) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) {
+                matches.put(mth, match);
+            }
+        }
+        // Start reordering
+        if (matches.size() != 1 && reorderArguments && arguments.size() > 1) {
+            Map<Method, List<Object>> nmatches = new HashMap<Method, List<Object>>();
+            for (Method mth : methods) {
+                ArgumentMatcher matcher = new ArgumentMatcher(mth.getGenericParameterTypes());
+                List<Object> match = matcher.match(args, types);
+                if (match != null) {
+                    nmatches.put(mth, match);
+                }
+            }
+            if (nmatches.size() > 0) {
+                matches = nmatches;
+            }
+        }
+        return matches;
+    }
+
+    private Map<Constructor, List<Object>> findMatchingConstructors(List<Object> args, List<Class> types, List<Object> arguments) {
+        Map<Constructor, List<Object>> matches = new HashMap<Constructor, List<Object>>();
+        // Get constructors
+        List<Constructor> constructors = new ArrayList<Constructor>(Arrays.asList(getType().getConstructors()));
+        // Discard any signature with wrong cardinality
+        for (Iterator<Constructor> it = constructors.iterator(); it.hasNext();) {
+            if (it.next().getParameterTypes().length != args.size()) {
+                it.remove();
+            }
+        }
+        // Find a direct match
+        for (Constructor cns : constructors) {
+            boolean found = true;
+            List<Object> match = new ArrayList<Object>();
+            for (int i = 0; i < args.size(); i++) {
+                if (types.get(i) != null && types.get(i) != cns.getParameterTypes()[i]) {
+                    found = false;
+                    break;
+                }
+                try {
+                    Object val = convert(args.get(i), cns.getGenericParameterTypes()[i]);
+                    match.add(val);
+                } catch (Throwable t) {
+                    found = false;
+                    break;
+                }
+            }
+            if (found) {
+                matches.put(cns, match);
+            }
+        }
+        // Start reordering
+        if (matches.size() != 1 && reorderArguments && arguments.size() > 1) {
+            Map<Constructor, List<Object>> nmatches = new HashMap<Constructor, List<Object>>();
+            for (Constructor cns : constructors) {
+                ArgumentMatcher matcher = new ArgumentMatcher(cns.getGenericParameterTypes());
+                List<Object> match = matcher.match(args, types);
+                if (match != null) {
+                    nmatches.put(cns, match);
+                }
+            }
+            if (nmatches.size() > 0) {
+                matches = nmatches;
+            }
+        }
+        return matches;
+    }
 
     /**
-     * @todo move to metadatasource itself?
+     * Returns init method (if any). Throws exception if the init-method was set explicitly on the bean
+     * and the method is not found on the instance.
      */
-    public MavenProject buildWithDependencies( File projectDescriptor, ArtifactRepository localRepository,
-                                               List externalProfiles )
-        throws ProjectBuildingException, ArtifactResolutionException
-    {
-        MavenProject project = buildFromSourceFile( projectDescriptor, localRepository, externalProfiles );
-
-        // ----------------------------------------------------------------------
-        // Typically when the project builder is being used from maven proper
-        // the transitive dependencies will not be resolved here because this
-        // requires a lot of work when we may only be interested in running
-        // something simple like 'm2 clean'. So the artifact collector is used
-        // in the dependency resolution phase if it is required by any of the
-        // goals being executed. But when used as a component in another piece
-        // of code people may just want to build maven projects and have the
-        // dependencies resolved for whatever reason: this is why we keep
-        // this snippet of code here.
-        // ----------------------------------------------------------------------
-
-        // TODO: such a call in MavenMetadataSource too - packaging not really the intention of type
-        Artifact projectArtifact = project.getArtifact();
-
-        Map managedVersions = createManagedVersionMap( project.getDependencyManagement() );
-        
-        ensureMetadataSourceIsInitialized();
-        
-        ArtifactResolutionResult result = artifactResolver.resolveTransitively( project.getDependencyArtifacts(),
-                                                                                projectArtifact, managedVersions,
-                                                                                localRepository,
-                                                                                project.getRemoteArtifactRepositories(),
-                                                                                artifactMetadataSource );
-
-        project.setArtifacts( result.getArtifacts() );
-        return project;
-    }
-    
-    private void ensureMetadataSourceIsInitialized() 
-        throws ProjectBuildingException
-    {
-        if ( artifactMetadataSource == null )
-        {
-            try
-            {
-                artifactMetadataSource = (ArtifactMetadataSource) container.lookup( ArtifactMetadataSource.ROLE );
-            }
-            catch ( ComponentLookupException e )
-            {
-                throw new ProjectBuildingException( "Cannot lookup metadata source for building the project.", e );
+    protected Method getInitMethod(Object instance) throws ConstructionException {
+        Method method = null;        
+        if (initMethod == null) {
+            ComponentDefinitionRegistryImpl registry = blueprintContext.getComponentDefinitionRegistry();
+            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), registry.getDefaultInitMethod());
+        } else if (initMethod.length() > 0) {
+            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), initMethod);
+            if (method == null) {
+                throw new ConstructionException("Component '" + getName() + "' does not have init-method: " + initMethod);
             }
         }
-    }
-
-    private Map createManagedVersionMap( DependencyManagement dependencyManagement )
-        throws ProjectBuildingException
-    {
-        Map map;
-        if ( dependencyManagement != null && dependencyManagement.getDependencies() != null )
-        {
-            map = new HashMap();
-            for ( Iterator i = dependencyManagement.getDependencies().iterator(); i.hasNext(); )
-            {
-                Dependency d = (Dependency) i.next();
-
-                try
-                {
-                    VersionRange versionRange = VersionRange.createFromVersionSpec( d.getVersion() );
-                    Artifact artifact = artifactFactory.createDependencyArtifact( d.getGroupId(), d.getArtifactId(),
-                                                                                  versionRange, d.getType(),
-                                                                                  d.getScope() );
-                    map.put( d.getManagementKey(), artifact );
-                }
-                catch ( InvalidVersionSpecificationException e )
-                {
-                    throw new ProjectBuildingException( "Unable to parse dependency version", e );
-                }
-            }
-        }
-        else
-        {
-            map = Collections.EMPTY_MAP;
-        }
-        return map;
-    }
-
-    public MavenProject build( File projectDescriptor, ArtifactRepository localRepository, List externalProfiles )
-        throws ProjectBuildingException
-    {
-        return buildFromSourceFile( projectDescriptor, localRepository, externalProfiles );
-    }
-
-    private MavenProject buildFromSourceFile( File projectDescriptor, ArtifactRepository localRepository,
-                                              List externalProfiles )
-        throws ProjectBuildingException
-    {
-        Model model = readModel( projectDescriptor );
-
-        // Always cache files in the source tree over those in the repository
-        modelCache.put( createCacheKey( model.getGroupId(), model.getArtifactId(), model.getVersion() ), model );
-
-        MavenProject project = build( projectDescriptor.getAbsolutePath(), model, localRepository,
-                                      Collections.EMPTY_LIST, externalProfiles, projectDescriptor.getAbsoluteFile().getParentFile() );
-
-        // Only translate the base directory for files in the source tree
-        pathTranslator.alignToBaseDirectory( project.getModel(), projectDescriptor );
-
-        Build build = project.getBuild();
-        project.addCompileSourceRoot( build.getSourceDirectory() );
-        project.addScriptSourceRoot( build.getScriptSourceDirectory() );
-        project.addTestCompileSourceRoot( build.getTestSourceDirectory() );
-
-        // Only track the file of a POM in the source tree
-        project.setFile( projectDescriptor );
-
-        return project;
-    }
-
-    public MavenProject buildFromRepository( Artifact artifact, List remoteArtifactRepositories,
-                                             ArtifactRepository localRepository )
-        throws ProjectBuildingException
-    {
-        Model model = findModelFromRepository( artifact, remoteArtifactRepositories, localRepository );
-
-        return build( "Artifact [" + artifact.getId() + "]", model, localRepository, remoteArtifactRepositories,
-                      Collections.EMPTY_LIST, null );
-    }
-
-    private Model findModelFromRepository( Artifact artifact, List remoteArtifactRepositories,
-                                           ArtifactRepository localRepository )
-        throws ProjectBuildingException
-    {
-        Model model = getCachedModel( artifact.getGroupId(), artifact.getArtifactId(), artifact.getVersion() );
-        if ( model == null )
-        {
-            // TODO: can't assume artifact is a POM
-            try
-            {
-                artifactResolver.resolve( artifact, remoteArtifactRepositories, localRepository );
-
-                File file = artifact.getFile();
-                model = readModel( file );
-            }
-            catch ( ArtifactResolutionException e )
-            {
-                // TODO: a not found would be better vs other errors
-                // only not found should have the below behaviour
-//                throw new ProjectBuildingException( "Unable to find the POM in the repository", e );
-
-                getLogger().warn( "\n  ***** Using defaults for missing POM " + artifact.getId() + " *****\n" );
-
-                model = new Model();
-                model.setModelVersion( "4.0.0" );
-                model.setArtifactId( artifact.getArtifactId() );
-                model.setGroupId( artifact.getGroupId() );
-                model.setVersion( artifact.getVersion() );
-                // TODO: not correct in some instances
-                model.setPackaging( artifact.getType() );
-            }
-        }
-
-        // TODO: this is gross. Would like to give it the whole model, but maven-artifact shouldn't depend on that
-        // Can a maven-core implementation of the Artifact interface store it, and be used in the exceptions?
-        String downloadUrl = null;
-        if ( model.getDistributionManagement() != null )
-        {
-            downloadUrl = model.getDistributionManagement().getDownloadUrl();
-        }
-        if ( downloadUrl != null )
-        {
-            artifact.setDownloadUrl( downloadUrl );
-        }
-        else
-        {
-            artifact.setDownloadUrl( model.getUrl() );
-        }
-
-        return model;
-    }
-
-    private MavenProject build( String pomLocation, Model model, ArtifactRepository localRepository,
-                                List remoteArtifactRepositories, List externalProfiles, File projectDir )
-        throws ProjectBuildingException
-    {
-        Model superModel = getSuperModel();
-
-        //noinspection CollectionDeclaredAsConcreteClass
-        LinkedList lineage = new LinkedList();
-
-        Set aggregatedRemoteWagonRepositories = new HashSet();
-        if ( remoteArtifactRepositories != null && !remoteArtifactRepositories.isEmpty() )
-        {
-            aggregatedRemoteWagonRepositories.addAll( remoteArtifactRepositories );
-        }
-
-        aggregatedRemoteWagonRepositories.addAll( ProjectUtils.buildArtifactRepositories( superModel.getRepositories(),
-                                                                                          artifactRepositoryFactory,
-                                                                                          container ) );
-
-        for ( Iterator i = externalProfiles.iterator(); i.hasNext(); )
-        {
-            Profile externalProfile = (Profile) i.next();
-
-            for ( Iterator repoIterator = externalProfile.getRepositories().iterator(); repoIterator.hasNext(); )
-            {
-                Repository mavenRepo = (Repository) repoIterator.next();
-
-                ArtifactRepository artifactRepo = ProjectUtils.buildArtifactRepository( mavenRepo,
-                                                                                        artifactRepositoryFactory,
-                                                                                        container );
-
-                aggregatedRemoteWagonRepositories.add( artifactRepo );
-            }
-        }
-
-        Model originalModel = ModelUtils.cloneModel( model );
-        
-        List repositories = new ArrayList( aggregatedRemoteWagonRepositories );
-        
-        MavenProject project = assembleLineage( model, lineage, repositories, localRepository, externalProfiles, projectDir );
-
-        project.setOriginalModel( originalModel );
-
-        // we don't have to force the collision exception for superModel here, it's already been done in getSuperModel()
-        Model previous = superModel;
-
-        for ( Iterator i = lineage.iterator(); i.hasNext(); )
-        {
-            MavenProject currentProject = (MavenProject) i.next();
-
-            Model current = currentProject.getModel();
-
-            modelInheritanceAssembler.assembleModelInheritance( current, previous );
-
-            previous = current;
-        }
-
-        try
-        {
-            project = processProjectLogic( pomLocation, project, repositories, externalProfiles );
-        }
-        catch ( ModelInterpolationException e )
-        {
-            throw new ProjectBuildingException( "Error building project from \'" + pomLocation + "\': " + model.getId(),
-                                                e );
-        }
-        return project;
+        return method;
     }
 
     /**
-     * @todo can this take in a model instead of a project and still be successful?
-     * @todo In fact, does project REALLY need a MavenProject as a parent? Couldn't it have just a wrapper around a
-     * model that supported parents which were also the wrapper so that inheritence was assembled. We don't really need
-     * the resolved source roots, etc for the parent - that occurs for the parent when it is constructed independently
-     * and projects are not cached or reused
+     * Returns destroy method (if any). Throws exception if the destroy-method was set explicitly on the bean
+     * and the method is not found on the instance.
      */
-    private MavenProject processProjectLogic( String pomLocation, MavenProject project, List remoteRepositories,
-                                              List externalProfiles )
-        throws ProjectBuildingException, ModelInterpolationException
-    {
-        Model model = project.getModel();
-        String key = createCacheKey( model.getGroupId(), model.getArtifactId(), model.getVersion() );
-        Model cachedModel = (Model) modelCache.get( key );
-        if ( cachedModel == null )
-        {
-            modelCache.put( key, model );
-        }
-
-        List activeProfiles = new ArrayList( externalProfiles );
-
-        List activePomProfiles = profileActivationCalculator.calculateActiveProfiles( model.getProfiles() );
-
-        activeProfiles.addAll( activePomProfiles );
-
-        Properties profileProperties = new Properties();
-
-        for ( Iterator it = activeProfiles.iterator(); it.hasNext(); )
-        {
-            Profile profile = (Profile) it.next();
-
-            modelInheritanceAssembler.mergeProfileWithModel( model, profile );
-
-            profileProperties.putAll( profile.getProperties() );
-        }
-
-        // TODO: Clean this up...we're using this to 'jump' the interpolation step for model properties not expressed in XML.
-
-        model = modelInterpolator.interpolate( model );
-
-        // interpolation is before injection, because interpolation is off-limits in the injected variables
-        modelDefaultsInjector.injectDefaults( model );
-
-        MavenProject parentProject = project.getParent();
-
-        project = new MavenProject( model );
-
-        project.addProfileProperties( profileProperties );
-
-        project.setActiveProfiles( activeProfiles );
-
-        // TODO: maybe not strictly correct, while we should enfore that packaging has a type handler of the same id, we don't
-        Artifact projectArtifact = artifactFactory.createBuildArtifact( project.getGroupId(), project.getArtifactId(),
-                                                                        project.getVersion(), project.getPackaging() );
-
-        project.setArtifact( projectArtifact );
-
-        project.setPluginArtifactRepositories( ProjectUtils.buildArtifactRepositories( model.getPluginRepositories(),
-                                                                                       artifactRepositoryFactory,
-                                                                                       container ) );
-
-        DistributionManagement dm = model.getDistributionManagement();
-        if ( dm != null )
-        {
-            ArtifactRepository repo = ProjectUtils.buildArtifactRepositoryBase( dm.getRepository(),
-                                                                                artifactRepositoryFactory, container );
-            project.setReleaseArtifactRepository( repo );
-
-            if ( dm.getSnapshotRepository() != null )
-            {
-                repo = ProjectUtils.buildArtifactRepositoryBase( dm.getSnapshotRepository(), artifactRepositoryFactory,
-                                                                 container );
-                project.setSnapshotArtifactRepository( repo );
+    protected Method getDestroyMethod(Object instance) throws ConstructionException {
+        Method method = null;        
+        if (destroyMethod == null) {
+            ComponentDefinitionRegistryImpl registry = blueprintContext.getComponentDefinitionRegistry();
+            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), registry.getDefaultDestroyMethod());
+        } else if (destroyMethod.length() > 0) {
+            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), destroyMethod);
+            if (method == null) {
+                throw new ConstructionException("Component '" + getName() + "' does not have destroy-method: " + destroyMethod);
             }
         }
-
-        project.setParent( parentProject );
-
-        if ( parentProject != null )
-        {
-            Artifact parentArtifact = artifactFactory.createProjectArtifact( parentProject.getGroupId(),
-                                                                             parentProject.getArtifactId(),
-                                                                             parentProject.getVersion() );
-            project.setParentArtifact( parentArtifact );
-        }
-
-        // Must validate before artifact construction to make sure dependencies are good
-        ModelValidationResult validationResult = validator.validate( model );
-
-        if ( validationResult.getMessageCount() > 0 )
-        {
-            throw new ProjectBuildingException( "Failed to validate POM for \'" + pomLocation +
-                "\'.\n\n  Reason(s):\n" + validationResult.render( "  " ) );
-        }
-
-        project.setRemoteArtifactRepositories( remoteRepositories );
-        project.setDependencyArtifacts( createArtifacts( project.getDependencies() ) );
-        project.setPluginArtifacts( createPluginArtifacts( project.getBuildPlugins() ) );
-
-        return project;
+        return method;
     }
-
-    /** @noinspection CollectionDeclaredAsConcreteClass*/
-    private MavenProject assembleLineage( Model model, LinkedList lineage, List aggregatedRemoteWagonRepositories,
-                                          ArtifactRepository localRepository, List externalProfiles, File projectDir )
-        throws ProjectBuildingException
-    {
-        if ( !model.getRepositories().isEmpty() )
-        {
-            List respositories = ProjectUtils.buildArtifactRepositories( model.getRepositories(),
-                                                                         artifactRepositoryFactory, container );
-
-            for ( Iterator it = respositories.iterator(); it.hasNext(); )
-            {
-                ArtifactRepository repository = (ArtifactRepository) it.next();
-
-                if ( !aggregatedRemoteWagonRepositories.contains( repository ) )
-                {
-                    aggregatedRemoteWagonRepositories.add( repository );
-                }
-            }
-        }
-
-        MavenProject project = new MavenProject( model );
-
-        lineage.addFirst( project );
-
-        Parent parentModel = model.getParent();
-
-        if ( parentModel != null )
-        {
-            if ( StringUtils.isEmpty( parentModel.getGroupId() ) )
-            {
-                throw new ProjectBuildingException( "Missing groupId element from parent element" );
-            }
-            else if ( StringUtils.isEmpty( parentModel.getArtifactId() ) )
-            {
-                throw new ProjectBuildingException( "Missing artifactId element from parent element" );
-            }
-            else if ( StringUtils.isEmpty( parentModel.getVersion() ) )
-            {
-                throw new ProjectBuildingException( "Missing version element from parent element" );
-            }
-            
-            model = getCachedModel( parentModel.getGroupId(), parentModel.getArtifactId(), parentModel.getVersion() );
-            
-            // the only way this will have a value is if we find the parent on disk...
-            File parentProjectDir = null;
-            
-            String parentRelativePath = parentModel.getRelativePath();
-            
-            // if we can't find a cached model matching the parent spec, then let's try to look on disk using
-            // <relativePath/>
-            if ( model == null && projectDir != null && StringUtils.isNotEmpty(parentRelativePath) )
-            {
-                File parentDescriptor = new File( projectDir, parentRelativePath );
-                
-                try
-                {
-                    parentDescriptor = parentDescriptor.getCanonicalFile();
-                }
-                catch ( IOException e )
-                {
-                    getLogger().debug( "Failed to canonicalize potential parent POM: \'" + parentDescriptor + "\'", e );
-                    
-                    parentDescriptor = null;
-                }
-                
-                if ( parentDescriptor != null && parentDescriptor.exists() )
-                {
-                    Model candidateParent = readModel( parentDescriptor );
-                    
-                    // this works because parent-version is still required...
-                    if ( parentModel.getGroupId().equals( candidateParent.getGroupId() )
-                        && parentModel.getArtifactId().equals( candidateParent.getArtifactId() )
-                        && ( parentModel.getVersion().equals( candidateParent.getVersion() ) 
-                            || ( candidateParent.getParent() != null 
-                                && parentModel.getVersion().equals(candidateParent.getParent().getVersion() ) ) ) )
-                    {
-                        model = candidateParent;
-                        
-                        parentProjectDir = parentDescriptor.getParentFile();
-                        
-                        getLogger().debug( "Using parent-POM from the project hierarchy at: \'" + parentModel.getRelativePath() + "\' for project: " + project.getId() );
-                    }
-                    else
-                    {
-                        getLogger().debug("Invalid parent-POM referenced by relative path: \'" + parentModel.getRelativePath() + "\'. It did not match parent specification in " + project.getId() );
-                    }
-                }
-            }
-            
-            Artifact parentArtifact = null;
-
-            // only resolve the parent model from the repository system if we didn't find it on disk...
-            if ( model == null )
-            {
-                //!! (**)
-                // ----------------------------------------------------------------------
-                // Do we have the necessary information to actually find the parent
-                // POMs here?? I don't think so ... Say only one remote repository is
-                // specified and that is ibiblio then this model that we just read doesn't
-                // have any repository information ... I think we might have to inherit
-                // as we go in order to do this.
-                // ----------------------------------------------------------------------
-
-                parentArtifact = artifactFactory.createParentArtifact( parentModel.getGroupId(),
-                                                                       parentModel.getArtifactId(),
-                                                                       parentModel.getVersion() );
-
-                model = findModelFromRepository( parentArtifact, aggregatedRemoteWagonRepositories, localRepository );
-            }
-
-            MavenProject parent = assembleLineage( model, lineage, aggregatedRemoteWagonRepositories, localRepository, externalProfiles, parentProjectDir );
-
-            project.setParent( parent );
-
-            project.setParentArtifact( parentArtifact );
-        }
-
-        return project;
+    
+    @Override
+    public List<Recipe> getConstructorRecipes() {
+        return getNestedRecipes();
     }
-
-    private Model readModel( File file )
-        throws ProjectBuildingException
-    {
-        FileReader reader = null;
-        try
-        {
-            reader = new FileReader( file );
-            return modelReader.read( reader );
-        }
-        catch ( FileNotFoundException e )
-        {
-            throw new ProjectBuildingException( "Could not find the model file '" + file.getAbsolutePath() + "'.", e );
-        }
-        catch ( IOException e )
-        {
-            throw new ProjectBuildingException( "Failed to build model from file '" + file.getAbsolutePath() +
-                "'.\nError: \'" + e.getLocalizedMessage() + "\'", e );
-        }
-        catch ( XmlPullParserException e )
-        {
-            throw new ProjectBuildingException( "Failed to parse model from file '" + file.getAbsolutePath() +
-                "'.\nError: \'" + e.getLocalizedMessage() + "\'", e );
-        }
-        finally
-        {
-            IOUtil.close( reader );
-        }
-    }
-
-    private Model readModel( URL url )
-        throws ProjectBuildingException
-    {
-        InputStreamReader reader = null;
-        try
-        {
-            reader = new InputStreamReader( url.openStream() );
-            return modelReader.read( reader );
-        }
-        catch ( IOException e )
-        {
-            throw new ProjectBuildingException( "Failed build model from URL \'" + url.toExternalForm() +
-                "\'\nError: \'" + e.getLocalizedMessage() + "\'", e );
-        }
-        catch ( XmlPullParserException e )
-        {
-            throw new ProjectBuildingException( "Failed to parse model from URL \'" + url.toExternalForm() +
-                "\'\nError: \'" + e.getLocalizedMessage() + "\'", e );
-        }
-        finally
-        {
-            IOUtil.close( reader );
-        }
-    }
-
-    private Model getCachedModel( String groupId, String artifactId, String version )
-    {
-        return (Model) modelCache.get( createCacheKey( groupId, artifactId, version ) );
-    }
-
-    private static String createCacheKey( String groupId, String artifactId, String version )
-    {
-        return groupId + ":" + artifactId + ":" + version;
-    }
-
-    protected Set createArtifacts( List dependencies )
-        throws ProjectBuildingException
-    {
-        try
-        {
-            return MavenMetadataSource.createArtifacts( artifactFactory, dependencies, null, null );
-        }
-        catch ( InvalidVersionSpecificationException e )
-        {
-            throw new ProjectBuildingException( "Unable to parse dependency version", e );
-        }
-    }
-
-    protected Set createPluginArtifacts( List plugins )
-        throws ProjectBuildingException
-    {
-        Set pluginArtifacts = new HashSet();
-
-        for ( Iterator i = plugins.iterator(); i.hasNext(); )
-        {
-            Plugin p = (Plugin) i.next();
-
-            String version;
-            if ( StringUtils.isEmpty( p.getVersion() ) )
-            {
-                version = "RELEASE";
-            }
-            else
-            {
-                version = p.getVersion();
-            }
-
-            Artifact artifact;
-            try
-            {
-                artifact = artifactFactory.createPluginArtifact( p.getGroupId(), p.getArtifactId(),
-                                                                 VersionRange.createFromVersionSpec( version ) );
-            }
-            catch ( InvalidVersionSpecificationException e )
-            {
-                throw new ProjectBuildingException( "Unable to parse plugin version", e );
-            }
-
-            if ( artifact != null )
-            {
-                pluginArtifacts.add( artifact );
-            }
-        }
-
-        return pluginArtifacts;
-    }
-
-    protected Set createReportArtifacts( List reports )
-    throws ProjectBuildingException
-    {
-        Set pluginArtifacts = new HashSet();
+    
+    @Override
+    protected Object internalCreate(Type expectedType, boolean lazyRefAllowed) throws ConstructionException {
         
-        if ( reports != null )
-        {
-            for ( Iterator i = reports.iterator(); i.hasNext(); )
-            {
-                ReportPlugin p = (ReportPlugin) i.next();
+        instantiateExplicitDependencies();
 
-                String version;
-                if ( StringUtils.isEmpty( p.getVersion() ) )
-                {
-                    version = "RELEASE";
-                }
-                else
-                {
-                    version = p.getVersion();
-                }
+        Object obj = getInstance(lazyRefAllowed);
+        
+        // check for init lifecycle method (if any)
+        Method initMethod = getInitMethod(obj);
+        
+        // check for destroy lifecycle method (if any)
+        getDestroyMethod(obj);
+        
+        // inject properties
+        setProperties(obj);
 
-                Artifact artifact = null;
-                try
-                {
-                    artifact = artifactFactory.createPluginArtifact( p.getGroupId(), p.getArtifactId(), VersionRange
-                        .createFromVersionSpec( version ) );
-                }
-                catch ( InvalidVersionSpecificationException e )
-                {
-                    throw new ProjectBuildingException( "Unable to parse plugin version", e );
-                }
+        for (BeanProcessor processor : blueprintContext.getBeanProcessors()) {
+            obj = processor.beforeInit(obj, getName());
+        }
+        
+        // call init method
+        if (initMethod != null) {
+            try {
+                initMethod.invoke(obj);
+            } catch (InvocationTargetException e) {
+                Throwable root = e.getTargetException();
+                throw new ConstructionException("init-method generated exception", root);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        
+        if (getName() != null && !keepRecipe) {
+            ExecutionContext.getContext().addObject(getName(), obj);
+        }
+        
+        return obj;
+    }
+    
+    public void destroyInstance(Object obj) {
+        for (BeanProcessor processor : blueprintContext.getBeanProcessors()) {
+            processor.beforeDestroy(obj, getName());
+        }
+        try {
+            Method method = getDestroyMethod(obj);
+            if (method != null) {
+                method.invoke(obj);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        for (BeanProcessor processor : blueprintContext.getBeanProcessors()) {
+            processor.afterDestroy(obj, getName());
+        }
+    }
 
-                if ( artifact != null )
-                {
-                    pluginArtifacts.add( artifact );
+    public Type[] getTypes() {
+        Class type = getType();
+        if (type != null) {
+            return new Type[] { getType() };
+        } else{
+            return new Type[] { Object.class };
+        }
+    }
+
+    public void setProperties(Object instance) throws ConstructionException {
+        // clone the properties so they can be used again
+        Map<String,Object> propertyValues = new LinkedHashMap<String,Object>(properties);
+        setProperties(propertyValues, instance, instance.getClass());
+    }
+
+    public Class getType() {
+        return typeClass;
+    }
+
+    private void setProperties(Map<String, Object> propertyValues, Object instance, Class clazz) {
+        // set remaining properties
+        for (Map.Entry<String, Object> entry : propertyValues.entrySet()) {
+            String propertyName = entry.getKey();
+            Object propertyValue = entry.getValue();
+
+            setProperty(instance, clazz, propertyName, propertyValue);
+        }
+
+    }
+
+    private void setProperty(Object instance, Class clazz, String propertyName, Object propertyValue) {
+        String[] names = propertyName.split("\\.");
+        for (int i = 0; i < names.length - 1; i++) {
+            Method getter = getPropertyDescriptor(clazz, names[i]).getReadMethod();
+            if (getter != null) {
+                try {
+                    instance = getter.invoke(instance);
+                    clazz = instance.getClass();
+                } catch (Exception e) {
+                    Throwable t = e;
+                    if (e instanceof InvocationTargetException) {
+                        InvocationTargetException invocationTargetException = (InvocationTargetException) e;
+                        if (invocationTargetException.getCause() != null) {
+                            t = invocationTargetException.getCause();
+                        }
+                    }
+                    throw new ConstructionException("Error getting property: " + names[i] + " on bean " + getName() + " when setting property " + propertyName + " on class " + clazz.getName(), t);
                 }
+            } else {
+                throw new ConstructionException("No getter for " + names[i] + " property");
+            }
+        }
+        Method setter = getPropertyDescriptor(clazz, names[names.length - 1]).getWriteMethod();
+        if (setter != null) {
+            // convert the value to type of setter/field
+            Type type = setter.getGenericParameterTypes()[0];
+            // Instanciate value
+            if (propertyValue instanceof Recipe) {
+                propertyValue = ((Recipe) propertyValue).create(type, false);
+            }
+            try {
+                propertyValue = convert(propertyValue, type);
+            } catch (Exception e) {
+                String valueType = propertyValue == null ? "null" : propertyValue.getClass().getName();
+                String memberType = type instanceof Class ? ((Class) type).getName() : type.toString();
+                throw new ConstructionException("Unable to convert property value" +
+                        " from " + valueType +
+                        " to " + memberType +
+                        " for injection " + setter, e);
+            }
+            try {
+                // set value
+                setter.invoke(instance, propertyValue);
+            } catch (Exception e) {
+                Throwable t = e;
+                if (e instanceof InvocationTargetException) {
+                    InvocationTargetException invocationTargetException = (InvocationTargetException) e;
+                    if (invocationTargetException.getCause() != null) {
+                        t = invocationTargetException.getCause();
+                    }
+                }
+                throw new ConstructionException("Error setting property: " + setter, t);
+            }
+        } else {
+            throw new ConstructionException("No setter for " + names[names.length - 1] + " property");
+        }
+    }
+
+    PropertyDescriptor getPropertyDescriptor(Class clazz, String name) {
+        // TODO: it seems to fail in some cases, for example if there are two setters and no getters
+        //    it should throw an exception
+        try {
+            BeanInfo beanInfo = Introspector.getBeanInfo(clazz);
+            for (PropertyDescriptor pd : beanInfo.getPropertyDescriptors()) {
+                if (pd.getName().equals(name)) {
+                    return pd;
+                }
+            }
+            throw new ConstructionException("Unable to find property descriptor " + name + " on class " + clazz.getName());
+        } catch (IntrospectionException e) {
+            throw new ConstructionException("Unable to find property descriptor " + name + " on class " + clazz.getName(), e);
+        }
+    }
+
+    private static Object UNMATCHED = new Object();
+
+    private class ArgumentMatcher {
+
+        private ConversionService converter;
+        private List<TypeEntry> entries;
+
+        public ArgumentMatcher(Type[] types) {
+            entries = new ArrayList<TypeEntry>();
+            for (Type type : types) {
+                entries.add(new TypeEntry(type));
             }
         }
 
-        return pluginArtifacts;
-    }
-
-    public MavenProject buildStandaloneSuperProject( ArtifactRepository localRepository, List externalProfiles )
-        throws ProjectBuildingException
-    {
-        Model superModel = getSuperModel();
-
-        superModel.setGroupId( STANDALONE_SUPERPOM_GROUPID );
-
-        superModel.setArtifactId( STANDALONE_SUPERPOM_ARTIFACTID );
-
-        superModel.setVersion( STANDALONE_SUPERPOM_VERSION );
-
-        MavenProject project = new MavenProject( superModel );
-
-        try
-        {
-            project.setFile( new File( ".", "pom.xml" ) );
-
-            List remoteRepositories = ProjectUtils.buildArtifactRepositories( superModel.getRepositories(),
-                                                                              artifactRepositoryFactory, container );
-
-            project = processProjectLogic( "<Super-POM>", project, remoteRepositories, externalProfiles );
-
-            return project;
+        public List<Object> match(List<Object> arguments, List<Class> forcedTypes) {
+            if (find(arguments, forcedTypes)) {
+                return getArguments();
+            }
+            return null;
         }
-        catch ( ModelInterpolationException e )
-        {
-            throw new ProjectBuildingException( "Error building super-project", e );
+
+        private List<Object> getArguments() {
+            List<Object> list = new ArrayList<Object>();
+            for (TypeEntry entry : entries) {
+                if (entry.argument == UNMATCHED) {
+                    throw new RuntimeException("There are unmatched types");
+                } else {
+                    list.add(entry.argument);
+                }
+            }
+            return list;
         }
+
+        private boolean find(List<Object> arguments, List<Class> forcedTypes) {
+            if (entries.size() == arguments.size()) {
+                boolean matched = true;
+                for (int i = 0; i < arguments.size() && matched; i++) {
+                    matched = find(arguments.get(i), forcedTypes.get(i));
+                }
+                return matched;
+            }
+            return false;
+        }
+
+        private boolean find(Object arg, Class forcedType) {
+            for (TypeEntry entry : entries) {
+                Object val = arg;
+                if (entry.argument != UNMATCHED) {
+                    continue;
+                }
+                if (forcedType != null) {
+                    if (forcedType != entry.type) {
+                        continue;
+                    }
+                } else if (arg != null) {
+                    try {
+                        val = convert(arg, entry.type);
+                    } catch (Throwable t) {
+                        continue;
+                    }
+                }
+                entry.argument = val;
+                return true;
+            }
+            return false;
+        }
+
     }
 
-    // ----------------------------------------------------------------------
-    //
-    // ----------------------------------------------------------------------
+    private static class TypeEntry {
 
-    private Model getSuperModel()
-        throws ProjectBuildingException
-    {
-        URL url = DefaultMavenProjectBuilder.class.getResource( "pom-" + MAVEN_MODEL_VERSION + ".xml" );
+        private final Type type;
+        private Object argument;
 
-        return readModel( url );
+        public TypeEntry(Type type) {
+            this.type = type;
+            this.argument = UNMATCHED;
+        }
+
     }
 
-    public void contextualize( Context context )
-        throws ContextException
-    {
-        this.container = (PlexusContainer) context.get( PlexusConstants.PLEXUS_KEY );
-    }
 }

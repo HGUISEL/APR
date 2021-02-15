@@ -1,14 +1,12 @@
-/**
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,1487 +14,1195 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.hadoop.hbase;
+package org.apache.kafka.streams;
 
-import static org.codehaus.jackson.map.SerializationConfig.Feature.SORT_PROPERTIES_ALPHABETICALLY;
+import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.config.AbstractConfig;
+import org.apache.kafka.common.config.ConfigDef;
+import org.apache.kafka.common.config.ConfigDef.Importance;
+import org.apache.kafka.common.config.ConfigDef.Type;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.config.TopicConfig;
+import org.apache.kafka.common.metrics.Sensor;
+import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.errors.DefaultProductionExceptionHandler;
+import org.apache.kafka.streams.errors.DeserializationExceptionHandler;
+import org.apache.kafka.streams.errors.LogAndFailExceptionHandler;
+import org.apache.kafka.streams.errors.ProductionExceptionHandler;
+import org.apache.kafka.streams.errors.StreamsException;
+import org.apache.kafka.streams.processor.DefaultPartitionGrouper;
+import org.apache.kafka.streams.processor.FailOnInvalidTimestamp;
+import org.apache.kafka.streams.processor.TimestampExtractor;
+import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.io.PrintStream;
-import java.lang.reflect.Constructor;
-import java.math.BigDecimal;
-import java.math.MathContext;
-import java.text.DecimalFormat;
-import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Date;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
-import java.util.Random;
-import java.util.TreeMap;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.Properties;
+import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.conf.Configured;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.client.Durability;
-import org.apache.hadoop.hbase.client.Get;
-import org.apache.hadoop.hbase.client.HBaseAdmin;
-import org.apache.hadoop.hbase.client.HConnection;
-import org.apache.hadoop.hbase.client.HConnectionManager;
-import org.apache.hadoop.hbase.client.HTable;
-import org.apache.hadoop.hbase.client.HTableInterface;
-import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.Result;
-import org.apache.hadoop.hbase.client.ResultScanner;
-import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.filter.BinaryComparator;
-import org.apache.hadoop.hbase.filter.CompareFilter;
-import org.apache.hadoop.hbase.filter.Filter;
-import org.apache.hadoop.hbase.filter.FilterAllFilter;
-import org.apache.hadoop.hbase.filter.FilterList;
-import org.apache.hadoop.hbase.filter.PageFilter;
-import org.apache.hadoop.hbase.filter.SingleColumnValueFilter;
-import org.apache.hadoop.hbase.filter.WhileMatchFilter;
-import org.apache.hadoop.hbase.io.compress.Compression;
-import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
-import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
-import org.apache.hadoop.hbase.regionserver.BloomType;
-import org.apache.hadoop.hbase.trace.SpanReceiverHost;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.Hash;
-import org.apache.hadoop.hbase.util.MurmurHash;
-import org.apache.hadoop.hbase.util.Pair;
-import org.apache.hadoop.io.LongWritable;
-import org.apache.hadoop.io.Text;
-import org.apache.hadoop.mapreduce.Job;
-import org.apache.hadoop.mapreduce.Mapper;
-import org.apache.hadoop.mapreduce.lib.input.NLineInputFormat;
-import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
-import org.apache.hadoop.mapreduce.lib.reduce.LongSumReducer;
-import org.apache.hadoop.util.Tool;
-import org.apache.hadoop.util.ToolRunner;
-import org.codehaus.jackson.map.ObjectMapper;
-
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.yammer.metrics.core.Histogram;
-import com.yammer.metrics.stats.UniformSample;
-import com.yammer.metrics.stats.Snapshot;
-
-import org.htrace.Sampler;
-import org.htrace.Trace;
-import org.htrace.TraceScope;
-import org.htrace.impl.ProbabilitySampler;
+import static org.apache.kafka.common.config.ConfigDef.Range.atLeast;
+import static org.apache.kafka.common.config.ConfigDef.Range.between;
+import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
+import static org.apache.kafka.common.requests.IsolationLevel.READ_COMMITTED;
 
 /**
- * Script used evaluating HBase performance and scalability.  Runs a HBase
- * client that steps through one of a set of hardcoded tests or 'experiments'
- * (e.g. a random reads test, a random writes test, etc.). Pass on the
- * command-line which test to run and how many clients are participating in
- * this experiment. Run <code>java PerformanceEvaluation --help</code> to
- * obtain usage.
+ * Configuration for a {@link KafkaStreams} instance.
+ * Can also be used to configure the Kafka Streams internal {@link KafkaConsumer}, {@link KafkaProducer} and {@link AdminClient}.
+ * To avoid consumer/producer/admin property conflicts, you should prefix those properties using
+ * {@link #consumerPrefix(String)}, {@link #producerPrefix(String)} and {@link #adminClientPrefix(String)}, respectively.
+ * <p>
+ * Example:
+ * <pre>{@code
+ * // potentially wrong: sets "metadata.max.age.ms" to 1 minute for producer AND consumer
+ * Properties streamsProperties = new Properties();
+ * streamsProperties.put(ConsumerConfig.METADATA_MAX_AGE_CONFIG, 60000);
+ * // or
+ * streamsProperties.put(ProducerConfig.METADATA_MAX_AGE_CONFIG, 60000);
  *
- * <p>This class sets up and runs the evaluation programs described in
- * Section 7, <i>Performance Evaluation</i>, of the <a
- * href="http://labs.google.com/papers/bigtable.html">Bigtable</a>
- * paper, pages 8-10.
+ * // suggested:
+ * Properties streamsProperties = new Properties();
+ * // sets "metadata.max.age.ms" to 1 minute for consumer only
+ * streamsProperties.put(StreamsConfig.consumerPrefix(ConsumerConfig.METADATA_MAX_AGE_CONFIG), 60000);
+ * // sets "metadata.max.age.ms" to 1 minute for producer only
+ * streamsProperties.put(StreamsConfig.producerPrefix(ProducerConfig.METADATA_MAX_AGE_CONFIG), 60000);
  *
- * <p>If number of clients > 1, we start up a MapReduce job. Each map task
- * runs an individual client. Each client does about 1GB of data.
+ * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
+ * }</pre>
+ *
+ * This instance can also be used to pass in custom configurations to different modules (e.g. passing a special config in your customized serde class).
+ * The consumer/producer/admin prefix can also be used to distinguish these custom config values passed to different clients with the same config name.
+ * * Example:
+ * <pre>{@code
+ * Properties streamsProperties = new Properties();
+ * // sets "my.custom.config" to "foo" for consumer only
+ * streamsProperties.put(StreamsConfig.consumerPrefix("my.custom.config"), "foo");
+ * // sets "my.custom.config" to "bar" for producer only
+ * streamsProperties.put(StreamsConfig.producerPrefix("my.custom.config"), "bar");
+ * // sets "my.custom.config2" to "boom" for all clients universally
+ * streamsProperties.put("my.custom.config2", "boom");
+ *
+ * // as a result, inside producer's serde class configure(..) function,
+ * // users can now read both key-value pairs "my.custom.config" -> "foo"
+ * // and "my.custom.config2" -> "boom" from the config map
+ * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
+ * }</pre>
+ *
+ * When increasing both {@link ProducerConfig#RETRIES_CONFIG} and {@link ProducerConfig#MAX_BLOCK_MS_CONFIG} to be more resilient to non-available brokers you should also
+ * consider increasing {@link ConsumerConfig#MAX_POLL_INTERVAL_MS_CONFIG} using the following guidance:
+ * <pre>
+ *     max.poll.interval.ms > min ( max.block.ms, (retries +1) * request.timeout.ms )
+ * </pre>
+ *
+ *
+ * Kafka Streams requires at least the following properties to be set:
+ * <ul>
+ *  <li>{@link #APPLICATION_ID_CONFIG "application.id"}</li>
+ *  <li>{@link #BOOTSTRAP_SERVERS_CONFIG "bootstrap.servers"}</li>
+ * </ul>
+ *
+ * By default, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
+ * <ul>
+ *   <li>{@link ConsumerConfig#ENABLE_AUTO_COMMIT_CONFIG "enable.auto.commit"} (false) - Streams client will always disable/turn off auto committing</li>
+ * </ul>
+ *
+ * If {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} is set to {@link #EXACTLY_ONCE "exactly_once"}, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
+ * <ul>
+ *   <li>{@link ConsumerConfig#ISOLATION_LEVEL_CONFIG "isolation.level"} (read_committed) - Consumers will always read committed data only</li>
+ *   <li>{@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG "enable.idempotence"} (true) - Producer will always have idempotency enabled</li>
+ *   <li>{@link ProducerConfig#MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION "max.in.flight.requests.per.connection"} (5) - Producer will always have one in-flight request per connection</li>
+ * </ul>
+ *
+ *
+ * @see KafkaStreams#KafkaStreams(org.apache.kafka.streams.Topology, Properties)
+ * @see ConsumerConfig
+ * @see ProducerConfig
  */
-public class PerformanceEvaluation extends Configured implements Tool {
-  protected static final Log LOG = LogFactory.getLog(PerformanceEvaluation.class.getName());
+public class StreamsConfig extends AbstractConfig {
 
-  public static final String TABLE_NAME = "TestTable";
-  public static final byte[] FAMILY_NAME = Bytes.toBytes("info");
-  public static final byte[] QUALIFIER_NAME = Bytes.toBytes("data");
-  public static final int DEFAULT_VALUE_LENGTH = 1000;
-  public static final int ROW_LENGTH = 26;
+    private final static Logger log = LoggerFactory.getLogger(StreamsConfig.class);
 
-  private static final int ONE_GB = 1024 * 1024 * 1000;
-  private static final int DEFAULT_ROWS_PER_GB = ONE_GB / DEFAULT_VALUE_LENGTH;
-  // TODO : should we make this configurable
-  private static final int TAG_LENGTH = 256;
-  private static final DecimalFormat FMT = new DecimalFormat("0.##");
-  private static final MathContext CXT = MathContext.DECIMAL64;
-  private static final BigDecimal MS_PER_SEC = BigDecimal.valueOf(1000);
-  private static final BigDecimal BYTES_PER_MB = BigDecimal.valueOf(1024 * 1024);
-  private static final TestOptions DEFAULT_OPTS = new TestOptions();
+    private static final ConfigDef CONFIG;
 
-  protected Map<String, CmdDescriptor> commands = new TreeMap<String, CmdDescriptor>();
+    private final boolean eosEnabled;
+    private final static long DEFAULT_COMMIT_INTERVAL_MS = 30000L;
+    private final static long EOS_DEFAULT_COMMIT_INTERVAL_MS = 100L;
 
-  private static final Path PERF_EVAL_DIR = new Path("performance_evaluation");
-
-  /**
-   * Enum for map metrics.  Keep it out here rather than inside in the Map
-   * inner-class so we can find associated properties.
-   */
-  protected static enum Counter {
-    /** elapsed time */
-    ELAPSED_TIME,
-    /** number of rows */
-    ROWS
-  }
-
-  /**
-   * Constructor
-   * @param conf Configuration object
-   */
-  public PerformanceEvaluation(final Configuration conf) {
-    super(conf);
-
-    addCommandDescriptor(RandomReadTest.class, "randomRead",
-        "Run random read test");
-    addCommandDescriptor(RandomSeekScanTest.class, "randomSeekScan",
-        "Run random seek and scan 100 test");
-    addCommandDescriptor(RandomScanWithRange10Test.class, "scanRange10",
-        "Run random seek scan with both start and stop row (max 10 rows)");
-    addCommandDescriptor(RandomScanWithRange100Test.class, "scanRange100",
-        "Run random seek scan with both start and stop row (max 100 rows)");
-    addCommandDescriptor(RandomScanWithRange1000Test.class, "scanRange1000",
-        "Run random seek scan with both start and stop row (max 1000 rows)");
-    addCommandDescriptor(RandomScanWithRange10000Test.class, "scanRange10000",
-        "Run random seek scan with both start and stop row (max 10000 rows)");
-    addCommandDescriptor(RandomWriteTest.class, "randomWrite",
-        "Run random write test");
-    addCommandDescriptor(SequentialReadTest.class, "sequentialRead",
-        "Run sequential read test");
-    addCommandDescriptor(SequentialWriteTest.class, "sequentialWrite",
-        "Run sequential write test");
-    addCommandDescriptor(ScanTest.class, "scan",
-        "Run scan test (read every row)");
-    addCommandDescriptor(FilteredScanTest.class, "filterScan",
-        "Run scan test using a filter to find a specific row based on it's value " +
-        "(make sure to use --rows=20)");
-  }
-
-  protected void addCommandDescriptor(Class<? extends Test> cmdClass,
-      String name, String description) {
-    CmdDescriptor cmdDescriptor =
-      new CmdDescriptor(cmdClass, name, description);
-    commands.put(name, cmdDescriptor);
-  }
-
-  /**
-   * Implementations can have their status set.
-   */
-  interface Status {
     /**
-     * Sets status
-     * @param msg status message
-     * @throws IOException
+     * Prefix used to provide default topic configs to be applied when creating internal topics.
+     * These should be valid properties from {@link org.apache.kafka.common.config.TopicConfig TopicConfig}.
+     * It is recommended to use {@link #topicPrefix(String)}.
      */
-    void setStatus(final String msg) throws IOException;
-  }
+    // TODO: currently we cannot get the full topic configurations and hence cannot allow topic configs without the prefix,
+    //       this can be lifted once kafka.log.LogConfig is completely deprecated by org.apache.kafka.common.config.TopicConfig
+    @SuppressWarnings("WeakerAccess")
+    public static final String TOPIC_PREFIX = "topic.";
 
-  /**
-   * MapReduce job that runs a performance evaluation client in each map task.
-   */
-  public static class EvaluationMapTask
-      extends Mapper<LongWritable, Text, LongWritable, LongWritable> {
+    /**
+     * Prefix used to isolate {@link KafkaConsumer consumer} configs from other client configs.
+     * It is recommended to use {@link #consumerPrefix(String)} to add this prefix to {@link ConsumerConfig consumer
+     * properties}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String CONSUMER_PREFIX = "consumer.";
 
-    /** configuration parameter name that contains the command */
-    public final static String CMD_KEY = "EvaluationMapTask.command";
-    /** configuration parameter name that contains the PE impl */
-    public static final String PE_KEY = "EvaluationMapTask.performanceEvalImpl";
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the main consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. main.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String MAIN_CONSUMER_PREFIX = "main.consumer.";
 
-    private Class<? extends Test> cmd;
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the restore consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. restore.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String RESTORE_CONSUMER_PREFIX = "restore.consumer.";
+
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the global consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. global.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String GLOBAL_CONSUMER_PREFIX = "global.consumer.";
+
+    /**
+     * Prefix used to isolate {@link KafkaProducer producer} configs from other client configs.
+     * It is recommended to use {@link #producerPrefix(String)} to add this prefix to {@link ProducerConfig producer
+     * properties}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String PRODUCER_PREFIX = "producer.";
+
+    /**
+     * Prefix used to isolate {@link org.apache.kafka.clients.admin.AdminClient admin} configs from other client configs.
+     * It is recommended to use {@link #adminClientPrefix(String)} to add this prefix to {@link ProducerConfig producer
+     * properties}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String ADMIN_CLIENT_PREFIX = "admin.";
+
+    /**
+     * Config value for parameter (@link #TOPOLOGY_OPTIMIZATION "topology.optimization" for disabling topology optimization
+     */
+    public static final String NO_OPTIMIZATION = "none";
+
+    /**
+     * Config value for parameter (@link #TOPOLOGY_OPTIMIZATION "topology.optimization" for enabling topology optimization
+     */
+    public static final String OPTIMIZE = "all";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.0.x}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String UPGRADE_FROM_0100 = "0.10.0";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.1.x}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String UPGRADE_FROM_0101 = "0.10.1";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.2.x}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String UPGRADE_FROM_0102 = "0.10.2";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.11.0.x}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String UPGRADE_FROM_0110 = "0.11.0";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.0.x}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String UPGRADE_FROM_10 = "1.0";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.1.x}.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String UPGRADE_FROM_11 = "1.1";
+
+    /**
+     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for at-least-once processing guarantees.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String AT_LEAST_ONCE = "at_least_once";
+
+    /**
+     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for exactly-once processing guarantees.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String EXACTLY_ONCE = "exactly_once";
+
+    /** {@code application.id} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String APPLICATION_ID_CONFIG = "application.id";
+    private static final String APPLICATION_ID_DOC = "An identifier for the stream processing application. Must be unique within the Kafka cluster. It is used as 1) the default client-id prefix, 2) the group-id for membership management, 3) the changelog topic prefix.";
+
+    /**{@code user.endpoint} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String APPLICATION_SERVER_CONFIG = "application.server";
+    private static final String APPLICATION_SERVER_DOC = "A host:port pair pointing to an embedded user defined endpoint that can be used for discovering the locations of state stores within a single KafkaStreams application";
+
+    /** {@code bootstrap.servers} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
+
+    /** {@code buffered.records.per.partition} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String BUFFERED_RECORDS_PER_PARTITION_CONFIG = "buffered.records.per.partition";
+    private static final String BUFFERED_RECORDS_PER_PARTITION_DOC = "The maximum number of records to buffer per partition.";
+
+    /** {@code cache.max.bytes.buffering} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String CACHE_MAX_BYTES_BUFFERING_CONFIG = "cache.max.bytes.buffering";
+    private static final String CACHE_MAX_BYTES_BUFFERING_DOC = "Maximum number of memory bytes to be used for buffering across all threads";
+
+    /** {@code client.id} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String CLIENT_ID_CONFIG = CommonClientConfigs.CLIENT_ID_CONFIG;
+    private static final String CLIENT_ID_DOC = "An ID prefix string used for the client IDs of internal consumer, producer and restore-consumer," +
+        " with pattern '<client.id>-StreamThread-<threadSequenceNumber>-<consumer|producer|restore-consumer>'.";
+
+    /** {@code commit.interval.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String COMMIT_INTERVAL_MS_CONFIG = "commit.interval.ms";
+    private static final String COMMIT_INTERVAL_MS_DOC = "The frequency with which to save the position of the processor." +
+        " (Note, if 'processing.guarantee' is set to '" + EXACTLY_ONCE + "', the default value is " + EOS_DEFAULT_COMMIT_INTERVAL_MS + "," +
+        " otherwise the default value is " + DEFAULT_COMMIT_INTERVAL_MS + ".";
+
+    /** {@code connections.max.idle.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String CONNECTIONS_MAX_IDLE_MS_CONFIG = CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG;
+
+    /**
+     * {@code default.deserialization.exception.handler}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.deserialization.exception.handler";
+    private static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.DeserializationExceptionHandler</code> interface.";
+
+    /**
+     * {@code default.production.exception.handler}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.production.exception.handler";
+    private static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.ProductionExceptionHandler</code> interface.";
+
+    /**
+     * {@code default.windowed.key.serde.inner}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS = "default.windowed.key.serde.inner";
+
+    /**
+     * {@code default.windowed.value.serde.inner}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static final String DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS = "default.windowed.value.serde.inner";
+
+    /** {@code default key.serde} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String DEFAULT_KEY_SERDE_CLASS_CONFIG = "default.key.serde";
+    private static final String DEFAULT_KEY_SERDE_CLASS_DOC = " Default serializer / deserializer class for key that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
+            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
+            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
+
+    /** {@code default value.serde} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String DEFAULT_VALUE_SERDE_CLASS_CONFIG = "default.value.serde";
+    private static final String DEFAULT_VALUE_SERDE_CLASS_DOC = "Default serializer / deserializer class for value that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
+            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
+            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
+
+    /** {@code default.timestamp.extractor} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG = "default.timestamp.extractor";
+    private static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC = "Default timestamp extractor class that implements the <code>org.apache.kafka.streams.processor.TimestampExtractor</code> interface.";
+
+    /** {@code metadata.max.age.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String METADATA_MAX_AGE_CONFIG = CommonClientConfigs.METADATA_MAX_AGE_CONFIG;
+
+    /** {@code metrics.num.samples} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;
+
+    /** {@code metrics.record.level} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;
+
+    /** {@code metric.reporters} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String METRIC_REPORTER_CLASSES_CONFIG = CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG;
+
+    /** {@code metrics.sample.window.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
+
+    /** {@code num.standby.replicas} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String NUM_STANDBY_REPLICAS_CONFIG = "num.standby.replicas";
+    private static final String NUM_STANDBY_REPLICAS_DOC = "The number of standby replicas for each task.";
+
+    /** {@code num.stream.threads} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String NUM_STREAM_THREADS_CONFIG = "num.stream.threads";
+    private static final String NUM_STREAM_THREADS_DOC = "The number of threads to execute stream processing.";
+
+    /** {@code partition.grouper} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String PARTITION_GROUPER_CLASS_CONFIG = "partition.grouper";
+    private static final String PARTITION_GROUPER_CLASS_DOC = "Partition grouper class that implements the <code>org.apache.kafka.streams.processor.PartitionGrouper</code> interface.";
+
+    /** {@code poll.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String POLL_MS_CONFIG = "poll.ms";
+    private static final String POLL_MS_DOC = "The amount of time in milliseconds to block waiting for input.";
+
+    /** {@code processing.guarantee} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String PROCESSING_GUARANTEE_CONFIG = "processing.guarantee";
+    private static final String PROCESSING_GUARANTEE_DOC = "The processing guarantee that should be used. Possible values are <code>" + AT_LEAST_ONCE + "</code> (default) and <code>" + EXACTLY_ONCE + "</code>. " +
+        "Note that exactly-once processing requires a cluster of at least three brokers by default what is the recommended setting for production; for development you can change this, by adjusting broker setting `transaction.state.log.replication.factor`.";
+
+    /** {@code receive.buffer.bytes} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String RECEIVE_BUFFER_CONFIG = CommonClientConfigs.RECEIVE_BUFFER_CONFIG;
+
+    /** {@code reconnect.backoff.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String RECONNECT_BACKOFF_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MS_CONFIG;
+
+    /** {@code reconnect.backoff.max} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String RECONNECT_BACKOFF_MAX_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_CONFIG;
+
+    /** {@code replication.factor} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String REPLICATION_FACTOR_CONFIG = "replication.factor";
+    private static final String REPLICATION_FACTOR_DOC = "The replication factor for change log topics and repartition topics created by the stream processing application.";
+
+    /** {@code request.timeout.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String REQUEST_TIMEOUT_MS_CONFIG = CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG;
+
+    /** {@code retries} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String RETRIES_CONFIG = CommonClientConfigs.RETRIES_CONFIG;
+
+    /** {@code retry.backoff.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String RETRY_BACKOFF_MS_CONFIG = CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG;
+
+    /** {@code rocksdb.config.setter} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String ROCKSDB_CONFIG_SETTER_CLASS_CONFIG = "rocksdb.config.setter";
+    private static final String ROCKSDB_CONFIG_SETTER_CLASS_DOC = "A Rocks DB config setter class or class name that implements the <code>org.apache.kafka.streams.state.RocksDBConfigSetter</code> interface";
+
+    /** {@code security.protocol} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String SECURITY_PROTOCOL_CONFIG = CommonClientConfigs.SECURITY_PROTOCOL_CONFIG;
+
+    /** {@code send.buffer.bytes} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String SEND_BUFFER_CONFIG = CommonClientConfigs.SEND_BUFFER_CONFIG;
+
+    /** {@code state.cleanup.delay} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String STATE_CLEANUP_DELAY_MS_CONFIG = "state.cleanup.delay.ms";
+    private static final String STATE_CLEANUP_DELAY_MS_DOC = "The amount of time in milliseconds to wait before deleting state when a partition has migrated. Only state directories that have not been modified for at least state.cleanup.delay.ms will be removed";
+
+    /** {@code state.dir} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String STATE_DIR_CONFIG = "state.dir";
+    private static final String STATE_DIR_DOC = "Directory location for state store.";
+
+    /** {@code topology.optimization} */
+    public static final String TOPOLOGY_OPTIMIZATION = "topology.optimization";
+    private static final String TOPOLOGY_OPTIMIZATION_DOC = "A configuration telling Kafka Streams if it should optimize the topology, disabled by default";
+
+    /** {@code upgrade.from} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String UPGRADE_FROM_CONFIG = "upgrade.from";
+    private static final String UPGRADE_FROM_DOC = "Allows upgrading from versions 0.10.0/0.10.1/0.10.2/0.11.0/1.0/1.1 to version 1.2 (or newer) in a backward compatible way. " +
+        "When upgrading from 1.2 to a newer version it is not required to specify this config." +
+        "Default is null. Accepted values are \"" + UPGRADE_FROM_0100 + "\", \"" + UPGRADE_FROM_0101 + "\", \"" + UPGRADE_FROM_0102 + "\", \"" + UPGRADE_FROM_0110 + "\", \"" + UPGRADE_FROM_10 + "\", \"" + UPGRADE_FROM_11 + "\" (for upgrading from the corresponding old version).";
+
+    /** {@code windowstore.changelog.additional.retention.ms} */
+    @SuppressWarnings("WeakerAccess")
+    public static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG = "windowstore.changelog.additional.retention.ms";
+    private static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC = "Added to a windows maintainMs to ensure data is not deleted from the log prematurely. Allows for clock drift. Default is 1 day";
+
+    private static final String[] NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS = new String[] {ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG};
+    private static final String[] NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS = new String[] {ConsumerConfig.ISOLATION_LEVEL_CONFIG};
+    private static final String[] NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS = new String[] {ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG,
+                                                                                        ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION};
+
+    static {
+        CONFIG = new ConfigDef()
+
+            // HIGH
+
+            .define(APPLICATION_ID_CONFIG, // required with no default value
+                    Type.STRING,
+                    Importance.HIGH,
+                    APPLICATION_ID_DOC)
+            .define(BOOTSTRAP_SERVERS_CONFIG, // required with no default value
+                    Type.LIST,
+                    Importance.HIGH,
+                    CommonClientConfigs.BOOTSTRAP_SERVERS_DOC)
+            .define(REPLICATION_FACTOR_CONFIG,
+                    Type.INT,
+                    1,
+                    Importance.HIGH,
+                    REPLICATION_FACTOR_DOC)
+            .define(STATE_DIR_CONFIG,
+                    Type.STRING,
+                    "/tmp/kafka-streams",
+                    Importance.HIGH,
+                    STATE_DIR_DOC)
+
+            // MEDIUM
+
+            .define(CACHE_MAX_BYTES_BUFFERING_CONFIG,
+                    Type.LONG,
+                    10 * 1024 * 1024L,
+                    atLeast(0),
+                    Importance.MEDIUM,
+                    CACHE_MAX_BYTES_BUFFERING_DOC)
+            .define(CLIENT_ID_CONFIG,
+                    Type.STRING,
+                    "",
+                    Importance.MEDIUM,
+                    CLIENT_ID_DOC)
+            .define(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                    Type.CLASS,
+                    LogAndFailExceptionHandler.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC)
+            .define(DEFAULT_KEY_SERDE_CLASS_CONFIG,
+                    Type.CLASS,
+                    Serdes.ByteArraySerde.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_KEY_SERDE_CLASS_DOC)
+            .define(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                    Type.CLASS,
+                    DefaultProductionExceptionHandler.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC)
+            .define(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG,
+                    Type.CLASS,
+                    FailOnInvalidTimestamp.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC)
+            .define(DEFAULT_VALUE_SERDE_CLASS_CONFIG,
+                    Type.CLASS,
+                    Serdes.ByteArraySerde.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_VALUE_SERDE_CLASS_DOC)
+            .define(NUM_STANDBY_REPLICAS_CONFIG,
+                    Type.INT,
+                    0,
+                    Importance.MEDIUM,
+                    NUM_STANDBY_REPLICAS_DOC)
+            .define(NUM_STREAM_THREADS_CONFIG,
+                    Type.INT,
+                    1,
+                    Importance.MEDIUM,
+                    NUM_STREAM_THREADS_DOC)
+            .define(PROCESSING_GUARANTEE_CONFIG,
+                    Type.STRING,
+                    AT_LEAST_ONCE,
+                    in(AT_LEAST_ONCE, EXACTLY_ONCE),
+                    Importance.MEDIUM,
+                    PROCESSING_GUARANTEE_DOC)
+            .define(SECURITY_PROTOCOL_CONFIG,
+                    Type.STRING,
+                    CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
+                    Importance.MEDIUM,
+                    CommonClientConfigs.SECURITY_PROTOCOL_DOC)
+            .define(TOPOLOGY_OPTIMIZATION,
+                    Type.STRING,
+                    NO_OPTIMIZATION,
+                    in(NO_OPTIMIZATION, OPTIMIZE),
+                    Importance.MEDIUM,
+                    TOPOLOGY_OPTIMIZATION_DOC)
+
+            // LOW
+
+            .define(APPLICATION_SERVER_CONFIG,
+                    Type.STRING,
+                    "",
+                    Importance.LOW,
+                    APPLICATION_SERVER_DOC)
+            .define(BUFFERED_RECORDS_PER_PARTITION_CONFIG,
+                    Type.INT,
+                    1000,
+                    Importance.LOW,
+                    BUFFERED_RECORDS_PER_PARTITION_DOC)
+            .define(COMMIT_INTERVAL_MS_CONFIG,
+                    Type.LONG,
+                    DEFAULT_COMMIT_INTERVAL_MS,
+                    Importance.LOW,
+                    COMMIT_INTERVAL_MS_DOC)
+            .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
+                    ConfigDef.Type.LONG,
+                    9 * 60 * 1000L,
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
+            .define(METADATA_MAX_AGE_CONFIG,
+                    ConfigDef.Type.LONG,
+                    5 * 60 * 1000L,
+                    atLeast(0),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.METADATA_MAX_AGE_DOC)
+            .define(METRICS_NUM_SAMPLES_CONFIG,
+                    Type.INT,
+                    2,
+                    atLeast(1),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_NUM_SAMPLES_DOC)
+            .define(METRIC_REPORTER_CLASSES_CONFIG,
+                    Type.LIST,
+                    "",
+                    Importance.LOW,
+                    CommonClientConfigs.METRIC_REPORTER_CLASSES_DOC)
+            .define(METRICS_RECORDING_LEVEL_CONFIG,
+                    Type.STRING,
+                    Sensor.RecordingLevel.INFO.toString(),
+                    in(Sensor.RecordingLevel.INFO.toString(), Sensor.RecordingLevel.DEBUG.toString()),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_RECORDING_LEVEL_DOC)
+            .define(METRICS_SAMPLE_WINDOW_MS_CONFIG,
+                    Type.LONG,
+                    30000L,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_DOC)
+            .define(PARTITION_GROUPER_CLASS_CONFIG,
+                    Type.CLASS,
+                    DefaultPartitionGrouper.class.getName(),
+                    Importance.LOW,
+                    PARTITION_GROUPER_CLASS_DOC)
+            .define(POLL_MS_CONFIG,
+                    Type.LONG,
+                    100L,
+                    Importance.LOW,
+                    POLL_MS_DOC)
+            .define(RECEIVE_BUFFER_CONFIG,
+                    Type.INT,
+                    32 * 1024,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.RECEIVE_BUFFER_DOC)
+            .define(RECONNECT_BACKOFF_MS_CONFIG,
+                    Type.LONG,
+                    50L,
+                    atLeast(0L),
+                    Importance.LOW,
+                    CommonClientConfigs.RECONNECT_BACKOFF_MS_DOC)
+            .define(RECONNECT_BACKOFF_MAX_MS_CONFIG,
+                    Type.LONG,
+                    1000L,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
+            .define(RETRIES_CONFIG,
+                    Type.INT,
+                    0,
+                    between(0, Integer.MAX_VALUE),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RETRIES_DOC)
+            .define(RETRY_BACKOFF_MS_CONFIG,
+                    Type.LONG,
+                    100L,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RETRY_BACKOFF_MS_DOC)
+            .define(REQUEST_TIMEOUT_MS_CONFIG,
+                    Type.INT,
+                    40 * 1000,
+                    atLeast(0),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.REQUEST_TIMEOUT_MS_DOC)
+            .define(ROCKSDB_CONFIG_SETTER_CLASS_CONFIG,
+                    Type.CLASS,
+                    null,
+                    Importance.LOW,
+                    ROCKSDB_CONFIG_SETTER_CLASS_DOC)
+            .define(SEND_BUFFER_CONFIG,
+                    Type.INT,
+                    128 * 1024,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.SEND_BUFFER_DOC)
+            .define(STATE_CLEANUP_DELAY_MS_CONFIG,
+                    Type.LONG,
+                    10 * 60 * 1000L,
+                    Importance.LOW,
+                    STATE_CLEANUP_DELAY_MS_DOC)
+            .define(UPGRADE_FROM_CONFIG,
+                    ConfigDef.Type.STRING,
+                    null,
+                    in(null, UPGRADE_FROM_0100, UPGRADE_FROM_0101, UPGRADE_FROM_0102, UPGRADE_FROM_0110, UPGRADE_FROM_10, UPGRADE_FROM_11),
+                    Importance.LOW,
+                    UPGRADE_FROM_DOC)
+            .define(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG,
+                    Type.LONG,
+                    24 * 60 * 60 * 1000L,
+                    Importance.LOW,
+                    WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC);
+    }
+
+    // this is the list of configs for underlying clients
+    // that streams prefer different default values
+    private static final Map<String, Object> PRODUCER_DEFAULT_OVERRIDES;
+    static {
+        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>();
+        tempProducerDefaultOverrides.put(ProducerConfig.LINGER_MS_CONFIG, "100");
+        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, 10);
+
+        PRODUCER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> PRODUCER_EOS_OVERRIDES;
+    static {
+        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>(PRODUCER_DEFAULT_OVERRIDES);
+        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
+        tempProducerDefaultOverrides.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        PRODUCER_EOS_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> CONSUMER_DEFAULT_OVERRIDES;
+    static {
+        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>();
+        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1000");
+        tempConsumerDefaultOverrides.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        tempConsumerDefaultOverrides.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        tempConsumerDefaultOverrides.put("internal.leave.group.on.close", false);
+        // MAX_POLL_INTERVAL_MS_CONFIG needs to be large for streams to handle cases when
+        // streams is recovering data from state stores. We may set it to Integer.MAX_VALUE since
+        // the streams code itself catches most exceptions and acts accordingly without needing
+        // this timeout. Note however that deadlocks are not detected (by definition) so we
+        // are losing the ability to detect them by setting this value to large. Hopefully
+        // deadlocks happen very rarely or never.
+        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
+        CONSUMER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> CONSUMER_EOS_OVERRIDES;
+    static {
+        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>(CONSUMER_DEFAULT_OVERRIDES);
+        tempConsumerDefaultOverrides.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, READ_COMMITTED.name().toLowerCase(Locale.ROOT));
+        CONSUMER_EOS_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
+    }
+
+    public static class InternalConfig {
+        public static final String TASK_MANAGER_FOR_PARTITION_ASSIGNOR = "__task.manager.instance__";
+        public static final String VERSION_PROBING_FLAG = "__version.probing.flag__";
+    }
+
+    /**
+     * Prefix a property with {@link #CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static String consumerPrefix(final String consumerProp) {
+        return CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #MAIN_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig main consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #MAIN_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static String mainConsumerPrefix(final String consumerProp) {
+        return MAIN_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #RESTORE_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig restore consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #RESTORE_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static String restoreConsumerPrefix(final String consumerProp) {
+        return RESTORE_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #GLOBAL_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig global consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #GLOBAL_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static String globalConsumerPrefix(final String consumerProp) {
+        return GLOBAL_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #PRODUCER_PREFIX}. This is used to isolate {@link ProducerConfig producer configs}
+     * from other client configs.
+     *
+     * @param producerProp the producer property to be masked
+     * @return PRODUCER_PREFIX + {@code producerProp}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static String producerPrefix(final String producerProp) {
+        return PRODUCER_PREFIX + producerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #ADMIN_CLIENT_PREFIX}. This is used to isolate {@link AdminClientConfig admin configs}
+     * from other client configs.
+     *
+     * @param adminClientProp the admin client property to be masked
+     * @return ADMIN_CLIENT_PREFIX + {@code adminClientProp}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static String adminClientPrefix(final String adminClientProp) {
+        return ADMIN_CLIENT_PREFIX + adminClientProp;
+    }
+
+    /**
+     * Prefix a property with {@link #TOPIC_PREFIX}
+     * used to provide default topic configs to be applied when creating internal topics.
+     *
+     * @param topicProp the topic property to be masked
+     * @return TOPIC_PREFIX + {@code topicProp}
+     */
+    @SuppressWarnings("WeakerAccess")
+    public static String topicPrefix(final String topicProp) {
+        return TOPIC_PREFIX + topicProp;
+    }
+
+    /**
+     * Return a copy of the config definition.
+     *
+     * @return a copy of the config definition
+     */
+    @SuppressWarnings("unused")
+    public static ConfigDef configDef() {
+        return new ConfigDef(CONFIG);
+    }
+
+    /**
+     * Create a new {@code StreamsConfig} using the given properties.
+     *
+     * @param props properties that specify Kafka Streams and internal consumer/producer configuration
+     */
+    public StreamsConfig(final Map<?, ?> props) {
+        super(CONFIG, props);
+        eosEnabled = EXACTLY_ONCE.equals(getString(PROCESSING_GUARANTEE_CONFIG));
+    }
 
     @Override
-    protected void setup(Context context) throws IOException, InterruptedException {
-      this.cmd = forName(context.getConfiguration().get(CMD_KEY), Test.class);
+    protected Map<String, Object> postProcessParsedConfig(final Map<String, Object> parsedValues) {
+        final Map<String, Object> configUpdates =
+            CommonClientConfigs.postProcessReconnectBackoffConfigs(this, parsedValues);
 
-      // this is required so that extensions of PE are instantiated within the
-      // map reduce task...
-      Class<? extends PerformanceEvaluation> peClass =
-          forName(context.getConfiguration().get(PE_KEY), PerformanceEvaluation.class);
-      try {
-        peClass.getConstructor(Configuration.class).newInstance(context.getConfiguration());
-      } catch (Exception e) {
-        throw new IllegalStateException("Could not instantiate PE instance", e);
-      }
-    }
-
-    private <Type> Class<? extends Type> forName(String className, Class<Type> type) {
-      try {
-        return Class.forName(className).asSubclass(type);
-      } catch (ClassNotFoundException e) {
-        throw new IllegalStateException("Could not find class for name: " + className, e);
-      }
-    }
-
-    protected void map(LongWritable key, Text value, final Context context)
-           throws IOException, InterruptedException {
-
-      Status status = new Status() {
-        public void setStatus(String msg) {
-           context.setStatus(msg);
+        final boolean eosEnabled = EXACTLY_ONCE.equals(parsedValues.get(PROCESSING_GUARANTEE_CONFIG));
+        if (eosEnabled && !originals().containsKey(COMMIT_INTERVAL_MS_CONFIG)) {
+            log.debug("Using {} default value of {} as exactly once is enabled.",
+                    COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
+            configUpdates.put(COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
         }
-      };
 
-      ObjectMapper mapper = new ObjectMapper();
-      TestOptions opts = mapper.readValue(value.toString(), TestOptions.class);
-      Configuration conf = HBaseConfiguration.create(context.getConfiguration());
-
-      // Evaluation task
-      long elapsedTime = runOneClient(this.cmd, conf, opts, status);
-      // Collect how much time the thing took. Report as map output and
-      // to the ELAPSED_TIME counter.
-      context.getCounter(Counter.ELAPSED_TIME).increment(elapsedTime);
-      context.getCounter(Counter.ROWS).increment(opts.perClientRunRows);
-      context.write(new LongWritable(opts.startRow), new LongWritable(elapsedTime));
-      context.progress();
+        return configUpdates;
     }
-  }
 
-  /*
-   * If table does not already exist, create.
-   * @param c Client to use checking.
-   * @return True if we created the table.
-   * @throws IOException
-   */
-  private static boolean checkTable(HBaseAdmin admin, TestOptions opts) throws IOException {
-    HTableDescriptor tableDescriptor = getTableDescriptor(opts);
-    if (opts.presplitRegions > 0) {
-      // presplit requested
-      if (admin.tableExists(tableDescriptor.getTableName())) {
-        admin.disableTable(tableDescriptor.getTableName());
-        admin.deleteTable(tableDescriptor.getTableName());
-      }
+    private Map<String, Object> getCommonConsumerConfigs() {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(CONSUMER_PREFIX, ConsumerConfig.configNames());
 
-      byte[][] splits = getSplits(opts);
-      for (int i=0; i < splits.length; i++) {
-        LOG.debug(" split " + i + ": " + Bytes.toStringBinary(splits[i]));
-      }
-      admin.createTable(tableDescriptor, splits);
-      LOG.info ("Table created with " + opts.presplitRegions + " splits");
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS);
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS);
+
+        final Map<String, Object> consumerProps = new HashMap<>(eosEnabled ? CONSUMER_EOS_OVERRIDES : CONSUMER_DEFAULT_OVERRIDES);
+        consumerProps.putAll(getClientCustomProps());
+        consumerProps.putAll(clientProvidedProps);
+
+        // bootstrap.servers should be from StreamsConfig
+        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
+
+        return consumerProps;
     }
-    else {
-      boolean tableExists = admin.tableExists(tableDescriptor.getTableName());
-      if (!tableExists) {
-        admin.createTable(tableDescriptor);
-        LOG.info("Table " + tableDescriptor + " created");
-      }
-    }
-    return admin.tableExists(tableDescriptor.getTableName());
-  }
 
-  /**
-   * Create an HTableDescriptor from provided TestOptions.
-   */
-  protected static HTableDescriptor getTableDescriptor(TestOptions opts) {
-    HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(opts.tableName));
-    HColumnDescriptor family = new HColumnDescriptor(FAMILY_NAME);
-    family.setDataBlockEncoding(opts.blockEncoding);
-    family.setCompressionType(opts.compression);
-    family.setBloomFilterType(opts.bloomType);
-    if (opts.inMemoryCF) {
-      family.setInMemory(true);
-    }
-    desc.addFamily(family);
-    return desc;
-  }
+    private void checkIfUnexpectedUserSpecifiedConsumerConfig(final Map<String, Object> clientProvidedProps, final String[] nonConfigurableConfigs) {
+        // Streams does not allow users to configure certain consumer/producer configurations, for example,
+        // enable.auto.commit. In cases where user tries to override such non-configurable
+        // consumer/producer configurations, log a warning and remove the user defined value from the Map.
+        // Thus the default values for these consumer/producer configurations that are suitable for
+        // Streams will be used instead.
+        final Object maxInFlightRequests = clientProvidedProps.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
+        if (eosEnabled && maxInFlightRequests != null && 5 < (int) maxInFlightRequests) {
+            throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + " can't exceed 5 when using the idempotent producer");
+        }
+        for (final String config: nonConfigurableConfigs) {
+            if (clientProvidedProps.containsKey(config)) {
+                final String eosMessage =  PROCESSING_GUARANTEE_CONFIG + " is set to " + EXACTLY_ONCE + ". Hence, ";
+                final String nonConfigurableConfigMessage = "Unexpected user-specified %s config: %s found. %sUser setting (%s) will be ignored and the Streams default setting (%s) will be used ";
 
-  /**
-   * generates splits based on total number of rows and specified split regions
-   */
-  protected static byte[][] getSplits(TestOptions opts) {
-    if (opts.presplitRegions == 0)
-      return new byte [0][];
-
-    int numSplitPoints = opts.presplitRegions - 1;
-    byte[][] splits = new byte[numSplitPoints][];
-    int jump = opts.totalRows / opts.presplitRegions;
-    for (int i = 0; i < numSplitPoints; i++) {
-      int rowkey = jump * (1 + i);
-      splits[i] = format(rowkey);
-    }
-    return splits;
-  }
-
-  /*
-   * Run all clients in this vm each to its own thread.
-   * @param cmd Command to run.
-   * @throws IOException
-   */
-  private void doLocalClients(final Class<? extends Test> cmd, final TestOptions opts)
-      throws IOException, InterruptedException {
-    Future<Long>[] threads = new Future[opts.numClientThreads];
-    long[] timings = new long[opts.numClientThreads];
-    ExecutorService pool = Executors.newFixedThreadPool(opts.numClientThreads,
-      new ThreadFactoryBuilder().setNameFormat("TestClient-%s").build());
-    for (int i = 0; i < threads.length; i++) {
-      final int index = i;
-      threads[i] = pool.submit(new Callable<Long>() {
-        @Override
-        public Long call() throws Exception {
-          TestOptions threadOpts = new TestOptions(opts);
-          threadOpts.startRow = index * threadOpts.perClientRunRows;
-          long elapsedTime = runOneClient(cmd, getConf(), threadOpts, new Status() {
-            public void setStatus(final String msg) throws IOException {
-              LOG.info(msg);
+                if (CONSUMER_DEFAULT_OVERRIDES.containsKey(config)) {
+                    if (!clientProvidedProps.get(config).equals(CONSUMER_DEFAULT_OVERRIDES.get(config))) {
+                        log.warn(String.format(nonConfigurableConfigMessage, "consumer", config, "", clientProvidedProps.get(config),  CONSUMER_DEFAULT_OVERRIDES.get(config)));
+                        clientProvidedProps.remove(config);
+                    }
+                } else if (eosEnabled) {
+                    if (CONSUMER_EOS_OVERRIDES.containsKey(config)) {
+                        if (!clientProvidedProps.get(config).equals(CONSUMER_EOS_OVERRIDES.get(config))) {
+                            log.warn(String.format(nonConfigurableConfigMessage,
+                                    "consumer", config, eosMessage, clientProvidedProps.get(config), CONSUMER_EOS_OVERRIDES.get(config)));
+                            clientProvidedProps.remove(config);
+                        }
+                    } else if (PRODUCER_EOS_OVERRIDES.containsKey(config)) {
+                        if (!clientProvidedProps.get(config).equals(PRODUCER_EOS_OVERRIDES.get(config))) {
+                            log.warn(String.format(nonConfigurableConfigMessage,
+                                    "producer", config, eosMessage, clientProvidedProps.get(config), PRODUCER_EOS_OVERRIDES.get(config)));
+                            clientProvidedProps.remove(config);
+                        }
+                    }
+                }
             }
-          });
-          LOG.info("Finished in " + elapsedTime +
-            "ms over " + threadOpts.perClientRunRows + " rows");
-          return elapsedTime;
+
         }
-      });
-    }
-    pool.shutdown();
-    for (int i = 0; i < threads.length; i++) {
-      try {
-        timings[i] = threads[i].get();
-      } catch (ExecutionException e) {
-        throw new IOException(e.getCause());
-      }
-    }
-    final String test = cmd.getSimpleName();
-    LOG.info("[" + test + "] Summary of timings (ms): "
-             + Arrays.toString(timings));
-    Arrays.sort(timings);
-    long total = 0;
-    for (long timing : timings) {
-      total += timing;
-    }
-    LOG.info("[" + test + "]"
-             + "\tMin: " + timings[0] + "ms"
-             + "\tMax: " + timings[timings.length - 1] + "ms"
-             + "\tAvg: " + (total / timings.length) + "ms");
-  }
-
-  /*
-   * Run a mapreduce job.  Run as many maps as asked-for clients.
-   * Before we start up the job, write out an input file with instruction
-   * per client regards which row they are to start on.
-   * @param cmd Command to run.
-   * @throws IOException
-   */
-  private void doMapReduce(final Class<? extends Test> cmd, TestOptions opts) throws IOException,
-        InterruptedException, ClassNotFoundException {
-    Configuration conf = getConf();
-    Path inputDir = writeInputFile(conf, opts);
-    conf.set(EvaluationMapTask.CMD_KEY, cmd.getName());
-    conf.set(EvaluationMapTask.PE_KEY, getClass().getName());
-    Job job = new Job(conf);
-    job.setJarByClass(PerformanceEvaluation.class);
-    job.setJobName("HBase Performance Evaluation");
-
-    job.setInputFormatClass(NLineInputFormat.class);
-    NLineInputFormat.setInputPaths(job, inputDir);
-    // this is default, but be explicit about it just in case.
-    NLineInputFormat.setNumLinesPerSplit(job, 1);
-
-    job.setOutputKeyClass(LongWritable.class);
-    job.setOutputValueClass(LongWritable.class);
-
-    job.setMapperClass(EvaluationMapTask.class);
-    job.setReducerClass(LongSumReducer.class);
-
-    job.setNumReduceTasks(1);
-
-    job.setOutputFormatClass(TextOutputFormat.class);
-    TextOutputFormat.setOutputPath(job, new Path(inputDir.getParent(), "outputs"));
-
-    TableMapReduceUtil.addDependencyJars(job);
-    TableMapReduceUtil.addDependencyJars(job.getConfiguration(),
-      Histogram.class,     // yammer metrics   
-      ObjectMapper.class); // jackson-mapper-asl
-
-    TableMapReduceUtil.initCredentials(job);
-
-    job.waitForCompletion(true);
-  }
-
-  /*
-   * Write input file of offsets-per-client for the mapreduce job.
-   * @param c Configuration
-   * @return Directory that contains file written.
-   * @throws IOException
-   */
-  private Path writeInputFile(final Configuration c, final TestOptions opts) throws IOException {
-    SimpleDateFormat formatter = new SimpleDateFormat("yyyyMMddHHmmss");
-    Path jobdir = new Path(PERF_EVAL_DIR, formatter.format(new Date()));
-    Path inputDir = new Path(jobdir, "inputs");
-
-    FileSystem fs = FileSystem.get(c);
-    fs.mkdirs(inputDir);
-
-    Path inputFile = new Path(inputDir, "input.txt");
-    PrintStream out = new PrintStream(fs.create(inputFile));
-    // Make input random.
-    Map<Integer, String> m = new TreeMap<Integer, String>();
-    Hash h = MurmurHash.getInstance();
-    int perClientRows = (opts.totalRows / opts.numClientThreads);
-    ObjectMapper mapper = new ObjectMapper();
-    mapper.configure(SORT_PROPERTIES_ALPHABETICALLY, true);
-    try {
-      for (int i = 0; i < 10; i++) {
-        for (int j = 0; j < opts.numClientThreads; j++) {
-          TestOptions next = new TestOptions(opts);
-          next.startRow = (j * perClientRows) + (i * (perClientRows/10));
-          next.perClientRunRows = perClientRows / 10;
-          String s = mapper.writeValueAsString(next);
-          int hash = h.hash(Bytes.toBytes(s));
-          m.put(hash, s);
-        }
-      }
-      for (Map.Entry<Integer, String> e: m.entrySet()) {
-        out.println(e.getValue());
-      }
-    } finally {
-      out.close();
-    }
-    return inputDir;
-  }
-
-  /**
-   * Describes a command.
-   */
-  static class CmdDescriptor {
-    private Class<? extends Test> cmdClass;
-    private String name;
-    private String description;
-
-    CmdDescriptor(Class<? extends Test> cmdClass, String name, String description) {
-      this.cmdClass = cmdClass;
-      this.name = name;
-      this.description = description;
-    }
-
-    public Class<? extends Test> getCmdClass() {
-      return cmdClass;
-    }
-
-    public String getName() {
-      return name;
-    }
-
-    public String getDescription() {
-      return description;
-    }
-  }
-
-  /**
-   * Wraps up options passed to {@link org.apache.hadoop.hbase.PerformanceEvaluation}.
-   * This makes tracking all these arguments a little easier.
-   */
-  static class TestOptions {
-
-    public TestOptions() {}
-
-    public TestOptions(TestOptions that) {
-      this.nomapred = that.nomapred;
-      this.startRow = that.startRow;
-      this.size = that.size;
-      this.perClientRunRows = that.perClientRunRows;
-      this.numClientThreads = that.numClientThreads;
-      this.totalRows = that.totalRows;
-      this.sampleRate = that.sampleRate;
-      this.traceRate = that.traceRate;
-      this.tableName = that.tableName;
-      this.flushCommits = that.flushCommits;
-      this.writeToWAL = that.writeToWAL;
-      this.autoFlush = that.autoFlush;
-      this.oneCon = that.oneCon;
-      this.useTags = that.useTags;
-      this.noOfTags = that.noOfTags;
-      this.reportLatency = that.reportLatency;
-      this.multiGet = that.multiGet;
-      this.inMemoryCF = that.inMemoryCF;
-      this.presplitRegions = that.presplitRegions;
-      this.compression = that.compression;
-      this.blockEncoding = that.blockEncoding;
-      this.filterAll = that.filterAll;
-      this.bloomType = that.bloomType;
-      this.valueRandom = that.valueRandom;
-      this.valueSize = that.valueSize;
-      this.period = that.period;
-    }
-
-    public boolean nomapred = false;
-    public boolean filterAll = false;
-    public int startRow = 0;
-    public float size = 1.0f;
-    public int perClientRunRows = DEFAULT_ROWS_PER_GB;
-    public int numClientThreads = 1;
-    public int totalRows = DEFAULT_ROWS_PER_GB;
-    public float sampleRate = 1.0f;
-    public double traceRate = 0.0;
-    public String tableName = TABLE_NAME;
-    public boolean flushCommits = true;
-    public boolean writeToWAL = true;
-    public boolean autoFlush = false;
-    public boolean oneCon = false;
-    public boolean useTags = false;
-    public int noOfTags = 1;
-    public boolean reportLatency = false;
-    public int multiGet = 0;
-    public boolean inMemoryCF = false;
-    public int presplitRegions = 0;
-    public Compression.Algorithm compression = Compression.Algorithm.NONE;
-    public BloomType bloomType = BloomType.ROW;
-    public DataBlockEncoding blockEncoding = DataBlockEncoding.NONE;
-    public boolean valueRandom = false;
-    public int valueSize = DEFAULT_VALUE_LENGTH;
-    public int period = (this.perClientRunRows / 10) == 0? perClientRunRows: perClientRunRows / 10;
-  }
-
-  /*
-   * A test.
-   * Subclass to particularize what happens per row.
-   */
-  static abstract class Test {
-    // Below is make it so when Tests are all running in the one
-    // jvm, that they each have a differently seeded Random.
-    private static final Random randomSeed = new Random(System.currentTimeMillis());
-
-    private static long nextRandomSeed() {
-      return randomSeed.nextLong();
-    }
-    private final int everyN;
-
-    protected final Random rand = new Random(nextRandomSeed());
-    protected final Configuration conf;
-    protected final TestOptions opts;
-
-    private final Status status;
-    private final Sampler<?> traceSampler;
-    private final SpanReceiverHost receiverHost;
-    protected HConnection connection;
-    protected HTableInterface table;
-
-    private String testName;
-    private Histogram latency;
-    private Histogram valueSize;
-
-    /**
-     * Note that all subclasses of this class must provide a public contructor
-     * that has the exact same list of arguments.
-     */
-    Test(final HConnection con, final TestOptions options, final Status status) {
-      this.connection = con;
-      this.conf = con.getConfiguration();
-      this.opts = options;
-      this.status = status;
-      this.testName = this.getClass().getSimpleName();
-      receiverHost = SpanReceiverHost.getInstance(conf);
-      if (options.traceRate >= 1.0) {
-        this.traceSampler = Sampler.ALWAYS;
-      } else if (options.traceRate > 0.0) {
-        this.traceSampler = new ProbabilitySampler(options.traceRate);
-      } else {
-        this.traceSampler = Sampler.NEVER;
-      }
-      everyN = (int) (opts.totalRows / (opts.totalRows * opts.sampleRate));
-      LOG.info("Sampling 1 every " + everyN + " out of " + opts.perClientRunRows + " total rows.");
-    }
-
-    int getValueLength(final Random r) {
-      return opts.valueRandom? Math.abs(r.nextInt() % opts.valueSize): opts.valueSize;
-    }
-
-    void updateValueSize(final Result [] rs) throws IOException {
-      if (rs == null || !isRandomValueSize()) return;
-      for (Result r: rs) updateValueSize(r);
-    }
- 
-    void updateValueSize(final Result r) throws IOException {
-      if (r == null || !isRandomValueSize()) return;
-      int size = 0;
-      for (CellScanner scanner = r.cellScanner(); scanner.advance();) {
-        size += scanner.current().getValueLength();
-      }
-      updateValueSize(size);
-    }
-
-    void updateValueSize(final int valueSize) {
-      if (!isRandomValueSize()) return;
-      this.valueSize.update(valueSize);
-    }
-
-    String generateStatus(final int sr, final int i, final int lr) {
-      return sr + "/" + i + "/" + lr + ", latency " + getShortLatencyReport() +
-        (!isRandomValueSize()? "": ", value size " + getShortValueSizeReport());
-    }
- 
-    boolean isRandomValueSize() {
-      return opts.valueRandom;
-    }
-
-    protected int getReportingPeriod() {
-      return opts.period;
-    }
-
-    void testSetup() throws IOException {
-      if (!opts.oneCon) {
-        this.connection = HConnectionManager.createConnection(conf);
-      }
-      this.table = new HTable(TableName.valueOf(opts.tableName), connection);
-      this.table.setAutoFlushTo(opts.autoFlush);
-
-      try {
-        Constructor<?> ctor =
-            Histogram.class.getDeclaredConstructor(com.yammer.metrics.stats.Sample.class);
-        ctor.setAccessible(true);
-        latency = (Histogram) ctor.newInstance(new UniformSample(1024 * 500));
-        valueSize = (Histogram) ctor.newInstance(new UniformSample(1024 * 500));
-      } catch (Exception e) {
-        throw new RuntimeException(e);
-      }
-
-    }
-
-    void testTakedown() throws IOException {
-      reportLatency();
-      reportValueSize();
-      if (opts.flushCommits) {
-        this.table.flushCommits();
-      }
-      table.close();
-      if (!opts.oneCon) {
-        connection.close();
-      }
-      receiverHost.closeReceivers();
-    }
-
-    /*
-     * Run test
-     * @return Elapsed time.
-     * @throws IOException
-     */
-    long test() throws IOException {
-      testSetup();
-      LOG.info("Timed test starting in thread " + Thread.currentThread().getName());
-      final long startTime = System.nanoTime();
-      try {
-        testTimed();
-      } finally {
-        testTakedown();
-      }
-      return (System.nanoTime() - startTime) / 1000000;
     }
 
     /**
-     * Provides an extension point for tests that don't want a per row invocation.
+     * Get the configs to the {@link KafkaConsumer consumer}.
+     * Properties using the prefix {@link #CONSUMER_PREFIX} will be used in favor over their non-prefixed versions
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     *
+     * @param groupId      consumer groupId
+     * @param clientId     clientId
+     * @return Map of the consumer configuration.
+     * @deprecated use {@link StreamsConfig#getMainConsumerConfigs(String, String)}
      */
-    void testTimed() throws IOException {
-      int lastRow = opts.startRow + opts.perClientRunRows;
-      // Report on completion of 1/10th of total.
-      for (int i = opts.startRow; i < lastRow; i++) {
-        if (i % everyN != 0) continue;
-        long startTime = System.nanoTime();
-        TraceScope scope = Trace.startSpan("test row", traceSampler);
+    @SuppressWarnings("WeakerAccess")
+    @Deprecated
+    public Map<String, Object> getConsumerConfigs(final String groupId,
+                                                  final String clientId) {
+        return getMainConsumerConfigs(groupId, clientId);
+    }
+
+    /**
+     * Get the configs to the {@link KafkaConsumer main consumer}.
+     * Properties using the prefix {@link #MAIN_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #MAIN_CONSUMER_PREFIX}
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #MAIN_CONSUMER_PREFIX}, main consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param groupId      consumer groupId
+     * @param clientId     clientId
+     * @return Map of the consumer configuration.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public Map<String, Object> getMainConsumerConfigs(final String groupId,
+                                                      final String clientId) {
+        final Map<String, Object> consumerProps = getCommonConsumerConfigs();
+
+        // Get main consumer override configs
+        final Map<String, Object> mainConsumerProps = originalsWithPrefix(MAIN_CONSUMER_PREFIX);
+        for (final Map.Entry<String, Object> entry: mainConsumerProps.entrySet()) {
+            consumerProps.put(entry.getKey(), entry.getValue());
+        }
+
+        // add client id with stream client id prefix, and group id
+        consumerProps.put(APPLICATION_ID_CONFIG, groupId);
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        consumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-consumer");
+
+        // add configs required for stream partition assignor
+        consumerProps.put(UPGRADE_FROM_CONFIG, getString(UPGRADE_FROM_CONFIG));
+        consumerProps.put(REPLICATION_FACTOR_CONFIG, getInt(REPLICATION_FACTOR_CONFIG));
+        consumerProps.put(APPLICATION_SERVER_CONFIG, getString(APPLICATION_SERVER_CONFIG));
+        consumerProps.put(NUM_STANDBY_REPLICAS_CONFIG, getInt(NUM_STANDBY_REPLICAS_CONFIG));
+        consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, StreamsPartitionAssignor.class.getName());
+        consumerProps.put(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG, getLong(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG));
+
+        // add admin retries configs for creating topics
+        final AdminClientConfig adminClientDefaultConfig = new AdminClientConfig(getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames()));
+        consumerProps.put(adminClientPrefix(AdminClientConfig.RETRIES_CONFIG), adminClientDefaultConfig.getInt(AdminClientConfig.RETRIES_CONFIG));
+
+        // verify that producer batch config is no larger than segment size, then add topic configs required for creating topics
+        final Map<String, Object> topicProps = originalsWithPrefix(TOPIC_PREFIX, false);
+
+        if (topicProps.containsKey(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG))) {
+            final int segmentSize = Integer.parseInt(topicProps.get(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG)).toString());
+            final Map<String, Object> producerProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
+            final int batchSize;
+            if (producerProps.containsKey(ProducerConfig.BATCH_SIZE_CONFIG)) {
+                batchSize = Integer.parseInt(producerProps.get(ProducerConfig.BATCH_SIZE_CONFIG).toString());
+            } else {
+                final ProducerConfig producerDefaultConfig = new ProducerConfig(new Properties());
+                batchSize = producerDefaultConfig.getInt(ProducerConfig.BATCH_SIZE_CONFIG);
+            }
+
+            if (segmentSize < batchSize) {
+                throw new IllegalArgumentException(String.format("Specified topic segment size %d is is smaller than the configured producer batch size %d, this will cause produced batch not able to be appended to the topic",
+                        segmentSize,
+                        batchSize));
+            }
+        }
+
+        consumerProps.putAll(topicProps);
+
+        return consumerProps;
+    }
+
+    /**
+     * Get the configs for the {@link KafkaConsumer restore-consumer}.
+     * Properties using the prefix {@link #RESTORE_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #RESTORE_CONSUMER_PREFIX}
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #RESTORE_CONSUMER_PREFIX}, restore consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param clientId clientId
+     * @return Map of the restore consumer configuration.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public Map<String, Object> getRestoreConsumerConfigs(final String clientId) {
+        final Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
+
+        // Get restore consumer override configs
+        final Map<String, Object> restoreConsumerProps = originalsWithPrefix(RESTORE_CONSUMER_PREFIX);
+        for (final Map.Entry<String, Object> entry: restoreConsumerProps.entrySet()) {
+            baseConsumerProps.put(entry.getKey(), entry.getValue());
+        }
+
+        // no need to set group id for a restore consumer
+        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
+        // add client id with stream client id prefix
+        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-restore-consumer");
+        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+
+        return baseConsumerProps;
+    }
+
+    /**
+     * Get the configs for the {@link KafkaConsumer global consumer}.
+     * Properties using the prefix {@link #GLOBAL_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #GLOBAL_CONSUMER_PREFIX}
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #GLOBAL_CONSUMER_PREFIX}, global consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param clientId clientId
+     * @return Map of the global consumer configuration.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public Map<String, Object> getGlobalConsumerConfigs(final String clientId) {
+        final Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
+
+        // Get global consumer override configs
+        final Map<String, Object> globalConsumerProps = originalsWithPrefix(GLOBAL_CONSUMER_PREFIX);
+        for (final Map.Entry<String, Object> entry: globalConsumerProps.entrySet()) {
+            baseConsumerProps.put(entry.getKey(), entry.getValue());
+        }
+
+        // no need to set group id for a global consumer
+        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
+        // add client id with stream client id prefix
+        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-global-consumer");
+        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+
+        return baseConsumerProps;
+    }
+
+    /**
+     * Get the configs for the {@link KafkaProducer producer}.
+     * Properties using the prefix {@link #PRODUCER_PREFIX} will be used in favor over their non-prefixed versions
+     * except in the case of {@link ProducerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     *
+     * @param clientId clientId
+     * @return Map of the producer configuration.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public Map<String, Object> getProducerConfigs(final String clientId) {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
+
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS);
+
+        // generate producer configs from original properties and overridden maps
+        final Map<String, Object> props = new HashMap<>(eosEnabled ? PRODUCER_EOS_OVERRIDES : PRODUCER_DEFAULT_OVERRIDES);
+        props.putAll(getClientCustomProps());
+        props.putAll(clientProvidedProps);
+
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
+        // add client id with stream client id prefix
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-producer");
+
+        return props;
+    }
+
+    /**
+     * Get the configs for the {@link org.apache.kafka.clients.admin.AdminClient admin client}.
+     * @param clientId clientId
+     * @return Map of the admin client configuration.
+     */
+    @SuppressWarnings("WeakerAccess")
+    public Map<String, Object> getAdminConfigs(final String clientId) {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames());
+
+        final Map<String, Object> props = new HashMap<>();
+        props.putAll(getClientCustomProps());
+        props.putAll(clientProvidedProps);
+
+        // add client id with stream client id prefix
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-admin");
+
+        return props;
+    }
+
+    private Map<String, Object> getClientPropsWithPrefix(final String prefix,
+                                                         final Set<String> configNames) {
+        final Map<String, Object> props = clientProps(configNames, originals());
+        props.putAll(originalsWithPrefix(prefix));
+        return props;
+    }
+
+    /**
+     * Get a map of custom configs by removing from the originals all the Streams, Consumer, Producer, and AdminClient configs.
+     * Prefixed properties are also removed because they are already added by {@link #getClientPropsWithPrefix(String, Set)}.
+     * This allows to set a custom property for a specific client alone if specified using a prefix, or for all
+     * when no prefix is used.
+     *
+     * @return a map with the custom properties
+     */
+    private Map<String, Object> getClientCustomProps() {
+        final Map<String, Object> props = originals();
+        props.keySet().removeAll(CONFIG.names());
+        props.keySet().removeAll(ConsumerConfig.configNames());
+        props.keySet().removeAll(ProducerConfig.configNames());
+        props.keySet().removeAll(AdminClientConfig.configNames());
+        props.keySet().removeAll(originalsWithPrefix(CONSUMER_PREFIX, false).keySet());
+        props.keySet().removeAll(originalsWithPrefix(PRODUCER_PREFIX, false).keySet());
+        props.keySet().removeAll(originalsWithPrefix(ADMIN_CLIENT_PREFIX, false).keySet());
+        return props;
+    }
+
+    /**
+     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_KEY_SERDE_CLASS_CONFIG key Serde
+     * class}.
+     *
+     * @return an configured instance of key Serde class
+     */
+    @SuppressWarnings("WeakerAccess")
+    public Serde defaultKeySerde() {
+        final Object keySerdeConfigSetting = get(DEFAULT_KEY_SERDE_CLASS_CONFIG);
         try {
-          testRow(i);
-        } finally {
-          scope.close();
+            final Serde<?> serde = getConfiguredInstance(DEFAULT_KEY_SERDE_CLASS_CONFIG, Serde.class);
+            serde.configure(originals(), true);
+            return serde;
+        } catch (final Exception e) {
+            throw new StreamsException(
+                String.format("Failed to configure key serde %s", keySerdeConfigSetting), e);
         }
-        latency.update((System.nanoTime() - startTime) / 1000);
-        if (status != null && i > 0 && (i % getReportingPeriod()) == 0) {
-          status.setStatus(generateStatus(opts.startRow, i, lastRow));
-        }
-      }
-    }
-    /**
-     * report percentiles of latency
-     * @throws IOException
-     */
-    private void reportLatency() throws IOException {
-      status.setStatus(testName + " latency log (microseconds), on " +
-          latency.count() + " measures");
-      reportHistogram(this.latency);
-    }
-
-    private void reportValueSize() throws IOException {
-      status.setStatus(testName + " valueSize after " +
-          valueSize.count() + " measures");
-      reportHistogram(this.valueSize);
-    }
- 
-    private void reportHistogram(final Histogram h) throws IOException {
-      Snapshot sn = h.getSnapshot();
-      status.setStatus(testName + " Min      = " + h.min());
-      status.setStatus(testName + " Avg      = " + h.mean());
-      status.setStatus(testName + " StdDev   = " + h.stdDev());
-      status.setStatus(testName + " 50th     = " + sn.getMedian());
-      status.setStatus(testName + " 95th     = " + sn.get95thPercentile());
-      status.setStatus(testName + " 99th     = " + sn.get99thPercentile());
-      status.setStatus(testName + " 99.9th   = " + sn.get999thPercentile());
-      status.setStatus(testName + " 99.99th  = " + sn.getValue(0.9999));
-      status.setStatus(testName + " 99.999th = " + sn.getValue(0.99999));
-      status.setStatus(testName + " Max      = " + h.max());
     }
 
     /**
-     * Used formating doubles so only two places after decimal point.
+     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_VALUE_SERDE_CLASS_CONFIG value
+     * Serde class}.
+     *
+     * @return an configured instance of value Serde class
      */
-    private static DecimalFormat DOUBLE_FORMAT = new DecimalFormat("#0.00");
+    @SuppressWarnings("WeakerAccess")
+    public Serde defaultValueSerde() {
+        final Object valueSerdeConfigSetting = get(DEFAULT_VALUE_SERDE_CLASS_CONFIG);
+        try {
+            final Serde<?> serde = getConfiguredInstance(DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serde.class);
+            serde.configure(originals(), false);
+            return serde;
+        } catch (final Exception e) {
+            throw new StreamsException(
+                String.format("Failed to configure value serde %s", valueSerdeConfigSetting), e);
+        }
+    }
+
+    @SuppressWarnings("WeakerAccess")
+    public TimestampExtractor defaultTimestampExtractor() {
+        return getConfiguredInstance(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG, TimestampExtractor.class);
+    }
+
+    @SuppressWarnings("WeakerAccess")
+    public DeserializationExceptionHandler defaultDeserializationExceptionHandler() {
+        return getConfiguredInstance(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG, DeserializationExceptionHandler.class);
+    }
+
+    @SuppressWarnings("WeakerAccess")
+    public ProductionExceptionHandler defaultProductionExceptionHandler() {
+        return getConfiguredInstance(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG, ProductionExceptionHandler.class);
+    }
 
     /**
-     * @return Subset of the histograms' calculation.
+     * Override any client properties in the original configs with overrides
+     *
+     * @param configNames The given set of configuration names.
+     * @param originals   The original configs to be filtered.
+     * @return client config with any overrides
      */
-    private String getShortLatencyReport() {
-      return getShortHistogramReport(this.latency);
-    }
-
-    /**
-     * @return Subset of the histograms' calculation.
-     */
-    private String getShortValueSizeReport() {
-      return getShortHistogramReport(this.valueSize);
-    }
-
-    private String getShortHistogramReport(final Histogram h) {
-      Snapshot sn = h.getSnapshot();
-      return "mean=" + DOUBLE_FORMAT.format(h.mean()) +
-        ", min=" + DOUBLE_FORMAT.format(h.min()) +
-        ", max=" + DOUBLE_FORMAT.format(h.max()) +
-        ", stdDev=" + DOUBLE_FORMAT.format(h.stdDev()) +
-        ", 95th=" + DOUBLE_FORMAT.format(sn.get95thPercentile()) +
-        ", 99th=" + DOUBLE_FORMAT.format(sn.get99thPercentile());
-    }
-
-    /*
-    * Test for individual row.
-    * @param i Row index.
-    */
-    abstract void testRow(final int i) throws IOException;
-  }
-
-
-  @SuppressWarnings("unused")
-  static class RandomSeekScanTest extends Test {
-    RandomSeekScanTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    void testRow(final int i) throws IOException {
-      Scan scan = new Scan(getRandomRow(this.rand, opts.totalRows));
-      FilterList list = new FilterList();
-      scan.addColumn(FAMILY_NAME, QUALIFIER_NAME);
-      if (opts.filterAll) {
-        list.addFilter(new FilterAllFilter());
-      }
-      list.addFilter(new WhileMatchFilter(new PageFilter(120)));
-      scan.setFilter(list);
-      ResultScanner s = this.table.getScanner(scan);
-      for (Result rr; (rr = s.next()) != null;) {
-        updateValueSize(rr);
-      }
-      s.close();
-    }
-
-    @Override
-    protected int getReportingPeriod() {
-      int period = opts.perClientRunRows / 100;
-      return period == 0 ? opts.perClientRunRows : period;
-    }
-
-  }
-
-  static abstract class RandomScanWithRangeTest extends Test {
-    RandomScanWithRangeTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    void testRow(final int i) throws IOException {
-      Pair<byte[], byte[]> startAndStopRow = getStartAndStopRow();
-      Scan scan = new Scan(startAndStopRow.getFirst(), startAndStopRow.getSecond());
-      if (opts.filterAll) {
-        scan.setFilter(new FilterAllFilter());
-      }
-      scan.addColumn(FAMILY_NAME, QUALIFIER_NAME);
-      Result r = null;
-      int count = 0;
-      ResultScanner s = this.table.getScanner(scan);
-      for (; (r = s.next()) != null;) {
-        updateValueSize(r);
-        count++;
-      }
-      if (i % 100 == 0) {
-        LOG.info(String.format("Scan for key range %s - %s returned %s rows",
-            Bytes.toString(startAndStopRow.getFirst()),
-            Bytes.toString(startAndStopRow.getSecond()), count));
-      }
-
-      s.close();
-    }
-
-    protected abstract Pair<byte[],byte[]> getStartAndStopRow();
-
-    protected Pair<byte[], byte[]> generateStartAndStopRows(int maxRange) {
-      int start = this.rand.nextInt(Integer.MAX_VALUE) % opts.totalRows;
-      int stop = start + maxRange;
-      return new Pair<byte[],byte[]>(format(start), format(stop));
-    }
-
-    @Override
-    protected int getReportingPeriod() {
-      int period = opts.perClientRunRows / 100;
-      return period == 0? opts.perClientRunRows: period;
-    }
-  }
-
-  static class RandomScanWithRange10Test extends RandomScanWithRangeTest {
-    RandomScanWithRange10Test(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    protected Pair<byte[], byte[]> getStartAndStopRow() {
-      return generateStartAndStopRows(10);
-    }
-  }
-
-  static class RandomScanWithRange100Test extends RandomScanWithRangeTest {
-    RandomScanWithRange100Test(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    protected Pair<byte[], byte[]> getStartAndStopRow() {
-      return generateStartAndStopRows(100);
-    }
-  }
-
-  static class RandomScanWithRange1000Test extends RandomScanWithRangeTest {
-    RandomScanWithRange1000Test(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    protected Pair<byte[], byte[]> getStartAndStopRow() {
-      return generateStartAndStopRows(1000);
-    }
-  }
-
-  static class RandomScanWithRange10000Test extends RandomScanWithRangeTest {
-    RandomScanWithRange10000Test(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    protected Pair<byte[], byte[]> getStartAndStopRow() {
-      return generateStartAndStopRows(10000);
-    }
-  }
-
-  static class RandomReadTest extends Test {
-    private ArrayList<Get> gets;
-
-    RandomReadTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-      if (opts.multiGet > 0) {
-        LOG.info("MultiGet enabled. Sending GETs in batches of " + opts.multiGet + ".");
-        this.gets = new ArrayList<Get>(opts.multiGet);
-      }
-    }
-
-    @Override
-    void testRow(final int i) throws IOException {
-      Get get = new Get(getRandomRow(this.rand, opts.totalRows));
-      get.addColumn(FAMILY_NAME, QUALIFIER_NAME);
-      if (opts.filterAll) {
-        get.setFilter(new FilterAllFilter());
-      }
-      if (LOG.isTraceEnabled()) LOG.trace(get.toString());
-      if (opts.multiGet > 0) {
-        this.gets.add(get);
-        if (this.gets.size() == opts.multiGet) {
-          Result [] rs = this.table.get(this.gets);
-          updateValueSize(rs);
-          this.gets.clear();
-        }
-      } else {
-        updateValueSize(this.table.get(get));
-      }
-    }
-
-    @Override
-    protected int getReportingPeriod() {
-      int period = opts.perClientRunRows / 10;
-      return period == 0 ? opts.perClientRunRows : period;
-    }
-
-    @Override
-    protected void testTakedown() throws IOException {
-      if (this.gets != null && this.gets.size() > 0) {
-        this.table.get(gets);
-        this.gets.clear();
-      }
-      super.testTakedown();
-    }
-  }
-
-  static class RandomWriteTest extends Test {
-    RandomWriteTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    void testRow(final int i) throws IOException {
-      byte[] row = getRandomRow(this.rand, opts.totalRows);
-      Put put = new Put(row);
-      byte[] value = generateData(this.rand, getValueLength(this.rand));
-      if (opts.useTags) {
-        byte[] tag = generateData(this.rand, TAG_LENGTH);
-        Tag[] tags = new Tag[opts.noOfTags];
-        for (int n = 0; n < opts.noOfTags; n++) {
-          Tag t = new Tag((byte) n, tag);
-          tags[n] = t;
-        }
-        KeyValue kv = new KeyValue(row, FAMILY_NAME, QUALIFIER_NAME, HConstants.LATEST_TIMESTAMP,
-            value, tags);
-        put.add(kv);
-        updateValueSize(kv.getValueLength());
-      } else {
-        put.add(FAMILY_NAME, QUALIFIER_NAME, value);
-        updateValueSize(value.length);
-      }
-      put.setDurability(opts.writeToWAL ? Durability.SYNC_WAL : Durability.SKIP_WAL);
-      table.put(put);
-    }
-  }
-
-  static class ScanTest extends Test {
-    private ResultScanner testScanner;
-
-    ScanTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    void testTakedown() throws IOException {
-      if (this.testScanner != null) {
-        this.testScanner.close();
-      }
-      super.testTakedown();
-    }
-
-
-    @Override
-    void testRow(final int i) throws IOException {
-      if (this.testScanner == null) {
-        Scan scan = new Scan(format(opts.startRow));
-        scan.setCaching(30);
-        scan.addColumn(FAMILY_NAME, QUALIFIER_NAME);
-        if (opts.filterAll) {
-          scan.setFilter(new FilterAllFilter());
-        }
-       this.testScanner = table.getScanner(scan);
-      }
-      Result r = testScanner.next();
-      updateValueSize(r);
-    }
-
-  }
-
-  static class SequentialReadTest extends Test {
-    SequentialReadTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    void testRow(final int i) throws IOException {
-      Get get = new Get(format(i));
-      get.addColumn(FAMILY_NAME, QUALIFIER_NAME);
-      if (opts.filterAll) {
-        get.setFilter(new FilterAllFilter());
-      }
-      updateValueSize(table.get(get));
-    }
-  }
-
-  static class SequentialWriteTest extends Test {
-    SequentialWriteTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    void testRow(final int i) throws IOException {
-      byte[] row = format(i);
-      Put put = new Put(row);
-      byte[] value = generateData(this.rand, getValueLength(this.rand));
-      if (opts.useTags) {
-        byte[] tag = generateData(this.rand, TAG_LENGTH);
-        Tag[] tags = new Tag[opts.noOfTags];
-        for (int n = 0; n < opts.noOfTags; n++) {
-          Tag t = new Tag((byte) n, tag);
-          tags[n] = t;
-        }
-        KeyValue kv = new KeyValue(row, FAMILY_NAME, QUALIFIER_NAME, HConstants.LATEST_TIMESTAMP,
-            value, tags);
-        put.add(kv);
-        updateValueSize(kv.getValueLength());
-      } else {
-        put.add(FAMILY_NAME, QUALIFIER_NAME, value);
-        updateValueSize(value.length);
-      }
-      put.setDurability(opts.writeToWAL ? Durability.SYNC_WAL : Durability.SKIP_WAL);
-      table.put(put);
-    }
-  }
-
-  static class FilteredScanTest extends Test {
-    protected static final Log LOG = LogFactory.getLog(FilteredScanTest.class.getName());
-
-    FilteredScanTest(HConnection con, TestOptions options, Status status) {
-      super(con, options, status);
-    }
-
-    @Override
-    void testRow(int i) throws IOException {
-      byte[] value = generateData(this.rand, getValueLength(this.rand));
-      Scan scan = constructScan(value);
-      ResultScanner scanner = null;
-      try {
-        scanner = this.table.getScanner(scan);
-        for (Result r = null; (r = scanner.next()) != null;) {
-          updateValueSize(r);
-        }
-      } finally {
-        if (scanner != null) scanner.close();
-      }
-    }
-
-    protected Scan constructScan(byte[] valuePrefix) throws IOException {
-      FilterList list = new FilterList();
-      Filter filter = new SingleColumnValueFilter(
-          FAMILY_NAME, QUALIFIER_NAME, CompareFilter.CompareOp.EQUAL,
-          new BinaryComparator(valuePrefix)
-      );
-      list.addFilter(filter);
-      if(opts.filterAll) {
-        list.addFilter(new FilterAllFilter());
-      }
-      Scan scan = new Scan();
-      scan.addColumn(FAMILY_NAME, QUALIFIER_NAME);
-      scan.setFilter(list);
-      return scan;
-    }
-  }
-
-  /**
-   * Compute a throughput rate in MB/s.
-   * @param rows Number of records consumed.
-   * @param timeMs Time taken in milliseconds.
-   * @return String value with label, ie '123.76 MB/s'
-   */
-  private static String calculateMbps(int rows, long timeMs, final int valueSize) {
-    // MB/s = ((totalRows * ROW_SIZE_BYTES) / totalTimeMS)
-    //        * 1000 MS_PER_SEC / (1024 * 1024) BYTES_PER_MB
-    BigDecimal rowSize =
-      BigDecimal.valueOf(ROW_LENGTH + valueSize + FAMILY_NAME.length + QUALIFIER_NAME.length);
-    BigDecimal mbps = BigDecimal.valueOf(rows).multiply(rowSize, CXT)
-      .divide(BigDecimal.valueOf(timeMs), CXT).multiply(MS_PER_SEC, CXT)
-      .divide(BYTES_PER_MB, CXT);
-    return FMT.format(mbps) + " MB/s";
-  }
-
-  /*
-   * Format passed integer.
-   * @param number
-   * @return Returns zero-prefixed ROW_LENGTH-byte wide decimal version of passed
-   * number (Does absolute in case number is negative).
-   */
-  public static byte [] format(final int number) {
-    byte [] b = new byte[ROW_LENGTH];
-    int d = Math.abs(number);
-    for (int i = b.length - 1; i >= 0; i--) {
-      b[i] = (byte)((d % 10) + '0');
-      d /= 10;
-    }
-    return b;
-  }
-
-  /*
-   * This method takes some time and is done inline uploading data.  For
-   * example, doing the mapfile test, generation of the key and value
-   * consumes about 30% of CPU time.
-   * @return Generated random value to insert into a table cell.
-   */
-  public static byte[] generateData(final Random r, int length) {
-    byte [] b = new byte [length];
-    int i;
-
-    for(i = 0; i < (length-8); i += 8) {
-      b[i] = (byte) (65 + r.nextInt(26));
-      b[i+1] = b[i];
-      b[i+2] = b[i];
-      b[i+3] = b[i];
-      b[i+4] = b[i];
-      b[i+5] = b[i];
-      b[i+6] = b[i];
-      b[i+7] = b[i];
-    }
-
-    byte a = (byte) (65 + r.nextInt(26));
-    for(; i < length; i++) {
-      b[i] = a;
-    }
-    return b;
-  }
-
-  /**
-   * @deprecated Use {@link #generateData(java.util.Random, int)} instead.
-   * @return Generated random value to insert into a table cell.
-   */
-  @Deprecated
-  public static byte[] generateValue(final Random r) {
-    return generateData(r, DEFAULT_VALUE_LENGTH);
-  }
-
-  static byte [] getRandomRow(final Random random, final int totalRows) {
-    return format(random.nextInt(Integer.MAX_VALUE) % totalRows);
-  }
-
-  static long runOneClient(final Class<? extends Test> cmd, Configuration conf, TestOptions opts,
-    final Status status)
-      throws IOException {
-    status.setStatus("Start " + cmd + " at offset " + opts.startRow + " for " +
-      opts.perClientRunRows + " rows");
-    long totalElapsedTime;
-
-    final Test t;
-    HConnection con = HConnectionManager.createConnection(conf);
-    try {
-      Constructor<? extends Test> constructor =
-        cmd.getDeclaredConstructor(HConnection.class, TestOptions.class, Status.class);
-      t = constructor.newInstance(con, opts, status);
-    } catch (NoSuchMethodException e) {
-      throw new IllegalArgumentException("Invalid command class: " +
-          cmd.getName() + ".  It does not provide a constructor as described by " +
-          "the javadoc comment.  Available constructors are: " +
-          Arrays.toString(cmd.getConstructors()));
-    } catch (Exception e) {
-      throw new IllegalStateException("Failed to construct command class", e);
-    }
-    totalElapsedTime = t.test();
-
-    status.setStatus("Finished " + cmd + " in " + totalElapsedTime +
-      "ms at offset " + opts.startRow + " for " + opts.perClientRunRows + " rows" +
-      " (" + calculateMbps((int)(opts.perClientRunRows * opts.sampleRate), totalElapsedTime,
-          getAverageValueLength(opts)) + ")");
-    con.close();
-    return totalElapsedTime;
-  }
-
-  private static int getAverageValueLength(final TestOptions opts) {
-    return opts.valueRandom? opts.valueSize/2: opts.valueSize;
-  }
-
-  private void runTest(final Class<? extends Test> cmd, TestOptions opts) throws IOException,
-      InterruptedException, ClassNotFoundException {
-    HBaseAdmin admin = null;
-    try {
-      admin = new HBaseAdmin(getConf());
-      checkTable(admin, opts);
-    } finally {
-      if (admin != null) admin.close();
-    }
-    if (opts.nomapred) {
-      doLocalClients(cmd, opts);
-    } else {
-      doMapReduce(cmd, opts);
-    }
-  }
-
-  protected void printUsage() {
-    printUsage(null);
-  }
-
-  protected void printUsage(final String message) {
-    if (message != null && message.length() > 0) {
-      System.err.println(message);
-    }
-    System.err.println("Usage: java " + this.getClass().getName() + " \\");
-    System.err.println("  <OPTIONS> [-D<property=value>]* <command> <nclients>");
-    System.err.println();
-    System.err.println("Options:");
-    System.err.println(" nomapred        Run multiple clients using threads " +
-      "(rather than use mapreduce)");
-    System.err.println(" rows            Rows each client runs. Default: One million");
-    System.err.println(" size            Total size in GiB. Mutually exclusive with --rows. " +
-      "Default: 1.0.");
-    System.err.println(" sampleRate      Execute test on a sample of total " +
-      "rows. Only supported by randomRead. Default: 1.0");
-    System.err.println(" traceRate       Enable HTrace spans. Initiate tracing every N rows. " +
-      "Default: 0");
-    System.err.println(" table           Alternate table name. Default: 'TestTable'");
-    System.err.println(" multiGet        If >0, when doing RandomRead, perform multiple gets " +
-      "instead of single gets. Default: 0");
-    System.err.println(" compress        Compression type to use (GZ, LZO, ...). Default: 'NONE'");
-    System.err.println(" flushCommits    Used to determine if the test should flush the table. " +
-      "Default: false");
-    System.err.println(" writeToWAL      Set writeToWAL on puts. Default: True");
-    System.err.println(" autoFlush       Set autoFlush on htable. Default: False");
-    System.err.println(" oneCon          all the threads share the same connection. Default: False");
-    System.err.println(" presplit        Create presplit table. Recommended for accurate perf " +
-      "analysis (see guide).  Default: disabled");
-    System.err.println(" inmemory        Tries to keep the HFiles of the CF " +
-      "inmemory as far as possible. Not guaranteed that reads are always served " +
-      "from memory.  Default: false");
-    System.err.println(" usetags         Writes tags along with KVs. Use with HFile V3. " +
-      "Default: false");
-    System.err.println(" numoftags       Specify the no of tags that would be needed. " +
-       "This works only if usetags is true.");
-    System.err.println(" filterAll       Helps to filter out all the rows on the server side"
-        + " there by not returning any thing back to the client.  Helps to check the server side"
-        + " performance.  Uses FilterAllFilter internally. ");
-    System.err.println(" latency         Set to report operation latencies. Default: False");
-    System.err.println(" bloomFilter      Bloom filter type, one of " + Arrays.toString(BloomType.values()));
-    System.err.println(" valueSize       Pass value size to use: Default: 1024");
-    System.err.println(" valueRandom     Set if we should vary value size between 0 and " +
-        "'valueSize': Default: Not set.");
-    System.err.println(" period          Report every 'period' rows: " +
-      "Default: opts.perClientRunRows / 10");
-    System.err.println();
-    System.err.println(" Note: -D properties will be applied to the conf used. ");
-    System.err.println("  For example: ");
-    System.err.println("   -Dmapreduce.output.fileoutputformat.compress=true");
-    System.err.println("   -Dmapreduce.task.timeout=60000");
-    System.err.println();
-    System.err.println("Command:");
-    for (CmdDescriptor command : commands.values()) {
-      System.err.println(String.format(" %-15s %s", command.getName(), command.getDescription()));
-    }
-    System.err.println();
-    System.err.println("Args:");
-    System.err.println(" nclients        Integer. Required. Total number of " +
-      "clients (and HRegionServers)");
-    System.err.println("                 running: 1 <= value <= 500");
-    System.err.println("Examples:");
-    System.err.println(" To run a single evaluation client:");
-    System.err.println(" $ bin/hbase " + this.getClass().getName()
-        + " sequentialWrite 1");
-  }
-
-  private static int getNumClients(final int start, final String[] args) {
-    if(start + 1 > args.length) {
-      throw new IllegalArgumentException("must supply the number of clients");
-    }
-    int N = Integer.parseInt(args[start]);
-    if (N < 1) {
-      throw new IllegalArgumentException("Number of clients must be > 1");
-    }
-    return N;
-  }
-
-  public int run(String[] args) throws Exception {
-    // Process command-line args. TODO: Better cmd-line processing
-    // (but hopefully something not as painful as cli options).
-    int errCode = -1;
-    if (args.length < 1) {
-      printUsage();
-      return errCode;
-    }
-
-    try {
-      // MR-NOTE: if you are adding a property that is used to control an operation
-      // like put(), get(), scan(), ... you must also add it as part of the MR 
-      // input, take a look at writeInputFile().
-      // Then you must adapt the LINE_PATTERN input regex,
-      // and parse the argument, take a look at PEInputFormat.getSplits().
-
-      TestOptions opts = new TestOptions();
-
-      for (int i = 0; i < args.length; i++) {
-        String cmd = args[i];
-        if (cmd.equals("-h") || cmd.startsWith("--h")) {
-          printUsage();
-          errCode = 0;
-          break;
+    private Map<String, Object> clientProps(final Set<String> configNames,
+                                            final Map<String, Object> originals) {
+        // iterate all client config names, filter out non-client configs from the original
+        // property map and use the overridden values when they are not specified by users
+        final Map<String, Object> parsed = new HashMap<>();
+        for (final String configName: configNames) {
+            if (originals.containsKey(configName)) {
+                parsed.put(configName, originals.get(configName));
+            }
         }
 
-        final String nmr = "--nomapred";
-        if (cmd.startsWith(nmr)) {
-          opts.nomapred = true;
-          continue;
-        }
-
-        final String rows = "--rows=";
-        if (cmd.startsWith(rows)) {
-          opts.perClientRunRows = Integer.parseInt(cmd.substring(rows.length()));
-          continue;
-        }
-
-        final String sampleRate = "--sampleRate=";
-        if (cmd.startsWith(sampleRate)) {
-          opts.sampleRate = Float.parseFloat(cmd.substring(sampleRate.length()));
-          continue;
-        }
-
-        final String traceRate = "--traceRate=";
-        if (cmd.startsWith(traceRate)) {
-          opts.traceRate = Double.parseDouble(cmd.substring(traceRate.length()));
-          continue;
-        }
-
-        final String table = "--table=";
-        if (cmd.startsWith(table)) {
-          opts.tableName = cmd.substring(table.length());
-          continue;
-        }
-
-        final String compress = "--compress=";
-        if (cmd.startsWith(compress)) {
-          opts.compression = Compression.Algorithm.valueOf(cmd.substring(compress.length()));
-          continue;
-        }
-
-        final String blockEncoding = "--blockEncoding=";
-        if (cmd.startsWith(blockEncoding)) {
-          opts.blockEncoding = DataBlockEncoding.valueOf(cmd.substring(blockEncoding.length()));
-          continue;
-        }
-
-        final String flushCommits = "--flushCommits=";
-        if (cmd.startsWith(flushCommits)) {
-          opts.flushCommits = Boolean.parseBoolean(cmd.substring(flushCommits.length()));
-          continue;
-        }
-
-        final String writeToWAL = "--writeToWAL=";
-        if (cmd.startsWith(writeToWAL)) {
-          opts.writeToWAL = Boolean.parseBoolean(cmd.substring(writeToWAL.length()));
-          continue;
-        }
-
-        final String autoFlush = "--autoFlush=";
-        if (cmd.startsWith(autoFlush)) {
-          opts.autoFlush = Boolean.parseBoolean(cmd.substring(autoFlush.length()));
-          continue;
-        }
-
-        final String onceCon = "--oneCon=";
-        if (cmd.startsWith(onceCon)) {
-          opts.oneCon = Boolean.parseBoolean(cmd.substring(onceCon.length()));
-          continue;
-        }
-
-        final String presplit = "--presplit=";
-        if (cmd.startsWith(presplit)) {
-          opts.presplitRegions = Integer.parseInt(cmd.substring(presplit.length()));
-          continue;
-        }
-
-        final String inMemory = "--inmemory=";
-        if (cmd.startsWith(inMemory)) {
-          opts.inMemoryCF = Boolean.parseBoolean(cmd.substring(inMemory.length()));
-          continue;
-        }
-
-        final String latency = "--latency";
-        if (cmd.startsWith(latency)) {
-          opts.reportLatency = true;
-          continue;
-        }
-
-        final String multiGet = "--multiGet=";
-        if (cmd.startsWith(multiGet)) {
-          opts.multiGet = Integer.parseInt(cmd.substring(multiGet.length()));
-          continue;
-        }
-
-        final String useTags = "--usetags=";
-        if (cmd.startsWith(useTags)) {
-          opts.useTags = Boolean.parseBoolean(cmd.substring(useTags.length()));
-          continue;
-        }
-
-        final String noOfTags = "--nooftags=";
-        if (cmd.startsWith(noOfTags)) {
-          opts.noOfTags = Integer.parseInt(cmd.substring(noOfTags.length()));
-          continue;
-        }
-
-        final String filterOutAll = "--filterAll";
-        if (cmd.startsWith(filterOutAll)) {
-          opts.filterAll = true;
-          continue;
-        }
-
-        final String size = "--size=";
-        if (cmd.startsWith(size)) {
-          opts.size = Float.parseFloat(cmd.substring(size.length()));
-          continue;
-        }
-
-        final String bloomFilter = "--bloomFilter";
-        if (cmd.startsWith(bloomFilter)) {
-          opts.bloomType = BloomType.valueOf(cmd.substring(bloomFilter.length()));
-          continue;
-        }
-
-        final String valueSize = "--valueSize=";
-        if (cmd.startsWith(valueSize)) {
-          opts.valueSize = Integer.parseInt(cmd.substring(valueSize.length()));
-          continue;
-        }
-
-        final String valueRandom = "--valueRandom";
-        if (cmd.startsWith(valueRandom)) {
-          opts.valueRandom = true;
-          continue;
-        }
-
-        final String period = "--period=";
-        if (cmd.startsWith(period)) {
-          opts.period = Integer.parseInt(cmd.substring(period.length()));
-          continue;
-        }
-
-        Class<? extends Test> cmdClass = determineCommandClass(cmd);
-        if (cmdClass != null) {
-          opts.numClientThreads = getNumClients(i + 1, args);
-          if (opts.size != DEFAULT_OPTS.size &&
-            opts.perClientRunRows != DEFAULT_OPTS.perClientRunRows) {
-            throw new IllegalArgumentException(rows + " and " + size +
-              " are mutually exclusive arguments.");
-          }
-          // Calculate how many rows per gig.  If random value size presume that that half the max
-          // is average row size.
-          int rowsPerGB = ONE_GB / (opts.valueRandom? opts.valueSize/2: opts.valueSize);
-          if (opts.size != DEFAULT_OPTS.size) {
-            // total size in GB specified
-            opts.totalRows = (int) opts.size * rowsPerGB;
-            opts.perClientRunRows = opts.totalRows / opts.numClientThreads;
-          } else if (opts.perClientRunRows != DEFAULT_OPTS.perClientRunRows) {
-            // number of rows specified
-            opts.totalRows = opts.perClientRunRows * opts.numClientThreads;
-            opts.size = opts.totalRows / rowsPerGB;
-          }
-          runTest(cmdClass, opts);
-          errCode = 0;
-          break;
-        }
-
-        printUsage();
-        break;
-      }
-    } catch (Exception e) {
-      e.printStackTrace();
+        return parsed;
     }
 
-    return errCode;
-  }
-
-  private Class<? extends Test> determineCommandClass(String cmd) {
-    CmdDescriptor descriptor = commands.get(cmd);
-    return descriptor != null ? descriptor.getCmdClass() : null;
-  }
-
-  public static void main(final String[] args) throws Exception {
-    int res = ToolRunner.run(new PerformanceEvaluation(HBaseConfiguration.create()), args);
-    System.exit(res);
-  }
+    public static void main(final String[] args) {
+        System.out.println(CONFIG.toHtmlTable());
+    }
 }

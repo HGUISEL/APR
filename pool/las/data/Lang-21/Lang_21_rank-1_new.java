@@ -1,1633 +1,1661 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
+ * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
+ * regarding copyright ownership.  The ASF licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
+ * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
  */
+package org.apache.karaf.main;
 
-package org.apache.axis2.databinding.utils;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleActivator;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.BundleException;
+import org.osgi.framework.Constants;
+import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.ServiceReference;
+import org.osgi.framework.launch.Framework;
+import org.osgi.framework.launch.FrameworkFactory;
+import org.osgi.service.startlevel.StartLevel;
 
-import org.apache.axiom.attachments.ByteArrayDataSource;
-import org.apache.axiom.attachments.utils.IOUtils;
-import org.apache.axiom.om.OMAbstractFactory;
-import org.apache.axiom.om.OMElement;
-import org.apache.axiom.om.impl.builder.StAXOMBuilder;
-import org.apache.axiom.om.util.Base64;
-import org.apache.axiom.om.util.StAXUtils;
-import org.apache.axiom.util.stax.XMLStreamReaderUtils;
-import org.apache.axiom.util.stax.XMLStreamWriterUtils;
-import org.apache.axis2.databinding.ADBBean;
-import org.apache.axis2.databinding.ADBException;
-import org.apache.axis2.databinding.i18n.ADBMessages;
-import org.apache.axis2.databinding.types.Day;
-import org.apache.axis2.databinding.types.Duration;
-import org.apache.axis2.databinding.types.Entities;
-import org.apache.axis2.databinding.types.Entity;
-import org.apache.axis2.databinding.types.HexBinary;
-import org.apache.axis2.databinding.types.IDRef;
-import org.apache.axis2.databinding.types.IDRefs;
-import org.apache.axis2.databinding.types.Id;
-import org.apache.axis2.databinding.types.Language;
-import org.apache.axis2.databinding.types.Month;
-import org.apache.axis2.databinding.types.MonthDay;
-import org.apache.axis2.databinding.types.NCName;
-import org.apache.axis2.databinding.types.NMToken;
-import org.apache.axis2.databinding.types.NMTokens;
-import org.apache.axis2.databinding.types.Name;
-import org.apache.axis2.databinding.types.NegativeInteger;
-import org.apache.axis2.databinding.types.NonNegativeInteger;
-import org.apache.axis2.databinding.types.NonPositiveInteger;
-import org.apache.axis2.databinding.types.NormalizedString;
-import org.apache.axis2.databinding.types.Notation;
-import org.apache.axis2.databinding.types.PositiveInteger;
-import org.apache.axis2.databinding.types.Time;
-import org.apache.axis2.databinding.types.Token;
-import org.apache.axis2.databinding.types.URI;
-import org.apache.axis2.databinding.types.UnsignedByte;
-import org.apache.axis2.databinding.types.UnsignedInt;
-import org.apache.axis2.databinding.types.UnsignedLong;
-import org.apache.axis2.databinding.types.UnsignedShort;
-import org.apache.axis2.databinding.types.Year;
-import org.apache.axis2.databinding.types.YearMonth;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
-import javax.activation.DataHandler;
-import javax.xml.namespace.NamespaceContext;
-import javax.xml.namespace.QName;
-import javax.xml.stream.XMLStreamException;
-import javax.xml.stream.XMLStreamReader;
-import javax.xml.stream.XMLStreamWriter;
-import java.io.ByteArrayInputStream;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Array;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.math.BigDecimal;
-import java.math.BigInteger;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
+import java.net.InetAddress;
+import java.net.MalformedURLException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.channels.FileLock;
+import java.security.AccessControlException;
+import java.security.Provider;
+import java.security.Security;
 import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.GregorianCalendar;
+import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.List;
-import java.util.TimeZone;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Random;
+import java.util.StringTokenizer;
+import java.util.TreeMap;
+import java.util.UUID;
+import java.util.jar.Manifest;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.apache.karaf.util.properties.FileLockUtils;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleActivator;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.BundleException;
+import org.osgi.framework.Constants;
+import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.FrameworkListener;
+import org.osgi.framework.ServiceReference;
+import org.osgi.framework.launch.Framework;
+import org.osgi.framework.launch.FrameworkFactory;
+import org.osgi.service.startlevel.StartLevel;
 
 /**
- * Converter methods to go from 1. simple type -> String 2. simple type -> Object 3. String ->
- * simpletype 4. Object list -> array
+ * <p>
+ * This class is the default way to instantiate and execute the framework. It is not
+ * intended to be the only way to instantiate and execute the framework; rather, it is
+ * one example of how to do so. When embedding the framework in a host application,
+ * this class can serve as a simple guide of how to do so. It may even be
+ * worthwhile to reuse some of its property handling capabilities. This class
+ * is completely static and is only intended to start a single instance of
+ * the framework.
+ * </p>
  */
-public class ConverterUtil {
-
-    private static Log log = LogFactory.getLog(ConverterUtil.class);
-
-    private static final String POSITIVE_INFINITY = "INF";
-    private static final String NEGATIVE_INFINITY = "-INF";
-
-    public static final String SYSTEM_PROPERTY_ADB_CONVERTERUTIL = "adb.converterutil";
-
-    private static boolean isCustomClassPresent;
-    private static Class customClass;
-
-    /* String conversion methods */
-    public static String convertToString(int i) {
-        return Integer.toString(i);
-    }
-
-    public static String convertToString(float i) {
-        return Float.toString(i);
-    }
-
-    public static String convertToString(long i) {
-        return Long.toString(i);
-    }
-
-    public static String convertToString(double i) {
-        return Double.toString(i);
-    }
-
-    public static String convertToString(byte i) {
-        return Byte.toString(i);
-    }
-
-    public static String convertToString(char i) {
-        return Character.toString(i);
-    }
-
-    public static String convertToString(short i) {
-        return Short.toString(i);
-    }
-
-    public static String convertToString(boolean i) {
-        return Boolean.toString(i);
-    }
-
-    public static String convertToString(Date value) {
-
-        if (isCustomClassPresent) {
-            // this means user has define a seperate converter util class
-            return invokeToStringMethod(value,Date.class);
-        } else {
-            // lexical form of the date is '-'? yyyy '-' mm '-' dd zzzzzz?
-            Calendar calendar = Calendar.getInstance();
-            calendar.clear();
-            calendar.setTime(value);
-            if (!calendar.isSet(Calendar.ZONE_OFFSET)){
-                calendar.setTimeZone(TimeZone.getDefault());
-            }
-            StringBuffer dateString = new StringBuffer(16);
-            appendDate(dateString, calendar);
-            appendTimeZone(calendar, dateString);
-            return dateString.toString();
-        }
-    }
-
-    public static void appendTimeZone(Calendar calendar, StringBuffer dateString) {
-        int timezoneOffSet = calendar.get(Calendar.ZONE_OFFSET) + calendar.get(Calendar.DST_OFFSET);
-        int timezoneOffSetInMinits = timezoneOffSet / 60000;
-        if (timezoneOffSetInMinits < 0){
-            dateString.append("-");
-            timezoneOffSetInMinits = timezoneOffSetInMinits * -1;
-        } else {
-            dateString.append("+");
-        }
-        int hours = timezoneOffSetInMinits / 60;
-        int minits = timezoneOffSetInMinits % 60;
-
-        if (hours < 10) {
-            dateString.append("0");
-        }
-        dateString.append(hours).append(":");
-
-        if (minits < 10){
-            dateString.append("0");
-        }
-
-        dateString.append(minits);
-    }
-
-    public static void appendDate(StringBuffer dateString, Calendar calendar) {
-
-        int year = calendar.get(Calendar.YEAR);
-
-        if (year < 1000){
-            dateString.append("0");
-        }
-        if (year < 100){
-            dateString.append("0");
-        }
-        if (year < 10) {
-            dateString.append("0");
-        }
-        dateString.append(year).append("-");
-
-        // xml date month is started from 1 and calendar month is
-        // started from 0. so have to add one
-        int month = calendar.get(Calendar.MONTH) + 1;
-        if (month < 10){
-            dateString.append("0");
-        }
-        dateString.append(month).append("-");
-        if (calendar.get(Calendar.DAY_OF_MONTH) < 10){
-            dateString.append("0");
-        }
-        dateString.append(calendar.get(Calendar.DAY_OF_MONTH));
-    }
-
-    private static String invokeToStringMethod(Object value, Class type) {
-
-        try {
-            Method method = customClass.getMethod("convertToString", new Class[]{type});
-            String result = (String) method.invoke(null,new Object[]{value});
-            return result;
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException("can not find the method convertToString("
-                    + type.getName() + ") in converter util class " + customClass.getName(), e);
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException("can not access the method convertToString("
-                    + type.getName() + ") in converter util class " + customClass.getName(), e);
-        } catch (InvocationTargetException e) {
-            throw new RuntimeException("can not invocate the method convertToString("
-                    + type.getName() + ") in converter util class " + customClass.getName(), e);
-        }
-    }
-
-    public static String convertToString(Calendar value) {
-        if (isCustomClassPresent) {
-            return invokeToStringMethod(value,Calendar.class);
-        } else {
-            // lexical form of the calendar is '-'? yyyy '-' mm '-' dd 'T' hh ':' mm ':' ss ('.' s+)? (zzzzzz)?
-            if (value.get(Calendar.ZONE_OFFSET) == -1){
-                value.setTimeZone(TimeZone.getDefault());
-            }
-            StringBuffer dateString = new StringBuffer(28);
-            appendDate(dateString, value);
-            dateString.append("T");
-            //adding hours
-            appendTime(value, dateString);
-            appendTimeZone(value, dateString);
-            return dateString.toString();
-        }
-    }
-
-    public static void appendTime(Calendar value, StringBuffer dateString) {
-        if (value.get(Calendar.HOUR_OF_DAY) < 10) {
-            dateString.append("0");
-        }
-        dateString.append(value.get(Calendar.HOUR_OF_DAY)).append(":");
-        if (value.get(Calendar.MINUTE) < 10) {
-            dateString.append("0");
-        }
-        dateString.append(value.get(Calendar.MINUTE)).append(":");
-        if (value.get(Calendar.SECOND) < 10) {
-            dateString.append("0");
-        }
-        dateString.append(value.get(Calendar.SECOND)).append(".");
-        if (value.get(Calendar.MILLISECOND) < 10) {
-            dateString.append("0");
-        }
-        if (value.get(Calendar.MILLISECOND) < 100) {
-            dateString.append("0");
-        }
-        dateString.append(value.get(Calendar.MILLISECOND));
-    }
-
-    public static String convertToString(Day o) {
-        return o.toString();
-    }
-
-    public static String convertToString(YearMonth o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Year o) {
-        return o.toString();
-    }
-
-    public static String convertToString(HexBinary o) {
-        return o.toString();
-    }
-
-    public static String convertToString(MonthDay o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Time o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Byte o) {
-        return o.toString();
-    }
-
-    public static String convertToString(BigInteger o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Integer o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Long o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Short o) {
-        return o.toString();
-    }
-
-    public static String convertToString(UnsignedByte o) {
-        return o.toString();
-    }
-
-    public static String convertToString(UnsignedInt o) {
-        return o.toString();
-    }
-
-    public static String convertToString(UnsignedLong o) {
-        return o.toString();
-    }
-
-    public static String convertToString(QName o) {
-        if (o != null) {
-            return o.getLocalPart();
-        } else {
-            return "";
-        }
-    }
-
-    public static String convertToString(Object o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Double o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Duration o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Float o) {
-        return o.toString();
-    }
-
-    public static String convertToString(Month o) {
-        return o.toString();
-    }
-
-    public static String convertToString(byte[] bytes) {
-        return Base64.encode(bytes);
-    }
-
-    public static String convertToString(javax.activation.DataHandler handler) {
-        return getStringFromDatahandler(handler);
-    }
-
-    /* ################################################################################ */
-    /* String to java type conversions
-       These methods have a special signature structure
-       <code>convertTo</code> followed by the schema type name
-       Say for int, convertToint(String) is the converter method
-
-       Not very elegant but it seems to be the only way!
-
-    */
-
-
-    public static int convertToInt(String s) {
-        if ((s == null) || s.equals("")){
-            return Integer.MIN_VALUE;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return Integer.parseInt(s);
-    }
-
-    public static BigDecimal convertToBigDecimal(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new BigDecimal(s);
-    }
-
-    public static double convertToDouble(String s) {
-        if ((s == null) || s.equals("")){
-            return Double.NaN;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        if (POSITIVE_INFINITY.equals(s)) {
-            return Double.POSITIVE_INFINITY;
-        } else if (NEGATIVE_INFINITY.equals(s)) {
-            return Double.NEGATIVE_INFINITY;
-        }
-        return Double.parseDouble(s);
-    }
-
-    public static BigDecimal convertToDecimal(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new BigDecimal(s);
-    }
-
-    public static float convertToFloat(String s) {
-        if ((s == null) || s.equals("")){
-            return Float.NaN;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        if (POSITIVE_INFINITY.equals(s)) {
-            return Float.POSITIVE_INFINITY;
-        } else if (NEGATIVE_INFINITY.equals(s)) {
-            return Float.NEGATIVE_INFINITY;
-        }
-        return Float.parseFloat(s);
-    }
-
-    public static String convertToString(String s) {
-        return s;
-    }
-
-    public static long convertToLong(String s) {
-        if ((s == null) || s.equals("")){
-            return Long.MIN_VALUE;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return Long.parseLong(s);
-    }
-
-    public static short convertToShort(String s) {
-        if ((s == null) || s.equals("")){
-            return Short.MIN_VALUE;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return Short.parseShort(s);
-    }
-
-    public static boolean convertToBoolean(String s) {
-
-        boolean returnValue = false;
-        if ((s != null) && (s.length() > 0)) {
-            if ("1".equals(s) || s.toLowerCase().equals("true")) {
-                returnValue = true;
-            } else if (!"0".equals(s) && !s.toLowerCase().equals("false")) {
-                throw new RuntimeException("in valid string -" + s + " for boolean value");
-            }
-        }
-        return returnValue;
-    }
-
-    public static String convertToAnySimpleType(String s) {
-        return s;
-    }
-
-    public static OMElement convertToAnyType(String s) {
-        try {
-            XMLStreamReader r = StAXUtils.createXMLStreamReader(
-                    new ByteArrayInputStream(s.getBytes()));
-            StAXOMBuilder builder = new StAXOMBuilder(OMAbstractFactory.getOMFactory(), r);
-            return builder.getDocumentElement();
-        } catch (XMLStreamException e) {
-            return null;
-        }
-    }
-
-    public static YearMonth convertToGYearMonth(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new YearMonth(s);
-    }
-
-    public static MonthDay convertToGMonthDay(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new MonthDay(s);
-    }
-
-    public static Year convertToGYear(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Year(s);
-    }
-
-    public static Month convertToGMonth(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Month(s);
-    }
-
-    public static Day convertToGDay(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Day(s);
-    }
-
-    public static Duration convertToDuration(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Duration(s);
-    }
-
-
-    public static HexBinary convertToHexBinary(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new HexBinary(s);
-    }
-
-    public static javax.activation.DataHandler convertToBase64Binary(String s) {
-        // reusing the byteArrayDataSource from the Axiom classes
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        ByteArrayDataSource byteArrayDataSource = new ByteArrayDataSource(
-                Base64.decode(s)
-        );
-        return new DataHandler(byteArrayDataSource);
-    }
-
-    public static javax.activation.DataHandler convertToDataHandler(String s) {
-        return convertToBase64Binary(s);
-    }
+public class Main {
+    /**
+     * The default name used for the system properties file.
+     */
+    public static final String SYSTEM_PROPERTIES_FILE_NAME = "system.properties";
+    /**
+     * The default name used for the configuration properties file.
+     */
+    public static final String CONFIG_PROPERTIES_FILE_NAME = "config.properties";
+    /**
+     * The default name used for the startup properties file.
+     */
+    public static final String STARTUP_PROPERTIES_FILE_NAME = "startup.properties";
+    /**
+     * The property name prefix for the launcher's auto-install property.
+     */
+    public static final String PROPERTY_AUTO_INSTALL = "karaf.auto.install";
+    /**
+     * The property for auto-discovering the bundles
+     */
+    public static final String PROPERTY_AUTO_START = "karaf.auto.start";
+    /**
+     * The system property for specifying the Karaf home directory.  The home directory
+     * hold the binary install of Karaf.
+     */
+    public static final String PROP_KARAF_HOME = "karaf.home";
+    /**
+     * The environment variable for specifying the Karaf home directory.  The home directory
+     * hold the binary install of Karaf.
+     */
+    public static final String ENV_KARAF_HOME = "KARAF_HOME";
+    /**
+     * The system property for specifying the Karaf base directory.  The base directory
+     * holds the configuration and data for a Karaf instance.
+     */
+    public static final String PROP_KARAF_BASE = "karaf.base";
+    /**
+     * The environment variable for specifying the Karaf base directory.  The base directory
+     * holds the configuration and data for a Karaf instance.
+     */
+    public static final String ENV_KARAF_BASE = "KARAF_BASE";
+    /**
+     * The system property for specifying the Karaf data directory. The data directory
+     * holds the bundles data and cache for a Karaf instance.
+     */
+    public static final String PROP_KARAF_DATA = "karaf.data";
+    /**
+     * The environment variable for specifying the Karaf data directory. The data directory
+     * holds the bundles data and cache for a Karaf instance.
+     */
+    public static final String ENV_KARAF_DATA = "KARAF_DATA";
+    /**
+     * The system property for specifying the Karaf etc directory. The etc directory
+     * holds the configuration files for a Karaf instance.
+     */
+    public static final String PROP_KARAF_ETC = "karaf.etc";
+    /**
+     * The environment variable for specifying the Karaf etc directory. The etc directory
+     * holds the configuration files for a Karaf instance.
+     */
+    public static final String ENV_KARAF_ETC = "KARAF_ETC";
+    /**
+     * The system property for specifying the Karaf data directory. The data directory
+     * holds the bundles data and cache for a Karaf instance.
+     */
+    public static final String PROP_KARAF_INSTANCES = "karaf.instances";
+    /**
+     * The system property for specifying the Karaf data directory. The data directory
+     * holds the bundles data and cache for a Karaf instance.
+     */
+    public static final String ENV_KARAF_INSTANCES = "KARAF_INSTANCES";
+    /**
+     * The system property for holding the Karaf version.
+     */
+    public static final String PROP_KARAF_VERSION = "karaf.version";
 
     /**
-     * Converts a given string into a date. Code from Axis1 DateDeserializer.
-     *
-     * @param source
-     * @return Returns Date.
+     * Config property which identifies directories which contain bundles to be loaded by SMX
      */
-    public static Date convertToDate(String source) {
+    public static final String BUNDLE_LOCATIONS = "bundle.locations";
 
-        // the lexical form of the date is '-'? yyyy '-' mm '-' dd zzzzzz?
-        if ((source == null) || source.trim().equals("")) {
-            return null;
+    /**
+     * Config property that indicates we want to convert bundles locations
+     * to Maven style URLs
+     */
+    public static final String PROPERTY_CONVERT_TO_MAVEN_URL = "karaf.maven.convert";
+
+    /**
+     * If a lock should be used before starting the runtime
+     */
+    public static final String PROPERTY_USE_LOCK = "karaf.lock";
+
+    /**
+     * The lock implementation
+     */
+    public static final String PROPERTY_LOCK_CLASS = "karaf.lock.class";
+
+    public static final String PROPERTY_LOCK_DELAY = "karaf.lock.delay";
+
+    public static final String PROPERTY_LOCK_LEVEL = "karaf.lock.level";
+
+    public static final String DEFAULT_REPO = "karaf.default.repository";
+    
+    public static final String KARAF_FRAMEWORK = "karaf.framework";
+
+    public static final String KARAF_FRAMEWORK_FACTORY = "karaf.framework.factory";
+
+    public static final String KARAF_SHUTDOWN_TIMEOUT = "karaf.shutdown.timeout";
+
+    public static final String KARAF_SHUTDOWN_PORT = "karaf.shutdown.port";
+
+    public static final String KARAF_SHUTDOWN_HOST = "karaf.shutdown.host";
+
+    public static final String KARAF_SHUTDOWN_PORT_FILE = "karaf.shutdown.port.file";
+
+    public static final String KARAF_SHUTDOWN_COMMAND = "karaf.shutdown.command";
+
+    public static final String KARAF_SHUTDOWN_PID_FILE = "karaf.shutdown.pid.file";
+
+    public static final String DEFAULT_SHUTDOWN_COMMAND = "SHUTDOWN";
+
+    public static final String PROPERTY_LOCK_CLASS_DEFAULT = SimpleFileLock.class.getName();
+
+    public static final String INCLUDES_PROPERTY = "${includes}"; // mandatory includes
+
+    public static final String OPTIONALS_PROPERTY = "${optionals}"; // optionals includes
+
+    public static final String KARAF_ACTIVATOR = "Karaf-Activator";
+
+    public static final String SECURITY_PROVIDERS = "org.apache.karaf.security.providers";
+
+    public static final String KARAF_STARTUP_MESSAGE = "karaf.startup.message";
+    
+    private static final String KARAF_DELAY_CONSOLE = "karaf.delay.console";
+
+	public static final String OVERRIDE_PREFIX = "karaf.override.";
+
+    public static final String DEFAULT_LOCK_DELAY = "1000";
+
+    Logger LOG = Logger.getLogger(this.getClass().getName());
+
+    private File karafHome;
+    private File karafBase;
+    private File karafData;
+    private File karafEtc;
+    private File karafInstances;
+    private Properties configProps = null;
+    private Framework framework = null;
+    private final String[] args;
+    private int exitCode;
+    private Lock lock;
+    private int defaultStartLevel = 100;
+    private int lockStartLevel = 1;
+    private int lockDelay = Integer.parseInt( DEFAULT_LOCK_DELAY );
+    private int shutdownTimeout = 5 * 60 * 1000;
+    private boolean exiting = false;
+    private ShutdownCallback shutdownCallback;
+    private List<BundleActivator> karafActivators = new ArrayList<BundleActivator>();
+    private Object startLevelLock = new Object();
+    private StartLevelListener startLevelListener;
+
+    public Main(String[] args) {
+        this.args = args;
+    }
+
+    public void setShutdownCallback(ShutdownCallback shutdownCallback) {
+        this.shutdownCallback = shutdownCallback;
+    }
+
+    public void launch() throws Exception {
+        karafHome = Utils.getKarafHome();
+        karafBase = Utils.getKarafDirectory(Main.PROP_KARAF_BASE, Main.ENV_KARAF_BASE, karafHome, false, true);
+        karafData = Utils.getKarafDirectory(Main.PROP_KARAF_DATA, Main.ENV_KARAF_DATA, new File(karafBase, "data"), true, true);
+        karafEtc = Utils.getKarafDirectory(Main.PROP_KARAF_ETC, Main.ENV_KARAF_ETC, new File(karafBase, "etc"), true, true);
+        karafInstances = Utils.getKarafDirectory(Main.PROP_KARAF_INSTANCES, Main.ENV_KARAF_INSTANCES, new File(karafHome, "instances"), false, false);
+
+        Package p = Package.getPackage("org.apache.karaf.main");
+        if (p != null && p.getImplementationVersion() != null) {
+            System.setProperty(PROP_KARAF_VERSION, p.getImplementationVersion());
         }
-        source = source.trim();
-        boolean bc = false;
-        if (source.startsWith("-")) {
-            source = source.substring(1);
-            bc = true;
-        }
+        System.setProperty(PROP_KARAF_HOME, karafHome.getPath());
+        System.setProperty(PROP_KARAF_BASE, karafBase.getPath());
+        System.setProperty(PROP_KARAF_DATA, karafData.getPath());
+        System.setProperty(PROP_KARAF_INSTANCES, karafInstances.getPath());
 
-        int year = 0;
-        int month = 0;
-        int day = 0;
-        int timeZoneOffSet = TimeZone.getDefault().getRawOffset();
+        // Load system properties.
+        loadSystemProperties(karafEtc);
 
-        if (source.length() >= 10) {
-            //first 10 numbers must give the year
-            if ((source.charAt(4) != '-') || (source.charAt(7) != '-')){
-                throw new RuntimeException("invalid date format (" + source + ") with out - s at correct place ");
+        updateInstancePid();
+
+        // Read configuration properties.
+        configProps = loadConfigProperties();
+        BootstrapLogManager.setProperties(configProps);
+        LOG.addHandler(BootstrapLogManager.getDefaultHandler());
+        
+        // Copy framework properties from the system properties.
+        Main.copySystemProperties(configProps);
+
+        File cleanAllIndicatorFile = new File(karafData, "clean_all");
+        File cleanCacheIndicatorFile = new File(karafData, "clean_cache");
+        if (Boolean.getBoolean("karaf.clean.all") || cleanAllIndicatorFile.exists()) {
+            if (cleanAllIndicatorFile.exists()) {
+                cleanAllIndicatorFile.delete();
             }
-            year = Integer.parseInt(source.substring(0,4));
-            month = Integer.parseInt(source.substring(5,7));
-            day = Integer.parseInt(source.substring(8,10));
-
-            if (source.length() > 10) {
-                String restpart = source.substring(10);
-                if (restpart.startsWith("Z")) {
-                    // this is a gmt time zone value
-                    timeZoneOffSet = 0;
-                } else if (restpart.startsWith("+") || restpart.startsWith("-")) {
-                    // this is a specific time format string
-                    if (restpart.charAt(3) != ':'){
-                        throw new RuntimeException("invalid time zone format (" + source
-                                + ") without : at correct place");
-                    }
-                    int hours = Integer.parseInt(restpart.substring(1,3));
-                    int minits = Integer.parseInt(restpart.substring(4,6));
-                    timeZoneOffSet = ((hours * 60) + minits) * 60000;
-                    if (restpart.startsWith("-")){
-                        timeZoneOffSet = timeZoneOffSet * -1;
-                    }
-                } else {
-                    throw new RuntimeException("In valid string sufix");
-                }
-            }
+            File karafHome = Utils.getKarafHome();
+            File karafBase = Utils.getKarafDirectory(Main.PROP_KARAF_BASE, Main.ENV_KARAF_BASE, karafHome, false, true);
+            File karafData = Utils.getKarafDirectory(Main.PROP_KARAF_DATA, Main.ENV_KARAF_DATA, new File(karafBase, "data"), true, true);
+            Utils.deleteDirectory(karafData);
         } else {
-            throw new RuntimeException("In valid string to parse");
-        }
-
-        Calendar calendar = Calendar.getInstance();
-        calendar.clear();
-        calendar.setLenient(false);
-        calendar.set(Calendar.YEAR, year);
-        //xml month stars from the 1 and calendar month is starts with 0
-        calendar.set(Calendar.MONTH, month - 1);
-        calendar.set(Calendar.DAY_OF_MONTH, day);
-        calendar.set(Calendar.ZONE_OFFSET, timeZoneOffSet);
-        calendar.set(Calendar.DST_OFFSET, 0);
-        calendar.getTimeInMillis();
-        if (bc){
-            calendar.set(Calendar.ERA, GregorianCalendar.BC);
-        }
-
-        return calendar.getTime();
-
-    }
-
-    public static Time convertToTime(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Time(s);
-    }
-
-    public static Token convertToToken(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Token(s);
-    }
-
-
-    public static NormalizedString convertToNormalizedString(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new NormalizedString(s);
-    }
-
-    public static UnsignedLong convertToUnsignedLong(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new UnsignedLong(s);
-    }
-
-    public static UnsignedInt convertToUnsignedInt(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new UnsignedInt(s);
-    }
-
-    public static UnsignedShort convertToUnsignedShort(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new UnsignedShort(s);
-    }
-
-    public static UnsignedByte convertToUnsignedByte(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new UnsignedByte(s);
-    }
-
-    public static NonNegativeInteger convertToNonNegativeInteger(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new NonNegativeInteger(s);
-    }
-
-    public static NegativeInteger convertToNegativeInteger(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new NegativeInteger(s);
-    }
-
-    public static PositiveInteger convertToPositiveInteger(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new PositiveInteger(s);
-    }
-
-    public static NonPositiveInteger convertToNonPositiveInteger(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new NonPositiveInteger(s);
-    }
-
-    public static Name convertToName(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Name(s);
-    }
-
-    public static NCName convertToNCName(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new NCName(s);
-    }
-
-    public static Id convertToID(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Id(s);
-    }
-
-    public static Id convertToId(String s) {
-        return convertToID(s);
-    }
-
-    public static Language convertToLanguage(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Language(s);
-    }
-
-    public static NMToken convertToNMTOKEN(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new NMToken(s);
-    }
-
-    public static NMTokens convertToNMTOKENS(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new NMTokens(s);
-    }
-
-    public static Notation convertToNOTATION(String s) {
-        return null; //todo Need to fix this
-        // return new Notation(s);
-    }
-
-    public static Entity convertToENTITY(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Entity(s);
-    }
-
-    public static Entities convertToENTITIES(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new Entities(s);
-    }
-
-    public static IDRef convertToIDREF(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new IDRef(s);
-    }
-
-    public static IDRefs convertToIDREFS(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return new IDRefs(s);
-    }
-
-    public static URI convertToURI(String s){
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        return convertToAnyURI(s);
-    }
-
-    public static URI convertToAnyURI(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        try {
-            return new URI(s);
-        } catch (URI.MalformedURIException e) {
-            throw new ObjectConversionException(
-                    ADBMessages.getMessage("converter.cannotParse", s), e);
-        }
-    }
-
-    public static BigInteger convertToInteger(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return new BigInteger(s);
-    }
-
-    public static BigInteger convertToBigInteger(String s) {
-        if ((s == null) || s.equals("")){
-            return null;
-        }
-        if (s.startsWith("+")) {
-            s = s.substring(1);
-        }
-        return convertToInteger(s);
-    }
-
-    public static byte convertToByte(String s) {
-        if ((s == null) || s.equals("")){
-            return Byte.MIN_VALUE;
-        }
-        return Byte.parseByte(s);
-    }
-
-    /**
-     * Code from Axis1 code base Note - We only follow the convention in the latest schema spec
-     *
-     * @param source
-     * @return Returns Calendar.
-     */
-    public static Calendar convertToDateTime(String source) {
-
-        if ((source == null) || source.trim().equals("")) {
-            return null;
-        }
-        source = source.trim();
-        // the lexical representation of the date time as follows
-        // '-'? yyyy '-' mm '-' dd 'T' hh ':' mm ':' ss ('.' s+)? (zzzzzz)?
-        Date date = null;
-        Calendar calendar = Calendar.getInstance();
-        calendar.clear();
-        calendar.setLenient(false);
-
-
-        if (source.startsWith("-")) {
-            source = source.substring(1);
-            calendar.set(Calendar.ERA, GregorianCalendar.BC);
-        }
-
-        int year = 0;
-        int month = 0;
-        int day = 0;
-        int hour = 0;
-        int minite = 0;
-        int second = 0;
-        long miliSecond = 0;
-        int timeZoneOffSet = TimeZone.getDefault().getRawOffset();
-
-
-        if ((source != null) && (source.length() >= 19)) {
-            if ((source.charAt(4) != '-') ||
-                    (source.charAt(7) != '-') ||
-                    (source.charAt(10) != 'T') ||
-                    (source.charAt(13) != ':') ||
-                    (source.charAt(16) != ':')) {
-                throw new RuntimeException("invalid date format (" + source + ") with out - s at correct place ");
-            }
-            year = Integer.parseInt(source.substring(0, 4));
-            month = Integer.parseInt(source.substring(5, 7));
-            day = Integer.parseInt(source.substring(8, 10));
-            hour = Integer.parseInt(source.substring(11, 13));
-            minite = Integer.parseInt(source.substring(14, 16));
-            second = Integer.parseInt(source.substring(17, 19));
-
-            int milliSecondPartLength = 0;
-
-            if (source.length() > 19)  {
-                String rest = source.substring(19);
-                if (rest.startsWith(".")) {
-                    // i.e this have the ('.'s+) part
-                    if (rest.endsWith("Z")) {
-                        // this is in gmt time zone
-                        timeZoneOffSet = 0;
-                        calendar.setTimeZone(TimeZone.getTimeZone("GMT"));
-                        miliSecond = Integer.parseInt(rest.substring(1, rest.lastIndexOf("Z")));
-                        milliSecondPartLength = rest.substring(1,rest.lastIndexOf("Z")).trim().length();
-                    } else if ((rest.lastIndexOf("+") > 0) || (rest.lastIndexOf("-") > 0)) {
-                        // this is given in a general time zione
-                        String timeOffSet = null;
-                        if (rest.lastIndexOf("+") > 0) {
-                            timeOffSet = rest.substring(rest.lastIndexOf("+") + 1);
-                            miliSecond = Integer.parseInt(rest.substring(1, rest.lastIndexOf("+")));
-                            milliSecondPartLength = rest.substring(1, rest.lastIndexOf("+")).trim().length();
-                            // we keep +1 or -1 to finally calculate the value
-                            timeZoneOffSet = 1;
-
-                        } else if (rest.lastIndexOf("-") > 0) {
-                            timeOffSet = rest.substring(rest.lastIndexOf("-") + 1);
-                            miliSecond = Integer.parseInt(rest.substring(1, rest.lastIndexOf("-")));
-                            milliSecondPartLength = rest.substring(1, rest.lastIndexOf("-")).trim().length();
-                            // we keep +1 or -1 to finally calculate the value
-                            timeZoneOffSet = -1;
-                        }
-                        if (timeOffSet.charAt(2) != ':') {
-                            throw new RuntimeException("invalid time zone format (" + source
-                                    + ") without : at correct place");
-                        }
-                        int hours = Integer.parseInt(timeOffSet.substring(0, 2));
-                        int minits = Integer.parseInt(timeOffSet.substring(3, 5));
-                        timeZoneOffSet = ((hours * 60) + minits) * 60000 * timeZoneOffSet;
-
-                    } else {
-                        // i.e it does not have time zone
-                        miliSecond = Integer.parseInt(rest.substring(1));
-                        milliSecondPartLength = rest.substring(1).trim().length();
-                    }
-
-                } else {
-                    if (rest.startsWith("Z")) {
-                        calendar.setTimeZone(TimeZone.getTimeZone("GMT"));
-                        // this is in gmt time zone
-                        timeZoneOffSet = 0;
-                    } else if (rest.startsWith("+") || rest.startsWith("-")) {
-                        // this is given in a general time zione
-                        if (rest.charAt(3) != ':') {
-                            throw new RuntimeException("invalid time zone format (" + source
-                                    + ") without : at correct place");
-                        }
-                        int hours = Integer.parseInt(rest.substring(1, 3));
-                        int minits = Integer.parseInt(rest.substring(4, 6));
-                        timeZoneOffSet = ((hours * 60) + minits) * 60000;
-                        if (rest.startsWith("-")) {
-                            timeZoneOffSet = timeZoneOffSet * -1;
-                        }
-                    } else {
-                        throw new NumberFormatException("in valid time zone attribute");
-                    }
+            if (Boolean.getBoolean("karaf.clean.cache") || cleanCacheIndicatorFile.exists()) {
+                if (cleanCacheIndicatorFile.exists()) {
+                    cleanCacheIndicatorFile.delete();
                 }
+                File karafHome = Utils.getKarafHome();
+                File karafBase = Utils.getKarafDirectory(Main.PROP_KARAF_BASE, Main.ENV_KARAF_BASE, karafHome, false, true);
+                File karafData = Utils.getKarafDirectory(Main.PROP_KARAF_DATA, Main.ENV_KARAF_DATA, new File(karafBase, "data"), true, true);
+                File karafCache = Utils.getKarafDirectory(Main.PROP_KARAF_DATA, Main.ENV_KARAF_DATA, new File(karafData, "cache"), true, true);
+                Utils.deleteDirectory(karafCache);
             }
-            calendar.set(Calendar.YEAR, year);
-            // xml month is started from 1 and calendar month is started from 0
-            calendar.set(Calendar.MONTH, month - 1);
-            calendar.set(Calendar.DAY_OF_MONTH, day);
-            calendar.set(Calendar.HOUR_OF_DAY, hour);
-            calendar.set(Calendar.MINUTE, minite);
-            calendar.set(Calendar.SECOND, second);
-            if (milliSecondPartLength != 3){
-                // milisecond part represenst the fraction of the second so we have to
-                // find the fraction and multiply it by 1000. So if milisecond part
-                // has three digits nothing required
-                miliSecond = miliSecond * 1000;
-                for (int i = 0; i < milliSecondPartLength; i++) {
-                    miliSecond = miliSecond / 10;
-                }
-            }
-            calendar.set(Calendar.MILLISECOND, (int)miliSecond);
-            calendar.set(Calendar.ZONE_OFFSET, timeZoneOffSet);
-            calendar.set(Calendar.DST_OFFSET, 0);
-
-
-
-        } else {
-            throw new NumberFormatException("date string can not be less than 19 characters");
         }
 
-        return calendar;
-    }
+        boolean delayConsoleStart = Boolean.parseBoolean(configProps.getProperty(KARAF_DELAY_CONSOLE, "false"));
+        System.setProperty(KARAF_DELAY_CONSOLE, new Boolean(delayConsoleStart).toString());
 
-    /**
-     * Code from Axis1 code base
-     *
-     * @param source
-     * @return Returns QName.
-     */
-    public static QName convertToQName(String source, String nameSpaceuri) {
-        source = source.trim();
-        int colon = source.lastIndexOf(":");
-        //context.getNamespaceURI(source.substring(0, colon));
-        String localPart = colon < 0 ? source : source.substring(colon + 1);
-        String perfix = colon <= 0 ? "" : source.substring(0, colon);
-        return new QName(nameSpaceuri, localPart, perfix);
-    }
-
-    /* ################################################################# */
-
-    /* java Primitive types to Object conversion methods */
-    public static Object convertToObject(String i) {
-        return i;
-    }
-
-    public static Object convertToObject(boolean i) {
-        return Boolean.valueOf(i);
-    }
-
-    public static Object convertToObject(double i) {
-        return new Double(i);
-    }
-
-    public static Object convertToObject(byte i) {
-        return new Byte(i);
-    }
-
-    public static Object convertToObject(char i) {
-        return new Character(i);
-    }
-
-    public static Object convertToObject(short i) {
-        return new Short(i);
-    }
-
-    /* list to array conversion methods */
-
-    public static Object convertToArray(Class baseArrayClass, String[] valueArray) {
-        //create a list using the string array
-        List valuesList = new ArrayList(valueArray.length);
-        for (int i = 0; i < valueArray.length; i++) {
-            valuesList.add(valueArray[i]);
-
+        if (delayConsoleStart) {
+        	System.out.println(configProps.getProperty(KARAF_STARTUP_MESSAGE, "Apache Karaf starting up. Press Enter to open shell now ..."));
         }
 
-        return convertToArray(baseArrayClass, valuesList);
-    }
+        ClassLoader classLoader = createClassLoader(configProps);
 
+        processSecurityProperties(configProps);
 
-    /**
-     * @param baseArrayClass
-     * @param objectList     -> for primitive type array conversion we assume the content to be
-     *                       strings!
-     * @return Returns Object.
-     */
-    public static Object convertToArray(Class baseArrayClass, List objectList) {
-        int listSize = objectList.size();
-        Object returnArray = null;
-        if (int.class.equals(baseArrayClass)) {
-            int[] array = new int[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = Integer.parseInt(o.toString());
-                } else {
-                    array[i] = Integer.MIN_VALUE;
-                }
-            }
-            returnArray = array;
-        } else if (float.class.equals(baseArrayClass)) {
-            float[] array = new float[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = Float.parseFloat(o.toString());
-                } else {
-                    array[i] = Float.NaN;
-                }
-            }
-            returnArray = array;
-        } else if (short.class.equals(baseArrayClass)) {
-            short[] array = new short[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = Short.parseShort(o.toString());
-                } else {
-                    array[i] = Short.MIN_VALUE;
-                }
-            }
-            returnArray = array;
-        } else if (byte.class.equals(baseArrayClass)) {
-            byte[] array = new byte[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = Byte.parseByte(o.toString());
-                } else {
-                    array[i] = Byte.MIN_VALUE;
-                }
-            }
-            returnArray = array;
-        } else if (long.class.equals(baseArrayClass)) {
-            long[] array = new long[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = Long.parseLong(o.toString());
-                } else {
-                    array[i] = Long.MIN_VALUE;
-                }
-            }
-            returnArray = array;
-        } else if (boolean.class.equals(baseArrayClass)) {
-            boolean[] array = new boolean[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = o.toString().equalsIgnoreCase("true");
-                }
-            }
-            returnArray = array;
-        } else if (char.class.equals(baseArrayClass)) {
-            char[] array = new char[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = o.toString().toCharArray()[0];
-                }
-            }
-            returnArray = array;
-        } else if (double.class.equals(baseArrayClass)) {
-            double[] array = new double[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    array[i] = Double.parseDouble(o.toString());
-                } else {
-                    array[i] = Double.NaN;
-                }
-            }
-            returnArray = array;
-        } else if (Calendar.class.equals(baseArrayClass)) {
-            Calendar[] array = new Calendar[listSize];
-            for (int i = 0; i < listSize; i++) {
-                Object o = objectList.get(i);
-                if (o != null) {
-                    if (o instanceof String){
-                        array[i] = ConverterUtil.convertToDateTime(o.toString());
-                    } else if (o instanceof Calendar) {
-                        array[i] = (Calendar) o;
-                    }
-                }
-            }
-            returnArray = array;
-        } else {
-            returnArray = Array.newInstance(baseArrayClass, listSize);
-            ConvertToArbitraryObjectArray(returnArray, baseArrayClass, objectList);
-        }
-        return returnArray;
-    }
-
-    /**
-     * @param returnArray
-     * @param baseArrayClass
-     * @param objectList
-     */
-    private static void ConvertToArbitraryObjectArray(Object returnArray,
-                                                      Class baseArrayClass,
-                                                      List objectList) {
-        if (!(ADBBean.class.isAssignableFrom(baseArrayClass))) {
+        if (configProps.getProperty(Constants.FRAMEWORK_STORAGE) == null) {
+            File storage = new File(karafData.getPath(), "cache");
             try {
-                for (int i = 0; i < objectList.size(); i++) {
-                    Object o = objectList.get(i);
-                    if (o == null) {
-                        // if the string is null the object value must be null
-                        Array.set(returnArray, i, null);
-                    } else {
-                        Array.set(returnArray, i, getObjectForClass(
-                                baseArrayClass,
-                                o.toString()));
-                    }
+                storage.mkdirs();
+            } catch (SecurityException se) {
+                throw new Exception(se.getMessage()); 
+            }
+            configProps.setProperty(Constants.FRAMEWORK_STORAGE, storage.getAbsolutePath());
+        }
+        
+        defaultStartLevel = Integer.parseInt(configProps.getProperty(Constants.FRAMEWORK_BEGINNING_STARTLEVEL));
+        System.setProperty(Constants.FRAMEWORK_BEGINNING_STARTLEVEL, Integer.toString(this.defaultStartLevel));
+        lockStartLevel = Integer.parseInt(configProps.getProperty(PROPERTY_LOCK_LEVEL, Integer.toString(lockStartLevel)));
+        lockDelay = Integer.parseInt(configProps.getProperty(PROPERTY_LOCK_DELAY, DEFAULT_LOCK_DELAY));
+        configProps.setProperty(Constants.FRAMEWORK_BEGINNING_STARTLEVEL, Integer.toString(lockStartLevel));
+        shutdownTimeout = Integer.parseInt(configProps.getProperty(KARAF_SHUTDOWN_TIMEOUT, Integer.toString(shutdownTimeout)));
+        // Start up the OSGI framework
 
+        String factoryClass = configProps.getProperty(KARAF_FRAMEWORK_FACTORY);
+        if (factoryClass == null) {
+            InputStream is = classLoader.getResourceAsStream("META-INF/services/" + FrameworkFactory.class.getName());
+            BufferedReader br = new BufferedReader(new InputStreamReader(is, "UTF-8"));
+            factoryClass = br.readLine();
+            br.close();
+        }
+        FrameworkFactory factory = (FrameworkFactory) classLoader.loadClass(factoryClass).newInstance();
+        framework = factory.newFramework(new StringMap(configProps, false));
+        framework.init();
+        // Process properties
+        loadStartupProperties(configProps);
+        processAutoProperties(framework.getBundleContext());
+
+        startLevelListener = new StartLevelListener(startLevelLock);
+        framework.getBundleContext().addFrameworkListener(startLevelListener);
+
+        framework.start();
+        // Start custom activators
+        startKarafActivators(classLoader);
+        
+        if (delayConsoleStart) {
+            // Progress bar
+            new StartupListener(framework.getBundleContext());
+        }
+        // Start lock monitor
+        new Thread() {
+            public void run() {
+                lock(configProps);
+            }
+        }.start();
+    }
+
+    private void startKarafActivators(ClassLoader classLoader) throws IOException {
+        Enumeration<URL> urls = classLoader.getResources("META-INF/MANIFEST.MF");
+        while (urls != null && urls.hasMoreElements()) {
+            URL url = urls.nextElement();
+            String className = null;
+            InputStream is = url.openStream();
+            try {
+                Manifest mf = new Manifest(is);
+                className = mf.getMainAttributes().getValue(KARAF_ACTIVATOR);
+                if (className != null) {
+                    BundleActivator activator = (BundleActivator) classLoader.loadClass(className).newInstance();
+                    activator.start(framework.getBundleContext());
+                    karafActivators.add(activator);
                 }
+            } catch (Throwable e) {
+                if (className != null) {
+                    System.err.println("Error starting karaf activator " + className + ": " + e.getMessage());
+                    LOG.log(Level.WARNING, "Error starting karaf activator " + className + " from url " + url, e);
+                }
+            } finally {
+                if (is != null) {
+                    try {
+                        is.close();
+                    } catch (IOException e) {
+                    }
+                }
+            }
+        }
+    }
+
+    private void stopKarafActivators() {
+        for (BundleActivator activator : karafActivators) {
+            try {
+                activator.stop(framework.getBundleContext());
+            } catch (Throwable e) {
+                LOG.log(Level.WARNING, "Error stopping karaf activator " + activator.getClass().getName(), e);
+            }
+        }
+    }
+
+    public void awaitShutdown() throws Exception {
+        if (framework == null) {
+            return;
+        }
+        while (true) {
+            FrameworkEvent event = framework.waitForStop(0);
+            if (event.getType() == FrameworkEvent.STOPPED_UPDATE) {
+                unlock();
+                while (framework.getState() != Bundle.STARTING && framework.getState() != Bundle.ACTIVE) {
+                    Thread.sleep(10);
+                }
+                new Thread() {
+                    @Override
+                    public void run() {
+                        lock(configProps);
+                    }
+                }.start();
+            } else {
                 return;
-            } catch (Exception e) {
-                //oops! - this cannot be converted fall through and
-                //try the other alternative
             }
         }
+    }
 
+	public boolean destroy() throws Exception {
+        if (framework == null) {
+            return true;
+        }
         try {
-            objectList.toArray((Object[])returnArray);
-        } catch (Exception e) {
-            //we are over with alternatives - throw the
-            //converison exception
-            throw new ObjectConversionException(e);
-        }
-    }
+            int step = 5000;
 
-    /**
-     * We could have used the Arraya.asList() method but that returns an *immutable* list !!!!!
-     *
-     * @param array
-     * @return list
-     */
-    public static List toList(Object[] array) {
-        if (array == null) {
-            return new ArrayList();
-        } else {
-            ArrayList list = new ArrayList();
-            for (int i = 0; i < array.length; i++) {
-                list.add(array[i]);
+            // Notify the callback asap
+            if (shutdownCallback != null) {
+                shutdownCallback.waitingForShutdown(step);
             }
-            return list;
-        }
-    }
 
-    /**
-     * @param intValue
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static int compare(int intValue, String value) {
-        return intValue - Integer.parseInt(value);
-    }
-
-    /**
-     * @param doubleValue
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static double compare(double doubleValue, String value) {
-        return doubleValue - Double.parseDouble(value);
-    }
-
-
-    /**
-     * @param floatValue
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static float compare(float floatValue, String value) {
-        return floatValue - Float.parseFloat(value);
-    }
-
-    /**
-     * @param longValue
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static long compare(long longValue, String value) {
-        return longValue - Long.parseLong(value);
-    }
-
-    /**
-     * @param shortValue
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static int compare(short shortValue, String value) {
-        return shortValue - Short.parseShort(value);
-    }
-
-    /**
-     * @param byteVlaue
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static int compare(byte byteVlaue, String value) {
-        return byteVlaue - Byte.parseByte(value);
-    }
-
-
-    /**
-     * @param binBigInteger
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static int compare(BigInteger binBigInteger, String value) {
-        return binBigInteger.intValue() - Integer.parseInt(value);
-    }
-
-    /**
-     * @param binBigDecimal
-     * @param value
-     * @return 0 if equal , + value if greater than , - value if less than
-     */
-    public static double compare(BigDecimal binBigDecimal, String value) {
-        return binBigDecimal.doubleValue() - Double.parseDouble(value);
-    }
-
-    public static long compare(Duration duration, String value) {
-        Duration compareValue = new Duration(value);
-        return duration.compare(compareValue);
-    }
-
-    public static long compare(Date date, String value) {
-        Date newDate = convertToDate(value);
-        return date.getTime() - newDate.getTime();
-    }
-
-    public static long compare(Time time, String value) {
-        Time newTime = new Time(value);
-        return time.getAsCalendar().getTimeInMillis() - newTime.getAsCalendar().getTimeInMillis();
-    }
-
-    public static long compare(Calendar calendar, String value) {
-        Calendar newCalendar = convertToDateTime(value);
-        return calendar.getTimeInMillis() - newCalendar.getTimeInMillis();
-    }
-
-    /**
-     * Converts the given .datahandler to a string
-     *
-     * @return string
-     */
-    public static String getStringFromDatahandler(DataHandler dataHandler) {
-        try {
-            InputStream inStream;
-            if (dataHandler == null) {
-                return "";
+            // Stop the framework in case it's still active
+            exiting = true;
+            if (framework.getState() == Bundle.ACTIVE || framework.getState() == Bundle.STARTING) {
+                new Thread() {
+                    public void run() {
+                        try {
+                            framework.stop();
+                        } catch (BundleException e) {
+                            System.err.println("Error stopping karaf: " + e.getMessage());
+                        }
+                    }
+                }.start();
             }
-            inStream = dataHandler.getDataSource().getInputStream();
-            byte[] data = IOUtils.getStreamAsByteArray(inStream);
-            return Base64.encode(data);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
 
-    /**
-     * A reflection based method to generate an instance of a given class and populate it with a
-     * given value
-     *
-     * @param clazz
-     * @param value
-     * @return object
-     */
-    public static Object getObjectForClass(Class clazz, String value) {
-        //first see whether this class has a constructor that can
-        //take the string as an argument.
-        try {
-            Constructor stringConstructor = clazz.getConstructor(new Class[] { String.class });
-            return stringConstructor.newInstance(new Object[] { value });
-        } catch (NoSuchMethodException e) {
-            //oops - no such constructors - continue with the
-            //parse method
-        } catch (Exception e) {
-            throw new ObjectConversionException(
-                    ADBMessages.getMessage("converter.cannotGenerate",
-                                           clazz.getName()), e);
-        }
-
-        try {
-            Method parseMethod = clazz.getMethod("parse", new Class[] { String.class });
-            Object instance = clazz.newInstance();
-            return parseMethod.invoke(instance, new Object[] { value });
-        } catch (NoSuchMethodException e) {
-            throw new ObjectConversionException(e);
-        } catch (Exception e) {
-            throw new ObjectConversionException(
-                    ADBMessages.getMessage("converter.cannotGenerate",
-                                           clazz.getName()),
-                    e);
-        }
-
-    }
-
-    /** A simple exception that is thrown when the conversion fails */
-    public static class ObjectConversionException extends RuntimeException {
-        public ObjectConversionException() {
-        }
-
-        public ObjectConversionException(String message) {
-            super(message);
-        }
-
-        public ObjectConversionException(Throwable cause) {
-            super(cause);
-        }
-
-        public ObjectConversionException(String message, Throwable cause) {
-            super(message, cause);
-        }
-
-    }
-
-    // serialization methods for xsd any type
-    public static void serializeAnyType(Object value, XMLStreamWriter xmlStreamWriter) throws XMLStreamException {
-        if (value instanceof String) {
-            serializeAnyType("string", value.toString(), xmlStreamWriter);
-        } else if (value instanceof Integer) {
-            serializeAnyType("int", value.toString(), xmlStreamWriter);
-        } else if (value instanceof Boolean) {
-            serializeAnyType("boolean", value.toString(), xmlStreamWriter);
-        } else if (value instanceof URI) {
-            serializeAnyType("anyURI", value.toString(), xmlStreamWriter);
-        } else if (value instanceof Byte) {
-            serializeAnyType("byte", value.toString(), xmlStreamWriter);
-        } else if (value instanceof Date) {
-            serializeAnyType("date", convertToString((Date) value), xmlStreamWriter);
-        } else if (value instanceof Calendar) {
-            serializeAnyType("dateTime", convertToString((Calendar) value), xmlStreamWriter);
-        } else if (value instanceof Time) {
-            serializeAnyType("time", convertToString((Time) value), xmlStreamWriter);
-        } else if (value instanceof Float) {
-            serializeAnyType("float", value.toString(), xmlStreamWriter);
-        } else if (value instanceof Long) {
-            serializeAnyType("long", value.toString(), xmlStreamWriter);
-        } else if (value instanceof Double) {
-            serializeAnyType("double", value.toString(), xmlStreamWriter);
-        } else if (value instanceof Short) {
-            serializeAnyType("short", value.toString(), xmlStreamWriter);
-        } else if (value instanceof BigDecimal) {
-            serializeAnyType("decimal", value.toString(), xmlStreamWriter);
-        } else if (value instanceof DataHandler) {
-            addTypeAttribute(xmlStreamWriter,"base64Binary");
-            try {
-                XMLStreamWriterUtils.writeDataHandler(xmlStreamWriter, (DataHandler)value, null, true);
-            } catch (IOException ex) {
-                throw new XMLStreamException("Unable to read data handler", ex);
+            int timeout = shutdownTimeout;
+            if (shutdownTimeout <= 0) {
+                timeout = Integer.MAX_VALUE;
             }
-        } else if (value instanceof QName) {
-            QName qNameValue = (QName) value;
-            String prefix = xmlStreamWriter.getPrefix(qNameValue.getNamespaceURI());
-            if (prefix == null) {
-                prefix = BeanUtil.getUniquePrefix();
-                xmlStreamWriter.writeNamespace(prefix, qNameValue.getNamespaceURI());
-                xmlStreamWriter.setPrefix(prefix, qNameValue.getNamespaceURI());
-            }
-            String attributeValue = qNameValue.getLocalPart();
-            if (!prefix.equals("")) {
-                attributeValue = prefix + ":" + attributeValue;
-            }
-            serializeAnyType("QName", attributeValue, xmlStreamWriter);
-        } else if (value instanceof UnsignedByte) {
-            serializeAnyType("unsignedByte", convertToString((UnsignedByte) value), xmlStreamWriter);
-        } else if (value instanceof UnsignedLong) {
-            serializeAnyType("unsignedLong", convertToString((UnsignedLong) value), xmlStreamWriter);
-        } else if (value instanceof UnsignedShort) {
-            serializeAnyType("unsignedShort", convertToString((UnsignedShort) value), xmlStreamWriter);
-        } else if (value instanceof UnsignedInt) {
-            serializeAnyType("unsignedInt", convertToString((UnsignedInt) value), xmlStreamWriter);
-        } else if (value instanceof PositiveInteger) {
-            serializeAnyType("positiveInteger", convertToString((PositiveInteger) value), xmlStreamWriter);
-        } else if (value instanceof NegativeInteger) {
-            serializeAnyType("negativeInteger", convertToString((NegativeInteger) value), xmlStreamWriter);
-        } else if (value instanceof NonNegativeInteger) {
-            serializeAnyType("nonNegativeInteger", convertToString((NonNegativeInteger) value), xmlStreamWriter);
-        } else if (value instanceof NonPositiveInteger) {
-            serializeAnyType("nonPositiveInteger", convertToString((NonPositiveInteger) value), xmlStreamWriter);
-        } else {
-            throw new XMLStreamException("Unknow type can not serialize");
-        }
-    }
-
-
-    /**
-     * this method writes the xsi:type attrubte and the value to the xmlstreamwriter
-     * to serialize the anytype object
-     * @param type  - xsd type of the attribute
-     * @param value - string value of the object
-     * @param xmlStreamWriter
-     * @throws XMLStreamException
-     */
-    private static void serializeAnyType(String type,
-                                         String value,
-                                         XMLStreamWriter xmlStreamWriter)
-            throws XMLStreamException {
-
-        addTypeAttribute(xmlStreamWriter, type);
-        xmlStreamWriter.writeCharacters(value);
-    }
-
-    private static void addTypeAttribute(XMLStreamWriter xmlStreamWriter, String type) throws XMLStreamException {
-        String prefix = xmlStreamWriter.getPrefix(Constants.XSI_NAMESPACE);
-        if (prefix == null) {
-            prefix = BeanUtil.getUniquePrefix();
-            xmlStreamWriter.writeNamespace(prefix, Constants.XSI_NAMESPACE);
-            xmlStreamWriter.setPrefix(prefix, Constants.XSI_NAMESPACE);
-        }
-
-        prefix = xmlStreamWriter.getPrefix(Constants.XSD_NAMESPACE);
-        if (prefix == null) {
-            prefix = BeanUtil.getUniquePrefix();
-            xmlStreamWriter.writeNamespace(prefix, Constants.XSD_NAMESPACE);
-            xmlStreamWriter.setPrefix(prefix, Constants.XSD_NAMESPACE);
-        }
-
-        String attributeValue = null;
-        if (prefix.equals("")) {
-            attributeValue = type;
-        } else {
-            attributeValue = prefix + ":" + type;
-        }
-
-        xmlStreamWriter.writeAttribute(Constants.XSI_NAMESPACE, "type", attributeValue);
-    }
-
-    public static Object getAnyTypeObject(XMLStreamReader xmlStreamReader,
-                                          Class extensionMapperClass) throws XMLStreamException {
-        Object returnObject = null;
-
-        // make sure reader is at the first element.
-        while(!xmlStreamReader.isStartElement()){
-            xmlStreamReader.next();
-        }
-        // first check whether this element is null or not
-        String nillableValue = xmlStreamReader.getAttributeValue(Constants.XSI_NAMESPACE, "nil");
-        if ("true".equals(nillableValue) || "1".equals(nillableValue)){
-            returnObject = null;
-            xmlStreamReader.next();
-        } else {
-            String attributeType = xmlStreamReader.getAttributeValue(Constants.XSI_NAMESPACE, "type");
-            if (attributeType != null) {
-                String attributeTypePrefix = "";
-                if (attributeType.indexOf(":") > -1) {
-                    attributeTypePrefix = attributeType.substring(0,attributeType.indexOf(":"));
-                    attributeType = attributeType.substring(attributeType.indexOf(":") + 1);
+            while (timeout > 0) {
+                timeout -= step;
+                if (shutdownCallback != null) {
+                    shutdownCallback.waitingForShutdown(step * 2);
                 }
-                NamespaceContext namespaceContext = xmlStreamReader.getNamespaceContext();
-                String attributeNameSpace = namespaceContext.getNamespaceURI(attributeTypePrefix);
+                FrameworkEvent event = framework.waitForStop(step);
+                if (event.getType() != FrameworkEvent.WAIT_TIMEDOUT) {
+                    stopKarafActivators();
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            unlock();
+        }
+    }
 
-                if (Constants.XSD_NAMESPACE.equals(attributeNameSpace)) {
-                    if ("base64Binary".equals(attributeType)) {
-                        returnObject = XMLStreamReaderUtils.getDataHandlerFromElement(xmlStreamReader);
+    /**
+     * <p>
+     * This method performs the main task of constructing an framework instance
+     * and starting its execution. The following functions are performed
+     * when invoked:
+     * </p>
+     * <ol>
+     *   <li><i><b>Read the system properties file.<b></i> This is a file
+     *       containing properties to be pushed into <tt>System.setProperty()</tt>
+     *       before starting the framework. This mechanism is mainly shorthand
+     *       for people starting the framework from the command line to avoid having
+     *       to specify a bunch of <tt>-D</tt> system property definitions.
+     *       The only properties defined in this file that will impact the framework's
+     *       behavior are the those concerning setting HTTP proxies, such as
+     *       <tt>http.proxyHost</tt>, <tt>http.proxyPort</tt>, and
+     *       <tt>http.proxyAuth</tt>.
+     *   </li>
+     *   <li><i><b>Perform system property variable substitution on system
+     *       properties.</b></i> Any system properties in the system property
+     *       file whose value adheres to <tt>${&lt;system-prop-name&gt;}</tt>
+     *       syntax will have their value substituted with the appropriate
+     *       system property value.
+     *   </li>
+     *   <li><i><b>Read the framework's configuration property file.</b></i> This is
+     *       a file containing properties used to configure the framework
+     *       instance and to pass configuration information into
+     *       bundles installed into the framework instance. The configuration
+     *       property file is called <tt>config.properties</tt> by default
+     *       and is located in the <tt>conf/</tt> directory of the Felix
+     *       installation directory, which is the parent directory of the
+     *       directory containing the <tt>felix.jar</tt> file. It is possible
+     *       to use a different location for the property file by specifying
+     *       the desired URL using the <tt>felix.config.properties</tt>
+     *       system property; this should be set using the <tt>-D</tt> syntax
+     *       when executing the JVM. Refer to the
+     *       <a href="Felix.html#Felix(java.util.Map, java.util.List)">
+     *       <tt>Felix</tt></a> constructor documentation for more
+     *       information on the framework configuration options.
+     *   </li>
+     *   <li><i><b>Perform system property variable substitution on configuration
+     *       properties.</b></i> Any configuration properties whose value adheres to
+     *       <tt>${&lt;system-prop-name&gt;}</tt> syntax will have their value
+     *       substituted with the appropriate system property value.
+     *   </li>
+     *   <li><i><b>Ensure the default bundle cache has sufficient information to
+     *       initialize.</b></i> The default implementation of the bundle cache
+     *       requires either a profile name or a profile directory in order to
+     *       start. The configuration properties are checked for at least one
+     *       of the <tt>felix.cache.profile</tt> or <tt>felix.cache.profiledir</tt>
+     *       properties. If neither is found, the user is asked to supply a profile
+     *       name that is added to the configuration property set. See the
+     *       <a href="cache/DefaultBundleCache.html"><tt>DefaultBundleCache</tt></a>
+     *       documentation for more details its configuration options.
+     *   </li>
+     *   <li><i><b>Creates and starts a framework instance.</b></i> A
+     *       case insensitive
+     *       <a href="util/StringMap.html"><tt>StringMap</tt></a>
+     *       is created for the configuration property file and is passed
+     *       into the framework.
+     *   </li>
+     * </ol>
+     * <p>
+     * It should be noted that simply starting an instance of the framework is not enough
+     * to create an interactive session with it. It is necessary to install
+     * and start bundles that provide an interactive impl; this is generally
+     * done by specifying an "auto-start" property in the framework configuration
+     * property file. If no interactive impl bundles are installed or if
+     * the configuration property file cannot be found, the framework will appear to
+     * be hung or deadlocked. This is not the case, it is executing correctly,
+     * there is just no way to interact with it. Refer to the
+     * <a href="Felix.html#Felix(java.util.Map, java.util.List)">
+     * <tt>Felix</tt></a> constructor documentation for more information on
+     * framework configuration options.
+     * </p>
+     * @param args An array of arguments, all of which are ignored.
+     * @throws Exception If an error occurs.
+     **/
+    public static void main(String[] args) throws Exception {
+        while (true) {
+            boolean restart = false;
+            System.setProperty("karaf.restart", "false");
+            final Main main = new Main(args);
+            try {
+                main.launch();
+            } catch (IOException ioe){
+                main.destroy();
+                main.setExitCode(-1);
+                System.err.println("Karaf can't startup, make sure the log file can be accessed and written by the user starting Karaf : " + ioe);
+            } catch (Throwable ex) {
+                main.destroy();
+                main.setExitCode(-1);
+                System.err.println("Could not create framework: " + ex);
+                ex.printStackTrace();
+            }
+            try {
+                main.awaitShutdown();
+                boolean stopped = main.destroy();
+                restart = Boolean.getBoolean("karaf.restart");
+                if (!stopped) {
+                    if (restart) {
+                        System.err.println("Timeout waiting for framework to stop.  Restarting now.");
                     } else {
-                        String attribValue = xmlStreamReader.getElementText();
-                        if (attribValue != null) {
-                            if (attributeType.equals("string")) {
-                                returnObject = attribValue;
-                            } else if (attributeType.equals("int")) {
-                                returnObject = new Integer(attribValue);
-                            } else if (attributeType.equals("QName")) {
-                                String namespacePrefix = null;
-                                String localPart = null;
-                                if (attribValue.indexOf(":") > -1) {
-                                    namespacePrefix = attribValue.substring(0, attribValue.indexOf(":"));
-                                    localPart = attribValue.substring(attribValue.indexOf(":") + 1);
-                                    returnObject = new QName(namespaceContext.getNamespaceURI(namespacePrefix), localPart);
-                                }
-                            } else if ("boolean".equals(attributeType)) {
-                                returnObject = new Boolean(attribValue);
-                            } else if ("anyURI".equals(attributeType)) {
-                                try {
-                                    returnObject = new URI(attribValue);
-                                } catch (URI.MalformedURIException e) {
-                                    throw new XMLStreamException("Invalid URI");
-                                }
-                            } else if ("date".equals(attributeType)) {
-                                returnObject = ConverterUtil.convertToDate(attribValue);
-                            } else if ("dateTime".equals(attributeType)) {
-                                returnObject = ConverterUtil.convertToDateTime(attribValue);
-                            } else if ("time".equals(attributeType)) {
-                                returnObject = ConverterUtil.convertToTime(attribValue);
-                            } else if ("byte".equals(attributeType)) {
-                                returnObject = new Byte(attribValue);
-                            } else if ("short".equals(attributeType)) {
-                                returnObject = new Short(attribValue);
-                            } else if ("float".equals(attributeType)) {
-                                returnObject = new Float(attribValue);
-                            } else if ("long".equals(attributeType)) {
-                                returnObject = new Long(attribValue);
-                            } else if ("double".equals(attributeType)) {
-                                returnObject = new Double(attribValue);
-                            } else if ("decimal".equals(attributeType)) {
-                                returnObject = new BigDecimal(attribValue);
-                            } else if ("unsignedLong".equals(attributeType)) {
-                                returnObject = new UnsignedLong(attribValue);
-                            } else if ("unsignedInt".equals(attributeType)) {
-                                returnObject = new UnsignedInt(attribValue);
-                            } else if ("unsignedShort".equals(attributeType)) {
-                                returnObject = new UnsignedShort(attribValue);
-                            } else if ("unsignedByte".equals(attributeType)) {
-                                returnObject = new UnsignedByte(attribValue);
-                            } else if ("positiveInteger".equals(attributeType)) {
-                                returnObject = new PositiveInteger(attribValue);
-                            } else if ("negativeInteger".equals(attributeType)) {
-                                returnObject = new NegativeInteger(attribValue);
-                            } else if ("nonNegativeInteger".equals(attributeType)) {
-                                returnObject = new NonNegativeInteger(attribValue);
-                            } else if ("nonPositiveInteger".equals(attributeType)) {
-                                returnObject = new NonPositiveInteger(attribValue);
+                        System.err.println("Timeout waiting for framework to stop.  Exiting VM.");
+                        main.setExitCode(-3);
+                    }
+                }
+            } catch (Throwable ex) {
+                main.setExitCode(-2);
+                System.err.println("Error occurred shutting down framework: " + ex);
+                ex.printStackTrace();
+            } finally {
+                if (!restart) {
+                    System.exit(main.getExitCode());
+                } else {
+                    System.gc();
+                }
+            }
+        }
+    }
+
+    private static void processSecurityProperties(Properties m_configProps) {
+        String prop = m_configProps.getProperty(SECURITY_PROVIDERS);
+        if (prop != null) {
+            String[] providers = prop.split(",");
+            for (String provider : providers) {
+                addProvider(provider);
+            }
+        }
+    }
+
+    private static void addProvider(String provider) {
+        try {
+            Security.addProvider((Provider) Class.forName(provider).newInstance());
+        } catch (Throwable t) {
+            System.err.println("Unable to register security provider: " + t);
+        }
+    }
+
+    private void updateInstancePid() {
+        try {
+            final String instanceName = System.getProperty("karaf.name");
+            final String pid = getPid();
+            
+            final boolean isRoot = karafHome.equals(karafBase);
+            
+            if (instanceName != null) {
+                String storage = System.getProperty("karaf.instances");
+                if (storage == null) {
+                    throw new Exception("System property 'karaf.instances' is not set. \n" +
+                        "This property needs to be set to the full path of the instance.properties file.");
+                }
+                File storageFile = new File(storage);
+                final File propertiesFile = new File(storageFile, "instance.properties");
+                if (!propertiesFile.getParentFile().exists()) {
+                    try {
+                        if (!propertiesFile.getParentFile().mkdirs()) {
+                            throw new Exception("Unable to create directory " + propertiesFile.getParentFile());
+                        }
+                    } catch (SecurityException se) {
+                        throw new Exception(se.getMessage());
+                    }
+                }
+                FileLockUtils.execute(propertiesFile, new FileLockUtils.RunnableWithProperties() {
+                    public void run(org.apache.felix.utils.properties.Properties props) throws IOException {
+                        if (props.isEmpty()) {
+                            if (isRoot) {
+                                props.setProperty("count", "1");
+                                props.setProperty("item.0.name", instanceName);
+                                props.setProperty("item.0.loc", karafHome.getAbsolutePath());
+                                props.setProperty("item.0.pid", pid);
+                                props.setProperty("item.0.root", "true");
                             } else {
-                                throw new ADBException("Unknown type ==> " + attributeType);
+                                throw new IllegalStateException("Child instance started but no root registered in " + propertiesFile);
                             }
                         } else {
-                            throw new ADBException("Attribute value is null");
+                            int count = Integer.parseInt(props.getProperty("count"));
+                            // update root name if karaf.name got updated since the last container start
+                            if (isRoot) {
+                                for (int i = 0; i < count; i++) {
+                                    //looking for root instance entry
+                                    boolean root = Boolean.parseBoolean(props.getProperty("item." + i + ".root", "false"));
+                                    if (root) {
+                                        props.setProperty("item." + i + ".name", instanceName);
+                                        props.setProperty("item." + i + ".pid", pid);
+                                        return;
+                                    }
+                                }
+                                throw new IllegalStateException("Unable to find root instance in " + propertiesFile);
+                            } else {
+                                for (int i = 0; i < count; i++) {
+                                    String name = props.getProperty("item." + i + ".name");
+                                    if (name.equals(instanceName)) {
+                                        props.setProperty("item." + i + ".pid", pid);
+                                        return;
+                                    }
+                                }
+                                throw new IllegalStateException("Unable to find instance '" + instanceName + "'in " + propertiesFile);
+                            }
                         }
                     }
+                }, true);
+            }
+        } catch (Exception e) {
+            System.err.println("Unable to update instance pid: " + e.getMessage());
+        }
+    }
+
+    private static String getPid() {
+        String pid = ManagementFactory.getRuntimeMXBean().getName();
+        if (pid.indexOf('@') > 0) {
+            pid = pid.substring(0, pid.indexOf('@'));
+        }
+        return pid;
+    }
+
+    /**
+     * <p/>
+     * Processes the auto-install and auto-start properties from the
+     * specified configuration properties.
+     *
+     * @param context the system bundle context
+     */
+    private void processAutoProperties(BundleContext context) {
+        // Check if we want to convert URLs to maven style
+        boolean convertToMavenUrls = Boolean.parseBoolean(configProps.getProperty(PROPERTY_CONVERT_TO_MAVEN_URL, "true"));
+
+        // Retrieve the Start Level service, since it will be needed
+        // to set the start level of the installed bundles.
+        StartLevel sl = (StartLevel) context.getService(
+                context.getServiceReference(org.osgi.service.startlevel.StartLevel.class.getName()));
+
+        // Set the default bundle start level
+        int ibsl = 60;
+        try {
+            String str = configProps.getProperty("karaf.startlevel.bundle");
+            if (str != null) {
+                ibsl = Integer.parseInt(str);
+            }
+        } catch (Throwable t) {
+        }
+        sl.setInitialBundleStartLevel(ibsl);
+
+        // If we have a clean state, install everything
+        if (framework.getBundleContext().getBundles().length == 1) {
+            // The auto-install property specifies a space-delimited list of
+            // bundle URLs to be automatically installed into each new profile;
+            // the start level to which the bundles are assigned is specified by
+            // appending a ".n" to the auto-install property name, where "n" is
+            // the desired start level for the list of bundles.
+            autoInstall(PROPERTY_AUTO_INSTALL, context, sl, convertToMavenUrls, false);
+
+            // The auto-start property specifies a space-delimited list of
+            // bundle URLs to be automatically installed and started into each
+            // new profile; the start level to which the bundles are assigned
+            // is specified by appending a ".n" to the auto-start property name,
+            // where "n" is the desired start level for the list of bundles.
+            // The following code starts bundles in one pass, installing bundles
+            // for a given level, then starting them, then moving to the next level.
+            autoInstall(PROPERTY_AUTO_START, context, sl, convertToMavenUrls, true);
+        }
+    }
+
+    private List<Bundle> autoInstall(String propertyPrefix, BundleContext context, StartLevel sl, boolean convertToMavenUrls, boolean start) {
+        Map<Integer, String> autoStart = new TreeMap<Integer, String>();
+        List<Bundle> bundles = new ArrayList<Bundle>();
+        for (Object o : configProps.keySet()) {
+            String key = (String) o;
+            // Ignore all keys that are not the auto-start property.
+            if (!key.startsWith(propertyPrefix)) {
+                continue;
+            }
+            // If the auto-start property does not have a start level,
+            // then assume it is the default bundle start level, otherwise
+            // parse the specified start level.
+            int startLevel = sl.getInitialBundleStartLevel();
+            if (!key.equals(propertyPrefix)) {
+                try {
+                    startLevel = Integer.parseInt(key.substring(key.lastIndexOf('.') + 1));
+                } catch (NumberFormatException ex) {
+                    System.err.println("Invalid property: " + key);
+                }
+            }
+            autoStart.put(startLevel, configProps.getProperty(key));
+        }
+        for (Integer startLevel : autoStart.keySet()) {
+            StringTokenizer st = new StringTokenizer(autoStart.get(startLevel), "\" ", true);
+            if (st.countTokens() > 0) {
+                String location;
+                do {
+                    location = nextLocation(st);
+                    if (location != null) {
+                        try {
+                            // TODO: Workaround for PAXURL-278
+                            String[] parts = location.contains("pax-url-aether") ? convertToMavenUrlsIfNeeded(location, false) 
+                                :  convertToMavenUrlsIfNeeded(location, convertToMavenUrls);
+                            Bundle b = context.installBundle(parts[0], new URL(parts[1]).openStream());
+                            sl.setBundleStartLevel(b, startLevel);
+                            bundles.add(b);
+                        }
+                        catch (Exception ex) {
+                            System.err.println("Error installing bundle  " + location + ": " + ex);
+                        }
+                    }
+                }
+                while (location != null);
+            }
+        }
+        // Now loop through and start the installed bundles.
+        if (start) {
+            for (Bundle b : bundles) {
+                try {
+                    String fragmentHostHeader = (String) b.getHeaders().get(Constants.FRAGMENT_HOST);
+                    if (fragmentHostHeader == null || fragmentHostHeader.trim().length() == 0) {
+                        b.start();
+                    }
+                }
+                catch (Exception ex) {
+                    System.err.println("Error starting bundle " + b.getSymbolicName() + ": " + ex);
+                }
+            }
+        }
+        return bundles;
+    }
+
+    private static String[] convertToMavenUrlsIfNeeded(String location, boolean convertToMavenUrls) {
+        String[] parts = location.split("\\|");
+        if (convertToMavenUrls) {
+            String[] p = parts[1].split("/");
+            if (p.length >= 4 && p[p.length-1].startsWith(p[p.length-3] + "-" + p[p.length-2])) {
+                String artifactId = p[p.length-3];
+                String version = p[p.length-2];
+                String classifier;
+                String type;
+                String artifactIdVersion = artifactId + "-" + version;
+                StringBuffer sb = new StringBuffer();
+                if (p[p.length-1].charAt(artifactIdVersion.length()) == '-') {
+                    classifier = p[p.length-1].substring(artifactIdVersion.length() + 1, p[p.length-1].lastIndexOf('.'));
                 } else {
-                    try {
-                        Method getObjectMethod = extensionMapperClass.getMethod("getTypeObject",
-                                new Class[]{String.class, String.class, XMLStreamReader.class});
-                        returnObject = getObjectMethod.invoke(null,
-                                new Object[]{attributeNameSpace, attributeType, xmlStreamReader});
-                    } catch (NoSuchMethodException e) {
-                        throw new ADBException("Can not find the getTypeObject method in the " +
-                                "extension mapper class ", e);
-                    } catch (IllegalAccessException e) {
-                        throw new ADBException("Can not access the getTypeObject method in the " +
-                                "extension mapper class ", e);
-                    } catch (InvocationTargetException e) {
-                        throw new ADBException("Can not invoke the getTypeObject method in the " +
-                                "extension mapper class ", e);
+                    classifier = null;
+                }
+                type = p[p.length-1].substring(p[p.length-1].lastIndexOf('.') + 1);
+                sb.append("mvn:");
+                for (int j = 0; j < p.length - 3; j++) {
+                    if (j > 0) {
+                        sb.append('.');
+                    }
+                    sb.append(p[j]);
+                }
+                sb.append('/').append(artifactId).append('/').append(version);
+                if (!"jar".equals(type) || classifier != null) {
+                    sb.append('/');
+                    if (!"jar".equals(type)) {
+                        sb.append(type);
+                    }
+                    if (classifier != null) {
+                        sb.append('/').append(classifier);
+                    }
+                }
+                parts[1] = parts[0];
+                parts[0] = sb.toString();
+            } else {
+                parts[1] = parts[0];
+            }
+        } else {
+            parts[1] = parts[0];
+        }
+        return parts;
+    }
+
+    private static String nextLocation(StringTokenizer st) {
+        String retVal = null;
+
+        if (st.countTokens() > 0) {
+            String tokenList = "\" ";
+            StringBuffer tokBuf = new StringBuffer(10);
+            String tok;
+            boolean inQuote = false;
+            boolean tokStarted = false;
+            boolean exit = false;
+            while ((st.hasMoreTokens()) && (!exit)) {
+                tok = st.nextToken(tokenList);
+                if (tok.equals("\"")) {
+                    inQuote = !inQuote;
+                    if (inQuote) {
+                        tokenList = "\"";
+                    } else {
+                        tokenList = "\" ";
                     }
 
+                } else if (tok.equals(" ")) {
+                    if (tokStarted) {
+                        retVal = tokBuf.toString();
+                        tokStarted = false;
+                        tokBuf = new StringBuffer(10);
+                        exit = true;
+                    }
+                } else {
+                    tokStarted = true;
+                    tokBuf.append(tok.trim());
+                }
+            }
+
+            // Handle case where end of token stream and
+            // still got data
+            if ((!exit) && (tokStarted)) {
+                retVal = tokBuf.toString();
+            }
+        }
+
+        return retVal;
+    }
+
+    /**
+     * <p>
+     * Loads the properties in the system property file associated with the
+     * framework installation into <tt>System.setProperty()</tt>. These properties
+     * are not directly used by the framework in anyway. By default, the system
+     * property file is located in the <tt>conf/</tt> directory of the Felix
+     * installation directory and is called "<tt>system.properties</tt>". The
+     * installation directory of Felix is assumed to be the parent directory of
+     * the <tt>felix.jar</tt> file as found on the system class path property.
+     * The precise file from which to load system properties can be set by
+     * initializing the "<tt>felix.system.properties</tt>" system property to an
+     * arbitrary URL.
+     * </p>
+     *
+     * @param karafEtc the karaf etc folder
+     */
+    protected static void loadSystemProperties(File karafEtc) {
+        // The system properties file is either specified by a system
+        // property or it is in the same directory as the Felix JAR file.
+        // Try to load it from one of these places.
+
+        // See if the property URL was specified as a property.
+        URL propURL;
+        try {
+            File file = new File(karafEtc, SYSTEM_PROPERTIES_FILE_NAME);
+            propURL = file.toURI().toURL();
+        }
+        catch (MalformedURLException ex) {
+            System.err.print("Main: " + ex);
+            return;
+        }
+
+        // Read the properties file.
+        Properties props = new Properties();
+        InputStream is = null;
+        try {
+            is = propURL.openConnection().getInputStream();
+            props.load(is);
+            is.close();
+        }
+        catch (FileNotFoundException ex) {
+            // Ignore file not found.
+        }
+        catch (Exception ex) {
+            System.err.println(
+                    "Main: Error loading system properties from " + propURL);
+            System.err.println("Main: " + ex);
+            try {
+                if (is != null) is.close();
+            }
+            catch (IOException ex2) {
+                // Nothing we can do.
+            }
+            return;
+        }
+
+        // Perform variable substitution on specified properties.
+        for (Enumeration e = props.propertyNames(); e.hasMoreElements();) {
+            String name = (String) e.nextElement();
+			if (name.startsWith(OVERRIDE_PREFIX)) {
+				String overrideName = name.substring(OVERRIDE_PREFIX.length());
+				String value = props.getProperty(name);
+				System.setProperty(overrideName, substVars(value, name, null, props));
+			} else {
+				String value = System.getProperty(name, props.getProperty(name));
+				System.setProperty(name, substVars(value, name, null, props));
+			}
+        }
+    }
+
+    /**
+     * <p>
+     * Loads the configuration properties in the configuration property file
+     * associated with the framework installation; these properties
+     * are accessible to the framework and to bundles and are intended
+     * for configuration purposes. By default, the configuration property
+     * file is located in the <tt>conf/</tt> directory of the Felix
+     * installation directory and is called "<tt>config.properties</tt>".
+     * The installation directory of Felix is assumed to be the parent
+     * directory of the <tt>felix.jar</tt> file as found on the system class
+     * path property. The precise file from which to load configuration
+     * properties can be set by initializing the "<tt>felix.config.properties</tt>"
+     * system property to an arbitrary URL.
+     * </p>
+     *
+     * @return A <tt>Properties</tt> instance or <tt>null</tt> if there was an error.
+     * @throws Exception if something wrong occurs
+     */
+    private Properties loadConfigProperties() throws Exception {
+        // See if the property URL was specified as a property.
+        URL configPropURL;
+
+        try {
+            if (!karafEtc.exists()) {
+                throw new FileNotFoundException("etc folder not found: " + karafEtc.getAbsolutePath());
+            }
+            File file = new File(karafEtc, CONFIG_PROPERTIES_FILE_NAME);
+            configPropURL = file.toURI().toURL();
+        }
+        catch (MalformedURLException ex) {
+            System.err.print("Main: " + ex);
+            return null;
+        }
+
+
+        Properties configProps = loadPropertiesFile(configPropURL, false);
+
+        // Perform variable substitution for system properties.
+        for (Enumeration e = configProps.propertyNames(); e.hasMoreElements();) {
+            String name = (String) e.nextElement();
+            configProps.setProperty(name,
+                    substVars(configProps.getProperty(name), name, null, configProps));
+        }
+
+        return configProps;
+    }
+
+    private void loadStartupProperties(Properties configProps) throws Exception {
+        // The config properties file is either specified by a system
+        // property or it is in the conf/ directory of the Felix
+        // installation directory.  Try to load it from one of these
+        // places.
+
+        List<File> bundleDirs = new ArrayList<File>();
+
+        // See if the property URL was specified as a property.
+        URL startupPropURL;
+
+        if (!karafEtc.exists()) {
+            throw new FileNotFoundException("etc folder not found: " + karafEtc.getAbsolutePath());
+        }
+        File file = new File(karafEtc, STARTUP_PROPERTIES_FILE_NAME);
+        startupPropURL = file.toURI().toURL();
+        Properties startupProps = loadPropertiesFile(startupPropURL, true);
+
+        String defaultRepo = System.getProperty(DEFAULT_REPO, "system");
+        if (karafBase.equals(karafHome)) {
+            File systemRepo = new File(karafHome, defaultRepo);
+            if (!systemRepo.exists()) {
+                throw new FileNotFoundException("system repo not found: " + systemRepo.getAbsolutePath());
+            }
+            bundleDirs.add(systemRepo);
+        } else {
+            File baseSystemRepo = new File(karafBase, defaultRepo);
+            File homeSystemRepo = new File(karafHome, defaultRepo);
+            if (!baseSystemRepo.exists() && !homeSystemRepo.exists()) {
+                throw new FileNotFoundException("system repos not found: " + baseSystemRepo.getAbsolutePath() + " " + homeSystemRepo.getAbsolutePath());
+            }
+            bundleDirs.add(baseSystemRepo);
+            bundleDirs.add(homeSystemRepo);
+        }
+        String locations = configProps.getProperty(BUNDLE_LOCATIONS);
+        if (locations != null) {
+            StringTokenizer st = new StringTokenizer(locations, "\" ", true);
+            if (st.countTokens() > 0) {
+                String location;
+                do {
+                    location = nextLocation(st);
+                    if (location != null) {
+                        File f;
+                        if (karafBase.equals(karafHome)) {
+                        	f = new File(karafHome, location);
+                        } else {
+                        	f = new File(karafBase, location);
+                        }
+                        if (f.exists() && f.isDirectory()) {
+                            bundleDirs.add(f);
+                        } else {
+                            System.err.println("Bundle location " + location
+                                    + " does not exist or is not a directory.");
+                        }
+                    }
                 }
 
+                while (location != null);
+            }
+        }
+
+        // Mutate properties
+        Main.processConfigurationProperties(configProps, startupProps, bundleDirs);
+    }
+
+    protected static Properties loadPropertiesFile(URL configPropURL, boolean failIfNotFound) throws Exception {
+        // Read the properties file.
+        Properties configProps = new Properties();
+        InputStream is = null;
+        try {
+            is = configPropURL.openConnection().getInputStream();
+            configProps.load(is);
+            is.close();
+        } catch (FileNotFoundException ex) {
+            if (failIfNotFound) {
+                throw ex;
             } else {
-                throw new ADBException("Any type element type has not been given");
+                System.err.println("WARN: " + configPropURL + " is not found, so not loaded");
             }
-        }
-        return returnObject;
-    }
-
-    static {
-        isCustomClassPresent = (System.getProperty(SYSTEM_PROPERTY_ADB_CONVERTERUTIL) != null);
-        if (isCustomClassPresent){
-            String className = System.getProperty(SYSTEM_PROPERTY_ADB_CONVERTERUTIL);
+        } catch (Exception ex) {
+            System.err.println("Error loading config properties from " + configPropURL);
+            System.err.println("Main: " + ex);
+            return configProps;
+        } finally {
             try {
-                customClass = Class.forName(className);
-            } catch (ClassNotFoundException e) {
-                log.error("Can not load the converter util class "
-                        + className + " using default org.apache.axis2.databinding.utils.ConverterUtil class");
-                isCustomClassPresent = false;
+                if (is != null) {
+                    is.close();
+                }
+            }
+            catch (IOException ex2) {
+                // Nothing we can do.
+            }
+        }
+        String includes = configProps.getProperty(INCLUDES_PROPERTY);
+        if (includes != null) {
+            StringTokenizer st = new StringTokenizer(includes, "\" ", true);
+            if (st.countTokens() > 0) {
+                String location;
+                do {
+                    location = nextLocation(st);
+                    if (location != null) {
+                        URL url = new URL(configPropURL, location);
+                        Properties props = loadPropertiesFile(url, true);
+                        configProps.putAll(props);
+                    }
+                }
+                while (location != null);
+            }
+            configProps.remove(INCLUDES_PROPERTY);
+        }
+        String optionals = configProps.getProperty(OPTIONALS_PROPERTY);
+        if (optionals != null) {
+            StringTokenizer st = new StringTokenizer(optionals, "\" ", true);
+            if (st.countTokens() > 0) {
+                String location;
+                do {
+                    location = nextLocation(st);
+                    if (location != null) {
+                        URL url = new URL(configPropURL, location);
+                        Properties props = loadPropertiesFile(url, false);
+                        configProps.putAll(props);
+                    }
+                } while (location != null);
+            }
+            configProps.remove(OPTIONALS_PROPERTY);
+        }
+        for (Enumeration e = configProps.propertyNames(); e.hasMoreElements();) {
+            Object key = e.nextElement();
+            if (key instanceof String) {
+                String v = configProps.getProperty((String) key);
+                configProps.put(key.toString(), v.trim());
+            }
+        }
+        return configProps;
+    }
+
+    protected static void copySystemProperties(Properties configProps) {
+        for (Enumeration e = System.getProperties().propertyNames();
+             e.hasMoreElements();) {
+            String key = (String) e.nextElement();
+            if (key.startsWith("felix.") ||
+                    key.startsWith("karaf.") ||
+                    key.startsWith("org.osgi.framework.")) {
+                configProps.setProperty(key, System.getProperty(key));
+            }
+        }
+    }
+    
+    private ClassLoader createClassLoader(Properties configProps) throws Exception {
+    	String framework = configProps.getProperty(KARAF_FRAMEWORK);
+        if (framework == null) {
+            throw new IllegalArgumentException("Property " + KARAF_FRAMEWORK + " must be set in the etc/" + CONFIG_PROPERTIES_FILE_NAME + " configuration file");
+        }
+        String bundle = configProps.getProperty(KARAF_FRAMEWORK + "." + framework);
+        if (bundle == null) {
+            throw new IllegalArgumentException("Property " + KARAF_FRAMEWORK + "." + framework + " must be set in the etc/" + CONFIG_PROPERTIES_FILE_NAME + " configuration file");
+        }
+        File bundleFile = new File(karafBase, bundle);
+        if (!bundleFile.exists()) {
+            bundleFile = new File(karafHome, bundle);
+        }
+        if (!bundleFile.exists()) {
+            throw new FileNotFoundException(bundleFile.getAbsolutePath());
+        }
+
+        List<URL> urls = new ArrayList<URL>();
+        urls.add( bundleFile.toURI().toURL() );
+        File[] libs = new File(karafHome, "lib").listFiles();
+        if (libs != null) {
+            for (File f : libs) {
+                if (f.isFile() && f.canRead() && f.getName().endsWith(".jar")) {
+                    urls.add(f.toURI().toURL());
+                }
+            }
+        }
+
+        return new URLClassLoader(urls.toArray(new URL[urls.size()]), Main.class.getClassLoader());
+    }
+
+    /**
+     * Process properties to customize default felix behavior
+     *
+     * @param configProps properties loaded from etc/config.properties
+     * @param startupProps properties loaded from etc/startup.properties
+     * @param bundleDirs location to load bundles from (usually system/)
+     */
+    private static void processConfigurationProperties(Properties configProps, Properties startupProps, List<File> bundleDirs) throws Exception {
+        if (bundleDirs == null) {
+            return;
+        }
+        boolean hasErrors = false;
+        if ("all".equals(configProps.getProperty(PROPERTY_AUTO_START, "").trim())) {
+            configProps.remove(PROPERTY_AUTO_START);
+            ArrayList<File> jars = new ArrayList<File>();
+
+            // We should start all the bundles in the system dir.
+            for (File bundleDir : bundleDirs) {
+                findJars(bundleDir, jars);
+            }
+
+            StringBuffer sb = new StringBuffer();
+
+            for (File jar : jars) {
+                try {
+                    sb.append("\"").append(jar.toURI().toURL().toString()).append("\" ");
+                } catch (MalformedURLException e) {
+                    System.err.print("Ignoring " + jar.toString() + " (" + e + ")");
+                }
+            }
+
+            configProps.setProperty(PROPERTY_AUTO_START, sb.toString());
+
+        } else if (STARTUP_PROPERTIES_FILE_NAME.equals(configProps.getProperty(PROPERTY_AUTO_START, "").trim())) {
+            configProps.remove(PROPERTY_AUTO_START);
+            // We should start the bundles in the startup.properties file.
+            HashMap<Integer, StringBuffer> levels = new HashMap<Integer, StringBuffer>();
+            for (Object o : startupProps.keySet()) {
+                String name = (String) o;
+                File file = findFile(bundleDirs, name);
+
+                if (file != null) {
+                    Integer level;
+                    try {
+                        level = new Integer(startupProps.getProperty(name).trim());
+                    } catch (NumberFormatException e1) {
+                        System.err.print("Ignoring " + file.toString() + " (run level must be an integer)");
+                        continue;
+                    }
+                    StringBuffer sb = levels.get(level);
+                    if (sb == null) {
+                        sb = new StringBuffer(256);
+                        levels.put(level, sb);
+                    }
+                    try {
+                        sb.append("\"").append(file.toURI().toURL().toString()).append("|").append(name).append("\" ");
+                    } catch (MalformedURLException e) {
+                        System.err.print("Ignoring " + file.toString() + " (" + e + ")");
+                    }
+                } else {
+                    System.err.println("Bundle listed in " + STARTUP_PROPERTIES_FILE_NAME + " configuration not found: " + name);
+                    hasErrors = true;
+                }
+            }
+
+            for (Map.Entry<Integer, StringBuffer> entry : levels.entrySet()) {
+                configProps.setProperty(PROPERTY_AUTO_START + "." + entry.getKey(), entry.getValue().toString());
+            }
+        }
+        if (hasErrors) {
+            throw new Exception("Aborting due to missing startup bundles");
+        }
+    }
+
+    private static File findFile(List<File> bundleDirs, String name) {
+        for (File bundleDir : bundleDirs) {
+            File file = findFile(bundleDir, name);
+            if (file != null) {
+                return file;
+            }
+        }
+        return null;
+    }
+
+    private static File findFile(File dir, String name) {
+        File theFile = new File(dir, name);
+
+        if (theFile.exists() && !theFile.isDirectory()) {
+            return theFile;
+        }
+
+        for (File file : dir.listFiles()) {
+            if (file.isDirectory()) {
+                return findFile(file, name);
+            }
+        }
+
+        return null;
+    }
+
+    private static void findJars(File dir, ArrayList<File> jars) {
+        for (File file : dir.listFiles()) {
+            if (file.isDirectory()) {
+                findJars(file, jars);
+            } else {
+                if (file.toString().endsWith(".jar")) {
+                    jars.add(file);
+                }
             }
         }
     }
 
+    private static final String DELIM_START = "${";
+    private static final String DELIM_STOP = "}";
+
+    /**
+     * <p>
+     * This method performs property variable substitution on the
+     * specified value. If the specified value contains the syntax
+     * <tt>${&lt;prop-name&gt;}</tt>, where <tt>&lt;prop-name&gt;</tt>
+     * refers to either a configuration property or a system property,
+     * then the corresponding property value is substituted for the variable
+     * placeholder. Multiple variable placeholders may exist in the
+     * specified value as well as nested variable placeholders, which
+     * are substituted from inner most to outer most. Configuration
+     * properties override system properties.
+     * </p>
+     *
+     * @param val         The string on which to perform property substitution.
+     * @param currentKey  The key of the property being evaluated used to
+     *                    detect cycles.
+     * @param cycleMap    Map of variable references used to detect nested cycles.
+     * @param configProps Set of configuration properties.
+     * @return The value of the specified string after system property substitution.
+     * @throws IllegalArgumentException If there was a syntax error in the
+     *                                  property placeholder syntax or a recursive variable reference.
+     */
+    public static String substVars(String val, String currentKey,
+                                    Map<String, String> cycleMap, Properties configProps)
+            throws IllegalArgumentException {
+        // If there is currently no cycle map, then create
+        // one for detecting cycles for this invocation.
+        if (cycleMap == null) {
+            cycleMap = new HashMap<String, String>();
+        }
+
+        // Put the current key in the cycle map.
+        cycleMap.put(currentKey, currentKey);
+
+        // Assume we have a value that is something like:
+        // "leading ${foo.${bar}} middle ${baz} trailing"
+
+        // Find the first ending '}' variable delimiter, which
+        // will correspond to the first deepest nested variable
+        // placeholder.
+        int stopDelim = val.indexOf(DELIM_STOP);
+
+        // Find the matching starting "${" variable delimiter
+        // by looping until we find a start delimiter that is
+        // greater than the stop delimiter we have found.
+        int startDelim = val.indexOf(DELIM_START);
+        while (stopDelim >= 0) {
+            int idx = val.indexOf(DELIM_START, startDelim + DELIM_START.length());
+            if ((idx < 0) || (idx > stopDelim)) {
+                break;
+            } else if (idx < stopDelim) {
+                startDelim = idx;
+            }
+        }
+
+        // If we do not have a start or stop delimiter, then just
+        // return the existing value.
+        if ((startDelim < 0) && (stopDelim < 0)) {
+            return val;
+        }
+        // At this point, we found a stop delimiter without a start,
+        // so throw an exception.
+        else if (((startDelim < 0) || (startDelim > stopDelim))
+                && (stopDelim >= 0)) {
+            throw new IllegalArgumentException(
+                    "stop delimiter with no start delimiter: "
+                            + val);
+        }
+
+        // At this point, we have found a variable placeholder so
+        // we must perform a variable substitution on it.
+        // Using the start and stop delimiter indices, extract
+        // the first, deepest nested variable placeholder.
+        String variable =
+                val.substring(startDelim + DELIM_START.length(), stopDelim);
+
+        // Verify that this is not a recursive variable reference.
+        if (cycleMap.get(variable) != null) {
+            throw new IllegalArgumentException(
+                    "recursive variable reference: " + variable);
+        }
+
+        // Get the value of the deepest nested variable placeholder.
+        // Try to configuration properties first.
+        String substValue = (configProps != null)
+                ? configProps.getProperty(variable, null)
+                : null;
+        if (substValue == null) {
+            // Ignore unknown property values.
+            substValue = System.getProperty(variable, "");
+        }
+
+        // Remove the found variable from the cycle map, since
+        // it may appear more than once in the value and we don't
+        // want such situations to appear as a recursive reference.
+        cycleMap.remove(variable);
+
+        // Append the leading characters, the substituted value of
+        // the variable, and the trailing characters to get the new
+        // value.
+        val = val.substring(0, startDelim)
+                + substValue
+                + val.substring(stopDelim + DELIM_STOP.length(), val.length());
+
+        // Now perform substitution again, since there could still
+        // be substitutions to make.
+        val = substVars(val, currentKey, cycleMap, configProps);
+
+        // Return the value.
+        return val;
+    }
+
+    /**
+     * Retrieve the arguments used when launching Karaf
+     *
+     * @return the arguments of the main karaf process
+     */
+    public String[] getArgs() {
+        return args;
+    }
+
+    public int getExitCode() {
+        return exitCode;
+    }
+
+    public void setExitCode(int exitCode) {
+        this.exitCode = exitCode;
+    }
+
+    public Framework getFramework() {
+        return framework;
+    }
+    
+    public void lock(Properties props) {
+        try {
+            if (Boolean.parseBoolean(props.getProperty(PROPERTY_USE_LOCK, "true"))) {
+                doLock(props);
+            } else {
+                setStartLevel(defaultStartLevel);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void doLock(Properties props) throws Exception {
+        File dataDir = new File(System.getProperty(PROP_KARAF_DATA));
+        String clz = props.getProperty(PROPERTY_LOCK_CLASS, PROPERTY_LOCK_CLASS_DEFAULT);
+        lock = (Lock) Class.forName(clz).getConstructor(Properties.class).newInstance(props);
+        boolean lockLogged = false;
+        while (!exiting) {
+            if (lock.lock()) {
+                if (lockLogged) {
+                    LOG.info("Lock acquired.");
+                }
+                setupShutdown(props);
+                setStartLevel(defaultStartLevel);
+                for (;;) {
+                    if (!dataDir.isDirectory()) {
+                        LOG.info("Data directory does not exist anymore, halting");
+                        framework.stop();
+                        System.exit(-1);
+                        return;
+                    }
+                    if (!lock.isAlive()) {
+                        break;
+                    }
+                    Thread.sleep(lockDelay);
+                }
+                if (framework.getState() == Bundle.ACTIVE && !exiting) {
+                    LOG.info("Lost the lock, reducing start level to " + lockStartLevel);
+                    synchronized (startLevelLock) {
+                        setStartLevel(lockStartLevel);
+                        
+                        // we have to wait for the start level to be reduced here because
+                        // if the lock is regained before the start level is fully changed
+                        // things may not come up as expected
+                        LOG.fine("Waiting for start level change to complete...");
+                        startLevelLock.wait(shutdownTimeout);
+                    }
+                }
+            } else {
+                setStartLevel(lockStartLevel);
+                if (!lockLogged) {
+                    LOG.info("Waiting for the lock ...");
+                    lockLogged = true;
+                }
+            }
+            Thread.sleep(lockDelay);
+        }
+    }
+
+    public void unlock() throws Exception {
+        if (lock != null) {
+            lock.release();
+        }
+    }
+
+    protected void setStartLevel(int level) throws Exception {
+        BundleContext ctx = framework.getBundleContext();
+        ServiceReference[] refs = ctx.getServiceReferences(StartLevel.class.getName(), null);
+        StartLevel sl = (StartLevel) ctx.getService(refs[0]);
+        sl.setStartLevel(level);
+    }
+
+
+    private Random random = null;
+    private ServerSocket shutdownSocket;
+
+    protected void setupShutdown(Properties props) {
+        writePid(props);
+        try {
+            int port = Integer.parseInt(props.getProperty(KARAF_SHUTDOWN_PORT, "0"));
+            String host = props.getProperty(KARAF_SHUTDOWN_HOST, "localhost");
+            String portFile = props.getProperty(KARAF_SHUTDOWN_PORT_FILE);
+            String shutdown = props.getProperty(KARAF_SHUTDOWN_COMMAND);
+            if (shutdown == null) {
+                shutdown = UUID.randomUUID().toString();
+                File file = new File(karafEtc, CONFIG_PROPERTIES_FILE_NAME);
+                Writer writer = new FileWriter(file, true);
+                try {
+                    writer.write("\n#\n# Generated command shutdown\n,#\n"
+                            + KARAF_SHUTDOWN_COMMAND + " = " + shutdown + "\n");
+                } finally {
+                    writer.close();
+                }
+            }
+            if (port >= 0) {
+                shutdownSocket = new ServerSocket(port, 1, InetAddress.getByName(host));
+                if (port == 0) {
+                    port = shutdownSocket.getLocalPort();
+                }
+                if (portFile != null) {
+                    Writer w = new OutputStreamWriter(new FileOutputStream(portFile));
+                    w.write(Integer.toString(port));
+                    w.close();
+                }
+                Thread thread = new ShutdownSocketThread(shutdown);
+                thread.setDaemon(true);
+                thread.start();
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void writePid(Properties props) {
+        try {
+            String pidFile = props.getProperty(KARAF_SHUTDOWN_PID_FILE);
+            if (pidFile != null) {
+                RuntimeMXBean rtb = ManagementFactory.getRuntimeMXBean();
+                String processName = rtb.getName();
+                Pattern pattern = Pattern.compile("^([0-9]+)@.+$", Pattern.CASE_INSENSITIVE);
+                Matcher matcher = pattern.matcher(processName);
+                if (matcher.matches()) {
+                    int pid = Integer.parseInt(matcher.group(1));
+                    Writer w = new OutputStreamWriter(new FileOutputStream(pidFile));
+                    w.write(Integer.toString(pid));
+                    w.close();
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public Lock getLock() {
+        return lock;
+    }
+
+    private class ShutdownSocketThread extends Thread {
+
+        private final String shutdown;
+
+        public ShutdownSocketThread(String shutdown) {
+            this.shutdown = shutdown;
+        }
+
+        public void run() {
+            try {
+                while (true) {
+                    // Wait for the next connection
+                    Socket socket = null;
+                    InputStream stream = null;
+                    try {
+                        socket = shutdownSocket.accept();
+                        socket.setSoTimeout(10 * 1000);  // Ten seconds
+                        stream = socket.getInputStream();
+                    } catch (AccessControlException ace) {
+                        LOG.log(Level.WARNING, "Karaf shutdown socket: security exception: "
+                                           + ace.getMessage(), ace);
+                        continue;
+                    } catch (IOException e) {
+                        LOG.log(Level.SEVERE, "Karaf shutdown socket: accept: ", e);
+                        System.exit(1);
+                    }
+
+                    // Read a set of characters from the socket
+                    StringBuilder command = new StringBuilder();
+                    int expected = 1024; // Cut off to avoid DoS attack
+                    while (expected < shutdown.length()) {
+                        if (random == null) {
+                            random = new Random();
+                        }
+                        expected += (random.nextInt() % 1024);
+                    }
+                    while (expected > 0) {
+                        int ch;
+                        try {
+                            ch = stream.read();
+                        } catch (IOException e) {
+                            LOG.log(Level.WARNING, "Karaf shutdown socket:  read: ", e);
+                            ch = -1;
+                        }
+                        if (ch < 32) {  // Control character or EOF terminates loop
+                            break;
+                        }
+                        command.append((char) ch);
+                        expected--;
+                    }
+
+                    // Close the socket now that we are done with it
+                    try {
+                        socket.close();
+                    } catch (IOException e) {
+                        // Ignore
+                    }
+
+                    // Match against our command string
+                    boolean match = command.toString().equals(shutdown);
+                    if (match) {
+                        LOG.log(Level.INFO, "Karaf shutdown socket: received shutdown command. Stopping framework...");
+                        framework.stop();
+                        break;
+                    } else {
+                        LOG.log(Level.WARNING, "Karaf shutdown socket:  Invalid command '" +
+                                           command.toString() + "' received");
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                try {
+                    shutdownSocket.close();
+                } catch (IOException e) {
+                    // Ignore
+                }
+            }
+        }
+    }
 }

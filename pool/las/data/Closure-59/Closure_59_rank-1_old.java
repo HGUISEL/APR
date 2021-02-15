@@ -1,315 +1,220 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
- * agreements. See the NOTICE file distributed with this work for additional information regarding
- * copyright ownership. The ASF licenses this file to You under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.geode.internal.security;
+package org.apache.pdfbox.pdmodel.interactive.form;
 
 import java.io.IOException;
-import java.security.AccessController;
-import java.util.Properties;
-import java.util.Set;
-import java.util.concurrent.Callable;
 
-import org.apache.commons.lang.SerializationException;
-import org.apache.commons.lang.StringUtils;
-import org.apache.logging.log4j.Logger;
-import org.apache.shiro.SecurityUtils;
-import org.apache.shiro.ShiroException;
-import org.apache.shiro.session.Session;
-import org.apache.shiro.subject.Subject;
-import org.apache.shiro.subject.support.SubjectThreadState;
-import org.apache.shiro.util.ThreadContext;
-import org.apache.shiro.util.ThreadState;
-
-import org.apache.geode.GemFireIOException;
-import org.apache.geode.internal.cache.EntryEventImpl;
-import org.apache.geode.internal.logging.LogService;
-import org.apache.geode.internal.security.shiro.GeodeAuthenticationToken;
-import org.apache.geode.internal.security.shiro.SecurityManagerProvider;
-import org.apache.geode.internal.security.shiro.ShiroPrincipal;
-import org.apache.geode.internal.util.BlobHelper;
-import org.apache.geode.security.AuthenticationFailedException;
-import org.apache.geode.security.AuthenticationRequiredException;
-import org.apache.geode.security.GemFireSecurityException;
-import org.apache.geode.security.NotAuthorizedException;
-import org.apache.geode.security.PostProcessor;
-import org.apache.geode.security.ResourcePermission;
-import org.apache.geode.security.ResourcePermission.Operation;
-import org.apache.geode.security.ResourcePermission.Resource;
-import org.apache.geode.security.ResourcePermission.Target;
-import org.apache.geode.security.SecurityManager;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSNumber;
+import org.apache.pdfbox.cos.COSString;
 
 /**
- * Security service with SecurityManager and an optional PostProcessor.
+ * Base class for fields which use "Variable Text".
+ * These fields construct an appearance stream dynamically at viewing time.
+ *
+ * @author Ben Litchfield
  */
-public class IntegratedSecurityService implements SecurityService {
-  private static Logger logger = LogService.getLogger(LogService.SECURITY_LOGGER_NAME);
-  public static final String CREDENTIALS_SESSION_ATTRIBUTE = "credentials";
+public abstract class PDVariableText extends PDField
+{
 
-  private final PostProcessor postProcessor;
-  private final SecurityManager securityManager;
+    /**
+     * A Q value.
+     */
+    public static final int QUADDING_LEFT = 0;
 
-  /**
-   * this creates a security service using a SecurityManager
-   *
-   * @param provider this provides shiro security manager
-   * @param postProcessor this can be null
-   */
-  IntegratedSecurityService(SecurityManagerProvider provider, PostProcessor postProcessor) {
-    // provider must provide a shiro security manager, otherwise, this is not integrated security
-    // service at all.
-    assert provider.getShiroSecurityManager() != null;
-    SecurityUtils.setSecurityManager(provider.getShiroSecurityManager());
+    /**
+     * A Q value.
+     */
+    public static final int QUADDING_CENTERED = 1;
 
-    this.securityManager = provider.getSecurityManager();
-    this.postProcessor = postProcessor;
-  }
+    /**
+     * A Q value.
+     */
+    public static final int QUADDING_RIGHT = 2;
 
-  @Override
-  public PostProcessor getPostProcessor() {
-    return this.postProcessor;
-  }
-
-  @Override
-  public SecurityManager getSecurityManager() {
-    return this.securityManager;
-  }
-
-  /**
-   * It first looks the shiro subject in AccessControlContext since JMX will use multiple threads to
-   * process operations from the same client, then it looks into Shiro's thead context.
-   *
-   * @return the shiro subject, null if security is not enabled
-   */
-  @Override
-  public Subject getSubject() {
-    Subject currentUser;
-
-    // First try get the principal out of AccessControlContext instead of Shiro's Thread context
-    // since threads can be shared between JMX clients.
-    javax.security.auth.Subject jmxSubject =
-        javax.security.auth.Subject.getSubject(AccessController.getContext());
-
-    if (jmxSubject != null) {
-      Set<ShiroPrincipal> principals = jmxSubject.getPrincipals(ShiroPrincipal.class);
-      if (!principals.isEmpty()) {
-        ShiroPrincipal principal = principals.iterator().next();
-        currentUser = principal.getSubject();
-        ThreadContext.bind(currentUser);
-        return currentUser;
-      }
+    /**
+     * @see PDField#PDField(PDAcroForm)
+     *
+     * @param theAcroForm The acroform.
+     */
+    PDVariableText(PDAcroForm theAcroForm)
+    {
+        super( theAcroForm );
     }
 
-    // in other cases like rest call, client operations, we get it from the current thread
-    currentUser = SecurityUtils.getSubject();
-
-    if (currentUser == null || currentUser.getPrincipal() == null) {
-      throw new GemFireSecurityException("Error: Anonymous User");
+    /**
+     * Constructor.
+     * 
+     * @param theAcroForm The form that this field is part of.
+     * @param field the PDF object to represent as a field.
+     * @param parentNode the parent node of the node to be created
+     */
+    protected PDVariableText(PDAcroForm theAcroForm, COSDictionary field, PDFieldTreeNode parentNode)
+    {
+        super( theAcroForm, field, parentNode);
     }
 
-    return currentUser;
-  }
-
-  /**
-   * @return return a shiro subject
-   */
-  @Override
-  public Subject login(final Properties credentials) {
-    if (credentials == null) {
-      throw new AuthenticationRequiredException("credentials are null");
+    /**
+     * Get the default appearance.
+     * 
+     * This is an inheritable attribute.
+     * 
+     * The default appearance contains a set of default graphics and text operators
+     * to define the field’s text size and color.
+     * 
+     * @return the DA element of the dictionary object
+     */
+    public String getDefaultAppearance()
+    {
+        COSString defaultAppearance = (COSString) getInheritableAttribute(COSName.DA);
+        return defaultAppearance.getString();
     }
 
-    // this makes sure it starts with a clean user object
-    ThreadContext.remove();
-
-    Subject currentUser = SecurityUtils.getSubject();
-    GeodeAuthenticationToken token = new GeodeAuthenticationToken(credentials);
-    try {
-      logger.debug("Logging in " + token.getPrincipal());
-      currentUser.login(token);
-    } catch (ShiroException e) {
-      logger.info(e.getMessage(), e);
-      throw new AuthenticationFailedException(
-          "Authentication error. Please check your credentials.", e);
+    /**
+     * Set the default appearance.
+     * 
+     * This will set the local default appearance for the variable text field only not 
+     * affecting a default appearance in the parent hierarchy.
+     * 
+     * Providing null as the value will remove the local default appearance.
+     * 
+     * @param daValue a string describing the default appearance
+     */
+    public void setDefaultAppearance(String daValue)
+    {
+        if (daValue != null)
+        {
+            setInheritableAttribute(COSName.DA, new COSString(daValue));
+        }
+        else
+        {
+            removeInheritableAttribute(COSName.DA);
+        }
+    }
+    
+    /**
+     * Get the default style string.
+     * 
+     * The default style string defines the default style for
+     * rich text fields.
+     * 
+     * @return the DS element of the dictionary object
+     */
+    public String getDefaultStyleString()
+    {
+        COSString defaultStyleString = (COSString) getCOSObject().getDictionaryObject(COSName.DS);
+        return defaultStyleString.getString();
     }
 
-    Session currentSession = currentUser.getSession();
-    currentSession.setAttribute(CREDENTIALS_SESSION_ATTRIBUTE, credentials);
-    return currentUser;
-  }
+    /**
+     * Set the default style string.
+     * 
+     * Providing null as the value will remove the default style string.
+     * 
+     * @param defaultStyleString a string describing the default style.
+     */
+    public void setDefaultStyleString(String defaultStyleString)
+    {
+        if (defaultStyleString != null)
+        {
+            getCOSObject().setItem(COSName.DS, new COSString(defaultStyleString));
+        }
+        else
+        {
+            getCOSObject().removeItem(COSName.DS);
+        }
+    }    
 
-  @Override
-  public void logout() {
-    Subject currentUser = getSubject();
-    try {
-      logger.debug("Logging out " + currentUser.getPrincipal());
-      currentUser.logout();
-    } catch (ShiroException e) {
-      logger.info(e.getMessage(), e);
-      throw new GemFireSecurityException(e.getMessage(), e);
+    /**
+     * This will get the 'quadding' or justification of the text to be displayed.
+     * 
+     * This is an inheritable attribute.
+     * 
+     * 0 - Left(default)<br/>
+     * 1 - Centered<br />
+     * 2 - Right<br />
+     * Please see the QUADDING_CONSTANTS.
+     *
+     * @return The justification of the text strings.
+     */
+    public int getQ()
+    {
+        int retval = 0;
+
+        COSNumber number = (COSNumber)getInheritableAttribute(COSName.Q );
+        
+        if( number != null )
+        {
+            retval = number.intValue();
+        }
+        return retval;
     }
 
-    // clean out Shiro's thread local content
-    ThreadContext.remove();
-  }
-
-  @Override
-  public Callable associateWith(final Callable callable) {
-    Subject currentUser = getSubject();
-    return currentUser.associateWith(callable);
-  }
-
-  /**
-   * Binds the passed-in subject to the executing thread. Usage:
-   *
-   * <pre>
-   * ThreadState state = null;
-   * try {
-   *   state = securityService.bindSubject(subject);
-   *   // do the rest of the work as this subject
-   * } finally {
-   *   if (state != null)
-   *     state.clear();
-   * }
-   * </pre>
-   */
-  @Override
-  public ThreadState bindSubject(final Subject subject) {
-    if (subject == null) {
-      throw new GemFireSecurityException("Error: Anonymous User");
+    /**
+     * This will set the quadding/justification of the text.  See QUADDING constants.
+     *
+     * @param q The new text justification.
+     */
+    public void setQ( int q )
+    {
+        getCOSObject().setInt( COSName.Q, q );
     }
-
-    ThreadState threadState = new SubjectThreadState(subject);
-    threadState.bind();
-    return threadState;
-  }
-
-  @Override
-  public void authorize(Resource resource, Operation operation) {
-    authorize(resource, operation, Target.ALL, ResourcePermission.ALL);
-  }
-
-  @Override
-  public void authorize(Resource resource, Operation operation, Target target) {
-    authorize(resource, operation, target, ResourcePermission.ALL);
-  }
-
-  @Override
-  public void authorize(Resource resource, Operation operation, String target) {
-    authorize(resource, operation, target, ResourcePermission.ALL);
-  }
-
-  @Override
-  public void authorize(Resource resource, Operation operation, Target target, String key) {
-    authorize(new ResourcePermission(resource, operation, target, key));
-  }
-
-  @Override
-  public void authorize(Resource resource, Operation operation, String target, String key) {
-    authorize(new ResourcePermission(resource, operation, target, key));
-  }
-
-  @Override
-  public void authorize(final ResourcePermission context) {
-    if (context == null) {
-      return;
+    
+    /**
+     * Get the fields rich text value.
+     * 
+     * @return the rich text value string
+     * @throws IOException if the field dictionary entry is not a text type
+     */
+    public String getRichTextValue() throws IOException
+    {
+        String string = valueToString(getInheritableAttribute(COSName.RV));
+        if (string != null)
+        {
+            return string;
+        }
+        return "";
     }
-    if (context.getResource() == Resource.NULL && context.getOperation() == Operation.NULL) {
-      return;
+    
+    /**
+     * Set the fields rich text value.
+     * 
+     * <p>
+     * Setting the rich text value will not generate the appearance
+     * for the field.
+     * <br/>
+     * You can set {@link PDAcroForm#setNeedAppearances(Boolean)} to
+     * signal a conforming reader to generate the appearance stream.
+     * </p>
+     * 
+     * Providing null as the value will remove the default style string.
+     * 
+     * @param richTextValue a rich text string
+     */
+    public void setRichTextValue(String richTextValue)
+    {
+        if (richTextValue != null)
+        {
+            getCOSObject().setItem(COSName.RV, new COSString(richTextValue));
+        }
+        else
+        {
+            getCOSObject().removeItem(COSName.RV);
+        }        
     }
-
-    Subject currentUser = getSubject();
-    try {
-      currentUser.checkPermission(context);
-    } catch (ShiroException e) {
-      String msg = currentUser.getPrincipal() + " not authorized for " + context;
-      logger.info(msg);
-      throw new NotAuthorizedException(msg, e);
-    }
-  }
-
-  @Override
-  public void close() {
-    if (this.securityManager != null) {
-      this.securityManager.close();
-    }
-    if (this.postProcessor != null) {
-      this.postProcessor.close();
-    }
-
-    ThreadContext.remove();
-    SecurityUtils.setSecurityManager(null);
-  }
-
-  /**
-   * postProcess call already has this logic built in, you don't need to call this everytime you
-   * call postProcess. But if your postProcess is pretty involved with preparations and you need to
-   * bypass it entirely, call this first.
-   */
-  @Override
-  public boolean needPostProcess() {
-    return this.postProcessor != null;
-  }
-
-  @Override
-  public Object postProcess(final String regionPath, final Object key, final Object value,
-      final boolean valueIsSerialized) {
-    return postProcess(null, regionPath, key, value, valueIsSerialized);
-  }
-
-  @Override
-  public Object postProcess(Object principal, final String regionPath, final Object key,
-      final Object value, final boolean valueIsSerialized) {
-    if (!needPostProcess()) {
-      return value;
-    }
-
-    if (principal == null) {
-      principal = getSubject().getPrincipal();
-    }
-
-    String regionName = StringUtils.stripStart(regionPath, "/");
-    Object newValue;
-
-    // if the data is a byte array, but the data itself is supposed to be an object, we need to
-    // deserialize it before we pass it to the callback.
-    if (valueIsSerialized && value instanceof byte[]) {
-      try {
-        Object oldObj = EntryEventImpl.deserialize((byte[]) value);
-        Object newObj = this.postProcessor.processRegionValue(principal, regionName, key, oldObj);
-        newValue = BlobHelper.serializeToBlob(newObj);
-      } catch (IOException | SerializationException e) {
-        throw new GemFireIOException("Exception de/serializing entry value", e);
-      }
-    } else {
-      newValue = this.postProcessor.processRegionValue(principal, regionName, key, value);
-    }
-
-    return newValue;
-  }
-
-  @Override
-  public boolean isIntegratedSecurity() {
-    return true;
-  }
-
-  @Override
-  public boolean isClientSecurityRequired() {
-    return true;
-  }
-
-  @Override
-  public boolean isPeerSecurityRequired() {
-    return true;
-  }
 }

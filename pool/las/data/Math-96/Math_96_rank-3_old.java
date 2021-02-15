@@ -1,14 +1,13 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- * <p/>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p/>
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -16,299 +15,651 @@
  * limitations under the License.
  */
 
-package org.apache.atlas.repository.audit;
+package org.apache.commons.dbcp2;
 
-import org.apache.atlas.AtlasException;
-import org.apache.atlas.EntityAuditEvent;
-import org.apache.atlas.EntityAuditEvent.EntityAuditAction;
-import org.apache.atlas.RequestContextV1;
-import org.apache.atlas.listener.EntityChangeListener;
-import org.apache.atlas.typesystem.IReferenceableInstance;
-import org.apache.atlas.typesystem.IStruct;
-import org.apache.atlas.typesystem.ITypedReferenceableInstance;
-import org.apache.atlas.typesystem.json.InstanceSerialization;
-import org.apache.atlas.typesystem.types.AttributeInfo;
-import org.apache.commons.collections.CollectionUtils;
-import org.apache.commons.collections.MapUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-
-import javax.inject.Inject;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
+import java.net.URL;
+import java.sql.CallableStatement;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.util.Map;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+import java.io.InputStream;
+import java.io.Reader;
+import java.sql.SQLException;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
+/* JDBC_4_ANT_KEY_END */
 
 /**
- * Listener on entity create/update/delete, tag add/delete. Adds the corresponding audit event to the audit repository.
+ * A base delegating implementation of {@link CallableStatement}.
+ * <p>
+ * All of the methods from the {@link CallableStatement} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement Statement tracking and
+ * logging of code which created the Statement. Tracking the
+ * Statement ensures that the Connection which created it can
+ * close any open Statement's on Connection close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House
+ * @author Dirk Verbeeck
+ * @version $Revision$ $Date$
  */
-@Component
-public class EntityAuditListener implements EntityChangeListener {
-    private static final Logger LOG = LoggerFactory.getLogger(EntityAuditListener.class);
+public class DelegatingCallableStatement extends DelegatingPreparedStatement
+        implements CallableStatement {
 
-    private EntityAuditRepository auditRepository;
-
-    @Inject
-    public EntityAuditListener(EntityAuditRepository auditRepository) {
-        this.auditRepository = auditRepository;
+    /**
+     * Create a wrapper for the Statement which traces this
+     * Statement to the Connection which created it and the
+     * code which created it.
+     *
+     * @param c the {@link DelegatingConnection} that created this statement
+     * @param s the {@link CallableStatement} to delegate all calls to
+     */
+    public DelegatingCallableStatement(DelegatingConnection c,
+                                       CallableStatement s) {
+        super(c, s);
     }
 
-    @Override
-    public void onEntitiesAdded(Collection<ITypedReferenceableInstance> entities, boolean isImport) throws AtlasException {
-        List<EntityAuditEvent> events = new ArrayList<>();
-        for (ITypedReferenceableInstance entity : entities) {
-            EntityAuditEvent event = createEvent(entity, isImport ? EntityAuditAction.ENTITY_IMPORT_CREATE : EntityAuditAction.ENTITY_CREATE);
-            events.add(event);
+    public boolean equals(Object obj) {
+    	if (this == obj) return true;
+        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
+        if (delegate == null) {
+            return false;
         }
-
-        auditRepository.putEvents(events);
-    }
-
-    @Override
-    public void onEntitiesUpdated(Collection<ITypedReferenceableInstance> entities, boolean isImport) throws AtlasException {
-        List<EntityAuditEvent> events = new ArrayList<>();
-        for (ITypedReferenceableInstance entity : entities) {
-            EntityAuditEvent event = createEvent(entity, isImport ? EntityAuditAction.ENTITY_IMPORT_UPDATE : EntityAuditAction.ENTITY_UPDATE);
-            events.add(event);
+        if (obj instanceof DelegatingCallableStatement) {
+            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
+            return delegate.equals(s.getInnermostDelegate());
         }
-
-        auditRepository.putEvents(events);
-    }
-
-    @Override
-    public void onTraitsAdded(ITypedReferenceableInstance entity, Collection<? extends IStruct> traits) throws AtlasException {
-        if (traits != null) {
-            for (IStruct trait : traits) {
-                EntityAuditEvent event = createEvent(entity, EntityAuditAction.TAG_ADD,
-                                                     "Added trait: " + InstanceSerialization.toJson(trait, true));
-
-                auditRepository.putEvents(event);
-            }
+        else {
+            return delegate.equals(obj);
         }
     }
 
-    @Override
-    public void onTraitsDeleted(ITypedReferenceableInstance entity, Collection<String> traitNames) throws AtlasException {
-        if (traitNames != null) {
-            for (String traitName : traitNames) {
-                EntityAuditEvent event = createEvent(entity, EntityAuditAction.TAG_DELETE, "Deleted trait: " + traitName);
+    /** Sets my delegate. */
+    public void setDelegate(CallableStatement s) {
+        super.setDelegate(s);
+        _stmt = s;
+    }
 
-                auditRepository.putEvents(event);
-            }
+    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
+
+    public boolean wasNull() throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public String getString(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int i, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public URL getURL(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void setURL(String parameterName, URL val) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setBoolean(String parameterName, boolean x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setByte(String parameterName, byte x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setShort(String parameterName, short x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setInt(String parameterName, int x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setLong(String parameterName, long x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setFloat(String parameterName, float x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDouble(String parameterName, double x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setString(String parameterName, String x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBytes(String parameterName, byte [] x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDate(String parameterName, Date x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
+    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
+
+    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public String getString(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public byte[] getBytes(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public URL getURL(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+/* JDBC_4_ANT_KEY_BEGIN */
+
+    public RowId getRowId(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
         }
     }
 
-    @Override
-    public void onTraitsUpdated(ITypedReferenceableInstance entity, Collection<? extends IStruct> traits) throws AtlasException {
-        if (traits != null) {
-            for (IStruct trait : traits) {
-                EntityAuditEvent event = createEvent(entity, EntityAuditAction.TAG_UPDATE,
-                                                     "Updated trait: " + InstanceSerialization.toJson(trait, true));
-
-                auditRepository.putEvents(event);
-            }
+    public RowId getRowId(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
         }
     }
 
-    @Override
-    public void onEntitiesDeleted(Collection<ITypedReferenceableInstance> entities, boolean isImport) throws AtlasException {
-        List<EntityAuditEvent> events = new ArrayList<>();
-        for (ITypedReferenceableInstance entity : entities) {
-            EntityAuditEvent event = createEvent(entity, isImport ? EntityAuditAction.ENTITY_IMPORT_DELETE : EntityAuditAction.ENTITY_DELETE, "Deleted entity");
-            events.add(event);
+    public void setRowId(String parameterName, RowId value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setRowId(parameterName, value);
         }
-
-        auditRepository.putEvents(events);
-    }
-
-    public List<EntityAuditEvent> getAuditEvents(String guid) throws AtlasException{
-        return auditRepository.listEvents(guid, null, (short) 10);
-    }
-
-    private EntityAuditEvent createEvent(ITypedReferenceableInstance entity, EntityAuditAction action)
-            throws AtlasException {
-        String detail = getAuditEventDetail(entity, action);
-
-        return createEvent(entity, action, detail);
-    }
-
-    private EntityAuditEvent createEvent(ITypedReferenceableInstance entity, EntityAuditAction action, String details)
-            throws AtlasException {
-        return new EntityAuditEvent(entity.getId()._getId(), RequestContextV1.get().getRequestTime(), RequestContextV1.get().getUser(), action, details, entity);
-    }
-
-    private String getAuditEventDetail(ITypedReferenceableInstance entity, EntityAuditAction action) throws AtlasException {
-        Map<String, Object> prunedAttributes = pruneEntityAttributesForAudit(entity);
-
-        String auditPrefix  = getAuditPrefix(action);
-        String auditString  = auditPrefix + InstanceSerialization.toJson(entity, true);
-        byte[] auditBytes   = auditString.getBytes(StandardCharsets.UTF_8);
-        long   auditSize    = auditBytes != null ? auditBytes.length : 0;
-        long   auditMaxSize = auditRepository.repositoryMaxSize();
-
-        if (auditMaxSize >= 0 && auditSize > auditMaxSize) { // don't store attributes in audit
-            LOG.warn("audit record too long: entityType={}, guid={}, size={}; maxSize={}. entity attribute values not stored in audit",
-                    entity.getTypeName(), entity.getId()._getId(), auditSize, auditMaxSize);
-
-            Map<String, Object> attrValues = entity.getValuesMap();
-
-            clearAttributeValues(entity);
-
-            auditString = auditPrefix + InstanceSerialization.toJson(entity, true);
-
-            addAttributeValues(entity, attrValues);
-        }
-
-        restoreEntityAttributes(entity, prunedAttributes);
-
-        return auditString;
-    }
-
-    private void clearAttributeValues(IReferenceableInstance entity) throws AtlasException {
-        Map<String, Object> attributesMap = entity.getValuesMap();
-
-        if (MapUtils.isNotEmpty(attributesMap)) {
-            for (String attribute : attributesMap.keySet()) {
-                entity.setNull(attribute);
-            }
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-    private void addAttributeValues(ITypedReferenceableInstance entity, Map<String, Object> attributesMap) throws AtlasException {
-        if (MapUtils.isNotEmpty(attributesMap)) {
-            for (String attr : attributesMap.keySet()) {
-                entity.set(attr, attributesMap.get(attr));
-            }
+    public void setNString(String parameterName, String value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNString(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-    private Map<String, Object> pruneEntityAttributesForAudit(ITypedReferenceableInstance entity) throws AtlasException {
-        Map<String, Object> ret               = null;
-        Map<String, Object> entityAttributes  = entity.getValuesMap();
-        List<String>        excludeAttributes = auditRepository.getAuditExcludeAttributes(entity.getTypeName());
-
-        if (CollectionUtils.isNotEmpty(excludeAttributes) && MapUtils.isNotEmpty(entityAttributes)) {
-            Map<String, AttributeInfo> attributeInfoMap = entity.fieldMapping().fields;
-
-            for (String attrName : entityAttributes.keySet()) {
-                Object        attrValue = entityAttributes.get(attrName);
-                AttributeInfo attrInfo  = attributeInfoMap.get(attrName);
-
-                if (excludeAttributes.contains(attrName)) {
-                    if (ret == null) {
-                        ret = new HashMap<>();
-                    }
-
-                    ret.put(attrName, attrValue);
-                    entity.setNull(attrName);
-                } else if (attrInfo.isComposite) {
-                    if (attrValue instanceof Collection) {
-                        for (Object attribute : (Collection) attrValue) {
-                            if (attribute instanceof ITypedReferenceableInstance) {
-                                ret = pruneAttributes(ret, (ITypedReferenceableInstance) attribute);
-                            }
-                        }
-                    } else if (attrValue instanceof ITypedReferenceableInstance) {
-                        ret = pruneAttributes(ret, (ITypedReferenceableInstance) attrValue);
-                    }
-                }
-            }
+    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
         }
-
-        return ret;
-    }
-
-    private Map<String, Object> pruneAttributes(Map<String, Object> ret, ITypedReferenceableInstance attribute) throws AtlasException {
-        ITypedReferenceableInstance attrInstance = attribute;
-        Map<String, Object>         prunedAttrs  = pruneEntityAttributesForAudit(attrInstance);
-
-        if (MapUtils.isNotEmpty(prunedAttrs)) {
-            if (ret == null) {
-                ret = new HashMap<>();
-            }
-
-            ret.put(attrInstance.getId()._getId(), prunedAttrs);
-        }
-        return ret;
-    }
-
-    private void restoreEntityAttributes(ITypedReferenceableInstance entity, Map<String, Object> prunedAttributes) throws AtlasException {
-        if (MapUtils.isEmpty(prunedAttributes)) {
-            return;
-        }
-
-        Map<String, Object> entityAttributes = entity.getValuesMap();
-
-        if (MapUtils.isNotEmpty(entityAttributes)) {
-            Map<String, AttributeInfo> attributeInfoMap = entity.fieldMapping().fields;
-
-            for (String attrName : entityAttributes.keySet()) {
-                Object        attrValue = entityAttributes.get(attrName);
-                AttributeInfo attrInfo  = attributeInfoMap.get(attrName);
-
-                if (prunedAttributes.containsKey(attrName)) {
-                    entity.set(attrName, prunedAttributes.get(attrName));
-                } else if (attrInfo.isComposite) {
-                    if (attrValue instanceof Collection) {
-                        for (Object attributeEntity : (Collection) attrValue) {
-                            if (attributeEntity instanceof ITypedReferenceableInstance) {
-                                restoreAttributes(prunedAttributes, (ITypedReferenceableInstance) attributeEntity);
-                            }
-                        }
-                    } else if (attrValue instanceof ITypedReferenceableInstance) {
-                        restoreAttributes(prunedAttributes, (ITypedReferenceableInstance) attrValue);
-                    }
-                }
-            }
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-    private void restoreAttributes(Map<String, Object> prunedAttributes, ITypedReferenceableInstance attributeEntity) throws AtlasException {
-        Object                      obj          = prunedAttributes.get(attributeEntity.getId()._getId());
-
-        if (obj instanceof Map) {
-            restoreEntityAttributes(attributeEntity, (Map) obj);
+    public void setNClob(String parameterName, NClob value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
         }
     }
 
-    private String getAuditPrefix(EntityAuditAction action) {
-        final String ret;
-
-        switch (action) {
-            case ENTITY_CREATE:
-                ret = "Created: ";
-                break;
-            case ENTITY_UPDATE:
-                ret = "Updated: ";
-                break;
-            case ENTITY_DELETE:
-                ret = "Deleted: ";
-                break;
-            case TAG_ADD:
-                ret = "Added trait: ";
-                break;
-            case TAG_DELETE:
-                ret = "Deleted trait: ";
-                break;
-            case TAG_UPDATE:
-                ret = "Updated trait: ";
-                break;
-            case ENTITY_IMPORT_CREATE:
-                ret = "Created by import: ";
-                break;
-            case ENTITY_IMPORT_UPDATE:
-                ret = "Updated by import: ";
-                break;
-            case ENTITY_IMPORT_DELETE:
-                ret = "Deleted by import: ";
-                break;
-            default:
-                ret = "Unknown: ";
+    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
         }
-
-        return ret;
+        catch (SQLException e) {
+            handleException(e);
+        }
     }
+
+    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public NClob getNClob(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public NClob getNClob(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setBlob(String parameterName, Blob blob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, blob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Clob clob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, clob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setNClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+/* JDBC_4_ANT_KEY_END */
 }

@@ -1,427 +1,457 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package com.fasterxml.jackson.databind.deser.std;
 
-package org.apache.flink.runtime.webmonitor;
-
-import akka.actor.ActorSystem;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelInitializer;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http.router.Handler;
-import io.netty.handler.codec.http.router.Router;
-import org.apache.commons.io.FileUtils;
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.akka.AkkaUtils;
-import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
-import org.apache.flink.runtime.webmonitor.files.StaticFileServerHandler;
-import org.apache.flink.runtime.webmonitor.handlers.ClusterOverviewHandler;
-import org.apache.flink.runtime.webmonitor.handlers.ConstantTextHandler;
-import org.apache.flink.runtime.webmonitor.handlers.CurrentJobIdsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.CurrentJobsOverviewHandler;
-import org.apache.flink.runtime.webmonitor.handlers.DashboardConfigHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JarAccessDeniedHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JarDeleteHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JarListHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JarPlanHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JarRunHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JarUploadHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobAccumulatorsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobCancellationHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobCheckpointsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobConfigHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobDetailsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobExceptionsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobManagerConfigHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobPlanHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobStoppingHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobVertexAccumulatorsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobVertexBackPressureHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobVertexCheckpointsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobVertexDetailsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.JobVertexTaskManagersHandler;
-import org.apache.flink.runtime.webmonitor.handlers.RequestHandler;
-import org.apache.flink.runtime.webmonitor.handlers.SubtaskCurrentAttemptDetailsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.SubtaskExecutionAttemptAccumulatorsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.SubtaskExecutionAttemptDetailsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.SubtasksAllAccumulatorsHandler;
-import org.apache.flink.runtime.webmonitor.handlers.SubtasksTimesHandler;
-import org.apache.flink.runtime.webmonitor.handlers.TaskManagersHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import scala.concurrent.Promise;
-import scala.concurrent.duration.FiniteDuration;
-
-import java.io.File;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.util.*;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.io.NumberInput;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.introspect.AnnotatedMethod;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.EnumResolver;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
 
 /**
- * The root component of the web runtime monitor. This class starts the web server and creates
- * all request handlers for the REST API.
- * <p>
- * The web runtime monitor is based in Netty HTTP. It uses the Netty-Router library to route
- * HTTP requests of different paths to different response handlers. In addition, it serves the static
- * files of the web frontend, such as HTML, CSS, or JS files.
+ * Default {@link KeyDeserializer} implementation used for most {@link java.util.Map}
+ * types Jackson supports.
+ * Implemented as "chameleon" (or swiss pocket knife) class; not particularly elegant,
+ * but helps reduce number of classes and jar size (class metadata adds significant
+ * per-class overhead; much more than bytecode).
  */
-public class WebRuntimeMonitor implements WebMonitor {
-
-	/** By default, all requests to the JobManager have a timeout of 10 seconds */
-	public static final FiniteDuration DEFAULT_REQUEST_TIMEOUT = new FiniteDuration(10, TimeUnit.SECONDS);
-
-	/** Logger for web frontend startup / shutdown messages */
-	private static final Logger LOG = LoggerFactory.getLogger(WebRuntimeMonitor.class);
-
-	// ------------------------------------------------------------------------
-
-	/** Guarding concurrent modifications to the server channel pipeline during startup and shutdown */
-	private final Object startupShutdownLock = new Object();
-
-	private final LeaderRetrievalService leaderRetrievalService;
-
-	/** LeaderRetrievalListener which stores the currently leading JobManager and its archive */
-	private final JobManagerRetriever retriever;
-
-	private final Router router;
-
-	private final ServerBootstrap bootstrap;
-
-	private final Promise<String> jobManagerAddressPromise = new scala.concurrent.impl.Promise.DefaultPromise<>();
-
-	private final FiniteDuration timeout;
-
-	private Channel serverChannel;
-
-	private final File webRootDir;
-
-	private final File uploadDir;
-
-	private final StackTraceSampleCoordinator stackTraceSamples;
-
-	private final BackPressureStatsTracker backPressureStatsTracker;
-
-	private AtomicBoolean cleanedUp = new AtomicBoolean();
-
-	public WebRuntimeMonitor(
-			Configuration config,
-			LeaderRetrievalService leaderRetrievalService,
-			ActorSystem actorSystem) throws IOException, InterruptedException {
-
-		this.leaderRetrievalService = checkNotNull(leaderRetrievalService);
-		this.timeout = AkkaUtils.getTimeout(config);
-		this.retriever = new JobManagerRetriever(this, actorSystem, AkkaUtils.getTimeout(config), timeout);
-		
-		final WebMonitorConfig cfg = new WebMonitorConfig(config);
-		
-		final int configuredPort = cfg.getWebFrontendPort();
-		if (configuredPort < 0) {
-			throw new IllegalArgumentException("Web frontend port is invalid: " + configuredPort);
-		}
-		
-		final WebMonitorUtils.LogFileLocation logFiles = WebMonitorUtils.LogFileLocation.find(config);
-		
-		// create an empty directory in temp for the web server
-		String rootDirFileName = "flink-web-" + UUID.randomUUID();
-		webRootDir = new File(System.getProperty("java.io.tmpdir"), rootDirFileName);
-		LOG.info("Using directory {} for the web interface files", webRootDir);
-
-		final boolean webSubmitAllow = cfg.isProgramSubmitEnabled();
-		if (webSubmitAllow) {
-			// create storage for uploads
-			String uploadDirName = "flink-web-upload-" + UUID.randomUUID();
-			this.uploadDir = new File(System.getProperty("java.io.tmpdir"), uploadDirName);
-			if (!uploadDir.mkdir() || !uploadDir.canWrite()) {
-				throw new IOException("Unable to create temporary directory to support jar uploads.");
-			}
-			LOG.info("Using directory {} for web frontend JAR file uploads", uploadDir);
-		}
-		else {
-			this.uploadDir = null;
-		}
-
-		ExecutionGraphHolder currentGraphs = new ExecutionGraphHolder();
-
-		// - Back pressure stats ----------------------------------------------
-
-		stackTraceSamples = new StackTraceSampleCoordinator(actorSystem, 60000);
-
-		// Back pressure stats tracker config
-		int cleanUpInterval = config.getInteger(
-				ConfigConstants.JOB_MANAGER_WEB_BACK_PRESSURE_CLEAN_UP_INTERVAL,
-				ConfigConstants.DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_CLEAN_UP_INTERVAL);
-
-		int refreshInterval = config.getInteger(
-				ConfigConstants.JOB_MANAGER_WEB_BACK_PRESSURE_REFRESH_INTERVAL,
-				ConfigConstants.DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_REFRESH_INTERVAL);
-
-		int numSamples = config.getInteger(
-				ConfigConstants.JOB_MANAGER_WEB_BACK_PRESSURE_NUM_SAMPLES,
-				ConfigConstants.DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_NUM_SAMPLES);
-
-		int delay = config.getInteger(
-				ConfigConstants.JOB_MANAGER_WEB_BACK_PRESSURE_DELAY,
-				ConfigConstants.DEFAULT_JOB_MANAGER_WEB_BACK_PRESSURE_DELAY);
-
-		FiniteDuration delayBetweenSamples = new FiniteDuration(delay, TimeUnit.MILLISECONDS);
-
-		backPressureStatsTracker = new BackPressureStatsTracker(
-				stackTraceSamples, cleanUpInterval, numSamples, delayBetweenSamples);
-
-		// --------------------------------------------------------------------
-
-		router = new Router()
-			// config how to interact with this web server
-			.GET("/config", handler(new DashboardConfigHandler(cfg.getRefreshInterval())))
-
-			// the overview - how many task managers, slots, free slots, ...
-			.GET("/overview", handler(new ClusterOverviewHandler(DEFAULT_REQUEST_TIMEOUT)))
-
-			// job manager configuration
-			.GET("/jobmanager/config", handler(new JobManagerConfigHandler(config)))
-
-			// overview over jobs
-			.GET("/joboverview", handler(new CurrentJobsOverviewHandler(DEFAULT_REQUEST_TIMEOUT, true, true)))
-			.GET("/joboverview/running", handler(new CurrentJobsOverviewHandler(DEFAULT_REQUEST_TIMEOUT, true, false)))
-			.GET("/joboverview/completed", handler(new CurrentJobsOverviewHandler(DEFAULT_REQUEST_TIMEOUT, false, true)))
-
-			.GET("/jobs", handler(new CurrentJobIdsHandler(DEFAULT_REQUEST_TIMEOUT)))
-
-			.GET("/jobs/:jobid", handler(new JobDetailsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices", handler(new JobDetailsHandler(currentGraphs)))
-
-			.GET("/jobs/:jobid/vertices/:vertexid", handler(new JobVertexDetailsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/subtasktimes", handler(new SubtasksTimesHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/taskmanagers", handler(new JobVertexTaskManagersHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/accumulators", handler(new JobVertexAccumulatorsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/checkpoints", handler(new JobVertexCheckpointsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/backpressure", handler(new JobVertexBackPressureHandler(
-							currentGraphs,
-							backPressureStatsTracker,
-							refreshInterval)))
-			.GET("/jobs/:jobid/vertices/:vertexid/subtasks/accumulators", handler(new SubtasksAllAccumulatorsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/subtasks/:subtasknum", handler(new SubtaskCurrentAttemptDetailsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/subtasks/:subtasknum/attempts/:attempt", handler(new SubtaskExecutionAttemptDetailsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/vertices/:vertexid/subtasks/:subtasknum/attempts/:attempt/accumulators", handler(new SubtaskExecutionAttemptAccumulatorsHandler(currentGraphs)))
-
-			.GET("/jobs/:jobid/plan", handler(new JobPlanHandler(currentGraphs)))
-			.GET("/jobs/:jobid/config", handler(new JobConfigHandler(currentGraphs)))
-			.GET("/jobs/:jobid/exceptions", handler(new JobExceptionsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/accumulators", handler(new JobAccumulatorsHandler(currentGraphs)))
-			.GET("/jobs/:jobid/checkpoints", handler(new JobCheckpointsHandler(currentGraphs)))
-
-			.GET("/taskmanagers", handler(new TaskManagersHandler(DEFAULT_REQUEST_TIMEOUT)))
-			.GET("/taskmanagers/:" + TaskManagersHandler.TASK_MANAGER_ID_KEY, handler(new TaskManagersHandler(DEFAULT_REQUEST_TIMEOUT)))
-
-			// log and stdout
-			.GET("/jobmanager/log", logFiles.logFile == null ? new ConstantTextHandler("(log file unavailable)") :
-				new StaticFileServerHandler(retriever, jobManagerAddressPromise.future(), timeout, logFiles.logFile))
-
-			.GET("/jobmanager/stdout", logFiles.stdOutFile == null ? new ConstantTextHandler("(stdout file unavailable)") :
-				new StaticFileServerHandler(retriever, jobManagerAddressPromise.future(), timeout, logFiles.stdOutFile))
-
-			// Cancel a job via GET (for proper integration with YARN this has to be performed via GET)
-			.GET("/jobs/:jobid/yarn-cancel", handler(new JobCancellationHandler()))
-
-			// DELETE is the preferred way of canceling a job (Rest-conform)
-			.DELETE("/jobs/:jobid/cancel", handler(new JobCancellationHandler()))
-
-			// stop a job via GET (for proper integration with YARN this has to be performed via GET)
-			.GET("/jobs/:jobid/yarn-stop", handler(new JobStoppingHandler()))
-
-			// DELETE is the preferred way of stopping a job (Rest-conform)
-			.DELETE("/jobs/:jobid/stop", handler(new JobStoppingHandler()));
-
-		if (webSubmitAllow) {
-			router
-				// fetch the list of uploaded jars.
-				.GET("/jars", handler(new JarListHandler(uploadDir)))
-
-				// get plan for an uploaded jar
-				.GET("/jars/:jarid/plan", handler(new JarPlanHandler(uploadDir)))
-
-				// run a jar
-				.POST("/jars/:jarid/run", handler(new JarRunHandler(uploadDir, timeout)))
-
-				// upload a jar
-				.POST("/jars/upload", handler(new JarUploadHandler(uploadDir)))
-
-				// delete an uploaded jar from submission interface
-				.DELETE("/jars/:jarid", handler(new JarDeleteHandler(uploadDir)));
-		} else {
-			router
-				// send an Access Denied message (sort of)
-				// Every other GET request will go to the File Server, which will not provide
-				// access to the jar directory anyway, because it doesn't exist in webRootDir.
-				.GET("/jars", handler(new JarAccessDeniedHandler()));
-		}
-
-		// this handler serves all the static contents
-		router.GET("/:*", new StaticFileServerHandler(retriever, jobManagerAddressPromise.future(), timeout, webRootDir));
-
-		// add shutdown hook for deleting the directories and remaining temp files on shutdown
-		try {
-			Runtime.getRuntime().addShutdownHook(new Thread() {
-				@Override
-				public void run() {
-					cleanup();
-				}
-			});
-		} catch (IllegalStateException e) {
-			// race, JVM is in shutdown already, we can safely ignore this
-			LOG.debug("Unable to add shutdown hook, shutdown already in progress", e);
-		} catch (Throwable t) {
-			// these errors usually happen when the shutdown is already in progress
-			LOG.warn("Error while adding shutdown hook", t);
-		}
-
-		ChannelInitializer<SocketChannel> initializer = new ChannelInitializer<SocketChannel>() {
-
-			@Override
-			protected void initChannel(SocketChannel ch) {
-				Handler handler = new Handler(router);
-
-				ch.pipeline()
-						.addLast(new HttpServerCodec())
-						.addLast(new HttpRequestHandler())
-						.addLast(handler.name(), handler)
-						.addLast(new PipelineErrorHandler(LOG));
-			}
-		};
-
-		NioEventLoopGroup bossGroup   = new NioEventLoopGroup(1);
-		NioEventLoopGroup workerGroup = new NioEventLoopGroup();
-
-		this.bootstrap = new ServerBootstrap();
-		this.bootstrap
-				.group(bossGroup, workerGroup)
-				.channel(NioServerSocketChannel.class)
-				.childHandler(initializer);
-
-		Channel ch = this.bootstrap.bind(configuredPort).sync().channel();
-		this.serverChannel = ch;
-
-		InetSocketAddress bindAddress = (InetSocketAddress) ch.localAddress();
-		String address = bindAddress.getAddress().getHostAddress();
-		int port = bindAddress.getPort();
-
-		LOG.info("Web frontend listening at " + address + ':' + port);
-	}
-
-	@Override
-	public void start(String jobManagerAkkaUrl) throws Exception {
-		LOG.info("Starting with JobManager {} on port {}", jobManagerAkkaUrl, getServerPort());
-		
-		synchronized (startupShutdownLock) {
-			jobManagerAddressPromise.success(jobManagerAkkaUrl);
-			leaderRetrievalService.start(retriever);
-
-			long delay = backPressureStatsTracker.getCleanUpInterval();
-
-			// Scheduled back pressure stats tracker cache cleanup. We schedule
-			// this here repeatedly, because cache clean up only happens on
-			// interactions with the cache. We need it to make sure that we
-			// don't leak memory after completed jobs or long ago accessed stats.
-			bootstrap.childGroup().scheduleWithFixedDelay(new Runnable() {
-				@Override
-				public void run() {
-					try {
-						backPressureStatsTracker.cleanUpOperatorStatsCache();
-					} catch (Throwable t) {
-						LOG.error("Error during back pressure stats cache cleanup.", t);
-					}
-				}
-			}, delay, delay, TimeUnit.MILLISECONDS);
-		}
-	}
-
-	@Override
-	public void stop() throws Exception {
-		synchronized (startupShutdownLock) {
-			leaderRetrievalService.stop();
-
-			if (this.serverChannel != null) {
-				this.serverChannel.close().awaitUninterruptibly();
-				this.serverChannel = null;
-			}
-			if (bootstrap != null) {
-				if (bootstrap.group() != null) {
-					bootstrap.group().shutdownGracefully();
-				}
-			}
-
-			stackTraceSamples.shutDown();
-
-			backPressureStatsTracker.shutDown();
-
-			cleanup();
-		}
-	}
-
-	@Override
-	public int getServerPort() {
-		Channel server = this.serverChannel;
-		if (server != null) {
-			try {
-				return ((InetSocketAddress) server.localAddress()).getPort();
-			}
-			catch (Exception e) {
-				LOG.error("Cannot access local server port", e);
-			}
-		}
-
-		return -1;
-	}
-
-	private void cleanup() {
-		if (!cleanedUp.compareAndSet(false, true)) {
-			return;
-		}
-		try {
-			LOG.info("Removing web dashboard root cache directory {}", webRootDir);
-			FileUtils.deleteDirectory(webRootDir);
-		} catch (Throwable t) {
-			LOG.warn("Error while deleting web root directory {}", webRootDir, t);
-		}
-
-		if (uploadDir != null) {
-			try {
-				LOG.info("Removing web dashboard jar upload directory {}", uploadDir);
-				FileUtils.deleteDirectory(uploadDir);
-			} catch (Throwable t) {
-				LOG.warn("Error while deleting web storage dir {}", uploadDir, t);
-			}
-		}
-	}
-
-	// ------------------------------------------------------------------------
-	//  Utilities
-	// ------------------------------------------------------------------------
-
-	private RuntimeMonitorHandler handler(RequestHandler handler) {
-		return new RuntimeMonitorHandler(handler, retriever, jobManagerAddressPromise.future(), timeout);
-	}
+@JacksonStdImpl
+public class StdKeyDeserializer extends KeyDeserializer
+    implements java.io.Serializable
+{
+    private static final long serialVersionUID = 1L;
+
+    public final static int TYPE_BOOLEAN = 1;
+    public final static int TYPE_BYTE = 2;
+    public final static int TYPE_SHORT = 3;
+    public final static int TYPE_CHAR = 4;
+    public final static int TYPE_INT = 5;
+    public final static int TYPE_LONG = 6;
+    public final static int TYPE_FLOAT = 7;
+    public final static int TYPE_DOUBLE = 8;
+    public final static int TYPE_LOCALE = 9;
+    public final static int TYPE_DATE = 10;
+    public final static int TYPE_CALENDAR = 11;
+    public final static int TYPE_UUID = 12;
+    public final static int TYPE_URI = 13;
+    public final static int TYPE_URL = 14;
+    public final static int TYPE_CLASS = 15;
+    public final static int TYPE_CURRENCY = 16;
+    public final static int TYPE_BYTE_ARRAY = 17; // since 2.9
+
+    final protected int _kind;
+    final protected Class<?> _keyClass;
+
+    /**
+     * Some types that are deserialized using a helper deserializer.
+     */
+    protected final FromStringDeserializer<?> _deser;
+    
+    protected StdKeyDeserializer(int kind, Class<?> cls) {
+        this(kind, cls, null);
+    }
+
+    protected StdKeyDeserializer(int kind, Class<?> cls, FromStringDeserializer<?> deser) {
+        _kind = kind;
+        _keyClass = cls;
+        _deser = deser;
+    }
+
+    public static StdKeyDeserializer forType(Class<?> raw)
+    {
+        int kind;
+
+        // first common types:
+        if (raw == String.class || raw == Object.class || raw == CharSequence.class) {
+            return StringKD.forType(raw);
+        } else if (raw == UUID.class) {
+            kind = TYPE_UUID;
+        } else if (raw == Integer.class) {
+            kind = TYPE_INT;
+        } else if (raw == Long.class) {
+            kind = TYPE_LONG;
+        } else if (raw == Date.class) {
+            kind = TYPE_DATE;
+        } else if (raw == Calendar.class) {
+            kind = TYPE_CALENDAR;
+        // then less common ones...
+        } else if (raw == Boolean.class) {
+            kind = TYPE_BOOLEAN;
+        } else if (raw == Byte.class) {
+            kind = TYPE_BYTE;
+        } else if (raw == Character.class) {
+            kind = TYPE_CHAR;
+        } else if (raw == Short.class) {
+            kind = TYPE_SHORT;
+        } else if (raw == Float.class) {
+            kind = TYPE_FLOAT;
+        } else if (raw == Double.class) {
+            kind = TYPE_DOUBLE;
+        } else if (raw == URI.class) {
+            kind = TYPE_URI;
+        } else if (raw == URL.class) {
+            kind = TYPE_URL;
+        } else if (raw == Class.class) {
+            kind = TYPE_CLASS;
+        } else if (raw == Locale.class) {
+            FromStringDeserializer<?> deser = FromStringDeserializer.findDeserializer(Locale.class);
+            return new StdKeyDeserializer(TYPE_LOCALE, raw, deser);
+        } else if (raw == Currency.class) {
+            FromStringDeserializer<?> deser = FromStringDeserializer.findDeserializer(Currency.class);
+            return new StdKeyDeserializer(TYPE_CURRENCY, raw, deser);
+        } else if (raw == byte[].class) {
+            kind = TYPE_BYTE_ARRAY;
+        } else {
+            return null;
+        }
+        return new StdKeyDeserializer(kind, raw);
+    }
+
+    @Override
+    public Object deserializeKey(String key, DeserializationContext ctxt)
+        throws IOException
+    {
+        if (key == null) { // is this even legal call?
+            return null;
+        }
+        try {
+            Object result = _parse(key, ctxt);
+            if (result != null) {
+                return result;
+            }
+        } catch (Exception re) {
+            return ctxt.handleWeirdKey(_keyClass, key, "not a valid representation, problem: (%s) %s",
+                    re.getClass().getName(), re.getMessage());
+        }
+        if (_keyClass.isEnum() && ctxt.getConfig().isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)) {
+            return null;
+        }
+        return ctxt.handleWeirdKey(_keyClass, key, "not a valid representation");
+    }
+
+    public Class<?> getKeyClass() { return _keyClass; }
+
+    protected Object _parse(String key, DeserializationContext ctxt) throws Exception
+    {
+        switch (_kind) {
+        case TYPE_BOOLEAN:
+            if ("true".equals(key)) {
+                return Boolean.TRUE;
+            }
+            if ("false".equals(key)) {
+                return Boolean.FALSE;
+            }
+            return ctxt.handleWeirdKey(_keyClass, key, "value not 'true' or 'false'");
+        case TYPE_BYTE:
+            {
+                int value = _parseInt(key);
+                // allow range up to 255, inclusive (to support "unsigned" byte)
+                if (value < Byte.MIN_VALUE || value > 255) {
+                    return ctxt.handleWeirdKey(_keyClass, key, "overflow, value cannot be represented as 8-bit value");
+                }
+                return Byte.valueOf((byte) value);
+            }
+        case TYPE_SHORT:
+            {
+                int value = _parseInt(key);
+                if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
+                    return ctxt.handleWeirdKey(_keyClass, key, "overflow, value cannot be represented as 16-bit value");
+                    // fall-through and truncate if need be
+                }
+                return Short.valueOf((short) value);
+            }
+        case TYPE_CHAR:
+            if (key.length() == 1) {
+                return Character.valueOf(key.charAt(0));
+            }
+            return ctxt.handleWeirdKey(_keyClass, key, "can only convert 1-character Strings");
+        case TYPE_INT:
+            return _parseInt(key);
+
+        case TYPE_LONG:
+            return _parseLong(key);
+
+        case TYPE_FLOAT:
+            // Bounds/range checks would be tricky here, so let's not bother even trying...
+            return Float.valueOf((float) _parseDouble(key));
+        case TYPE_DOUBLE:
+            return _parseDouble(key);
+        case TYPE_LOCALE:
+            try {
+                return _deser._deserialize(key, ctxt);
+            } catch (IllegalArgumentException e) {
+                return _weirdKey(ctxt, key, e);
+            }
+        case TYPE_CURRENCY:
+            try {
+                return _deser._deserialize(key, ctxt);
+            } catch (IllegalArgumentException e) {
+                return _weirdKey(ctxt, key, e);
+            }
+        case TYPE_DATE:
+            return ctxt.parseDate(key);
+        case TYPE_CALENDAR:
+            return ctxt.constructCalendar(ctxt.parseDate(key));
+        case TYPE_UUID:
+            try {
+                return UUID.fromString(key);
+            } catch (Exception e) {
+                return _weirdKey(ctxt, key, e);
+            }
+        case TYPE_URI:
+            try {
+                return URI.create(key);
+            } catch (Exception e) {
+                return _weirdKey(ctxt, key, e);
+            }
+        case TYPE_URL:
+            try {
+                return new URL(key);
+            } catch (MalformedURLException e) {
+                return _weirdKey(ctxt, key, e);
+            }
+        case TYPE_CLASS:
+            try {
+                return ctxt.findClass(key);
+            } catch (Exception e) {
+                return ctxt.handleWeirdKey(_keyClass, key, "unable to parse key as Class");
+            }
+        case TYPE_BYTE_ARRAY:
+            try {
+                return ctxt.getConfig().getBase64Variant().decode(key);
+            } catch (IllegalArgumentException e) {
+                return _weirdKey(ctxt, key, e);
+            }
+        default:
+            throw new IllegalStateException("Internal error: unknown key type "+_keyClass);
+        }
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods for sub-classes
+    /**********************************************************
+     */
+
+    protected int _parseInt(String key) throws IllegalArgumentException {
+        return Integer.parseInt(key);
+    }
+
+    protected long _parseLong(String key) throws IllegalArgumentException {
+        return Long.parseLong(key);
+    }
+
+    protected double _parseDouble(String key) throws IllegalArgumentException {
+        return NumberInput.parseDouble(key);
+    }
+
+    // @since 2.9
+    protected Object _weirdKey(DeserializationContext ctxt, String key, Exception e) throws IOException {
+        return ctxt.handleWeirdKey(_keyClass, key, "problem: %s", e.getMessage());
+    }
+
+    /*
+    /**********************************************************
+    /* First: the standard "String as String" deserializer
+    /**********************************************************
+     */
+
+    @JacksonStdImpl
+    final static class StringKD extends StdKeyDeserializer
+    {
+        private static final long serialVersionUID = 1L;
+        private final static StringKD sString = new StringKD(String.class);
+        private final static StringKD sObject = new StringKD(Object.class);
+        
+        private StringKD(Class<?> nominalType) { super(-1, nominalType); }
+
+        public static StringKD forType(Class<?> nominalType)
+        {
+            if (nominalType == String.class) {
+                return sString;
+            }
+            if (nominalType == Object.class) {
+                return sObject;
+            }
+            return new StringKD(nominalType);
+        }
+
+        @Override
+        public Object deserializeKey(String key, DeserializationContext ctxt) throws IOException, JsonProcessingException {
+            return key;
+        }
+    }    
+
+    /*
+    /**********************************************************
+    /* Key deserializer implementations; other
+    /**********************************************************
+     */
+
+    /**
+     * Key deserializer that wraps a "regular" deserializer (but one
+     * that must recognize FIELD_NAMEs as text!) to reuse existing
+     * handlers as key handlers.
+     */
+    final static class DelegatingKD
+        extends KeyDeserializer // note: NOT the std one
+        implements java.io.Serializable
+    {
+        private static final long serialVersionUID = 1L;
+
+        final protected Class<?> _keyClass;
+
+        protected final JsonDeserializer<?> _delegate;
+        
+        protected DelegatingKD(Class<?> cls, JsonDeserializer<?> deser) {
+            _keyClass = cls;
+            _delegate = deser;
+        }
+
+        @SuppressWarnings("resource")
+        @Override
+        public final Object deserializeKey(String key, DeserializationContext ctxt)
+            throws IOException
+        {
+            if (key == null) { // is this even legal call?
+                return null;
+            }
+            TokenBuffer tb = new TokenBuffer(ctxt.getParser(), ctxt);
+            tb.writeString(key);
+            try {
+                // Ugh... should not have to give parser which may or may not be correct one...
+                JsonParser p = tb.asParser();
+                p.nextToken();
+                Object result = _delegate.deserialize(p, ctxt);
+                if (result != null) {
+                    return result;
+                }
+                return ctxt.handleWeirdKey(_keyClass, key, "not a valid representation");
+            } catch (Exception re) {
+                return ctxt.handleWeirdKey(_keyClass, key, "not a valid representation: %s", re.getMessage());
+            }
+        }
+
+        public Class<?> getKeyClass() { return _keyClass; }
+    }
+     
+    @JacksonStdImpl
+    final static class EnumKD extends StdKeyDeserializer
+    {
+        private static final long serialVersionUID = 1L;
+
+        protected final EnumResolver _byNameResolver;
+
+        protected final AnnotatedMethod _factory;
+
+        /**
+         * Lazily constructed alternative in case there is need to
+         * use 'toString()' method as the source.
+         *
+         * @since 2.7.3
+         */
+        protected EnumResolver _byToStringResolver;
+
+        protected final Enum<?> _enumDefaultValue;
+        
+        protected EnumKD(EnumResolver er, AnnotatedMethod factory) {
+            super(-1, er.getEnumClass());
+            _byNameResolver = er;
+            _factory = factory;
+            _enumDefaultValue = er.getDefaultValue();
+        }
+
+        @Override
+        public Object _parse(String key, DeserializationContext ctxt) throws IOException
+        {
+            if (_factory != null) {
+                try {
+                    return _factory.call1(key);
+                } catch (Exception e) {
+                    ClassUtil.unwrapAndThrowAsIAE(e);
+                }
+            }
+            EnumResolver res = ctxt.isEnabled(DeserializationFeature.READ_ENUMS_USING_TO_STRING)
+                    ? _getToStringResolver(ctxt) : _byNameResolver;
+            Enum<?> e = res.findEnum(key);
+            if (e == null) {
+                if ((_enumDefaultValue != null)
+                        && ctxt.isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE)) {
+                    e = _enumDefaultValue;
+                } else if (!ctxt.isEnabled(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)) {
+                    return ctxt.handleWeirdKey(_keyClass, key, "not one of values excepted for Enum class: %s",
+                        res.getEnumIds());
+                }
+                // fall-through if problems are collected, not immediately thrown
+            }
+            return e;
+        }
+
+        private EnumResolver _getToStringResolver(DeserializationContext ctxt)
+        {
+            EnumResolver res = _byToStringResolver;
+            if (res == null) {
+                synchronized (this) {
+                    res = EnumResolver.constructUnsafeUsingToString(_byNameResolver.getEnumClass(),
+                            ctxt.getAnnotationIntrospector());
+                }
+            }
+            return res;
+        }
+    }
+    
+    /**
+     * Key deserializer that calls a single-string-arg constructor
+     * to instantiate desired key type.
+     */
+    final static class StringCtorKeyDeserializer extends StdKeyDeserializer
+    {
+        private static final long serialVersionUID = 1L;
+
+        protected final Constructor<?> _ctor;
+
+        public StringCtorKeyDeserializer(Constructor<?> ctor) {
+            super(-1, ctor.getDeclaringClass());
+            _ctor = ctor;
+        }
+
+        @Override
+        public Object _parse(String key, DeserializationContext ctxt) throws Exception
+        {
+            return _ctor.newInstance(key);
+        }
+    }
+
+    /**
+     * Key deserializer that calls a static no-args factory method
+     * to instantiate desired key type.
+     */
+    final static class StringFactoryKeyDeserializer extends StdKeyDeserializer
+    {
+        private static final long serialVersionUID = 1L;
+
+        final Method _factoryMethod;
+
+        public StringFactoryKeyDeserializer(Method fm) {
+            super(-1, fm.getDeclaringClass());
+            _factoryMethod = fm;
+        }
+
+        @Override
+        public Object _parse(String key, DeserializationContext ctxt) throws Exception
+        {
+            return _factoryMethod.invoke(null, key);
+        }
+    }
 }
+

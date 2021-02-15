@@ -1,194 +1,96 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.fontbox.cmap;
+package org.mockito.internal.creation.bytebuddy;
 
-import java.io.IOException;
+import org.mockito.exceptions.base.MockitoException;
+import org.mockito.internal.InternalMockHandler;
+import org.mockito.internal.configuration.GlobalConfiguration;
+import org.mockito.invocation.MockHandler;
+import org.mockito.mock.MockCreationSettings;
+import org.mockito.mock.SerializableMode;
+import org.mockito.plugins.MockMaker;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Iterator;
+import java.lang.reflect.Constructor;
 
-/**
- * This class represents a CMap file.
- *
- * @author Ben Litchfield (ben@benlitchfield.com)
- * @version $Revision: 1.3 $
- */
-public class CMap
-{
-    private List<CodespaceRange> codeSpaceRanges = new ArrayList<CodespaceRange>();
-    private Map<Integer,String> singleByteMappings = new HashMap<Integer,String>();
-    private Map<Integer,String> doubleByteMappings = new HashMap<Integer,String>();
+import static org.mockito.internal.util.StringJoiner.join;
 
-    /**
-     * Creates a new instance of CMap.
-     */
-    public CMap()
-    {
-        //default constructor
-    }
-    
-    /**
-     * This will tell if this cmap has any one byte mappings.
-     * 
-     * @return true If there are any one byte mappings, false otherwise.
-     */
-    public boolean hasOneByteMappings()
-    {
-        return singleByteMappings.size() > 0;
-    }
-    
-    /**
-     * This will tell if this cmap has any two byte mappings.
-     * 
-     * @return true If there are any two byte mappings, false otherwise.
-     */
-    public boolean hasTwoByteMappings()
-    {
-        return doubleByteMappings.size() > 0;
+public class ByteBuddyMockMaker implements MockMaker {
+
+    private final ClassInstantiator classInstantiator;
+    private final CachingMockBytecodeGenerator cachingMockBytecodeGenerator;
+
+    public ByteBuddyMockMaker() {
+        classInstantiator = initializeClassInstantiator();
+        cachingMockBytecodeGenerator = new CachingMockBytecodeGenerator();
     }
 
-    /**
-     * This will perform a lookup into the map.
-     *
-     * @param code The code used to lookup.
-     * @param offset The offset into the byte array.
-     * @param length The length of the data we are getting.
-     *
-     * @return The string that matches the lookup.
-     */
-    public String lookup( byte[] code, int offset, int length )
-    {
-        String result = null;
-        Integer key = null;
-        if( length == 1 )
-        {
-            
-            key = new Integer( (code[offset]+256)%256 );
-            result = singleByteMappings.get( key );
+    public <T> T createMock(MockCreationSettings<T> settings, MockHandler handler) {
+        if (settings.getSerializableMode() == SerializableMode.ACROSS_CLASSLOADERS) {
+            throw new MockitoException("Serialization across classloaders not yet supported with ByteBuddyMockMaker");
         }
-        else if( length == 2 )
-        {
-            int intKey = (code[offset]+256)%256;
-            intKey <<= 8;
-            intKey += (code[offset+1]+256)%256;
-            key = new Integer( intKey );
+        Class<? extends T> mockedType = cachingMockBytecodeGenerator.get(
+                settings.getTypeToMock(),
+                settings.getExtraInterfaces()
+        );
+        T mock = classInstantiator.instantiate(mockedType);
+        MockMethodInterceptor.MockAccess mockAccess = (MockMethodInterceptor.MockAccess) mock;
+        mockAccess.setMockitoInterceptor(new MockMethodInterceptor(asInternalMockHandler(handler), settings));
 
-            result = doubleByteMappings.get( key );
-        }
-
-        return result;
+        return ensureMockIsAssignableToMockedType(settings, mock);
     }
 
-    /**
-     * This will add a mapping.
-     *
-     * @param src The src to the mapping.
-     * @param dest The dest to the mapping.
-     *
-     * @throws IOException if the src is invalid.
-     */
-    public void addMapping( byte[] src, String dest ) throws IOException
-    {
-        if( src.length == 1 )
-        {
-            singleByteMappings.put( new Integer( 0xFF & src[0] ), dest );
-        }
-        else if( src.length == 2 )
-        {
-            int intSrc = src[0]&0xFF;
-            intSrc <<= 8;
-            intSrc |= (src[1]&0xFF);
-            doubleByteMappings.put( new Integer( intSrc ), dest );
-        }
-        else
-        {
-            throw new IOException( "Mapping code should be 1 or two bytes and not " + src.length );
+    private <T> T ensureMockIsAssignableToMockedType(MockCreationSettings<T> settings, T mock) {
+        // force explicit cast to mocked type here, instead of
+        // relying on the JVM to implicitly cast on the client call site
+        Class<T> typeToMock = settings.getTypeToMock();
+        try {
+            return typeToMock.cast(mock);
+        } catch (ClassCastException cce) {
+            throw new MockitoException(join(
+                    "ClassCastException occurred while creating the mockito mock :",
+                    "  class to mock : '" + typeToMock.getCanonicalName() + "', loaded by classloader : '" + typeToMock.getClassLoader() + "'",
+                    "  imposterizing class : '" + mock.getClass().getCanonicalName() + "', loaded by classloader : '" + mock.getClass().getClassLoader() + "'",
+                    "",
+                    "You might experience classloading issues, please ask the mockito mailing-list.",
+                    ""
+            ),cce);
         }
     }
 
-
-    /**
-     * This will add a codespace range.
-     *
-     * @param range A single codespace range.
-     */
-    public void addCodespaceRange( CodespaceRange range )
-    {
-        codeSpaceRanges.add( range );
-    }
-
-    /**
-     * Getter for property codeSpaceRanges.
-     *
-     * @return Value of property codeSpaceRanges.
-     */
-    public List<CodespaceRange> getCodeSpaceRanges()
-    {
-        return codeSpaceRanges;
-    }
-    
-    /**
-     * Implementation of the usecmap operator.  This will
-     * copy all of the mappings from one cmap to another.
-     * 
-     * @param cmap The cmap to load mappings from.
-     */
-    public void useCmap( CMap cmap )
-    {
-        this.codeSpaceRanges.addAll( cmap.codeSpaceRanges );
-        this.singleByteMappings.putAll( cmap.singleByteMappings );
-        this.doubleByteMappings.putAll( cmap.doubleByteMappings );
-    }
-
-    /**
-     *  Check whether the given byte array is in codespace ranges or not.
-     *  
-     *  @param code The byte array to look for in the codespace range.
-     *  
-     *  @return true if the given byte array is in the codespace range.
-     */
-    public boolean isInCodeSpaceRanges( byte[] code )
-    {
-        return isInCodeSpaceRanges(code, 0, code.length);
-    }
- 
-    /**
-     *  Check whether the given byte array is in codespace ranges or not.
-     *  
-     *  @param code The byte array to look for in the codespace range.
-     *  @param offset The starting offset within the byte array.
-     *  @param length The length of the part of the array.
-     *  
-     *  @return true if the given byte array is in the codespace range.
-     */
-    public boolean isInCodeSpaceRanges( byte[] code, int offset, int length )
-    {
-        Iterator<CodespaceRange> it = codeSpaceRanges.iterator();
-        while ( it.hasNext() ) 
-        {
-            CodespaceRange range = it.next();
-            if ( range != null && range.isInRange(code, offset, length) )
-            {
-                return true;
-            }
+    public MockHandler getHandler(Object mock) {
+        if (!(mock instanceof MockMethodInterceptor.MockAccess)) {
+            return null;
         }
-        return false;
-     }
+        return ((MockMethodInterceptor.MockAccess) mock).getMockitoInterceptor().getMockHandler();
+    }
+
+    public void resetMock(Object mock, MockHandler newHandler, MockCreationSettings settings) {
+        ((MockMethodInterceptor.MockAccess) mock).setMockitoInterceptor(
+                new MockMethodInterceptor(asInternalMockHandler(newHandler), settings)
+        );
+    }
+
+    private static ClassInstantiator initializeClassInstantiator() {
+        try {
+            Class<?> objenesisClassLoader = Class.forName("org.mockito.internal.creation.bytebuddy.ClassInstantiator$UsingObjenesis");
+            Constructor<?> usingClassCacheConstructor = objenesisClassLoader.getDeclaredConstructor(boolean.class);
+            return ClassInstantiator.class.cast(usingClassCacheConstructor.newInstance(new GlobalConfiguration().enableClassCache()));
+        } catch (Throwable throwable) {
+            // MockitoException cannot be used at this point as we are early in the classloading chain and necessary dependencies may not yet be loadable by the classloader
+            throw new IllegalStateException(join(
+                    "Mockito could not create mock: Objenesis is missing on the classpath.",
+                    "Please add Objenesis on the classpath.",
+                    ""
+            ), throwable);
+        }
+    }
+
+    private static InternalMockHandler asInternalMockHandler(MockHandler handler) {
+        if (!(handler instanceof InternalMockHandler)) {
+            throw new MockitoException(join(
+                    "At the moment you cannot provide own implementations of MockHandler.",
+                    "Please see the javadocs for the MockMaker interface.",
+                    ""
+            ));
+        }
+        return (InternalMockHandler) handler;
+    }
 }

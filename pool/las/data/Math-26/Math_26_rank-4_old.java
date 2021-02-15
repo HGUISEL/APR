@@ -1,100 +1,282 @@
-package org.apache.helix.integration.task;
+package com.fasterxml.jackson.databind.ser.std;
 
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
+
+import com.fasterxml.jackson.core.*;
+
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitable;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonFormatVisitorWrapper;
+import com.fasterxml.jackson.databind.jsonschema.JsonSchema;
+import com.fasterxml.jackson.databind.jsonschema.SchemaAware;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
+import com.fasterxml.jackson.databind.ser.BeanSerializer;
+import com.fasterxml.jackson.databind.ser.ContextualSerializer;
+
+/**
+ * Serializer class that can serialize Object that have a
+ * {@link com.fasterxml.jackson.annotation.JsonValue} annotation to
+ * indicate that serialization should be done by calling the method
+ * annotated, and serializing result it returns.
+ * <p/>
+ * Implementation note: we will post-process resulting serializer
+ * (much like what is done with {@link BeanSerializer})
+ * to figure out actual serializers for final types.
+ *  This must be done from {@link #createContextual} method, and NOT from constructor;
+ * otherwise we could end up with an infinite loop.
  */
+@JacksonStdImpl
+public class JsonValueSerializer
+    extends StdSerializer<Object>
+    implements ContextualSerializer, JsonFormatVisitable, SchemaAware
+{
+    protected final Method _accessorMethod;
 
-import java.util.HashMap;
-import java.util.Map;
+    protected final JsonSerializer<Object> _valueSerializer;
 
-import org.apache.helix.task.Task;
-import org.apache.helix.task.TaskCallbackContext;
-import org.apache.helix.task.TaskConfig;
-import org.apache.helix.task.TaskResult;
+    protected final BeanProperty _property;
+    
+    /**
+     * This is a flag that is set in rare (?) cases where this serializer
+     * is used for "natural" types (boolean, int, String, double); and where
+     * we actually must force type information wrapping, even though
+     * one would not normally be added.
+     */
+    protected final boolean _forceTypeInformation;
+    
+    /*
+    /**********************************************************
+    /* Life-cycle
+    /**********************************************************
+     */
 
-public class MockTask implements Task {
-  public static final String TASK_COMMAND = "Reindex";
-  public static final String TIMEOUT_CONFIG = "Timeout";
-  public static final String TASK_RESULT_STATUS = "TaskResultStatus";
-  public static final String THROW_EXCEPTION = "ThrowException";
-  public static final String FAILURE_COUNT_BEFORE_SUCCESS = "FailureCountBeforeSuccess";
-  private final long _delay;
-  private volatile boolean _canceled;
-  private TaskResult.Status _taskResultStatus;
-  private boolean _throwException;
-  private int _expectedToSuccess;
-
-  public MockTask(TaskCallbackContext context) {
-    Map<String, String> cfg = context.getJobConfig().getJobCommandConfigMap();
-    if (cfg == null) {
-      cfg = new HashMap<String, String>();
+    /**
+     * @param ser Explicit serializer to use, if caller knows it (which
+     *    occurs if and only if the "value method" was annotated with
+     *    {@link com.fasterxml.jackson.databind.annotation.JsonSerialize#using}), otherwise
+     *    null
+     */
+    public JsonValueSerializer(Method valueMethod, JsonSerializer<Object> ser)
+    {
+        super(Object.class);
+        _accessorMethod = valueMethod;
+        _valueSerializer = ser;
+        _property = null;
+        _forceTypeInformation = true; // gets reconsidered when we are contextualized
     }
 
-    TaskConfig taskConfig = context.getTaskConfig();
-    Map<String, String> taskCfg = taskConfig.getConfigMap();
-    if (taskCfg != null) {
-      cfg.putAll(taskCfg);
+    @SuppressWarnings("unchecked")
+    public JsonValueSerializer(JsonValueSerializer src, BeanProperty property,
+            JsonSerializer<?> ser, boolean forceTypeInfo)
+    {
+        super(Object.class);
+        _accessorMethod = src._accessorMethod;
+        _valueSerializer = (JsonSerializer<Object>) ser;
+        _property = property;
+        _forceTypeInformation = forceTypeInfo;
     }
 
-    _delay = cfg.containsKey(TIMEOUT_CONFIG) ? Long.parseLong(cfg.get(TIMEOUT_CONFIG)) : 100L;
-    _taskResultStatus = cfg.containsKey(TASK_RESULT_STATUS) ?
-        TaskResult.Status.valueOf(cfg.get(TASK_RESULT_STATUS)) :
-        TaskResult.Status.COMPLETED;
-    _throwException = cfg.containsKey(THROW_EXCEPTION) ?
-        Boolean.valueOf(cfg.containsKey(THROW_EXCEPTION)) :
-        false;
-    _expectedToSuccess =
-        cfg.containsKey(FAILURE_COUNT_BEFORE_SUCCESS) ? Integer.parseInt(cfg.get(
-            FAILURE_COUNT_BEFORE_SUCCESS)) : 0;
-  }
-
-  @Override
-  public TaskResult run() {
-    long expiry = System.currentTimeMillis() + _delay;
-    long timeLeft;
-    while (System.currentTimeMillis() < expiry) {
-      if (_canceled) {
-        timeLeft = expiry - System.currentTimeMillis();
-        return new TaskResult(TaskResult.Status.CANCELED, String.valueOf(timeLeft < 0 ? 0
-            : timeLeft));
-      }
-      sleep(50);
+    public JsonValueSerializer withResolved(BeanProperty property,
+            JsonSerializer<?> ser, boolean forceTypeInfo)
+    {
+        if (_property == property && _valueSerializer == ser
+                && forceTypeInfo == _forceTypeInformation) {
+            return this;
+        }
+        return new JsonValueSerializer(this, property, ser, forceTypeInfo);
     }
-    timeLeft = expiry - System.currentTimeMillis();
+    
+    /*
+    /**********************************************************
+    /* Post-processing
+    /**********************************************************
+     */
 
-    if (_throwException || _expectedToSuccess > 0) {
-      _expectedToSuccess--;
-      throw new RuntimeException("Test failed");
+    /**
+     * We can try to find the actual serializer for value, if we can
+     * statically figure out what the result type must be.
+     */
+//  @Override
+    public JsonSerializer<?> createContextual(SerializerProvider provider,
+            BeanProperty property)
+        throws JsonMappingException
+    {
+        JsonSerializer<?> ser = _valueSerializer;
+        if (ser == null) {
+            /* Can only assign serializer statically if the declared type is final:
+             * if not, we don't really know the actual type until we get the instance.
+             */
+            // 10-Mar-2010, tatu: Except if static typing is to be used
+            if (provider.isEnabled(MapperFeature.USE_STATIC_TYPING)
+                    || Modifier.isFinal(_accessorMethod.getReturnType().getModifiers())) {
+                JavaType t = provider.constructType(_accessorMethod.getGenericReturnType());
+                // false -> no need to cache
+                /* 10-Mar-2010, tatu: Ideally we would actually separate out type
+                 *   serializer from value serializer; but, alas, there's no access
+                 *   to serializer factory at this point... 
+                 */
+                /* 09-Dec-2010, tatu: Turns out we must add special handling for
+                 *   cases where "native" (aka "natural") type is being serialized,
+                 *   using standard serializer
+                 */
+                ser = provider.findTypedValueSerializer(t, false, _property);
+                boolean forceTypeInformation = isNaturalTypeWithStdHandling(t.getRawClass(), ser);
+                return withResolved(property, ser, forceTypeInformation);
+            }
+        } else if (ser instanceof ContextualSerializer) {
+            ser = ((ContextualSerializer) ser).createContextual(provider, property);
+            return withResolved(property, ser, _forceTypeInformation);
+        }
+        return this;
+    }
+    
+    /*
+    /**********************************************************
+    /* Actual serialization
+    /**********************************************************
+     */
+    
+    @Override
+    public void serialize(Object bean, JsonGenerator jgen, SerializerProvider prov)
+        throws IOException, JsonGenerationException
+    {
+        try {
+            Object value = _accessorMethod.invoke(bean);
+
+            if (value == null) {
+                prov.defaultSerializeNull(jgen);
+                return;
+            }
+            JsonSerializer<Object> ser = _valueSerializer;
+            if (ser == null) {
+                Class<?> c = value.getClass();
+                /* 10-Mar-2010, tatu: Ideally we would actually separate out type
+                 *   serializer from value serializer; but, alas, there's no access
+                 *   to serializer factory at this point... 
+                 */
+                // let's cache it, may be needed soon again
+                ser = prov.findTypedValueSerializer(c, true, _property);
+            }
+            ser.serialize(value, jgen, prov);
+        } catch (IOException ioe) {
+            throw ioe;
+        } catch (Exception e) {
+            Throwable t = e;
+            // Need to unwrap this specific type, to see infinite recursion...
+            while (t instanceof InvocationTargetException && t.getCause() != null) {
+                t = t.getCause();
+            }
+            // Errors shouldn't be wrapped (and often can't, as well)
+            if (t instanceof Error) {
+                throw (Error) t;
+            }
+            // let's try to indicate the path best we can...
+            throw JsonMappingException.wrapWithPath(t, bean, _accessorMethod.getName() + "()");
+        }
     }
 
-    return new TaskResult(_taskResultStatus, String.valueOf(timeLeft < 0 ? 0 : timeLeft));
-  }
+    @Override
+    public void serializeWithType(Object bean, JsonGenerator jgen, SerializerProvider provider,
+            TypeSerializer typeSer)
+        throws IOException, JsonProcessingException
+    {
+        // Regardless of other parts, first need to find value to serialize:
+        Object value = null;
+        try {
+            value = _accessorMethod.invoke(bean);
 
-  @Override
-  public void cancel() {
-    _canceled = true;
-  }
-
-  private static void sleep(long d) {
-    try {
-      Thread.sleep(d);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
+            // and if we got null, can also just write it directly
+            if (value == null) {
+                provider.defaultSerializeNull(jgen);
+                return;
+            }
+            JsonSerializer<Object> ser = _valueSerializer;
+            if (ser != null) { // already got a serializer? fabulous, that be easy...
+                /* 09-Dec-2010, tatu: To work around natural type's refusal to add type info, we do
+                 *    this (note: type is for the wrapper type, not enclosed value!)
+                 */
+                if (_forceTypeInformation) {
+                    typeSer.writeTypePrefixForScalar(bean, jgen);
+                } 
+                ser.serializeWithType(value, jgen, provider, typeSer);
+                if (_forceTypeInformation) {
+                    typeSer.writeTypeSuffixForScalar(bean, jgen);
+                } 
+                return;
+            }
+            // But if not, it gets tad trickier (copied from main serialize() method)
+            Class<?> c = value.getClass();
+            ser = provider.findTypedValueSerializer(c, true, _property);
+            // note: now we have bundled type serializer, so should NOT call with typed version
+            ser.serialize(value, jgen, provider);
+        } catch (IOException ioe) {
+            throw ioe;
+        } catch (Exception e) {
+            Throwable t = e;
+            // Need to unwrap this specific type, to see infinite recursion...
+            while (t instanceof InvocationTargetException && t.getCause() != null) {
+                t = t.getCause();
+            }
+            // Errors shouldn't be wrapped (and often can't, as well)
+            if (t instanceof Error) {
+                throw (Error) t;
+            }
+            // let's try to indicate the path best we can...
+            throw JsonMappingException.wrapWithPath(t, bean, _accessorMethod.getName() + "()");
+        }
     }
-  }
+    
+    @SuppressWarnings("deprecation")
+    @Override
+    public JsonNode getSchema(SerializerProvider provider, Type typeHint)
+        throws JsonMappingException
+    {
+        return (_valueSerializer instanceof SchemaAware) ?
+                ((SchemaAware) _valueSerializer).getSchema(provider, null) :
+                JsonSchema.getDefaultSchemaNode();
+    }
+    
+    @Override
+    public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint)
+        throws JsonMappingException
+    {
+        if (_valueSerializer != null) {
+            _valueSerializer.acceptJsonFormatVisitor(visitor, null); 
+        } else {
+            visitor.expectAnyFormat(typeHint);
+    	}
+    }
+
+    protected boolean isNaturalTypeWithStdHandling(Class<?> rawType, JsonSerializer<?> ser)
+    {
+        // First: do we have a natural type being handled?
+        if (rawType.isPrimitive()) {
+            if (rawType != Integer.TYPE && rawType != Boolean.TYPE && rawType != Double.TYPE) {
+                return false;
+            }
+        } else {
+            if (rawType != String.class &&
+                    rawType != Integer.class && rawType != Boolean.class && rawType != Double.class) {
+                return false;
+            }
+        }
+        return isDefaultSerializer(ser);
+    }
+    
+    /*
+    /**********************************************************
+    /* Other methods
+    /**********************************************************
+     */
+
+    @Override
+    public String toString()
+    {
+        return "(@JsonValue serializer for method " + _accessorMethod.getDeclaringClass() + "#" + _accessorMethod.getName() + ")";
+    }
 }

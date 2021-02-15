@@ -1,1078 +1,329 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.jackrabbit.jcr2spi;
+package com.fasterxml.jackson.databind.ser;
 
-import org.apache.jackrabbit.jcr2spi.nodetype.NodeTypeRegistryImpl;
-import org.apache.jackrabbit.jcr2spi.nodetype.NodeTypeRegistry;
-import org.apache.jackrabbit.jcr2spi.nodetype.NodeTypeStorage;
-import org.apache.jackrabbit.jcr2spi.nodetype.ItemDefinitionProvider;
-import org.apache.jackrabbit.jcr2spi.nodetype.ItemDefinitionProviderImpl;
-import org.apache.jackrabbit.jcr2spi.nodetype.EffectiveNodeTypeProvider;
-import org.apache.jackrabbit.jcr2spi.nodetype.NodeTypeCache;
-import org.apache.jackrabbit.jcr2spi.state.ItemState;
-import org.apache.jackrabbit.jcr2spi.state.ChangeLog;
-import org.apache.jackrabbit.jcr2spi.state.UpdatableItemStateManager;
-import org.apache.jackrabbit.jcr2spi.state.ItemStateFactory;
-import org.apache.jackrabbit.jcr2spi.state.WorkspaceItemStateFactory;
-import org.apache.jackrabbit.jcr2spi.state.NodeState;
-import org.apache.jackrabbit.jcr2spi.state.TransientItemStateFactory;
-import org.apache.jackrabbit.jcr2spi.state.TransientISFactory;
-import org.apache.jackrabbit.jcr2spi.state.Status;
-import org.apache.jackrabbit.jcr2spi.operation.OperationVisitor;
-import org.apache.jackrabbit.jcr2spi.operation.AddNode;
-import org.apache.jackrabbit.jcr2spi.operation.AddProperty;
-import org.apache.jackrabbit.jcr2spi.operation.Clone;
-import org.apache.jackrabbit.jcr2spi.operation.Copy;
-import org.apache.jackrabbit.jcr2spi.operation.Move;
-import org.apache.jackrabbit.jcr2spi.operation.Remove;
-import org.apache.jackrabbit.jcr2spi.operation.SetMixin;
-import org.apache.jackrabbit.jcr2spi.operation.SetPropertyValue;
-import org.apache.jackrabbit.jcr2spi.operation.ReorderNodes;
-import org.apache.jackrabbit.jcr2spi.operation.Operation;
-import org.apache.jackrabbit.jcr2spi.operation.Checkout;
-import org.apache.jackrabbit.jcr2spi.operation.Checkin;
-import org.apache.jackrabbit.jcr2spi.operation.Update;
-import org.apache.jackrabbit.jcr2spi.operation.Restore;
-import org.apache.jackrabbit.jcr2spi.operation.ResolveMergeConflict;
-import org.apache.jackrabbit.jcr2spi.operation.Merge;
-import org.apache.jackrabbit.jcr2spi.operation.LockOperation;
-import org.apache.jackrabbit.jcr2spi.operation.LockRefresh;
-import org.apache.jackrabbit.jcr2spi.operation.LockRelease;
-import org.apache.jackrabbit.jcr2spi.operation.AddLabel;
-import org.apache.jackrabbit.jcr2spi.operation.RemoveLabel;
-import org.apache.jackrabbit.jcr2spi.operation.RemoveVersion;
-import org.apache.jackrabbit.jcr2spi.operation.WorkspaceImport;
-import org.apache.jackrabbit.jcr2spi.security.AccessManager;
-import org.apache.jackrabbit.jcr2spi.observation.InternalEventListener;
-import org.apache.jackrabbit.jcr2spi.config.CacheBehaviour;
-import org.apache.jackrabbit.jcr2spi.hierarchy.HierarchyEventListener;
-import org.apache.jackrabbit.jcr2spi.hierarchy.HierarchyManager;
-import org.apache.jackrabbit.jcr2spi.hierarchy.HierarchyManagerImpl;
-import org.apache.jackrabbit.spi.Path;
-import org.apache.jackrabbit.spi.Name;
-import org.apache.jackrabbit.spi.RepositoryService;
-import org.apache.jackrabbit.spi.SessionInfo;
-import org.apache.jackrabbit.spi.NodeId;
-import org.apache.jackrabbit.spi.IdFactory;
-import org.apache.jackrabbit.spi.LockInfo;
-import org.apache.jackrabbit.spi.QueryInfo;
-import org.apache.jackrabbit.spi.ItemId;
-import org.apache.jackrabbit.spi.PropertyId;
-import org.apache.jackrabbit.spi.Batch;
-import org.apache.jackrabbit.spi.EventBundle;
-import org.apache.jackrabbit.spi.EventFilter;
-import org.apache.jackrabbit.spi.QNodeTypeDefinition;
-import org.apache.jackrabbit.spi.QValue;
-import org.apache.jackrabbit.spi.Event;
-import org.apache.jackrabbit.spi.NameFactory;
-import org.apache.jackrabbit.spi.PathFactory;
-import org.apache.jackrabbit.spi.Subscription;
-import org.slf4j.LoggerFactory;
-import org.slf4j.Logger;
-
-import javax.jcr.RepositoryException;
-import javax.jcr.NamespaceRegistry;
-import javax.jcr.UnsupportedRepositoryOperationException;
-import javax.jcr.AccessDeniedException;
-import javax.jcr.PathNotFoundException;
-import javax.jcr.ItemNotFoundException;
-import javax.jcr.NamespaceException;
-import javax.jcr.NoSuchWorkspaceException;
-import javax.jcr.ItemExistsException;
-import javax.jcr.InvalidItemStateException;
-import javax.jcr.MergeException;
-import javax.jcr.Session;
-import javax.jcr.ReferentialIntegrityException;
-import javax.jcr.query.InvalidQueryException;
-import javax.jcr.version.VersionException;
-import javax.jcr.lock.LockException;
-import javax.jcr.nodetype.NoSuchNodeTypeException;
-import javax.jcr.nodetype.ConstraintViolationException;
-
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.Set;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Collection;
-
-import EDU.oswego.cs.dl.util.concurrent.Sync;
-import EDU.oswego.cs.dl.util.concurrent.Mutex;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
+import com.fasterxml.jackson.databind.util.*;
 
 /**
- * <code>WorkspaceManager</code>...
+ * Helper class for {@link BeanSerializerFactory} that is used to
+ * construct {@link BeanPropertyWriter} instances. Can be sub-classed
+ * to change behavior.
  */
-public class WorkspaceManager
-        implements UpdatableItemStateManager, NamespaceStorage, AccessManager {
-
-    private static Logger log = LoggerFactory.getLogger(WorkspaceManager.class);
-
-    private final RepositoryService service;
-    private final SessionInfo sessionInfo;
-    private final NameFactory nameFactory;
-    private final PathFactory pathFactory;
-
-    private final ItemStateFactory isf;
-    private final HierarchyManager hierarchyManager;
-    private final CacheBehaviour cacheBehaviour;
-
-    private final IdFactory idFactory;
-    private final NamespaceRegistryImpl nsRegistry;
-    private final NodeTypeRegistryImpl ntRegistry;
-    private final ItemDefinitionProvider definitionProvider;
+public class PropertyBuilder
+{
+    // @since 2.7
+    private final static Object NO_DEFAULT_MARKER = Boolean.FALSE;
+    
+    final protected SerializationConfig _config;
+    final protected BeanDescription _beanDesc;
 
     /**
-     * Mutex to synchronize the feed thread with client
-     * threads that call {@link #execute(Operation)} or {@link
-     * #execute(ChangeLog)}.
+     * Default inclusion mode for properties of the POJO for which
+     * properties are collected; possibly overridden on
+     * per-property basis.
      */
-    private final Sync updateSync = new Mutex();
+    final protected JsonInclude.Value _defaultInclusion;
+
+    final protected AnnotationIntrospector _annotationIntrospector;
 
     /**
-     * This is the event polling for changes. If <code>null</code>
-     * then the underlying repository service does not support observation.
+     * If a property has serialization inclusion value of
+     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT},
+     * we may need to know the default value of the bean, to know if property value
+     * equals default one.
+     *<p>
+     * NOTE: only used if enclosing class defines NON_DEFAULT, but NOT if it is the
+     * global default OR per-property override.
      */
-    private final Thread changeFeed;
+    protected Object _defaultBean;
 
-    /**
-     * List of event listener that are set on this WorkspaceManager to get
-     * notifications about local and external changes.
+    public PropertyBuilder(SerializationConfig config, BeanDescription beanDesc)
+    {
+        _config = config;
+        _beanDesc = beanDesc;
+        _defaultInclusion = beanDesc.findPropertyInclusion(
+                config.getDefaultPropertyInclusion(beanDesc.getBeanClass()));
+        _annotationIntrospector = _config.getAnnotationIntrospector();
+    }
+
+    /*
+    /**********************************************************
+    /* Public API
+    /**********************************************************
      */
-    private final Set listeners = new HashSet();
 
-    /**
-     * The current subscription for change events if there are listeners.
-     */
-    private Subscription subscription;
-
-    public WorkspaceManager(RepositoryService service, SessionInfo sessionInfo,
-                            CacheBehaviour cacheBehaviour, int pollTimeout,
-                            boolean enableObservation)
-        throws RepositoryException {
-        this.service = service;
-        this.sessionInfo = sessionInfo;
-        this.cacheBehaviour = cacheBehaviour;
-        this.nameFactory = service.getNameFactory();
-        this.pathFactory = service.getPathFactory();
-
-        idFactory = service.getIdFactory();
-        nsRegistry = new NamespaceRegistryImpl(this);
-        ntRegistry = createNodeTypeRegistry(nsRegistry);
-        changeFeed = createChangeFeed(pollTimeout, enableObservation);
-        definitionProvider = createDefinitionProvider(getEffectiveNodeTypeProvider());
-
-        TransientItemStateFactory stateFactory = createItemStateFactory();
-        this.isf = stateFactory;
-        this.hierarchyManager = createHierarchyManager(stateFactory, idFactory);
-        createHierarchyListener(hierarchyManager);
-    }
-
-    public NamespaceRegistryImpl getNamespaceRegistryImpl() {
-        return nsRegistry;
-    }
-
-    public NodeTypeRegistry getNodeTypeRegistry() {
-        return ntRegistry;
-    }
-
-    public ItemDefinitionProvider getItemDefinitionProvider() {
-        return definitionProvider;
-    }
-
-    public EffectiveNodeTypeProvider getEffectiveNodeTypeProvider() {
-        return ntRegistry;
-    }
-
-    public HierarchyManager getHierarchyManager() {
-        return hierarchyManager;
-    }
-
-    public String[] getWorkspaceNames() throws RepositoryException {
-        return service.getWorkspaceNames(sessionInfo);
-    }
-
-    public IdFactory getIdFactory() throws RepositoryException {
-        return idFactory;
-    }
-
-    public NameFactory getNameFactory() throws RepositoryException {
-        return nameFactory;
-    }
-
-    public PathFactory getPathFactory() throws RepositoryException {
-        return pathFactory;
-    }
-
-    public ItemStateFactory getItemStateFactory() {
-        return isf;
-    }
-
-    public LockInfo getLockInfo(NodeId nodeId) throws RepositoryException {
-        return service.getLockInfo(sessionInfo, nodeId);
-    }
-
-    public String[] getLockTokens() {
-        return sessionInfo.getLockTokens();
+    public Annotations getClassAnnotations() {
+        return _beanDesc.getClassAnnotations();
     }
 
     /**
-     * This method always succeeds.
-     * This is not compliant to the requirements for {@link Session#addLockToken(String)}
-     * as defined by JSR170, which defines that at most one single <code>Session</code>
-     * may contain the same lock token. However, with SPI it is not possible
-     * to determine, whether another session holds the lock, nor can the client
-     * determine, which lock this token belongs to. The latter would be
-     * necessary in order to build the 'Lock' object properly.
-     *
-     * @param lt
-     * @throws LockException
-     * @throws RepositoryException
+     * @param contentTypeSer Optional explicit type information serializer
+     *    to use for contained values (only used for properties that are
+     *    of container type)
      */
-    public void addLockToken(String lt) throws LockException, RepositoryException {
-        sessionInfo.addLockToken(lt);
-        /*
-        // TODO: JSR170 defines that a token can be present with one session only.
-        //       however, we cannot find out about another session holding the lock.
-        //       and neither knows the server, which session is holding a lock token.
-        */
-    }
+    @SuppressWarnings("deprecation")
+    protected BeanPropertyWriter buildWriter(SerializerProvider prov,
+            BeanPropertyDefinition propDef, JavaType declaredType, JsonSerializer<?> ser,
+            TypeSerializer typeSer, TypeSerializer contentTypeSer,
+            AnnotatedMember am, boolean defaultUseStaticTyping)
+        throws JsonMappingException
+    {
+        // do we have annotation that forces type to use (to declared type or its super type)?
+        JavaType serializationType = findSerializationType(am, defaultUseStaticTyping, declaredType);
 
-    /**
-     * Tries to remove the given token from the <code>SessionInfo</code>. If the
-     * SessionInfo does not contains the specified token, this method returns
-     * silently.<br>
-     * Note, that any restriction regarding removal of lock tokens must be asserted
-     * before this method is called.
-     *
-     * @param lt
-     * @throws LockException
-     * @throws RepositoryException
-     */
-    public void removeLockToken(String lt) throws LockException, RepositoryException {
-        String[] tokems = sessionInfo.getLockTokens();
-        for (int i = 0; i < tokems.length; i++) {
-            if (tokems[i].equals(lt)) {
-                sessionInfo.removeLockToken(lt);
-                return;
+        // Container types can have separate type serializers for content (value / element) type
+        if (contentTypeSer != null) {
+            /* 04-Feb-2010, tatu: Let's force static typing for collection, if there is
+             *    type information for contents. Should work well (for JAXB case); can be
+             *    revisited if this causes problems.
+             */
+            if (serializationType == null) {
+//                serializationType = TypeFactory.type(am.getGenericType(), _beanDesc.getType());
+                serializationType = declaredType;
             }
+            JavaType ct = serializationType.getContentType();
+            // Not exactly sure why, but this used to occur; better check explicitly:
+            if (ct == null) {
+                throw new IllegalStateException("Problem trying to create BeanPropertyWriter for property '"
+                        +propDef.getName()+"' (of type "+_beanDesc.getType()+"); serialization type "+serializationType+" has no content");
+            }
+            serializationType = serializationType.withContentTypeHandler(contentTypeSer);
+            ct = serializationType.getContentType();
         }
-        // sessionInfo doesn't contain the given lock token and is therefore
-        // not the lock holder
-        throw new RepositoryException("Unable to remove locktoken '" + lt + "' from Session.");
-    }
+        
+        Object valueToSuppress = null;
+        boolean suppressNulls = false;
 
-    /**
-     *
-     * @return
-     * @throws RepositoryException
-     */
-    public String[] getSupportedQueryLanguages() throws RepositoryException {
-        return service.getSupportedQueryLanguages(sessionInfo);
-    }
+        JsonInclude.Value inclV = _defaultInclusion.withOverrides(propDef.findInclusion());
+        JsonInclude.Include inclusion = inclV.getValueInclusion();
+        if (inclusion == JsonInclude.Include.USE_DEFAULTS) { // should not occur but...
+            inclusion = JsonInclude.Include.ALWAYS;
+        }
 
-    /**
-     * Checks if the query statement is valid.
-     *
-     * @param statement  the query statement.
-     * @param language   the query language.
-     * @param namespaces the locally remapped namespaces which might be used in
-     *                   the query statement.
-     * @throws InvalidQueryException if the query statement is invalid.
-     * @throws RepositoryException   if an error occurs while checking the query
-     *                               statement.
-     */
-    public void checkQueryStatement(String statement,
-                                    String language,
-                                    Map namespaces)
-            throws InvalidQueryException, RepositoryException {
-        service.checkQueryStatement(sessionInfo, statement, language, namespaces);
-    }
-
-    /**
-     * @param statement  the query statement.
-     * @param language   the query language.
-     * @param namespaces the locally remapped namespaces which might be used in
-     *                   the query statement.
-     * @return
-     * @throws RepositoryException
-     */
-    public QueryInfo executeQuery(String statement, String language, Map namespaces)
-            throws RepositoryException {
-        return service.executeQuery(sessionInfo, statement, language, namespaces);
-    }
-
-    /**
-     * Sets the <code>InternalEventListener</code> that gets notifications about
-     * local and external changes.
-     *
-     * @param listener the new listener.
-     * @throws RepositoryException if the listener cannot be registered.
-     */
-    public void addEventListener(InternalEventListener listener)
-            throws RepositoryException {
-        synchronized (listeners) {
-            listeners.add(listener);
-            EventFilter[] filters = getEventFilters(listeners);
-            if (listeners.size() == 1) {
-                subscription = service.createSubscription(sessionInfo, filters);
+        switch (inclusion) {
+        case NON_DEFAULT:
+            // 11-Nov-2015, tatu: This is tricky because semantics differ between cases,
+            //    so that if enclosing class has this, we may need to values of property,
+            //    whereas for global defaults OR per-property overrides, we have more
+            //    static definition. Sigh.
+            // First: case of class specifying it; try to find POJO property defaults
+            JavaType t = (serializationType == null) ? declaredType : serializationType;
+            if (_defaultInclusion.getValueInclusion() == JsonInclude.Include.NON_DEFAULT) {
+                valueToSuppress = getPropertyDefaultValue(propDef.getName(), am, t);
             } else {
-                service.updateEventFilters(subscription, filters);
+                valueToSuppress = getDefaultValue(t);
             }
-            listeners.notify();
-        }
-    }
-
-    /**
-     * Updates the event filters on the subscription. The filters are retrieved
-     * from the current list of internal event listeners.
-     *
-     * @throws RepositoryException
-     */
-    public void updateEventFilters() throws RepositoryException {
-        synchronized (listeners) {
-            service.updateEventFilters(subscription, getEventFilters(listeners));
-        }
-    }
-
-    /**
-     *
-     * @param listener
-     */
-    public void removeEventListener(InternalEventListener listener)
-            throws RepositoryException {
-        synchronized (listeners) {
-            listeners.remove(listener);
-            if (listeners.isEmpty()) {
-                service.dispose(subscription);
-                subscription = null;
+            if (valueToSuppress == null) {
+                suppressNulls = true;
             } else {
-                service.updateEventFilters(subscription, getEventFilters(listeners));
+                if (valueToSuppress.getClass().isArray()) {
+                    valueToSuppress = ArrayBuilders.getArrayComparator(valueToSuppress);
+                }
             }
+
+            break;
+        case NON_ABSENT: // new with 2.6, to support Guava/JDK8 Optionals
+            // always suppress nulls
+            suppressNulls = true;
+            // and for referential types, also "empty", which in their case means "absent"
+            if (declaredType.isReferenceType()) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
+        case NON_EMPTY:
+            // always suppress nulls
+            suppressNulls = true;
+            // but possibly also 'empty' values:
+            valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            break;
+        case NON_NULL:
+            suppressNulls = true;
+            // fall through
+        case ALWAYS: // default
+        default:
+            // we may still want to suppress empty collections, as per [JACKSON-254]:
+            if (declaredType.isContainerType()
+                    && !_config.isEnabled(SerializationFeature.WRITE_EMPTY_JSON_ARRAYS)) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
         }
-    }
+        BeanPropertyWriter bpw = new BeanPropertyWriter(propDef,
+                am, _beanDesc.getClassAnnotations(), declaredType,
+                ser, typeSer, serializationType, suppressNulls, valueToSuppress);
 
-    /**
-     * Creates an event filter based on the parameters available in {@link
-     * javax.jcr.observation.ObservationManager#addEventListener}.
-     *
-     * @param eventTypes   A combination of one or more event type constants
-     *                     encoded as a bitmask.
-     * @param path         an absolute path.
-     * @param isDeep       a <code>boolean</code>.
-     * @param uuids        array of UUIDs.
-     * @param nodeTypes    array of node type names.
-     * @param noLocal      a <code>boolean</code>.
-     * @return the event filter instance with the given parameters.
-     * @throws UnsupportedRepositoryOperationException
-     *          if this implementation does not support observation.
-     */
-    public EventFilter createEventFilter(int eventTypes, Path path, boolean isDeep,
-                                         String[] uuids, Name[] nodeTypes,
-                                         boolean noLocal)
-        throws UnsupportedRepositoryOperationException, RepositoryException {
-        return service.createEventFilter(sessionInfo, eventTypes, path, isDeep, uuids, nodeTypes, noLocal);
-    }
-    //--------------------------------------------------------------------------
-
-    /**
-     * Gets the event filters from the passed listener list.
-     *
-     * @param listeners the internal event listeners.
-     */
-    private static EventFilter[] getEventFilters(Collection listeners) {
-        List filters = new ArrayList();
-        for (Iterator it = listeners.iterator(); it.hasNext(); ) {
-            InternalEventListener listener = (InternalEventListener) it.next();
-            filters.addAll(listener.getEventFilters());
+        // How about custom null serializer?
+        Object serDef = _annotationIntrospector.findNullSerializer(am);
+        if (serDef != null) {
+            bpw.assignNullSerializer(prov.serializerInstance(am, serDef));
         }
-        return (EventFilter[]) filters.toArray(new EventFilter[filters.size()]);
-    }
-
-    /**
-     *
-     * @return
-     */
-    private TransientItemStateFactory createItemStateFactory() {
-        WorkspaceItemStateFactory isf = new WorkspaceItemStateFactory(service, sessionInfo, getItemDefinitionProvider());
-        TransientItemStateFactory tisf = new TransientISFactory(isf, getItemDefinitionProvider());
-        return tisf;
-    }
-
-    /**
-     *
-     * @return
-     */
-    private HierarchyManager createHierarchyManager(TransientItemStateFactory tisf, IdFactory idFactory) throws RepositoryException {
-        return new HierarchyManagerImpl(tisf, idFactory, getPathFactory());
-    }
-
-    /**
-     *
-     * @return
-     */
-    private InternalEventListener createHierarchyListener(HierarchyManager hierarchyMgr) {
-        InternalEventListener listener = new HierarchyEventListener(this, hierarchyMgr, cacheBehaviour);
-        return listener;
-    }
-
-    /**
-     *
-     * @param nsRegistry
-     * @return
-     */
-    private NodeTypeRegistryImpl createNodeTypeRegistry(NamespaceRegistry nsRegistry) {
-        NodeTypeStorage ntst = new NodeTypeStorage() {
-            public Iterator getAllDefinitions() throws RepositoryException {
-                return service.getQNodeTypeDefinitions(sessionInfo);
-            }
-            public Iterator getDefinitions(Name[] nodeTypeNames) throws NoSuchNodeTypeException, RepositoryException {
-                return service.getQNodeTypeDefinitions(sessionInfo, nodeTypeNames);
-            }
-            public void registerNodeTypes(QNodeTypeDefinition[] nodeTypeDefs) throws NoSuchNodeTypeException, RepositoryException {
-                throw new UnsupportedOperationException("NodeType registration not yet defined by the SPI");
-            }
-            public void reregisterNodeTypes(QNodeTypeDefinition[] nodeTypeDefs) throws NoSuchNodeTypeException, RepositoryException {
-                throw new UnsupportedOperationException("NodeType registration not yet defined by the SPI");
-            }
-            public void unregisterNodeTypes(Name[] nodeTypeNames) throws NoSuchNodeTypeException, RepositoryException {
-                throw new UnsupportedOperationException("NodeType registration not yet defined by the SPI");
-            }
-        };
-        NodeTypeCache ntCache = NodeTypeCache.getInstance(service, sessionInfo.getUserID());
-        ntst = ntCache.wrap(ntst);
-        return NodeTypeRegistryImpl.create(ntst, nsRegistry);
-    }
-
-    /**
-     *
-     * @param entProvider
-     * @return
-     */
-    private ItemDefinitionProvider createDefinitionProvider(EffectiveNodeTypeProvider entProvider) {
-        return new ItemDefinitionProviderImpl(entProvider, service, sessionInfo);
-    }
-
-    /**
-     * Creates a background thread which polls for external changes on the
-     * RepositoryService.
-     *
-     * @param pollTimeout the polling timeout in milliseconds.
-     * @param enableObservation if observation should be enabled.
-     * @return the background polling thread or <code>null</code> if the underlying
-     *         <code>RepositoryService</code> does not support observation.
-     */
-    private Thread createChangeFeed(int pollTimeout, boolean enableObservation) {
-        Thread t = null;
-        if (enableObservation) {
-            t = new Thread(new ChangePolling(pollTimeout));
-            t.setName("Change Polling");
-            t.setDaemon(true);
-            t.start();
+        // And then, handling of unwrapping
+        NameTransformer unwrapper = _annotationIntrospector.findUnwrappingNameTransformer(am);
+        if (unwrapper != null) {
+            bpw = bpw.unwrappingWriter(unwrapper);
         }
-        return t;
+        return bpw;
     }
 
-    //------------------------------------------< UpdatableItemStateManager >---
-    /**
-     * Creates a new batch from the single workspace operation and executes it.
-     *
-     * @see UpdatableItemStateManager#execute(Operation)
+    /*
+    /**********************************************************
+    /* Helper methods; annotation access
+    /**********************************************************
      */
-    public void execute(Operation operation) throws RepositoryException {
-        // block event delivery while changes are executed
-        try {
-            updateSync.acquire();
-        } catch (InterruptedException e) {
-            throw new RepositoryException(e);
+
+    /**
+     * Method that will try to determine statically defined type of property
+     * being serialized, based on annotations (for overrides), and alternatively
+     * declared type (if static typing for serialization is enabled).
+     * If neither can be used (no annotations, dynamic typing), returns null.
+     */
+    protected JavaType findSerializationType(Annotated a, boolean useStaticTyping, JavaType declaredType)
+        throws JsonMappingException
+    {
+        JavaType secondary = _annotationIntrospector.refineSerializationType(_config, a, declaredType);
+        // 11-Oct-2015, tatu: As of 2.7, not 100% sure following checks are needed. But keeping
+        //    for now, just in case
+        if (secondary != declaredType) {
+            Class<?> serClass = secondary.getRawClass();
+            // Must be a super type to be usable
+            Class<?> rawDeclared = declaredType.getRawClass();
+            if (serClass.isAssignableFrom(rawDeclared)) {
+                ; // fine as is
+            } else {
+                /* 18-Nov-2010, tatu: Related to fixing [JACKSON-416], an issue with such
+                 *   check is that for deserialization more specific type makes sense;
+                 *   and for serialization more generic. But alas JAXB uses but a single
+                 *   annotation to do both... Hence, we must just discard type, as long as
+                 *   types are related
+                 */
+                if (!rawDeclared.isAssignableFrom(serClass)) {
+                    throw new IllegalArgumentException("Illegal concrete-type annotation for method '"+a.getName()+"': class "+serClass.getName()+" not a super-type of (declared) class "+rawDeclared.getName());
+                }
+                /* 03-Dec-2010, tatu: Actually, ugh, we may need to further relax this
+                 *   and actually accept subtypes too for serialization. Bit dangerous in theory
+                 *   but need to trust user here...
+                 */
+            }
+            useStaticTyping = true;
+            declaredType = secondary;
         }
-        try {
-            /*
-            Execute operation and delegate invalidation of affected item
-            states to the operation.
-            NOTE, that the invalidation is independant of the cache behaviour
-            due to the fact, that local eventbundles are not processed by
-            the HierarchyEventListener.
-            */
-            new OperationVisitorImpl(sessionInfo).execute(operation);
-            operation.persisted();
-        } finally {
-            updateSync.release();
+        // If using static typing, declared type is known to be the type...
+        JsonSerialize.Typing typing = _annotationIntrospector.findSerializationTyping(a);
+        if ((typing != null) && (typing != JsonSerialize.Typing.DEFAULT_TYPING)) {
+            useStaticTyping = (typing == JsonSerialize.Typing.STATIC);
         }
+        if (useStaticTyping) {
+            // 11-Oct-2015, tatu: Make sure JavaType also "knows" static-ness...
+            return declaredType.withStaticTyping();
+            
+        }
+        return null;
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods for default value handling
+    /**********************************************************
+     */
+
+    protected Object getDefaultBean()
+    {
+        Object def = _defaultBean;
+        if (def == null) {
+            /* If we can fix access rights, we should; otherwise non-public
+             * classes or default constructor will prevent instantiation
+             */
+            def = _beanDesc.instantiateBean(_config.canOverrideAccessModifiers());
+            if (def == null) {
+                // 06-Nov-2015, tatu: As per [databind#998], do not fail.
+                /*
+                Class<?> cls = _beanDesc.getClassInfo().getAnnotated();
+                throw new IllegalArgumentException("Class "+cls.getName()+" has no default constructor; can not instantiate default bean value to support 'properties=JsonSerialize.Inclusion.NON_DEFAULT' annotation");
+                 */
+
+                // And use a marker
+                def = NO_DEFAULT_MARKER;
+            }
+            _defaultBean = def;
+        }
+        return (def == NO_DEFAULT_MARKER) ? null : _defaultBean;
     }
 
     /**
-     * Creates a new batch from the given <code>ChangeLog</code> and executes it.
+     * Accessor used to find out "default value" for given property, to use for
+     * comparing values to serialize, to determine whether to exclude value from serialization with
+     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_EMPTY}.
+     * This method is called when we specifically want to know default value within context
+     * of a POJO, when annotation is within containing class, and not for property or
+     * defined as global baseline.
+     *<p>
+     * Note that returning of pseudo-type 
      *
-     * @param changes
-     * @throws RepositoryException
+     * @since 2.7
      */
-    public void execute(ChangeLog changes) throws RepositoryException {
-        // block event delivery while changes are executed
-        try {
-            updateSync.acquire();
-        } catch (InterruptedException e) {
-            throw new RepositoryException(e);
+    protected Object getPropertyDefaultValue(String name, AnnotatedMember member,
+            JavaType type)
+    {
+        Object defaultBean = getDefaultBean();
+        if (defaultBean == null) {
+            return getDefaultValue(type);
         }
         try {
-            new OperationVisitorImpl(sessionInfo).execute(changes);
-            changes.persisted();
-        } finally {
-            updateSync.release();
-        }
-    }
-
-    /**
-     * Dispose this <code>WorkspaceManager</code>
-     */
-    public synchronized void dispose() {
-        try {
-            updateSync.acquire();
-            if (changeFeed != null) {
-                changeFeed.interrupt();
-            }
-            hierarchyManager.dispose();
-            if (subscription != null) {
-                service.dispose(subscription);
-            }
-            service.dispose(sessionInfo);
+            return member.getValue(defaultBean);
         } catch (Exception e) {
-            log.warn("Exception while disposing WorkspaceManager: " + e);
-        } finally {
-            updateSync.release();
+            return _throwWrapped(e, name, defaultBean);
         }
-        ntRegistry.dispose();
-    }
-    //------------------------------------------------------< AccessManager >---
-    /**
-     * @see AccessManager#isGranted(NodeState, Path, String[])
-     */
-    public boolean isGranted(NodeState parentState, Path relPath, String[] actions)
-            throws ItemNotFoundException, RepositoryException {
-        if (parentState.getStatus() == Status.NEW) {
-            return true;
-        }
-        // TODO: check again.
-        // build itemId from the given state and the relative path without
-        // making an attempt to retrieve the proper id of the item possibly
-        // identified by the resulting id.
-        // the server must be able to deal with paths and with proper ids anyway.
-        // TODO: 'createNodeId' is basically wrong since isGranted is unspecific for any item.
-        ItemId id = idFactory.createNodeId((NodeId) parentState.getWorkspaceId(), relPath);
-        return service.isGranted(sessionInfo, id, actions);
     }
 
     /**
-     * @see AccessManager#isGranted(ItemState, String[])
-     */
-    public boolean isGranted(ItemState itemState, String[] actions) throws ItemNotFoundException, RepositoryException {
-        // a 'new' state can always be read, written and removed
-        if (itemState.getStatus() == Status.NEW) {
-            return true;
-        }
-        return service.isGranted(sessionInfo, itemState.getWorkspaceId(), actions);
-    }
-
-    /**
-     * @see AccessManager#canRead(ItemState)
-     */
-    public boolean canRead(ItemState itemState) throws ItemNotFoundException, RepositoryException {
-        // a 'new' state can always be read
-        if (itemState.getStatus() == Status.NEW) {
-            return true;
-        }
-        return service.isGranted(sessionInfo, itemState.getWorkspaceId(), AccessManager.READ);
-    }
-
-    /**
-     * @see AccessManager#canRemove(ItemState)
-     */
-    public boolean canRemove(ItemState itemState) throws ItemNotFoundException, RepositoryException {
-        // a 'new' state can always be removed again
-        if (itemState.getStatus() == Status.NEW) {
-            return true;
-        }
-        return service.isGranted(sessionInfo, itemState.getWorkspaceId(), AccessManager.REMOVE);
-    }
-
-    /**
-     * @see AccessManager#canAccess(String)
-     */
-    public boolean canAccess(String workspaceName) throws NoSuchWorkspaceException, RepositoryException {
-        String[] wspNames = getWorkspaceNames();
-        for (int i = 0; i < wspNames.length; i++) {
-            if (wspNames[i].equals(workspaceName)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    //---------------------------------------------------< NamespaceStorage >---
-
-    public Map getRegisteredNamespaces() throws RepositoryException {
-        return service.getRegisteredNamespaces(sessionInfo);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public String getPrefix(String uri) throws NamespaceException, RepositoryException {
-        return service.getNamespacePrefix(sessionInfo, uri);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public String getURI(String prefix) throws NamespaceException, RepositoryException {
-        return service.getNamespaceURI(sessionInfo, prefix);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public void registerNamespace(String prefix, String uri) throws NamespaceException, UnsupportedRepositoryOperationException, AccessDeniedException, RepositoryException {
-        service.registerNamespace(sessionInfo, prefix, uri);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public void unregisterNamespace(String uri) throws NamespaceException, UnsupportedRepositoryOperationException, AccessDeniedException, RepositoryException {
-        service.unregisterNamespace(sessionInfo, uri);
-    }
-
-    //--------------------------------------------------------------------------
-    /**
-     * Called when local or external events occured. This method is called after
-     * changes have been applied to the repository.
+     * Accessor used to find out "default value" to use for comparing values to
+     * serialize, to determine whether to exclude value from serialization with
+     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}.
+     *<p>
+     * Default logic is such that for primitives and wrapper types for primitives, expected
+     * defaults (0 for `int` and `java.lang.Integer`) are returned; for Strings, empty String,
+     * and for structured (Maps, Collections, arrays) and reference types, criteria
+     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}
+     * is used.
      *
-     * @param eventBundles the event bundles generated by the repository service
-     *                     as the effect of an local or external change.
-     * @throws InterruptedException if this thread is interrupted while waiting
-     *                              for the {@link #updateSync}.
+     * @since 2.7
      */
-    private void onEventReceived(EventBundle[] eventBundles,
-                                 InternalEventListener[] lstnrs)
-            throws InterruptedException {
-        if (log.isDebugEnabled()) {
-            log.debug("received {} event bundles.", new Integer(eventBundles.length));
-            for (int i = 0; i < eventBundles.length; i++) {
-                log.debug("IsLocal:  {}", Boolean.valueOf(eventBundles[i].isLocal()));
-                for (Iterator it = eventBundles[i].getEvents(); it.hasNext(); ) {
-                    Event e = (Event) it.next();
-                    String type;
-                    switch (e.getType()) {
-                        case Event.NODE_ADDED:
-                            type = "NodeAdded";
-                            break;
-                        case Event.NODE_REMOVED:
-                            type = "NodeRemoved";
-                            break;
-                        case Event.PROPERTY_ADDED:
-                            type = "PropertyAdded";
-                            break;
-                        case Event.PROPERTY_CHANGED:
-                            type = "PropertyChanged";
-                            break;
-                        case Event.PROPERTY_REMOVED:
-                            type = "PropertyRemoved";
-                            break;
-                        default:
-                            type = "Unknown";
-                    }
-                    log.debug("  {}; {}", e.getPath(), type);
-                }
-            }
-        }
+    protected Object getDefaultValue(JavaType type)
+    {
+        // 06-Nov-2015, tatu: Returning null is fine for Object types; but need special
+        //   handling for primitives since they are never passed as nulls.
+        Class<?> cls = type.getRawClass();
 
-        // do not deliver events while an operation executes
-        updateSync.acquire();
-        try {
-            // notify listener
-            for (int i = 0; i < eventBundles.length; i++) {
-                for (int j = 0; j < lstnrs.length; j++) {
-                    lstnrs[j].onEvent(eventBundles[i]);
-                }
-            }
-        } finally {
-            updateSync.release();
+        Class<?> prim = ClassUtil.primitiveType(cls);
+        if (prim != null) {
+            return ClassUtil.defaultValue(prim);
         }
+        if (type.isContainerType() || type.isReferenceType()) {
+            return JsonInclude.Include.NON_EMPTY;
+        }
+        if (cls == String.class) {
+            return "";
+        }
+        return null;
     }
-
-    /**
-     * Executes a sequence of operations on the repository service within
-     * a given <code>SessionInfo</code>.
+    
+    /*
+    /**********************************************************
+    /* Helper methods for exception handling
+    /**********************************************************
      */
-    private final class OperationVisitorImpl implements OperationVisitor {
-
-        /**
-         * The session info for all operations in this batch.
-         */
-        private final SessionInfo sessionInfo;
-
-        private Batch batch;
-
-        private OperationVisitorImpl(SessionInfo sessionInfo) {
-            this.sessionInfo = sessionInfo;
+    
+    protected Object _throwWrapped(Exception e, String propName, Object defaultBean)
+    {
+        Throwable t = e;
+        while (t.getCause() != null) {
+            t = t.getCause();
         }
-
-        /**
-         * Executes the operations on the repository service.
-         */
-        private void execute(ChangeLog changeLog) throws RepositoryException, ConstraintViolationException, AccessDeniedException, ItemExistsException, NoSuchNodeTypeException, UnsupportedRepositoryOperationException, VersionException {
-            RepositoryException ex = null;
-            try {
-                ItemState target = changeLog.getTarget();
-                batch = service.createBatch(sessionInfo, target.getId());
-                Iterator it = changeLog.getOperations().iterator();
-                while (it.hasNext()) {
-                    Operation op = (Operation) it.next();
-                    log.debug("executing " + op.getName());
-                    op.accept(this);
-                }
-            } catch (RepositoryException e) {
-                ex = e;
-            } finally {
-                if (batch != null) {
-                    try {
-                        // submit must be called even in case there is an
-                        // exception to give the service a chance to clean
-                        // up the batch
-                        service.submit(batch);
-                    } catch (RepositoryException e) {
-                        if (ex == null) {
-                            ex = e;
-                        } else {
-                            log.warn("Exception submitting batch", e);
-                        }
-                    }
-                    // reset batch field
-                    batch = null;
-                }
-            }
-            if (ex != null) {
-                throw ex;
-            }
-        }
-
-        /**
-         * Executes the operations on the repository service.
-         */
-        private void execute(Operation workspaceOperation) throws RepositoryException, ConstraintViolationException, AccessDeniedException, ItemExistsException, NoSuchNodeTypeException, UnsupportedRepositoryOperationException, VersionException {
-            log.debug("executing " + workspaceOperation.getName());
-            workspaceOperation.accept(this);
-        }
-
-        //-----------------------------------------------< OperationVisitor >---
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(AddNode)
-         */
-        public void visit(AddNode operation) throws RepositoryException {
-            NodeId parentId = operation.getParentId();
-            batch.addNode(parentId, operation.getNodeName(), operation.getNodeTypeName(), operation.getUuid());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(AddProperty)
-         */
-        public void visit(AddProperty operation) throws RepositoryException {
-            NodeId parentId = operation.getParentId();
-            Name propertyName = operation.getPropertyName();
-            if (operation.isMultiValued()) {
-                batch.addProperty(parentId, propertyName, operation.getValues());
-            } else {
-                QValue value = operation.getValues()[0];
-                batch.addProperty(parentId, propertyName, value);
-            }
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Clone)
-         */
-        public void visit(Clone operation) throws NoSuchWorkspaceException, LockException, ConstraintViolationException, AccessDeniedException, ItemExistsException, UnsupportedRepositoryOperationException, VersionException, RepositoryException {
-            NodeId nId = operation.getNodeId();
-            NodeId destParentId = operation.getDestinationParentId();
-            service.clone(sessionInfo, operation.getWorkspaceName(), nId, destParentId, operation.getDestinationName(), operation.isRemoveExisting());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Copy)
-         */
-        public void visit(Copy operation) throws NoSuchWorkspaceException, LockException, ConstraintViolationException, AccessDeniedException, ItemExistsException, UnsupportedRepositoryOperationException, VersionException, RepositoryException {
-            NodeId nId = operation.getNodeId();
-            NodeId destParentId = operation.getDestinationParentId();
-            service.copy(sessionInfo, operation.getWorkspaceName(), nId, destParentId, operation.getDestinationName());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Move)
-         */
-        public void visit(Move operation) throws LockException, ConstraintViolationException, AccessDeniedException, ItemExistsException, UnsupportedRepositoryOperationException, VersionException, RepositoryException {
-            NodeId moveId = operation.getSourceId();
-            NodeId destParentId = operation.getDestinationParentId();
-
-            if (batch == null) {
-                service.move(sessionInfo, moveId, destParentId, operation.getDestinationName());
-            } else {
-                batch.move(moveId, destParentId, operation.getDestinationName());
-            }
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Update)
-         */
-        public void visit(Update operation) throws NoSuchWorkspaceException, AccessDeniedException, LockException, InvalidItemStateException, RepositoryException {
-            NodeId nId = operation.getNodeId();
-            service.update(sessionInfo, nId, operation.getSourceWorkspaceName());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Remove)
-         */
-        public void visit(Remove operation) throws RepositoryException {
-            batch.remove(operation.getRemoveId());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(SetMixin)
-         */
-        public void visit(SetMixin operation) throws RepositoryException {
-            batch.setMixins(operation.getNodeId(), operation.getMixinNames());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(SetPropertyValue)
-         */
-        public void visit(SetPropertyValue operation) throws RepositoryException {
-            PropertyId id = operation.getPropertyId();
-            if (operation.isMultiValued()) {
-                batch.setValue(id, operation.getValues());
-            } else {
-                batch.setValue(id, operation.getValues()[0]);
-            }
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(ReorderNodes)
-         */
-        public void visit(ReorderNodes operation) throws RepositoryException {
-            NodeId parentId = operation.getParentId();
-            NodeId insertId = operation.getInsertId();
-            NodeId beforeId = operation.getBeforeId();
-            batch.reorderNodes(parentId, insertId, beforeId);
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Checkout)
-         */
-        public void visit(Checkout operation) throws UnsupportedRepositoryOperationException, LockException, RepositoryException {
-            service.checkout(sessionInfo, operation.getNodeId());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Checkin)
-         */
-        public void visit(Checkin operation) throws UnsupportedRepositoryOperationException, LockException, InvalidItemStateException, RepositoryException {
-            NodeId newId = service.checkin(sessionInfo, operation.getNodeId());
-            operation.setNewVersionId(newId);
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Restore)
-         */
-        public void visit(Restore operation) throws VersionException, PathNotFoundException, ItemExistsException, UnsupportedRepositoryOperationException, LockException, InvalidItemStateException, RepositoryException {
-            NodeId nId = operation.getNodeId();
-            if (nId == null) {
-                service.restore(sessionInfo, operation.getVersionIds(), operation.removeExisting());
-            } else {
-                NodeId targetId;
-                Path relPath = operation.getRelativePath();
-                if (relPath != null) {
-                    targetId = idFactory.createNodeId(nId, relPath);
-                } else {
-                    targetId = nId;
-                }
-                NodeId versionId = operation.getVersionIds()[0];
-                service.restore(sessionInfo, targetId, versionId, operation.removeExisting());
-            }
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(Merge)
-         */
-        public void visit(Merge operation) throws NoSuchWorkspaceException, AccessDeniedException, MergeException, LockException, InvalidItemStateException, RepositoryException {
-            NodeId nId = operation.getNodeId();
-            Iterator failed = service.merge(sessionInfo, nId, operation.getSourceWorkspaceName(), operation.bestEffort());
-            operation.setFailedIds(failed);
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(ResolveMergeConflict)
-         */
-        public void visit(ResolveMergeConflict operation) throws VersionException, InvalidItemStateException, UnsupportedRepositoryOperationException, RepositoryException {
-            NodeId nId = operation.getNodeId();
-            NodeId[] mergedFailedIds = operation.getMergeFailedIds();
-            NodeId[] predecessorIds = operation.getPredecessorIds();
-            service.resolveMergeConflict(sessionInfo, nId, mergedFailedIds, predecessorIds);
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(LockOperation)
-         */
-        public void visit(LockOperation operation) throws AccessDeniedException, InvalidItemStateException, UnsupportedRepositoryOperationException, LockException, RepositoryException {
-            LockInfo lInfo = service.lock(sessionInfo, operation.getNodeId(), operation.isDeep(), operation.isSessionScoped());
-            operation.setLockInfo(lInfo);
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(LockRefresh)
-         */
-        public void visit(LockRefresh operation) throws AccessDeniedException, InvalidItemStateException, UnsupportedRepositoryOperationException, LockException, RepositoryException {
-            service.refreshLock(sessionInfo, operation.getNodeId());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(LockRelease)
-         */
-        public void visit(LockRelease operation) throws AccessDeniedException, InvalidItemStateException, UnsupportedRepositoryOperationException, LockException, RepositoryException {
-            service.unlock(sessionInfo, operation.getNodeId());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(AddLabel)
-         */
-        public void visit(AddLabel operation) throws VersionException, RepositoryException {
-            NodeId vhId = operation.getVersionHistoryId();
-            NodeId vId = operation.getVersionId();
-            service.addVersionLabel(sessionInfo, vhId, vId, operation.getLabel(), operation.moveLabel());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(RemoveLabel)
-         */
-        public void visit(RemoveLabel operation) throws VersionException, RepositoryException {
-            NodeId vhId = operation.getVersionHistoryId();
-            NodeId vId = operation.getVersionId();
-            service.removeVersionLabel(sessionInfo, vhId, vId, operation.getLabel());
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(RemoveVersion)
-         */
-        public void visit(RemoveVersion operation) throws VersionException, AccessDeniedException, ReferentialIntegrityException, RepositoryException {
-            NodeId versionId = (NodeId) operation.getRemoveId();
-            NodeState vhState = operation.getParentState();
-            service.removeVersion(sessionInfo, (NodeId) vhState.getWorkspaceId(), versionId);
-        }
-
-        /**
-         * @inheritDoc
-         * @see OperationVisitor#visit(WorkspaceImport)
-         */
-        public void visit(WorkspaceImport operation) throws RepositoryException {
-            service.importXml(sessionInfo, operation.getNodeId(), operation.getXmlStream(), operation.getUuidBehaviour());
-        }
-    }
-
-    //------------------------------------------------------< ChangePolling >---
-    /**
-     * Implements the polling for changes on the repository service.
-     */
-    private final class ChangePolling implements Runnable {
-
-        /**
-         * The polling timeout in milliseconds.
-         */
-        private final int pollTimeout;
-
-        /**
-         * Creates a new change polling with a given polling timeout.
-         *
-         * @param pollTimeout the timeout in milliseconds.
-         */
-        private ChangePolling(int pollTimeout) {
-            this.pollTimeout = pollTimeout;
-        }
-
-        public void run() {
-            while (!Thread.interrupted()) {
-                try {
-                    InternalEventListener[] iel;
-                    Subscription subscr;
-                    synchronized (listeners) {
-                        while (listeners.isEmpty()) {
-                            listeners.wait();
-                        }
-                        iel = (InternalEventListener[]) listeners.toArray(new InternalEventListener[0]);
-                        subscr = subscription;
-                    }
-
-                    log.debug("calling getEvents() (Workspace={})",
-                            sessionInfo.getWorkspaceName());
-                    EventBundle[] bundles = service.getEvents(subscr, pollTimeout);
-                    log.debug("returned from getEvents() (Workspace={})",
-                            sessionInfo.getWorkspaceName());
-                    // check if thread had been interrupted while
-                    // getting events
-                    if (Thread.interrupted()) {
-                        log.debug("Thread interrupted, terminating...");
-                        break;
-                    }
-                    if (bundles.length > 0) {
-                        onEventReceived(bundles, iel);
-                    }
-                } catch (UnsupportedRepositoryOperationException e) {
-                    log.error("SPI implementation does not support observation: " + e);
-                    // terminate
-                    break;
-                } catch (RepositoryException e) {
-                    log.info("Workspace=" + sessionInfo.getWorkspaceName() +
-                            ": Exception while retrieving event bundles: " + e);
-                    log.debug("Dump:", e);
-                } catch (InterruptedException e) {
-                    // terminate
-                    break;
-                } catch (Exception e) {
-                    log.warn("Exception in event polling thread: " + e);
-                    log.debug("Dump:", e);
-                }
-            }
-        }
+        if (t instanceof Error) throw (Error) t;
+        if (t instanceof RuntimeException) throw (RuntimeException) t;
+        throw new IllegalArgumentException("Failed to get property '"+propName+"' of default "+defaultBean.getClass().getName()+" instance");
     }
 }

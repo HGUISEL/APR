@@ -1,425 +1,284 @@
-/*****************************************************************
- *   Licensed to the Apache Software Foundation (ASF) under one
- *  or more contributor license agreements.  See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership.  The ASF licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License.  You may obtain a copy of the License at
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied.  See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
- ****************************************************************/
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-package org.apache.cayenne.access;
+package org.apache.commons.codec.language;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import org.apache.cayenne.CayenneRuntimeException;
-import org.apache.cayenne.DataRow;
-import org.apache.cayenne.Persistent;
-import org.apache.cayenne.exp.Expression;
-import org.apache.cayenne.exp.ExpressionFactory;
-import org.apache.cayenne.map.DbJoin;
-import org.apache.cayenne.map.DbRelationship;
-import org.apache.cayenne.map.ObjRelationship;
-import org.apache.cayenne.query.PrefetchProcessor;
-import org.apache.cayenne.query.PrefetchSelectQuery;
-import org.apache.cayenne.query.PrefetchTreeNode;
-import org.apache.cayenne.query.QueryMetadata;
-import org.apache.cayenne.reflect.ClassDescriptor;
+import org.apache.commons.codec.EncoderException;
+import org.apache.commons.codec.StringEncoder;
 
 /**
- * Processes a number of DataRow sets corresponding to a given prefetch tree, resolving
- * DataRows to an object tree. Can process any combination of joint and disjoint sets, per
- * prefetch tree.
+ * Encodes a string into a Soundex value. Soundex is an encoding used to relate similar names, but can also be used as a
+ * general purpose scheme to find word with similar phonemes.
+ *
+ * This class is thread-safe.
+ * Although not strictly immutable, the {@link #maxLength} field is not actually used.
+ *
+ * @version $Id$
  */
-class HierarchicalObjectResolver {
+public class Soundex implements StringEncoder {
 
-    DataContext context;
-    QueryMetadata queryMetadata;
-    DataRowStore cache;
-    ClassDescriptor descriptor;
-    boolean needToSaveDuplicates;
+    /**
+     * This is a default mapping of the 26 letters used in US English. A value of <code>0</code> for a letter position
+     * means do not encode.
+     * <p>
+     * (This constant is provided as both an implementation convenience and to allow Javadoc to pick
+     * up the value for the constant values page.)
+     * </p>
+     *
+     * @see #US_ENGLISH_MAPPING
+     */
+    public static final String US_ENGLISH_MAPPING_STRING = "01230120022455012623010202";
 
-    HierarchicalObjectResolver(DataContext context, QueryMetadata queryMetadata) {
-        this.queryMetadata = queryMetadata;
-        this.context = context;
-        this.cache = context.getObjectStore().getDataRowCache();
-    }
+    /**
+     * This is a default mapping of the 26 letters used in US English. A value of <code>0</code> for a letter position
+     * means do not encode.
+     *
+     * @see Soundex#Soundex(char[])
+     */
+    private static final char[] US_ENGLISH_MAPPING = US_ENGLISH_MAPPING_STRING.toCharArray();
 
-    HierarchicalObjectResolver(DataContext context, QueryMetadata metadata,
-            ClassDescriptor descriptor, boolean needToSaveDuplicates) {
-        this(context, metadata);
-        this.descriptor = descriptor;
-        this.needToSaveDuplicates = needToSaveDuplicates;
+    /**
+     * An instance of Soundex using the US_ENGLISH_MAPPING mapping.
+     *
+     * @see #US_ENGLISH_MAPPING
+     */
+    public static final Soundex US_ENGLISH = new Soundex();
+
+    /**
+     * The maximum length of a Soundex code - Soundex codes are only four characters by definition.
+     *
+     * @deprecated This feature is not needed since the encoding size must be constant. Will be removed in 2.0.
+     */
+    @Deprecated
+    private int maxLength = 4;
+
+    /**
+     * Every letter of the alphabet is "mapped" to a numerical value. This char array holds the values to which each
+     * letter is mapped. This implementation contains a default map for US_ENGLISH
+     */
+    private final char[] soundexMapping;
+
+    /**
+     * Creates an instance using US_ENGLISH_MAPPING
+     *
+     * @see Soundex#Soundex(char[])
+     * @see Soundex#US_ENGLISH_MAPPING
+     */
+    public Soundex() {
+        this.soundexMapping = US_ENGLISH_MAPPING;
     }
 
     /**
-     * Properly synchronized version of 'resolveObjectTree'.
+     * Creates a soundex instance using the given mapping. This constructor can be used to provide an internationalized
+     * mapping for a non-Western character set.
+     *
+     * Every letter of the alphabet is "mapped" to a numerical value. This char array holds the values to which each
+     * letter is mapped. This implementation contains a default map for US_ENGLISH
+     *
+     * @param mapping
+     *                  Mapping array to use when finding the corresponding code for a given character
      */
-    PrefetchProcessorNode synchronizedRootResultNodeFromDataRows(
-            PrefetchTreeNode tree,
-            List mainResultRows,
-            Map extraResultsByPath) {
-
-        synchronized (context.getObjectStore()) {
-            return resolveObjectTree(tree, mainResultRows, extraResultsByPath);
-        }
+    public Soundex(final char[] mapping) {
+        this.soundexMapping = new char[mapping.length];
+        System.arraycopy(mapping, 0, this.soundexMapping, 0, mapping.length);
     }
 
-    private PrefetchProcessorNode resolveObjectTree(
-            PrefetchTreeNode tree,
-            List mainResultRows,
-            Map extraResultsByPath) {
-
-        // create a copy of the tree using DecoratedPrefetchNodes and then traverse it
-        // resolving objects...
-        PrefetchProcessorNode decoratedTree = new PrefetchProcessorTreeBuilder(
-                this,
-                mainResultRows,
-                extraResultsByPath).buildTree(tree);
-
-        // do a single path for disjoint prefetches, joint subtrees will be processed at
-        // each disjoint node that is a parent of joint prefetches.
-        decoratedTree.traverse(new DisjointProcessor());
-
-        // connect related objects
-        decoratedTree.traverse(new PostProcessor());
-
-        return decoratedTree;
+    /**
+     * Creates a refined soundex instance using a custom mapping. This constructor can be used to customize the mapping,
+     * and/or possibly provide an internationalized mapping for a non-Western character set.
+     *
+     * @param mapping
+     *            Mapping string to use when finding the corresponding code for a given character
+     * @since 1.4
+     */
+    public Soundex(final String mapping) {
+        this.soundexMapping = mapping.toCharArray();
     }
 
-    final class DisjointProcessor implements PrefetchProcessor {
-
-        public boolean startDisjointPrefetch(PrefetchTreeNode node) {
-
-            PrefetchProcessorNode processorNode = (PrefetchProcessorNode) node;
-
-            // this means something bad happened during fetch
-            if (processorNode.getDataRows() == null) {
-                return false;
-            }
-
-            // ... continue with processing even if the objects list is empty to handle
-            // multi-step prefetches.
-            if (processorNode.getDataRows().isEmpty()) {
-                return true;
-            }
-
-            List<Persistent> objects = processorNode.getResolver().objectsFromDataRows(processorNode.getDataRows());
-            processorNode.setObjects(objects);
-
-            return true;
-        }
-
-        public boolean startDisjointByIdPrefetch(PrefetchTreeNode node) {
-            PrefetchProcessorNode processorNode = (PrefetchProcessorNode) node;
-
-            if (node.getParent().isPhantom()) {
-                // TODO: doing nothing in current implementation if parent node is phantom
-                return true;
-            }
-
-            PrefetchProcessorNode parentProcessorNode = (PrefetchProcessorNode) processorNode
-                    .getParent();
-            ObjRelationship relationship = processorNode.getIncoming().getRelationship();
-
-            List<DbRelationship> dbRelationships = relationship.getDbRelationships();
-            DbRelationship lastDbRelationship = dbRelationships.get(0);
-
-            String pathPrefix = "";
-            if (dbRelationships.size() > 1) {
-
-                // we need path prefix for flattened relationships
-                StringBuilder buffer = new StringBuilder();
-                for (int i = dbRelationships.size() - 1; i >= 1; i--) {
-                    if (buffer.length() > 0) {
-                        buffer.append(".");
-                    }
-
-                    buffer.append(dbRelationships
-                            .get(i)
-                            .getReverseRelationship()
-                            .getName());
-                }
-
-                pathPrefix = buffer.append(".").toString();
-            }
-
-            List<?> parentDataRows;
-            
-			// note that a disjoint prefetch that has adjacent joint prefetches
-			// will be a PrefetchProcessorJointNode, so here check for
-			// semantics, not node type
-			if (parentProcessorNode.getSemantics() == PrefetchTreeNode.JOINT_PREFETCH_SEMANTICS) {
-				parentDataRows = ((PrefetchProcessorJointNode) parentProcessorNode).getResolvedRows();
-			} else {
-				parentDataRows = parentProcessorNode.getDataRows();
-			}
-
-            int maxIdQualifierSize = context
-                    .getParentDataDomain()
-                    .getMaxIdQualifierSize();
-
-            List<PrefetchSelectQuery> queries = new ArrayList<PrefetchSelectQuery>();
-            int qualifiersCount = 0;
-            PrefetchSelectQuery currentQuery = null;
-
-            for (Object dataRow : parentDataRows) {
-                Expression allJoinsQualifier = null;
-                List<DbJoin> joins = lastDbRelationship.getJoins();
-
-                // handling too big qualifiers
-                if (currentQuery == null
-                        || (maxIdQualifierSize > 0 && qualifiersCount + joins.size() > maxIdQualifierSize)) {
-                    currentQuery = new PrefetchSelectQuery(node.getPath(), relationship);
-                    queries.add(currentQuery);
-                    qualifiersCount = 0;
-                }
-
-                for (DbJoin join : joins) {
-
-                    Object targetValue = ((DataRow) dataRow).get(join.getSourceName());
-                    Expression joinQualifier = ExpressionFactory.matchDbExp(pathPrefix
-                            + join.getTargetName(), targetValue);
-                    if (allJoinsQualifier == null) {
-                        allJoinsQualifier = joinQualifier;
-                    }
-                    else {
-                        allJoinsQualifier = allJoinsQualifier.andExp(joinQualifier);
-                    }
-                }
-
-                currentQuery.orQualifier(allJoinsQualifier);
-                qualifiersCount += joins.size();
-            }
-
-            PrefetchTreeNode jointSubtree = node.cloneJointSubtree();
-
-            List dataRows = new ArrayList();
-            for (PrefetchSelectQuery query : queries) {
-                // need to pass the remaining tree to make joint prefetches work
-                if (jointSubtree.hasChildren()) {
-                    query.setPrefetchTree(jointSubtree);
-                }
-
-                query.setFetchingDataRows(true);
-                if (relationship.isSourceIndependentFromTargetChange()) {
-                    // setup extra result columns to be able to relate result rows to the
-                    // parent result objects.
-                    query.addResultPath("db:"
-                            + relationship.getReverseDbRelationshipPath());
-                }
-                dataRows.addAll(context.performQuery(query));
-            }
-            processorNode.setDataRows(dataRows);
-
-            return startDisjointPrefetch(node);
-        }
-
-        public boolean startJointPrefetch(PrefetchTreeNode node) {
-
-            // delegate processing of the top level joint prefetch to a joint processor,
-            // skip non-top joint nodes
-
-            if (node.getParent() != null && !node.getParent().isJointPrefetch()) {
-
-                PrefetchProcessorJointNode processorNode = (PrefetchProcessorJointNode) node;
-
-                JointProcessor subprocessor = new JointProcessor(processorNode);
-
-                PrefetchProcessorNode parent = (PrefetchProcessorNode) processorNode
-                        .getParent();
-
-                while (parent != null && parent.isPhantom()) {
-                    parent = (PrefetchProcessorNode) parent.getParent();
-                }
-
-                if (parent == null) {
-                    return false;
-                }
-
-                List parentRows = parent.getDataRows();
-
-                // phantom node?
-                if (parentRows == null || parentRows.size() == 0) {
-                    return false;
-                }
-
-                List parentObjects = parent.getObjects();
-                int size = parentRows.size();
-
-                for (int i = 0; i < size; i++) {
-                    subprocessor.setCurrentFlatRow((DataRow) parentRows.get(i));
-                    parent.setLastResolved((Persistent) parentObjects.get(i));
-                    processorNode.traverse(subprocessor);
-                }
-
-                List objects = processorNode.getObjects();
-
-                cache.snapshotsUpdatedForObjects(
-                        objects,
-                        processorNode.getResolvedRows(),
-                        queryMetadata.isRefreshingObjects());
-
-            }
-            return true;
-        }
-
-        public boolean startPhantomPrefetch(PrefetchTreeNode node) {
-            return true;
-        }
-
-        public boolean startUnknownPrefetch(PrefetchTreeNode node) {
-            throw new CayenneRuntimeException("Unknown prefetch node: " + node);
-        }
-
-        public void finishPrefetch(PrefetchTreeNode node) {
-            // now that all the children are processed, we can clear the dupes
-
-            // TODO: see TODO in ObjectResolver.relatedObjectsFromDataRows
-
-            if ((node.isDisjointPrefetch() || node.isDisjointByIdPrefetch())
-                    && !needToSaveDuplicates) {
-                PrefetchProcessorNode processorNode = (PrefetchProcessorNode) node;
-                if (processorNode.isJointChildren()) {
-                    List<Persistent> objects = processorNode.getObjects();
-
-                    if (objects != null && objects.size() > 1) {
-
-                        Set<Persistent> seen = new HashSet<Persistent>(objects.size());
-                        Iterator<Persistent> it = objects.iterator();
-                        while (it.hasNext()) {
-                            if (!seen.add(it.next())) {
-                                it.remove();
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    /**
+     * Encodes the Strings and returns the number of characters in the two encoded Strings that are the same. This
+     * return value ranges from 0 through 4: 0 indicates little or no similarity, and 4 indicates strong similarity or
+     * identical values.
+     *
+     * @param s1
+     *                  A String that will be encoded and compared.
+     * @param s2
+     *                  A String that will be encoded and compared.
+     * @return The number of characters in the two encoded Strings that are the same from 0 to 4.
+     *
+     * @see SoundexUtils#difference(StringEncoder,String,String)
+     * @see <a href="http://msdn.microsoft.com/library/default.asp?url=/library/en-us/tsqlref/ts_de-dz_8co5.asp"> MS
+     *          T-SQL DIFFERENCE </a>
+     *
+     * @throws EncoderException
+     *                  if an error occurs encoding one of the strings
+     * @since 1.3
+     */
+    public int difference(final String s1, final String s2) throws EncoderException {
+        return SoundexUtils.difference(this, s1, s2);
     }
 
-    // a processor of a single joint result set that walks a subtree of prefetch nodes
-    // that use this result set.
-    final class JointProcessor implements PrefetchProcessor {
-
-        DataRow currentFlatRow;
-        PrefetchProcessorNode rootNode;
-
-        JointProcessor(PrefetchProcessorJointNode rootNode) {
-            this.rootNode = rootNode;
+    /**
+     * Encodes an Object using the soundex algorithm. This method is provided in order to satisfy the requirements of
+     * the Encoder interface, and will throw an EncoderException if the supplied object is not of type java.lang.String.
+     *
+     * @param obj
+     *                  Object to encode
+     * @return An object (or type java.lang.String) containing the soundex code which corresponds to the String
+     *             supplied.
+     * @throws EncoderException
+     *                  if the parameter supplied is not of type java.lang.String
+     * @throws IllegalArgumentException
+     *                  if a character is not mapped
+     */
+    @Override
+    public Object encode(final Object obj) throws EncoderException {
+        if (!(obj instanceof String)) {
+            throw new EncoderException("Parameter supplied to Soundex encode is not of type java.lang.String");
         }
+        return soundex((String) obj);
+    }
 
-        void setCurrentFlatRow(DataRow currentFlatRow) {
-            this.currentFlatRow = currentFlatRow;
-        }
+    /**
+     * Encodes a String using the soundex algorithm.
+     *
+     * @param str
+     *                  A String object to encode
+     * @return A Soundex code corresponding to the String supplied
+     * @throws IllegalArgumentException
+     *                  if a character is not mapped
+     */
+    @Override
+    public String encode(final String str) {
+        return soundex(str);
+    }
 
-        public boolean startDisjointPrefetch(PrefetchTreeNode node) {
-            // disjoint prefetch that is not the root terminates the walk...
-            // don't process the root node itself..
-            return node == rootNode;
-        }
-
-        public boolean startDisjointByIdPrefetch(PrefetchTreeNode node) {
-            return startDisjointPrefetch(node);
-        }
-
-        public boolean startJointPrefetch(PrefetchTreeNode node) {
-            PrefetchProcessorJointNode processorNode = (PrefetchProcessorJointNode) node;
-
-            Persistent object = null;
-
-            // find existing object, if found skip further processing
-            Map id = processorNode.idFromFlatRow(currentFlatRow);
-            object = processorNode.getResolved(id);
-            DataRow row = null;
-            if (object == null) {
-
-                row = processorNode.rowFromFlatRow(currentFlatRow);
-                object = processorNode.getResolver().objectFromDataRow(row);
-
-                // LEFT OUTER JOIN produced no matches...
-                if (object == null) {
-                    return false;
+    /**
+     * Used internally by the Soundex algorithm.
+     *
+     * Consonants from the same code group separated by W or H are treated as one.
+     *
+     * @param str
+     *                  the cleaned working string to encode (in upper case).
+     * @param index
+     *                  the character position to encode
+     * @return Mapping code for a particular character
+     * @throws IllegalArgumentException
+     *                  if the character is not mapped
+     */
+    private char getMappingCode(final String str, final int index) {
+        // map() throws IllegalArgumentException
+        final char mappedChar = this.map(str.charAt(index));
+        // HW rule check
+        if (index > 1 && mappedChar != '0') {
+            final char hwChar = str.charAt(index - 1);
+            if ('H' == hwChar || 'W' == hwChar) {
+                final char preHWChar = str.charAt(index - 2);
+                final char firstCode = this.map(preHWChar);
+                if (firstCode == mappedChar || 'H' == preHWChar || 'W' == preHWChar) {
+                    return 0;
                 }
-
-                processorNode.putResolved(id, object);
-                processorNode.addObject(object, row);
             }
-
-            // linking by parent needed even if an object is already there
-            // (many-to-many case)
-
-            processorNode.getParentAttachmentStrategy().linkToParent(row, object);
-
-            processorNode.setLastResolved(object);
-            return processorNode.isJointChildren();
         }
-
-        public boolean startPhantomPrefetch(PrefetchTreeNode node) {
-            return ((PrefetchProcessorNode) node).isJointChildren();
-        }
-
-        public boolean startUnknownPrefetch(PrefetchTreeNode node) {
-            throw new CayenneRuntimeException("Unknown prefetch node: " + node);
-        }
-
-        public void finishPrefetch(PrefetchTreeNode node) {
-            // noop
-        }
+        return mappedChar;
     }
 
-    // processor that converts temporary associations between DataObjects to Cayenne
-    // relationships and also fires snapshot update events
-    final class PostProcessor implements PrefetchProcessor {
-
-        public void finishPrefetch(PrefetchTreeNode node) {
-        }
-
-        public boolean startDisjointPrefetch(PrefetchTreeNode node) {
-            ((PrefetchProcessorNode) node).connectToParents();
-            return true;
-        }
-
-        public boolean startDisjointByIdPrefetch(PrefetchTreeNode node) {
-            return startDisjointPrefetch(node);
-        }
-
-        public boolean startJointPrefetch(PrefetchTreeNode node) {
-            PrefetchProcessorJointNode processorNode = (PrefetchProcessorJointNode) node;
-
-            if (!processorNode.getObjects().isEmpty()) {
-                cache.snapshotsUpdatedForObjects(
-                        processorNode.getObjects(),
-                        processorNode.getResolvedRows(),
-                        queryMetadata.isRefreshingObjects());
-            }
-
-            // run 'connectToParents' even if the object list is empty. This is needed to
-            // refresh stale relationships e.g. when some related objects got deleted.
-            processorNode.connectToParents();
-            return true;
-        }
-
-        public boolean startPhantomPrefetch(PrefetchTreeNode node) {
-            return true;
-        }
-
-        public boolean startUnknownPrefetch(PrefetchTreeNode node) {
-            throw new CayenneRuntimeException("Unknown prefetch node: " + node);
-        }
+    /**
+     * Returns the maxLength. Standard Soundex
+     *
+     * @deprecated This feature is not needed since the encoding size must be constant. Will be removed in 2.0.
+     * @return int
+     */
+    @Deprecated
+    public int getMaxLength() {
+        return this.maxLength;
     }
+
+    /**
+     * Returns the soundex mapping.
+     *
+     * @return soundexMapping.
+     */
+    private char[] getSoundexMapping() {
+        return this.soundexMapping;
+    }
+
+    /**
+     * Maps the given upper-case character to its Soundex code.
+     *
+     * @param ch
+     *                  An upper-case character.
+     * @return A Soundex code.
+     * @throws IllegalArgumentException
+     *                  Thrown if <code>ch</code> is not mapped.
+     */
+    private char map(final char ch) {
+        final int index = ch - 'A';
+        if (index < 0 || index >= this.getSoundexMapping().length) {
+            throw new IllegalArgumentException("The character is not mapped: " + ch);
+        }
+        return this.getSoundexMapping()[index];
+    }
+
+    /**
+     * Sets the maxLength.
+     *
+     * @deprecated This feature is not needed since the encoding size must be constant. Will be removed in 2.0.
+     * @param maxLength
+     *                  The maxLength to set
+     */
+    @Deprecated
+    public void setMaxLength(final int maxLength) {
+        this.maxLength = maxLength;
+    }
+
+    /**
+     * Retrieves the Soundex code for a given String object.
+     *
+     * @param str
+     *                  String to encode using the Soundex algorithm
+     * @return A soundex code for the String supplied
+     * @throws IllegalArgumentException
+     *                  if a character is not mapped
+     */
+    public String soundex(String str) {
+        if (str == null) {
+            return null;
+        }
+        str = SoundexUtils.clean(str);
+        if (str.length() == 0) {
+            return str;
+        }
+        final char out[] = {'0', '0', '0', '0'};
+        char last, mapped;
+        int incount = 1, count = 1;
+        out[0] = str.charAt(0);
+        // getMappingCode() throws IllegalArgumentException
+        last = getMappingCode(str, 0);
+        while (incount < str.length() && count < out.length) {
+            mapped = getMappingCode(str, incount++);
+            if (mapped != 0) {
+                if (mapped != '0' && mapped != last) {
+                    out[count++] = mapped;
+                }
+                last = mapped;
+            }
+        }
+        return new String(out);
+    }
+
 }

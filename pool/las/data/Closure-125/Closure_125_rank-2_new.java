@@ -1,11 +1,10 @@
 /**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -16,307 +15,298 @@
  * limitations under the License.
  */
 
-package org.apache.hadoop.hive.ql.exec;
+package org.apache.commons.cli;
 
-import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.filecache.DistributedCache;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.ql.exec.HashTableSinkOperator.HashTableSinkObjectCtx;
-import org.apache.hadoop.hive.ql.exec.persistence.AbstractMapJoinKey;
-import org.apache.hadoop.hive.ql.exec.persistence.HashMapWrapper;
-import org.apache.hadoop.hive.ql.exec.persistence.MapJoinObjectValue;
-import org.apache.hadoop.hive.ql.exec.persistence.MapJoinRowContainer;
-import org.apache.hadoop.hive.ql.metadata.HiveException;
-import org.apache.hadoop.hive.ql.plan.MapJoinDesc;
-import org.apache.hadoop.hive.ql.plan.TableDesc;
-import org.apache.hadoop.hive.ql.plan.api.OperatorType;
-import org.apache.hadoop.hive.serde2.SerDe;
-import org.apache.hadoop.hive.serde2.SerDeException;
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils;
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils.ObjectInspectorCopyOption;
-import org.apache.hadoop.util.ReflectionUtils;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
 
 /**
- * Map side Join operator implementation.
+ * The class PosixParser provides an implementation of the 
+ * {@link Parser#flatten(Options,String[],boolean) flatten} method.
+ *
+ * @author John Keyes (john at integralsource.com)
+ * @see Parser
+ * @version $Revision$
  */
-public class MapJoinOperator extends AbstractMapJoinOperator<MapJoinDesc> implements Serializable {
-  private static final long serialVersionUID = 1L;
-  private static final Log LOG = LogFactory.getLog(MapJoinOperator.class.getName());
+public class PosixParser extends Parser {
 
+    /** holder for flattened tokens */
+    private List tokens = new ArrayList();
 
-  protected transient Map<Byte, HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>> mapJoinTables;
+    /** specifies if bursting should continue */
+    private boolean eatTheRest;
 
-  private static final transient String[] FATAL_ERR_MSG = {
-      null, // counter value 0 means no error
-      "Mapside join exceeds available memory. "
-          + "Please try removing the mapjoin hint."};
+    /** holder for the current option */
+    private Option currentOption;
 
-  protected transient Map<Byte, MapJoinRowContainer<ArrayList<Object>>> rowContainerMap;
-  transient int metadataKeyTag;
-  transient int[] metadataValueTag;
-  transient boolean hashTblInitedOnce;
-  private int bigTableAlias;
+    /** the command line Options */
+    private Options options;
 
-  public MapJoinOperator() {
-  }
-
-  public MapJoinOperator(AbstractMapJoinOperator<? extends MapJoinDesc> mjop) {
-    super(mjop);
-  }
-
-  @Override
-  protected void initializeOp(Configuration hconf) throws HiveException {
-
-    super.initializeOp(hconf);
-
-    metadataValueTag = new int[numAliases];
-    for (int pos = 0; pos < numAliases; pos++) {
-      metadataValueTag[pos] = -1;
+    /**
+     * Resets the members to their original state i.e. remove
+     * all of <code>tokens</code> entries, set <code>eatTheRest</code>
+     * to false and set <code>currentOption</code> to null.
+     */
+    private void init()
+    {
+        eatTheRest = false;
+        tokens.clear();
+        currentOption = null;
     }
 
-    metadataKeyTag = -1;
-    bigTableAlias = order[posBigTable];
+    /**
+     * <p>An implementation of {@link Parser}'s abstract
+     * {@link Parser#flatten(Options,String[],boolean) flatten} method.</p>
+     *
+     * <p>The following are the rules used by this flatten method.
+     * <ol>
+     *  <li>if <code>stopAtNonOption</code> is <b>true</b> then do not
+     *  burst anymore of <code>arguments</code> entries, just add each
+     *  successive entry without further processing.  Otherwise, ignore
+     *  <code>stopAtNonOption</code>.</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>--</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>-</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is two characters
+     *  in length and the first character is "<b>-</b>" then check if this
+     *  is a valid {@link Option} id.  If it is a valid id, then add the
+     *  entry to the list of processed tokens and set the current {@link Option}
+     *  member.  If it is not a valid id and <code>stopAtNonOption</code>
+     *  is true, then the remaining entries are copied to the list of 
+     *  processed tokens.  Otherwise, the current entry is ignored.</li>
+     *  <li>if the current <code>arguments</code> entry is more than two
+     *  characters in length and the first character is "<b>-</b>" then
+     *  we need to burst the entry to determine its constituents.  For more
+     *  information on the bursting algorithm see 
+     *  {@link PosixParser#burstToken(String, boolean) burstToken}.</li>
+     *  <li>if the current <code>arguments</code> entry is not handled 
+     *  by any of the previous rules, then the entry is added to the list
+     *  of processed tokens.</li>
+     * </ol>
+     * </p>
+     *
+     * @param options The command line {@link Options}
+     * @param arguments The command line arguments to be parsed
+     * @param stopAtNonOption Specifies whether to stop flattening
+     * when an non option is found.
+     * @return The flattened <code>arguments</code> String array.
+     */
+    protected String[] flatten(Options options, String[] arguments, boolean stopAtNonOption)
+    {
+        init();
+        this.options = options;
 
-    mapJoinTables = new HashMap<Byte, HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>>();
-    rowContainerMap = new HashMap<Byte, MapJoinRowContainer<ArrayList<Object>>>();
-    // initialize the hash tables for other tables
-    for (int pos = 0; pos < numAliases; pos++) {
-      if (pos == posBigTable) {
-        continue;
-      }
+        // an iterator for the command line tokens
+        Iterator iter = Arrays.asList(arguments).iterator();
 
-      HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue> hashTable = new HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>();
+        // process each command line token
+        while (iter.hasNext())
+        {
+            // get the next command line token
+            String token = (String) iter.next();
 
-      mapJoinTables.put(Byte.valueOf((byte) pos), hashTable);
-      MapJoinRowContainer<ArrayList<Object>> rowContainer = new MapJoinRowContainer<ArrayList<Object>>();
-      rowContainerMap.put(Byte.valueOf((byte) pos), rowContainer);
-    }
-
-    hashTblInitedOnce = false;
-  }
-
-  @Override
-  protected void fatalErrorMessage(StringBuilder errMsg, long counterCode) {
-    errMsg.append("Operator " + getOperatorId() + " (id=" + id + "): "
-        + FATAL_ERR_MSG[(int) counterCode]);
-  }
-
-  public void generateMapMetaData() throws HiveException, SerDeException {
-    // generate the meta data for key
-    // index for key is -1
-    TableDesc keyTableDesc = conf.getKeyTblDesc();
-    SerDe keySerializer = (SerDe) ReflectionUtils.newInstance(keyTableDesc.getDeserializerClass(),
-        null);
-    keySerializer.initialize(null, keyTableDesc.getProperties());
-    MapJoinMetaData.put(Integer.valueOf(metadataKeyTag), new HashTableSinkObjectCtx(
-        ObjectInspectorUtils.getStandardObjectInspector(keySerializer.getObjectInspector(),
-            ObjectInspectorCopyOption.WRITABLE), keySerializer, keyTableDesc, hconf));
-
-    // index for values is just alias
-    for (int tag = 0; tag < order.length; tag++) {
-      int alias = (int) order[tag];
-
-      if (alias == this.bigTableAlias) {
-        continue;
-      }
-
-
-      TableDesc valueTableDesc = conf.getValueTblDescs().get(tag);
-      SerDe valueSerDe = (SerDe) ReflectionUtils.newInstance(valueTableDesc.getDeserializerClass(),
-          null);
-      valueSerDe.initialize(null, valueTableDesc.getProperties());
-
-      MapJoinMetaData.put(Integer.valueOf(alias), new HashTableSinkObjectCtx(ObjectInspectorUtils
-          .getStandardObjectInspector(valueSerDe.getObjectInspector(),
-              ObjectInspectorCopyOption.WRITABLE), valueSerDe, valueTableDesc, hconf));
-    }
-  }
-
-  private void loadHashTable() throws HiveException {
-
-    if (!this.getExecContext().getLocalWork().getInputFileChangeSensitive()) {
-      if (hashTblInitedOnce) {
-        return;
-      } else {
-        hashTblInitedOnce = true;
-      }
-    }
-
-    boolean localMode = HiveConf.getVar(hconf, HiveConf.ConfVars.HADOOPJT).equals("local");
-    String baseDir = null;
-
-    String currentInputFile = HiveConf.getVar(hconf, HiveConf.ConfVars.HADOOPMAPFILENAME);
-    LOG.info("******* Load from HashTable File: input : " + currentInputFile);
-
-    String currentFileName;
-
-    if (this.getExecContext().getLocalWork().getInputFileChangeSensitive()) {
-      currentFileName = this.getFileName(currentInputFile);
-    } else {
-      currentFileName = "-";
-    }
-
-    try {
-      if (localMode) {
-        baseDir = this.getExecContext().getLocalWork().getTmpFileURI();
-      } else {
-        Path[] localArchives;
-        String stageID = this.getExecContext().getLocalWork().getStageID();
-        String suffix = Utilities.generateTarFileName(stageID);
-        FileSystem localFs = FileSystem.getLocal(hconf);
-        localArchives = DistributedCache.getLocalCacheArchives(this.hconf);
-        Path archive;
-        for (int j = 0; j < localArchives.length; j++) {
-          archive = localArchives[j];
-          if (!archive.getName().endsWith(suffix)) {
-            continue;
-          }
-          Path archiveLocalLink = archive.makeQualified(localFs);
-          baseDir = archiveLocalLink.toUri().getPath();
-        }
-      }
-      for (Map.Entry<Byte, HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue>> entry : mapJoinTables
-          .entrySet()) {
-        Byte pos = entry.getKey();
-        HashMapWrapper<AbstractMapJoinKey, MapJoinObjectValue> hashtable = entry.getValue();
-        String filePath = Utilities.generatePath(baseDir, pos, currentFileName);
-        Path path = new Path(filePath);
-        LOG.info("\tLoad back 1 hashtable file from tmp file uri:" + path.toString());
-        hashtable.initilizePersistentHash(path.toUri().getPath());
-      }
-    } catch (Exception e) {
-      LOG.error("Load Distributed Cache Error");
-      throw new HiveException(e.getMessage());
-    }
-  }
-
-  // Load the hash table
-  @Override
-  public void cleanUpInputFileChangedOp() throws HiveException {
-    try {
-      if (firstRow) {
-        // generate the map metadata
-        generateMapMetaData();
-        firstRow = false;
-      }
-
-      loadHashTable();
-    } catch (SerDeException e) {
-      e.printStackTrace();
-      throw new HiveException(e);
-    }
-  }
-
-  @Override
-  public void processOp(Object row, int tag) throws HiveException {
-
-    try {
-      if (firstRow) {
-        // generate the map metadata
-        generateMapMetaData();
-        firstRow = false;
-      }
-
-      // get alias
-      alias = order[tag];
-      // alias = (byte)tag;
-
-      if ((lastAlias == null) || (!lastAlias.equals(alias))) {
-        nextSz = joinEmitInterval;
-      }
-
-      // compute keys and values as StandardObjects
-      AbstractMapJoinKey key = JoinUtil.computeMapJoinKeys(row, joinKeys.get(alias),
-          joinKeysObjectInspectors.get(alias));
-      ArrayList<Object> value = JoinUtil.computeValues(row, joinValues.get(alias),
-          joinValuesObjectInspectors.get(alias), joinFilters.get(alias), joinFilterObjectInspectors
-              .get(alias), noOuterJoin);
-
-
-      // Add the value to the ArrayList
-      storage.get((byte) tag).add(value);
-
-      for (Byte pos : order) {
-        if (pos.intValue() != tag) {
-
-          MapJoinObjectValue o = mapJoinTables.get(pos).get(key);
-          MapJoinRowContainer<ArrayList<Object>> rowContainer = rowContainerMap.get(pos);
-
-          // there is no join-value or join-key has all null elements
-          if (o == null || key.hasAnyNulls()) {
-            if (noOuterJoin) {
-              storage.put(pos, emptyList);
-            } else {
-              storage.put(pos, dummyObjVectors[pos.intValue()]);
+            // handle SPECIAL TOKEN
+            if (token.startsWith("--"))
+            {
+                if (token.indexOf('=') != -1)
+                {
+                    tokens.add(token.substring(0, token.indexOf('=')));
+                    tokens.add(token.substring(token.indexOf('=') + 1, token.length()));
+                }
+                else
+                {
+                    tokens.add(token);
+                }
             }
-          } else {
-            rowContainer.reset(o.getObj());
-            storage.put(pos, rowContainer);
-          }
+
+            // single hyphen
+            else if ("-".equals(token))
+            {
+                processSingleHyphen(token);
+            }
+            else if (token.startsWith("-"))
+            {
+                int tokenLength = token.length();
+
+                if (tokenLength == 2)
+                {
+                    processOptionToken(token, stopAtNonOption);
+                }
+                else if (options.hasOption(token))
+                {
+                    tokens.add(token);
+                }
+                // requires bursting
+                else
+                {
+                    burstToken(token, stopAtNonOption);
+                }
+            }
+            else
+            {
+                if (stopAtNonOption)
+                {
+                    process(token);
+                }
+                else
+                {
+                    tokens.add(token);
+                }
+            }
+
+            gobble(iter);
         }
-      }
 
-      // generate the output records
-      checkAndGenObject();
+        return (String[]) tokens.toArray(new String[tokens.size()]);
+    }
 
-      // done with the row
-      storage.get((byte) tag).clear();
-
-      for (Byte pos : order) {
-        if (pos.intValue() != tag) {
-          storage.put(pos, null);
+    /**
+     * Adds the remaining tokens to the processed tokens list.
+     *
+     * @param iter An iterator over the remaining tokens
+     */
+    private void gobble(Iterator iter)
+    {
+        if (eatTheRest)
+        {
+            while (iter.hasNext())
+            {
+                tokens.add(iter.next());
+            }
         }
-      }
-
-    } catch (SerDeException e) {
-      e.printStackTrace();
-      throw new HiveException(e);
-    }
-  }
-
-  private String getFileName(String path) {
-    if (path == null || path.length() == 0) {
-      return null;
     }
 
-    int last_separator = path.lastIndexOf(Path.SEPARATOR) + 1;
-    String fileName = path.substring(last_separator);
-    return fileName;
-
-  }
-
-  @Override
-  public void closeOp(boolean abort) throws HiveException {
-
-    if (mapJoinTables != null) {
-      for (HashMapWrapper<?, ?> hashTable : mapJoinTables.values()) {
-        hashTable.close();
-      }
+    /**
+     * <p>If there is a current option and it can have an argument
+     * value then add the token to the processed tokens list and 
+     * set the current option to null.</p>
+     *
+     * <p>If there is a current option and it can have argument
+     * values then add the token to the processed tokens list.</p>
+     *
+     * <p>If there is not a current option add the special token
+     * "<b>--</b>" and the current <code>value</code> to the processed
+     * tokens list.  The add all the remaining <code>argument</code>
+     * values to the processed tokens list.</p>
+     *
+     * @param value The current token
+     */
+    private void process(String value)
+    {
+        if (currentOption != null && currentOption.hasArg())
+        {
+            if (currentOption.hasArg())
+            {
+                tokens.add(value);
+                currentOption = null;
+            }
+            else if (currentOption.hasArgs())
+            {
+                tokens.add(value);
+            }
+        }
+        else
+        {
+            eatTheRest = true;
+            tokens.add("--");
+            tokens.add(value);
+        }
     }
-    super.closeOp(abort);
-  }
 
-  /**
-   * Implements the getName function for the Node Interface.
-   *
-   * @return the name of the operator
-   */
-  @Override
-  public String getName() {
-    return "MAPJOIN";
-  }
+    /**
+     * If it is a hyphen then add the hyphen directly to
+     * the processed tokens list.
+     *
+     * @param hyphen The hyphen token
+     */
+    private void processSingleHyphen(String hyphen)
+    {
+        tokens.add(hyphen);
+    }
 
-  @Override
-  public OperatorType getType() {
-    return OperatorType.MAPJOIN;
-  }
+    /**
+     * <p>If an {@link Option} exists for <code>token</code> then
+     * set the current option and add the token to the processed 
+     * list.</p>
+     *
+     * <p>If an {@link Option} does not exist and <code>stopAtNonOption</code>
+     * is set then ignore the current token and add the remaining tokens
+     * to the processed tokens list directly.</p>
+     *
+     * @param token The current option token
+     * @param stopAtNonOption Specifies whether flattening should halt
+     * at the first non option.
+     */
+    private void processOptionToken(String token, boolean stopAtNonOption)
+    {
+        if (this.options.hasOption(token))
+        {
+            currentOption = this.options.getOption(token);
+            tokens.add(token);
+        }
+        else if (stopAtNonOption)
+        {
+            eatTheRest = true;
+        }
+    }
+
+    /**
+     * <p>Breaks <code>token</code> into its constituent parts
+     * using the following algorithm.
+     * <ul>
+     *  <li>ignore the first character ("<b>-</b>")</li>
+     *  <li>foreach remaining character check if an {@link Option}
+     *  exists with that id.</li>
+     *  <li>if an {@link Option} does exist then add that character
+     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
+     *  <li>if the {@link Option} can have an argument value and there 
+     *  are remaining characters in the token then add the remaining 
+     *  characters as a token to the list of processed tokens.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b> 
+     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
+     *  "<b>--</b>" followed by the remaining characters and also 
+     *  the remaining tokens directly to the processed tokens list.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
+     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
+     *  character prepended with "<b>-</b>".</li>
+     * </ul>
+     * </p>
+     *
+     * @param token The current token to be <b>burst</b>
+     * @param stopAtNonOption Specifies whether to stop processing
+     * at the first non-Option encountered.
+     */
+    protected void burstToken(String token, boolean stopAtNonOption)
+    {
+        for (int i = 1; i < token.length(); i++)
+        {
+            String ch = String.valueOf(token.charAt(i));
+
+            if (options.hasOption(ch))
+            {
+                tokens.add("-" + ch);
+                currentOption = options.getOption(ch);
+
+                if (currentOption.hasArg() && (token.length() != (i + 1)))
+                {
+                    tokens.add(token.substring(i + 1));
+
+                    break;
+                }
+            }
+            else if (stopAtNonOption)
+            {
+                process(token.substring(i));
+                break;
+            }
+            else
+            {
+                tokens.add(token);
+                break;
+            }
+        }
+    }
 }

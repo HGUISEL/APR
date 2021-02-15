@@ -1,524 +1,568 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/*
+ * $Source: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//dbcp/src/java/org/apache/commons/dbcp/DelegatingCallableStatement.java,v $
+ * $Revision: 1.13 $
+ * $Date: 2003/12/26 15:16:28 $
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2003 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowledgement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation - http://www.apache.org/"
+ *    Alternately, this acknowledgement may appear in the software itself,
+ *    if and wherever such third-party acknowledgements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Software Foundation.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * http://www.apache.org/
+ *
  */
 
-package org.apache.oozie.action.hadoop;
+package org.apache.commons.dbcp;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedList;
+import java.sql.CallableStatement;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.util.Map;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+import java.sql.ResultSet;
+import java.io.InputStream;
+import java.io.Reader;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLWarning;
+import java.sql.SQLException;
+
 import java.util.List;
-import java.util.Properties;
-import java.util.jar.JarFile;
-import java.util.jar.Manifest;
-import java.util.regex.Pattern;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.lang.StringUtils;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.filecache.DistributedCache;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.log4j.PropertyConfigurator;
-import org.apache.spark.deploy.SparkSubmit;
+/**
+ * A base delegating implementation of {@link CallableStatement}.
+ * <p>
+ * All of the methods from the {@link CallableStatement} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement Statement tracking and
+ * logging of code which created the Statement. Tracking the
+ * Statement ensures that the Connection which created it can
+ * close any open Statement's on Connection close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House (<a href="mailto:james@interobjective.com">james@interobjective.com</a>)
+ * @author Dirk Verbeeck
+ * @version $Revision: 1.13 $ $Date: 2003/12/26 15:16:28 $
+ */
+public class DelegatingCallableStatement extends DelegatingPreparedStatement
+        implements CallableStatement {
 
-public class SparkMain extends LauncherMain {
-    private static final String MASTER_OPTION = "--master";
-    private static final String MODE_OPTION = "--deploy-mode";
-    private static final String JOB_NAME_OPTION = "--name";
-    private static final String CLASS_NAME_OPTION = "--class";
-    private static final String VERBOSE_OPTION = "--verbose";
-    private static final String DRIVER_CLASSPATH_OPTION = "--driver-class-path";
-    private static final String EXECUTOR_CLASSPATH = "spark.executor.extraClassPath=";
-    private static final String DRIVER_CLASSPATH = "spark.driver.extraClassPath=";
-    private static final String EXECUTOR_EXTRA_JAVA_OPTIONS = "spark.executor.extraJavaOptions=";
-    private static final String DRIVER_EXTRA_JAVA_OPTIONS = "spark.driver.extraJavaOptions=";
-    private static final String LOG4J_CONFIGURATION_JAVA_OPTION = "-Dlog4j.configuration=";
-    private static final String HIVE_SECURITY_TOKEN = "spark.yarn.security.tokens.hive.enabled";
-    private static final String HBASE_SECURITY_TOKEN = "spark.yarn.security.tokens.hbase.enabled";
-    private static final String CONF_OOZIE_SPARK_SETUP_HADOOP_CONF_DIR = "oozie.action.spark.setup.hadoop.conf.dir";
-    private static final String PWD = "$PWD" + File.separator + "*";
-    private static final Pattern[] PYSPARK_DEP_FILE_PATTERN = { Pattern.compile("py4\\S*src.zip"),
-            Pattern.compile("pyspark.zip") };
-    private static final Pattern SPARK_DEFAULTS_FILE_PATTERN = Pattern.compile("spark-defaults.conf");
-    private static final String SPARK_LOG4J_PROPS = "spark-log4j.properties";
-    private static final Pattern[] SPARK_JOB_IDS_PATTERNS = {
-            Pattern.compile("Submitted application (application[0-9_]*)") };
-    public static final Pattern SPARK_ASSEMBLY_JAR_PATTERN = Pattern
-            .compile("^spark-assembly((?:(-|_|(\\d+\\.))\\d+(?:\\.\\d+)*))*\\.jar$");
-    public static final Pattern SPARK_YARN_JAR_PATTERN = Pattern
-            .compile("^spark-yarn((?:(-|_|(\\d+\\.))\\d+(?:\\.\\d+)*))*\\.jar$");
-    private static final Pattern SPARK_VERSION_1 = Pattern.compile("^1.*");
-    private static final String SPARK_YARN_JAR = "spark.yarn.jar";
-    private static final String SPARK_YARN_JARS = "spark.yarn.jars";
-    private String sparkYarnJar = null;
-    private String sparkVersion = "1.X.X";
-    public static void main(String[] args) throws Exception {
-        run(SparkMain.class, args);
-    }
-
-    @Override
-    protected void run(String[] args) throws Exception {
-        boolean isPyspark = false;
-        Configuration actionConf = loadActionConf();
-        prepareHadoopConfig(actionConf);
-
-        setYarnTag(actionConf);
-        LauncherMainHadoopUtils.killChildYarnJobs(actionConf);
-        String logFile = setUpSparkLog4J(actionConf);
-        List<String> sparkArgs = new ArrayList<String>();
-
-        sparkArgs.add(MASTER_OPTION);
-        String master = actionConf.get(SparkActionExecutor.SPARK_MASTER);
-        sparkArgs.add(master);
-
-        // In local mode, everything runs here in the Launcher Job.
-        // In yarn-client mode, the driver runs here in the Launcher Job and the
-        // executor in Yarn.
-        // In yarn-cluster mode, the driver and executor run in Yarn.
-        String sparkDeployMode = actionConf.get(SparkActionExecutor.SPARK_MODE);
-        if (sparkDeployMode != null) {
-            sparkArgs.add(MODE_OPTION);
-            sparkArgs.add(sparkDeployMode);
-        }
-        boolean yarnClusterMode = master.equals("yarn-cluster")
-                || (master.equals("yarn") && sparkDeployMode != null && sparkDeployMode.equals("cluster"));
-        boolean yarnClientMode = master.equals("yarn-client")
-                || (master.equals("yarn") && sparkDeployMode != null && sparkDeployMode.equals("client"));
-
-        sparkArgs.add(JOB_NAME_OPTION);
-        sparkArgs.add(actionConf.get(SparkActionExecutor.SPARK_JOB_NAME));
-
-        String className = actionConf.get(SparkActionExecutor.SPARK_CLASS);
-        if (className != null) {
-            sparkArgs.add(CLASS_NAME_OPTION);
-            sparkArgs.add(className);
-        }
-
-        String jarPath = actionConf.get(SparkActionExecutor.SPARK_JAR);
-        if(jarPath!=null && jarPath.endsWith(".py")){
-            isPyspark = true;
-        }
-        boolean addedHiveSecurityToken = false;
-        boolean addedHBaseSecurityToken = false;
-        boolean addedLog4jDriverSettings = false;
-        boolean addedLog4jExecutorSettings = false;
-        StringBuilder driverClassPath = new StringBuilder();
-        StringBuilder executorClassPath = new StringBuilder();
-        String sparkOpts = actionConf.get(SparkActionExecutor.SPARK_OPTS);
-        if (StringUtils.isNotEmpty(sparkOpts)) {
-            List<String> sparkOptions = splitSparkOpts(sparkOpts);
-            for (int i = 0; i < sparkOptions.size(); i++) {
-                String opt = sparkOptions.get(i);
-                boolean addToSparkArgs = true;
-                if (yarnClusterMode || yarnClientMode) {
-                    if (opt.startsWith(EXECUTOR_CLASSPATH)) {
-                        appendWithPathSeparator(opt.substring(EXECUTOR_CLASSPATH.length()), executorClassPath);
-                        addToSparkArgs = false;
-                    }
-                    if (opt.startsWith(DRIVER_CLASSPATH)) {
-                        appendWithPathSeparator(opt.substring(DRIVER_CLASSPATH.length()), driverClassPath);
-                        addToSparkArgs = false;
-                    }
-                    if (opt.equals(DRIVER_CLASSPATH_OPTION)) {
-                        // we need the next element after this option
-                        appendWithPathSeparator(sparkOptions.get(i + 1), driverClassPath);
-                        // increase i to skip the next element.
-                        i++;
-                        addToSparkArgs = false;
-                    }
-                }
-                if (opt.startsWith(HIVE_SECURITY_TOKEN)) {
-                    addedHiveSecurityToken = true;
-                }
-                if (opt.startsWith(HBASE_SECURITY_TOKEN)) {
-                    addedHBaseSecurityToken = true;
-                }
-                if (opt.startsWith(EXECUTOR_EXTRA_JAVA_OPTIONS) || opt.startsWith(DRIVER_EXTRA_JAVA_OPTIONS)) {
-                    if(!opt.contains(LOG4J_CONFIGURATION_JAVA_OPTION)) {
-                        opt += " " + LOG4J_CONFIGURATION_JAVA_OPTION + SPARK_LOG4J_PROPS;
-                    }else{
-                        System.out.println("Warning: Spark Log4J settings are overwritten." +
-                                " Child job IDs may not be available");
-                    }
-                    if(opt.startsWith(EXECUTOR_EXTRA_JAVA_OPTIONS)) {
-                        addedLog4jExecutorSettings = true;
-                    }else{
-                        addedLog4jDriverSettings = true;
-                    }
-                }
-                if(addToSparkArgs) {
-                    sparkArgs.add(opt);
-                }
-            }
-        }
-
-        if ((yarnClusterMode || yarnClientMode)) {
-            // Include the current working directory (of executor container)
-            // in executor classpath, because it will contain localized
-            // files
-            appendWithPathSeparator(PWD, executorClassPath);
-            appendWithPathSeparator(PWD, driverClassPath);
-
-            sparkArgs.add("--conf");
-            sparkArgs.add(EXECUTOR_CLASSPATH + executorClassPath.toString());
-
-            sparkArgs.add("--conf");
-            sparkArgs.add(DRIVER_CLASSPATH + driverClassPath.toString());
-        }
-
-        if (actionConf.get(MAPREDUCE_JOB_TAGS) != null) {
-            sparkArgs.add("--conf");
-            sparkArgs.add("spark.yarn.tags=" + actionConf.get(MAPREDUCE_JOB_TAGS));
-        }
-
-        if (!addedHiveSecurityToken) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(HIVE_SECURITY_TOKEN + "=false");
-        }
-        if (!addedHBaseSecurityToken) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(HBASE_SECURITY_TOKEN + "=false");
-        }
-        if(!addedLog4jExecutorSettings) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(EXECUTOR_EXTRA_JAVA_OPTIONS + LOG4J_CONFIGURATION_JAVA_OPTION + SPARK_LOG4J_PROPS);
-        }
-        if(!addedLog4jDriverSettings) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(DRIVER_EXTRA_JAVA_OPTIONS + LOG4J_CONFIGURATION_JAVA_OPTION + SPARK_LOG4J_PROPS);
-        }
-        File defaultConfFile = getMatchingFile(SPARK_DEFAULTS_FILE_PATTERN);
-        if (defaultConfFile != null) {
-            sparkArgs.add("--properties-file");
-            sparkArgs.add(SPARK_DEFAULTS_FILE_PATTERN.toString());
-        }
-
-        if ((yarnClusterMode || yarnClientMode)) {
-            LinkedList<URI> fixedUris = fixFsDefaultUris(DistributedCache.getCacheFiles(actionConf), jarPath);
-            String cachedFiles = filterSparkYarnJar(fixedUris);
-            if (cachedFiles != null && !cachedFiles.isEmpty()) {
-                sparkArgs.add("--files");
-                sparkArgs.add(cachedFiles);
-            }
-            fixedUris = fixFsDefaultUris(DistributedCache.getCacheArchives(actionConf), jarPath);
-            String cachedArchives = StringUtils.join(fixedUris, ",");
-            if (cachedArchives != null && !cachedArchives.isEmpty()) {
-                sparkArgs.add("--archives");
-                sparkArgs.add(cachedArchives);
-            }
-            setSparkYarnJarsConf(sparkArgs);
-        }
-
-        if (!sparkArgs.contains(VERBOSE_OPTION)) {
-            sparkArgs.add(VERBOSE_OPTION);
-        }
-
-        sparkArgs.add(jarPath);
-        for (String arg : args) {
-            sparkArgs.add(arg);
-        }
-        if (isPyspark){
-            createPySparkLibFolder();
-        }
-
-
-        System.out.println("Spark Action Main class        : " + SparkSubmit.class.getName());
-        System.out.println();
-        System.out.println("Oozie Spark action configuration");
-        System.out.println("=================================================================");
-        System.out.println();
-        for (String arg : sparkArgs) {
-            System.out.println("                    " + arg);
-        }
-        System.out.println();
-        try {
-            runSpark(sparkArgs.toArray(new String[sparkArgs.size()]));
-        }
-        finally {
-            System.out.println("\n<<< Invocation of Spark command completed <<<\n");
-            writeExternalChildIDs(logFile, SPARK_JOB_IDS_PATTERNS, "Spark");
-        }
-    }
-
-    private void prepareHadoopConfig(Configuration actionConf) throws IOException {
-        // Copying oozie.action.conf.xml into hadoop configuration *-site files.
-        if (actionConf.getBoolean(CONF_OOZIE_SPARK_SETUP_HADOOP_CONF_DIR, false)) {
-            String actionXml = System.getProperty("oozie.action.conf.xml");
-            if (actionXml != null) {
-                File currentDir = new File(actionXml).getParentFile();
-                writeHadoopConfig(actionXml, currentDir);
-            }
-        }
-    }
+    /** My delegate. */
+    protected CallableStatement _stmt = null;
 
     /**
-     * SparkActionExecutor sets the SPARK_HOME environment variable to the local directory.
-     * Spark is looking for the pyspark.zip and py4j-VERSION-src.zip files in the python/lib folder under SPARK_HOME.
-     * This function creates the subfolders and copies the zips from the local folder.
-     * @throws OozieActionConfiguratorException  if the zip files are missing
-     * @throws IOException if there is an error during file copy
-     */
-    private void createPySparkLibFolder() throws OozieActionConfiguratorException, IOException {
-        File pythonLibDir = new File("python/lib");
-        if(!pythonLibDir.exists()){
-            pythonLibDir.mkdirs();
-            System.out.println("PySpark lib folder " + pythonLibDir.getAbsolutePath() + " folder created.");
-        }
-
-        for(Pattern fileNamePattern : PYSPARK_DEP_FILE_PATTERN) {
-            File file = getMatchingPyFile(fileNamePattern);
-            File destination = new File(pythonLibDir, file.getName());
-            FileUtils.copyFile(file, destination);
-            System.out.println("Copied " + file + " to " + destination.getAbsolutePath());
-        }
-    }
-
-    /**
-     * Searches for a file in the current directory that matches the given pattern.
-     * If there are multiple files matching the pattern returns one of them.
-     * @param fileNamePattern the pattern to look for
-     * @return the file if there is one
-     * @throws OozieActionConfiguratorException if there is are no files matching the pattern
-     */
-    private File getMatchingPyFile(Pattern fileNamePattern) throws OozieActionConfiguratorException {
-        File f = getMatchingFile(fileNamePattern);
-        if (f != null) {
-            return f;
-        }
-        throw new OozieActionConfiguratorException("Missing py4j and/or pyspark zip files. Please add them to "
-                + "the lib folder or to the Spark sharelib.");
-    }
-
-    /**
-     * Searches for a file in the current directory that matches the given
-     * pattern. If there are multiple files matching the pattern returns one of
-     * them.
+     * Create a wrapper for the Statement which traces this
+     * Statement to the Connection which created it and the
+     * code which created it.
      *
-     * @param fileNamePattern the pattern to look for
-     * @return the file if there is one else it returns null
+     * @param cs the {@link CallableStatement} to delegate all calls to.
      */
-    private File getMatchingFile(Pattern fileNamePattern) throws OozieActionConfiguratorException {
-        File localDir = new File(".");
-        for(String fileName : localDir.list()){
-            if(fileNamePattern.matcher(fileName).find()){
-                return new File(fileName);
-            }
-        }
-        return null;
+    public DelegatingCallableStatement(DelegatingConnection c,
+                                       CallableStatement s) {
+        super(c, s);
+        _stmt = s;
     }
 
-    private void runSpark(String[] args) throws Exception {
-        System.out.println("=================================================================");
-        System.out.println();
-        System.out.println(">>> Invoking Spark class now >>>");
-        System.out.println();
-        System.out.flush();
-        SparkSubmit.main(args);
-    }
-
-    /**
-     * Converts the options to be Spark-compatible.
-     * <ul>
-     *     <li>Parameters are separated by whitespace and can be groupped using double quotes</li>
-     *     <li>Quotes should be removed</li>
-     *     <li>Adjacent whitespace separators are treated as one</li>
-     * </ul>
-     * @param sparkOpts the options for Spark
-     * @return the options parsed into a list
-     */
-    static List<String> splitSparkOpts(String sparkOpts){
-        List<String> result = new ArrayList<String>();
-        StringBuilder currentWord = new StringBuilder();
-        boolean insideQuote = false;
-        for (int i = 0; i < sparkOpts.length(); i++) {
-            char c = sparkOpts.charAt(i);
-            if (c == '"') {
-                insideQuote = !insideQuote;
-            } else if (Character.isWhitespace(c) && !insideQuote) {
-                if (currentWord.length() > 0) {
-                    result.add(currentWord.toString());
-                    currentWord.setLength(0);
-                }
-            } else {
-                currentWord.append(c);
-            }
+    public boolean equals(Object obj) {
+        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
+        if (delegate == null) {
+            return false;
         }
-        if(currentWord.length()>0) {
-            result.add(currentWord.toString());
+        if (obj instanceof DelegatingCallableStatement) {
+            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
+            return delegate.equals(s.getInnermostDelegate());
         }
-        return result;
-    }
-
-    public static String setUpSparkLog4J(Configuration distcpConf) throws IOException {
-        // Logfile to capture job IDs
-        String hadoopJobId = System.getProperty("oozie.launcher.job.id");
-        if (hadoopJobId == null) {
-            throw new RuntimeException("Launcher Hadoop Job ID system,property not set");
-        }
-        String logFile = new File("spark-oozie-" + hadoopJobId + ".log").getAbsolutePath();
-        Properties hadoopProps = new Properties();
-
-        // Preparing log4j configuration
-        URL log4jFile = Thread.currentThread().getContextClassLoader().getResource("log4j.properties");
-        if (log4jFile != null) {
-            // getting hadoop log4j configuration
-            hadoopProps.load(log4jFile.openStream());
-        }
-
-        String logLevel = distcpConf.get("oozie.spark.log.level", "INFO");
-        String rootLogLevel = distcpConf.get("oozie.action." + LauncherMapper.ROOT_LOGGER_LEVEL, "INFO");
-
-        hadoopProps.setProperty("log4j.rootLogger", rootLogLevel + ", A");
-        hadoopProps.setProperty("log4j.logger.org.apache.spark", logLevel + ", A, jobid");
-        hadoopProps.setProperty("log4j.additivity.org.apache.spark", "false");
-        hadoopProps.setProperty("log4j.appender.A", "org.apache.log4j.ConsoleAppender");
-        hadoopProps.setProperty("log4j.appender.A.layout", "org.apache.log4j.PatternLayout");
-        hadoopProps.setProperty("log4j.appender.A.layout.ConversionPattern", "%d [%t] %-5p %c %x - %m%n");
-        hadoopProps.setProperty("log4j.appender.jobid", "org.apache.log4j.FileAppender");
-        hadoopProps.setProperty("log4j.appender.jobid.file", logFile);
-        hadoopProps.setProperty("log4j.appender.jobid.layout", "org.apache.log4j.PatternLayout");
-        hadoopProps.setProperty("log4j.appender.jobid.layout.ConversionPattern", "%d [%t] %-5p %c %x - %m%n");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapred", "INFO, jobid");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapreduce.Job", "INFO, jobid");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.yarn.client.api.impl.YarnClientImpl", "INFO, jobid");
-
-        String localProps = new File(SPARK_LOG4J_PROPS).getAbsolutePath();
-        OutputStream os1 = new FileOutputStream(localProps);
-        try {
-            hadoopProps.store(os1, "");
-        }
-        finally {
-            os1.close();
-        }
-        PropertyConfigurator.configure(SPARK_LOG4J_PROPS);
-        return logFile;
-    }
-
-    /**
-     * Convert URIs into the default format which Spark expects
-     *
-     * @param files
-     * @return
-     * @throws IOException
-     * @throws URISyntaxException
-     */
-    private LinkedList<URI> fixFsDefaultUris(URI[] files, String jarPath) throws IOException, URISyntaxException {
-        if (files == null) {
-            return null;
-        }
-        LinkedList<URI> listUris = new LinkedList<URI>();
-        FileSystem fs = FileSystem.get(new Configuration(true));
-        for (int i = 0; i < files.length; i++) {
-            URI fileUri = files[i];
-            // Spark compares URIs based on scheme, host and port.
-            // Here we convert URIs into the default format so that Spark
-            // won't think those belong to different file system.
-            // This will avoid an extra copy of files which already exists on
-            // same hdfs.
-            if (!fileUri.toString().equals(jarPath) && fs.getUri().getScheme().equals(fileUri.getScheme())
-                    && (fs.getUri().getHost().equals(fileUri.getHost()) || fileUri.getHost() == null)
-                    && (fs.getUri().getPort() == -1 || fileUri.getPort() == -1
-                            || fs.getUri().getPort() == fileUri.getPort())) {
-                URI uri = new URI(fs.getUri().getScheme(), fileUri.getUserInfo(), fs.getUri().getHost(),
-                        fs.getUri().getPort(), fileUri.getPath(), fileUri.getQuery(), fileUri.getFragment());
-                // Here we skip the application jar, because
-                // (if uris are same,) it will get distributed multiple times
-                // - one time with --files and another time as application jar.
-                if (!uri.toString().equals(jarPath)) {
-                    listUris.add(uri);
-                }
-            }
-        }
-        return listUris;
-    }
-
-    /**
-     * Filters out the Spark yarn jar and records its version
-     *
-     * @param listUris string containing uris separated by comma
-     * @return
-     * @throws OozieActionConfiguratorException
-     */
-    private String filterSparkYarnJar(LinkedList<URI> listUris) throws OozieActionConfiguratorException {
-        Iterator<URI> iterator = listUris.iterator();
-        File matchedFile = null;
-        while (iterator.hasNext()) {
-            URI uri = iterator.next();
-            Path p = new Path(uri);
-            if (SPARK_YARN_JAR_PATTERN.matcher(p.getName()).find()) {
-                matchedFile = getMatchingFile(SPARK_YARN_JAR_PATTERN);
-            }
-            else if (SPARK_ASSEMBLY_JAR_PATTERN.matcher(p.getName()).find()) {
-                matchedFile = getMatchingFile(SPARK_ASSEMBLY_JAR_PATTERN);
-            }
-            if (matchedFile != null) {
-                sparkYarnJar = uri.toString();
-                try {
-                    sparkVersion = getJarVersion(matchedFile);
-                    System.out.println("Spark Version " + sparkVersion);
-                }
-                catch (IOException io) {
-                    System.out.println(
-                            "Unable to open " + matchedFile.getPath() + ". Default Spark Version " + sparkVersion);
-                }
-                iterator.remove();
-                break;
-            }
-        }
-        return StringUtils.join(listUris, ",");
-    }
-
-    /**
-     * Sets spark.yarn.jars for Spark 2.X. Sets spark.yarn.jar for Spark 1.X.
-     *
-     * @param sparkArgs
-     */
-    private void setSparkYarnJarsConf(List<String> sparkArgs) {
-        if (SPARK_VERSION_1.matcher(sparkVersion).find()) {
-            // In Spark 1.X.X, set spark.yarn.jar to avoid
-            // multiple distribution
-            sparkArgs.add("--conf");
-            sparkArgs.add(SPARK_YARN_JAR + "=" + sparkYarnJar);
-                }
         else {
-            // In Spark 2.X.X, set spark.yarn.jars
-            sparkArgs.add("--conf");
-            sparkArgs.add(SPARK_YARN_JARS + "=" + sparkYarnJar);
+            return delegate.equals(obj);
         }
     }
 
-    private String getJarVersion(File jarFile) throws IOException {
-        @SuppressWarnings("resource")
-        Manifest manifest = new JarFile(jarFile).getManifest();
-        return manifest.getMainAttributes().getValue("Specification-Version");
+    /** Sets my delegate. */
+    public void setDelegate(CallableStatement s) {
+        super.setDelegate(s);
+        _stmt = s;
     }
 
-    private void appendWithPathSeparator(String what, StringBuilder to){
-        if(to.length() > 0){
-            to.append(File.pathSeparator);
+    /**
+     * Close this DelegatingCallableStatement, and close
+     * any ResultSets that were not explicitly closed.
+     */
+    public void close() throws SQLException {
+        if(_conn != null) {
+           _conn.removeTrace(this);
+           _conn = null;
         }
-        to.append(what);
+
+        // The JDBC spec requires that a statement close any open
+        // ResultSet's when it is closed.
+        List resultSets = getTrace();
+        if( resultSets != null) {
+            ResultSet[] set = new ResultSet[resultSets.size()];
+            resultSets.toArray(set);
+            for (int i = 0; i < set.length; i++) {
+                set[i].close();
+            }
+            clearTrace();
+        }
+
+        _stmt.close();
     }
+
+    public ResultSet executeQuery() throws SQLException {
+        return DelegatingResultSet.wrapResultSet(this,_stmt.executeQuery());
+    }
+
+    public ResultSet getResultSet() throws SQLException {
+        return DelegatingResultSet.wrapResultSet(this,_stmt.getResultSet());
+    }
+
+    public ResultSet executeQuery(String sql) throws SQLException {
+        return DelegatingResultSet.wrapResultSet(this,_stmt.executeQuery(sql));
+    }
+
+    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException { _stmt.registerOutParameter( parameterIndex,  sqlType);  }
+    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException { _stmt.registerOutParameter( parameterIndex,  sqlType,  scale);  }
+    public boolean wasNull() throws SQLException { return _stmt.wasNull();  }
+    public String getString(int parameterIndex) throws SQLException { return _stmt.getString( parameterIndex);  }
+    public boolean getBoolean(int parameterIndex) throws SQLException { return _stmt.getBoolean( parameterIndex);  }
+    public byte getByte(int parameterIndex) throws SQLException { return _stmt.getByte( parameterIndex);  }
+    public short getShort(int parameterIndex) throws SQLException { return _stmt.getShort( parameterIndex);  }
+    public int getInt(int parameterIndex) throws SQLException { return _stmt.getInt( parameterIndex);  }
+    public long getLong(int parameterIndex) throws SQLException { return _stmt.getLong( parameterIndex);  }
+    public float getFloat(int parameterIndex) throws SQLException { return _stmt.getFloat( parameterIndex);  }
+    public double getDouble(int parameterIndex) throws SQLException { return _stmt.getDouble( parameterIndex);  }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException { return _stmt.getBigDecimal( parameterIndex,  scale);  }
+    public byte[] getBytes(int parameterIndex) throws SQLException { return _stmt.getBytes( parameterIndex);  }
+    public Date getDate(int parameterIndex) throws SQLException { return _stmt.getDate( parameterIndex);  }
+    public Time getTime(int parameterIndex) throws SQLException { return _stmt.getTime( parameterIndex);  }
+    public Timestamp getTimestamp(int parameterIndex) throws SQLException { return _stmt.getTimestamp( parameterIndex);  }
+    public Object getObject(int parameterIndex) throws SQLException { return _stmt.getObject( parameterIndex);  }
+    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException { return _stmt.getBigDecimal( parameterIndex);  }
+    public Object getObject(int i, Map map) throws SQLException { return _stmt.getObject( i, map);  }
+    public Ref getRef(int i) throws SQLException { return _stmt.getRef( i);  }
+    public Blob getBlob(int i) throws SQLException { return _stmt.getBlob( i);  }
+    public Clob getClob(int i) throws SQLException { return _stmt.getClob( i);  }
+    public Array getArray(int i) throws SQLException { return _stmt.getArray( i);  }
+    public Date getDate(int parameterIndex, Calendar cal) throws SQLException { return _stmt.getDate( parameterIndex,  cal);  }
+    public Time getTime(int parameterIndex, Calendar cal) throws SQLException { return _stmt.getTime( parameterIndex,  cal);  }
+    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException { return _stmt.getTimestamp( parameterIndex,  cal);  }
+    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException { _stmt.registerOutParameter( paramIndex,  sqlType,  typeName);  }
+    public int executeUpdate() throws SQLException { return _stmt.executeUpdate();  }
+    public void setNull(int parameterIndex, int sqlType) throws SQLException { _stmt.setNull( parameterIndex,  sqlType);  }
+    public void setBoolean(int parameterIndex, boolean x) throws SQLException { _stmt.setBoolean( parameterIndex,  x);  }
+    public void setByte(int parameterIndex, byte x) throws SQLException { _stmt.setByte( parameterIndex,  x);  }
+    public void setShort(int parameterIndex, short x) throws SQLException { _stmt.setShort( parameterIndex,  x);  }
+    public void setInt(int parameterIndex, int x) throws SQLException { _stmt.setInt( parameterIndex,  x);  }
+    public void setLong(int parameterIndex, long x) throws SQLException { _stmt.setLong( parameterIndex,  x);  }
+    public void setFloat(int parameterIndex, float x) throws SQLException { _stmt.setFloat( parameterIndex,  x);  }
+    public void setDouble(int parameterIndex, double x) throws SQLException { _stmt.setDouble( parameterIndex,  x);  }
+    public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException { _stmt.setBigDecimal( parameterIndex,  x);  }
+    public void setString(int parameterIndex, String x) throws SQLException { _stmt.setString( parameterIndex,  x);  }
+    public void setBytes(int parameterIndex, byte[] x) throws SQLException { _stmt.setBytes( parameterIndex,  x);  }
+    public void setDate(int parameterIndex, Date x) throws SQLException { _stmt.setDate( parameterIndex,  x);  }
+    public void setTime(int parameterIndex, Time x) throws SQLException { _stmt.setTime( parameterIndex,  x);  }
+    public void setTimestamp(int parameterIndex, Timestamp x) throws SQLException { _stmt.setTimestamp( parameterIndex,  x);  }
+    public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException { _stmt.setAsciiStream( parameterIndex,  x,  length);  }
+    /** @deprecated */
+    public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException { _stmt.setUnicodeStream( parameterIndex,  x,  length);  }
+    public void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException { _stmt.setBinaryStream( parameterIndex,  x,  length);  }
+    public void clearParameters() throws SQLException { _stmt.clearParameters();  }
+    public void setObject(int parameterIndex, Object x, int targetSqlType, int scale) throws SQLException { _stmt.setObject( parameterIndex,  x,  targetSqlType,  scale);  }
+    public void setObject(int parameterIndex, Object x, int targetSqlType) throws SQLException { _stmt.setObject( parameterIndex,  x,  targetSqlType);  }
+    public void setObject(int parameterIndex, Object x) throws SQLException { _stmt.setObject( parameterIndex,  x);  }
+    public boolean execute() throws SQLException { return _stmt.execute();  }
+    public void addBatch() throws SQLException { _stmt.addBatch();  }
+    public void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException { _stmt.setCharacterStream( parameterIndex,  reader,  length);  }
+    public void setRef(int i, Ref x) throws SQLException { _stmt.setRef( i,  x);  }
+    public void setBlob(int i, Blob x) throws SQLException { _stmt.setBlob( i,  x);  }
+    public void setClob(int i, Clob x) throws SQLException { _stmt.setClob( i,  x);  }
+    public void setArray(int i, Array x) throws SQLException { _stmt.setArray( i,  x);  }
+    public ResultSetMetaData getMetaData() throws SQLException { return _stmt.getMetaData();  }
+    public void setDate(int parameterIndex, Date x, Calendar cal) throws SQLException { _stmt.setDate( parameterIndex,  x,  cal);  }
+    public void setTime(int parameterIndex, Time x, Calendar cal) throws SQLException { _stmt.setTime( parameterIndex,  x,  cal);  }
+    public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) throws SQLException { _stmt.setTimestamp( parameterIndex,  x,  cal);  }
+    public void setNull(int paramIndex, int sqlType, String typeName) throws SQLException { _stmt.setNull( paramIndex,  sqlType,  typeName);  }
+
+    public int executeUpdate(String sql) throws SQLException { return _stmt.executeUpdate( sql);  }
+    public int getMaxFieldSize() throws SQLException { return _stmt.getMaxFieldSize();  }
+    public void setMaxFieldSize(int max) throws SQLException { _stmt.setMaxFieldSize( max);  }
+    public int getMaxRows() throws SQLException { return _stmt.getMaxRows();  }
+    public void setMaxRows(int max) throws SQLException { _stmt.setMaxRows( max);  }
+    public void setEscapeProcessing(boolean enable) throws SQLException { _stmt.setEscapeProcessing( enable);  }
+    public int getQueryTimeout() throws SQLException { return _stmt.getQueryTimeout();  }
+    public void setQueryTimeout(int seconds) throws SQLException { _stmt.setQueryTimeout( seconds);  }
+    public void cancel() throws SQLException { _stmt.cancel();  }
+    public SQLWarning getWarnings() throws SQLException { return _stmt.getWarnings();  }
+    public void clearWarnings() throws SQLException { _stmt.clearWarnings();  }
+    public void setCursorName(String name) throws SQLException { _stmt.setCursorName( name);  }
+    public boolean execute(String sql) throws SQLException { return _stmt.execute( sql);  }
+
+    public int getUpdateCount() throws SQLException { return _stmt.getUpdateCount();  }
+    public boolean getMoreResults() throws SQLException { return _stmt.getMoreResults();  }
+    public void setFetchDirection(int direction) throws SQLException { _stmt.setFetchDirection( direction);  }
+    public int getFetchDirection() throws SQLException { return _stmt.getFetchDirection();  }
+    public void setFetchSize(int rows) throws SQLException { _stmt.setFetchSize( rows);  }
+    public int getFetchSize() throws SQLException { return _stmt.getFetchSize();  }
+    public int getResultSetConcurrency() throws SQLException { return _stmt.getResultSetConcurrency();  }
+    public int getResultSetType() throws SQLException { return _stmt.getResultSetType();  }
+    public void addBatch(String sql) throws SQLException { _stmt.addBatch( sql);  }
+    public void clearBatch() throws SQLException { _stmt.clearBatch();  }
+    public int[] executeBatch() throws SQLException { return _stmt.executeBatch();  }
+
+    // ------------------- JDBC 3.0 -----------------------------------------
+    // Will be commented by the build process on a JDBC 2.0 system
+
+/* JDBC_3_ANT_KEY_BEGIN */
+
+    public boolean getMoreResults(int current) throws SQLException {
+        return _stmt.getMoreResults(current);
+    }
+
+    public ResultSet getGeneratedKeys() throws SQLException {
+        return _stmt.getGeneratedKeys();
+    }
+
+    public int executeUpdate(String sql, int autoGeneratedKeys)
+        throws SQLException {
+        return _stmt.executeUpdate(sql, autoGeneratedKeys);
+    }
+
+    public int executeUpdate(String sql, int columnIndexes[])
+        throws SQLException {
+        return _stmt.executeUpdate(sql, columnIndexes);
+    }
+
+    public int executeUpdate(String sql, String columnNames[])
+        throws SQLException {
+        return _stmt.executeUpdate(sql, columnNames);
+    }
+
+    public boolean execute(String sql, int autoGeneratedKeys)
+        throws SQLException {
+        return _stmt.execute(sql, autoGeneratedKeys);
+    }
+
+    public boolean execute(String sql, int columnIndexes[])
+        throws SQLException {
+        return _stmt.execute(sql, columnIndexes);
+    }
+
+    public boolean execute(String sql, String columnNames[])
+        throws SQLException {
+        return _stmt.execute(sql, columnNames);
+    }
+
+    public int getResultSetHoldability() throws SQLException {
+        return _stmt.getResultSetHoldability();
+    }
+
+    public void setURL(int parameterIndex, URL x) throws SQLException {
+        _stmt.setURL(parameterIndex, x);
+    }
+
+    public java.sql.ParameterMetaData getParameterMetaData()
+        throws SQLException {
+        return _stmt.getParameterMetaData();
+    }
+
+    public void registerOutParameter(String parameterName, int sqlType)
+        throws SQLException {
+        _stmt.registerOutParameter(parameterName, sqlType);
+    }
+
+    public void registerOutParameter(String parameterName,
+        int sqlType, int scale) throws SQLException {
+        _stmt.registerOutParameter(parameterName, sqlType, scale);
+    }
+
+    public void registerOutParameter(String parameterName,
+        int sqlType, String typeName) throws SQLException {
+        _stmt.registerOutParameter(parameterName, sqlType, typeName);
+    }
+
+    public URL getURL(int parameterIndex) throws SQLException {
+        return _stmt.getURL(parameterIndex);
+    }
+
+    public void setURL(String parameterName, URL val) throws SQLException {
+        _stmt.setURL(parameterName, val);
+    }
+
+    public void setNull(String parameterName, int sqlType)
+        throws SQLException {
+        _stmt.setNull(parameterName, sqlType);
+    }
+
+    public void setBoolean(String parameterName, boolean x)
+        throws SQLException {
+        _stmt.setBoolean(parameterName, x);
+    }
+
+    public void setByte(String parameterName, byte x)
+        throws SQLException {
+        _stmt.setByte(parameterName, x);
+    }
+
+    public void setShort(String parameterName, short x)
+        throws SQLException {
+        _stmt.setShort(parameterName, x);
+    }
+
+    public void setInt(String parameterName, int x)
+        throws SQLException {
+        _stmt.setInt(parameterName, x);
+    }
+
+    public void setLong(String parameterName, long x)
+        throws SQLException {
+        _stmt.setLong(parameterName, x);
+    }
+
+    public void setFloat(String parameterName, float x)
+        throws SQLException {
+        _stmt.setFloat(parameterName, x);
+    }
+
+    public void setDouble(String parameterName, double x)
+        throws SQLException {
+        _stmt.setDouble(parameterName, x);
+    }
+
+    public void setBigDecimal(String parameterName, BigDecimal x)
+        throws SQLException {
+        _stmt.setBigDecimal(parameterName, x);
+    }
+
+    public void setString(String parameterName, String x)
+        throws SQLException {
+        _stmt.setString(parameterName, x);
+    }
+
+    public void setBytes(String parameterName, byte [] x)
+        throws SQLException {
+        _stmt.setBytes(parameterName, x);
+    }
+
+    public void setDate(String parameterName, Date x)
+        throws SQLException {
+        _stmt.setDate(parameterName, x);
+    }
+
+    public void setTime(String parameterName, Time x)
+        throws SQLException {
+        _stmt.setTime(parameterName, x);
+    }
+
+    public void setTimestamp(String parameterName, Timestamp x)
+        throws SQLException {
+        _stmt.setTimestamp(parameterName, x);
+    }
+
+    public void setAsciiStream(String parameterName,
+        InputStream x, int length)
+        throws SQLException {
+        _stmt.setAsciiStream(parameterName, x, length);
+    }
+
+    public void setBinaryStream(String parameterName,
+        InputStream x, int length)
+        throws SQLException {
+        _stmt.setBinaryStream(parameterName, x, length);
+    }
+
+    public void setObject(String parameterName,
+        Object x, int targetSqlType, int scale)
+        throws SQLException {
+        _stmt.setObject(parameterName, x, targetSqlType, scale);
+    }
+
+    public void setObject(String parameterName,
+        Object x, int targetSqlType)
+        throws SQLException {
+        _stmt.setObject(parameterName, x, targetSqlType);
+    }
+
+    public void setObject(String parameterName, Object x)
+        throws SQLException {
+        _stmt.setObject(parameterName, x);
+    }
+
+    public void setCharacterStream(String parameterName,
+        Reader reader, int length) throws SQLException {
+        _stmt.setCharacterStream(parameterName, reader, length);
+    }
+
+    public void setDate(String parameterName,
+        Date x, Calendar cal) throws SQLException {
+        _stmt.setDate(parameterName, x, cal);
+    }
+
+    public void setTime(String parameterName,
+        Time x, Calendar cal) throws SQLException {
+        _stmt.setTime(parameterName, x, cal);
+    }
+
+    public void setTimestamp(String parameterName,
+        Timestamp x, Calendar cal) throws SQLException {
+        _stmt.setTimestamp(parameterName, x, cal);
+    }
+
+    public void setNull(String parameterName,
+        int sqlType, String typeName) throws SQLException {
+        _stmt.setNull(parameterName, sqlType, typeName);
+    }
+
+    public String getString(String parameterName) throws SQLException {
+        return _stmt.getString(parameterName);
+    }
+
+    public boolean getBoolean(String parameterName) throws SQLException {
+        return _stmt.getBoolean(parameterName);
+    }
+
+    public byte getByte(String parameterName) throws SQLException {
+        return _stmt.getByte(parameterName);
+    }
+
+    public short getShort(String parameterName) throws SQLException {
+        return _stmt.getShort(parameterName);
+    }
+
+    public int getInt(String parameterName) throws SQLException {
+        return _stmt.getInt(parameterName);
+    }
+
+    public long getLong(String parameterName) throws SQLException {
+        return _stmt.getLong(parameterName);
+    }
+
+    public float getFloat(String parameterName) throws SQLException {
+        return _stmt.getFloat(parameterName);
+    }
+
+    public double getDouble(String parameterName) throws SQLException {
+        return _stmt.getDouble(parameterName);
+    }
+
+    public byte [] getBytes(String parameterName) throws SQLException {
+        return _stmt.getBytes(parameterName);
+    }
+
+    public Date getDate(String parameterName) throws SQLException {
+        return _stmt.getDate(parameterName);
+    }
+
+    public Time getTime(String parameterName) throws SQLException {
+        return _stmt.getTime(parameterName);
+    }
+
+    public Timestamp getTimestamp(String parameterName) throws SQLException {
+        return _stmt.getTimestamp(parameterName);
+    }
+
+    public Object getObject(String parameterName) throws SQLException {
+        return _stmt.getObject(parameterName);
+    }
+
+    public BigDecimal getBigDecimal(String parameterName) throws SQLException {
+        return _stmt.getBigDecimal(parameterName);
+    }
+
+    public Object getObject(String parameterName, Map map)
+        throws SQLException {
+        return _stmt.getObject(parameterName, map);
+    }
+
+    public Ref getRef(String parameterName) throws SQLException {
+        return _stmt.getRef(parameterName);
+    }
+
+    public Blob getBlob(String parameterName) throws SQLException {
+        return _stmt.getBlob(parameterName);
+    }
+
+    public Clob getClob(String parameterName) throws SQLException {
+        return _stmt.getClob(parameterName);
+    }
+
+    public Array getArray(String parameterName) throws SQLException {
+        return _stmt.getArray(parameterName);
+    }
+
+    public Date getDate(String parameterName, Calendar cal)
+        throws SQLException {
+        return _stmt.getDate(parameterName, cal);
+    }
+
+    public Time getTime(String parameterName, Calendar cal)
+        throws SQLException {
+        return _stmt.getTime(parameterName, cal);
+    }
+
+    public Timestamp getTimestamp(String parameterName, Calendar cal)
+        throws SQLException {
+        return _stmt.getTimestamp(parameterName, cal);
+    }
+
+    public URL getURL(String parameterName) throws SQLException {
+        return _stmt.getURL(parameterName);
+    }
+
+/* JDBC_3_ANT_KEY_END */
 }

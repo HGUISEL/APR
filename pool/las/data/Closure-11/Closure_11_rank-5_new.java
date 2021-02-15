@@ -1,434 +1,289 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package org.jsoup.nodes;
 
-package org.apache.flink.streaming.runtime.tasks;
+import org.jsoup.helper.Validate;
+import org.jsoup.parser.Tag;
 
-import java.io.Serializable;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetEncoder;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-
-import org.apache.commons.collections.CollectionUtils;
-import org.apache.commons.collections.functors.NotNullPredicate;
-
-import org.apache.flink.api.common.accumulators.Accumulator;
-import org.apache.flink.api.java.functions.KeySelector;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.configuration.GlobalConfiguration;
-import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
-import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
-import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
-import org.apache.flink.runtime.jobgraph.tasks.CheckpointNotificationOperator;
-import org.apache.flink.runtime.jobgraph.tasks.CheckpointedOperator;
-import org.apache.flink.runtime.jobgraph.tasks.OperatorStateCarrier;
-import org.apache.flink.runtime.state.FileStateHandle;
-import org.apache.flink.runtime.state.LocalStateHandle;
-import org.apache.flink.runtime.state.StateHandle;
-import org.apache.flink.runtime.state.StateHandleProvider;
-import org.apache.flink.runtime.util.event.EventListener;
-import org.apache.flink.streaming.api.graph.StreamConfig;
-import org.apache.flink.streaming.api.operators.StatefulStreamOperator;
-import org.apache.flink.streaming.api.operators.StreamOperator;
-import org.apache.flink.streaming.api.state.OperatorStateHandle;
-import org.apache.flink.streaming.api.state.WrapperStateHandle;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 
 /**
- * 
- * <pre>
- *     
- *  -- registerInputOutput()
- *         |
- *         +----> Create basic utils (config, etc) and load operators
- *         +----> operator specific init()
- *  
- *  -- restoreState()
- *  
- *  -- invoke()
- *        |
- *        +----> open operators()
- *        +----> run()
- *        +----> close operators()
- *        +----> common cleanup
- *        +----> operator specific cleanup()
- * </pre>
- * 
- * @param <OUT>
- * @param <O>
- */
-public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends AbstractInvokable implements
-		OperatorStateCarrier<StateHandle<Serializable>>, CheckpointedOperator, CheckpointNotificationOperator {
+ A HTML Document.
 
-	private static final Logger LOG = LoggerFactory.getLogger(StreamTask.class);
+ @author Jonathan Hedley, jonathan@hedley.net */
+public class Document extends Element {
+    private OutputSettings outputSettings = new OutputSettings();
 
-	
-	private final Object checkpointLock = new Object();
+    /**
+     Create a new, empty Document.
+     @param baseUri base URI of document
+     @see org.jsoup.Jsoup#parse
+     @see #createShell
+     */
+    public Document(String baseUri) {
+        super(Tag.valueOf("#root"), baseUri);
+    }
 
-	private final EventListener<CheckpointBarrier> checkpointBarrierListener;
-	
-	protected final List<StreamingRuntimeContext> contexts;
+    /**
+     Create a valid, empty shell of a document, suitable for adding more elements to.
+     @param baseUri baseUri of document
+     @return document with html, head, and body elements.
+     */
+    static public Document createShell(String baseUri) {
+        Validate.notNull(baseUri);
 
-	protected StreamingRuntimeContext headContext;
-	
-	protected StreamConfig configuration;
+        Document doc = new Document(baseUri);
+        Element html = doc.appendElement("html");
+        html.appendElement("head");
+        html.appendElement("body");
 
-	protected ClassLoader userClassLoader;
-	
-	protected OutputHandler<OUT> outputHandler;
+        return doc;
+    }
 
-	protected O streamOperator;
+    /**
+     Accessor to the document's {@code head} element.
+     @return {@code head}
+     */
+    public Element head() {
+        return findFirstElementByTagName("head", this);
+    }
 
-	protected boolean hasChainedOperators;
+    /**
+     Accessor to the document's {@code body} element.
+     @return {@code body}
+     */
+    public Element body() {
+        return findFirstElementByTagName("body", this);
+    }
 
-	/** Flag to mark the task "in operation", in which case check
-	 * needs to be initialized to true, so that early cancel() before invoke() behaves correctly */
-	private volatile boolean isRunning;
-	
-	// ------------------------------------------------------------------------
-	
-	public StreamTask() {
-		checkpointBarrierListener = new CheckpointBarrierListener();
-		contexts = new ArrayList<StreamingRuntimeContext>();
-	}
+    /**
+     Get the string contents of the document's {@code title} element.
+     @return Trimed title, or empty string if none set.
+     */
+    public String title() {
+        Element titleEl = getElementsByTag("title").first();
+        return titleEl != null ? titleEl.text().trim() : "";
+    }
 
-	// ------------------------------------------------------------------------
-	//  Life cycle methods for specific implementations
-	// ------------------------------------------------------------------------
+    /**
+     Set the document's {@code title} element. Updates the existing element, or adds {@code title} to {@code head} if
+     not present
+     @param title string to set as title
+     */
+    public void title(String title) {
+        Validate.notNull(title);
+        Element titleEl = getElementsByTag("title").first();
+        if (titleEl == null) { // add to head
+            head().appendElement("title").text(title);
+        } else {
+            titleEl.text(title);
+        }
+    }
 
-	protected abstract void init() throws Exception;
-	
-	protected abstract void run() throws Exception;
-	
-	protected abstract void cleanup() throws Exception;
-	
-	protected abstract void cancelTask() throws Exception;
+    /**
+     Create a new Element, with this document's base uri. Does not make the new element a child of this document.
+     @param tagName element tag name (e.g. {@code a})
+     @return new element
+     */
+    public Element createElement(String tagName) {
+        return new Element(Tag.valueOf(tagName), this.baseUri());
+    }
 
-	// ------------------------------------------------------------------------
-	//  Core work methods of the Stream Task
-	// ------------------------------------------------------------------------
-	
-	@Override
-	public final void registerInputOutput() throws Exception {
-		LOG.debug("Begin initialization for {}", getName());
-		
-		userClassLoader = getUserCodeClassLoader();
-		configuration = new StreamConfig(getTaskConfiguration());
+    /**
+     Normalise the document. This happens after the parse phase so generally does not need to be called.
+     Moves any text content that is not in the body element into the body.
+     @return this document after normalisation
+     */
+    public Document normalise() {
+        Element htmlEl = findFirstElementByTagName("html", this);
+        if (htmlEl == null)
+            htmlEl = appendElement("html");
+        if (head() == null)
+            htmlEl.prependElement("head");
+        if (body() == null)
+            htmlEl.appendElement("body");
 
-		streamOperator = configuration.getStreamOperator(userClassLoader);
+        // pull text nodes out of root, html, and head els, and push into body. non-text nodes are already taken care
+        // of. do in inverse order to maintain text order.
+        normalise(head());
+        normalise(htmlEl);
+        normalise(this);        
 
-		// Create and register Accumulators
-		AccumulatorRegistry accumulatorRegistry = getEnvironment().getAccumulatorRegistry();
-		Map<String, Accumulator<?, ?>> accumulatorMap = accumulatorRegistry.getUserMap();
-		AccumulatorRegistry.Reporter reporter = accumulatorRegistry.getReadWriteReporter();
+        return this;
+    }
 
-		outputHandler = new OutputHandler<OUT>(this, accumulatorMap, reporter);
+    // does not recurse.
+    private void normalise(Element element) {
+        List<Node> toMove = new ArrayList<Node>();
+        for (Node node: element.childNodes) {
+            if (node instanceof TextNode) {
+                TextNode tn = (TextNode) node;
+                if (!tn.isBlank())
+                    toMove.add(tn);
+            }
+        }
 
-		if (streamOperator != null) {
-			// IterationHead and IterationTail don't have an Operator...
+        for (int i = toMove.size()-1; i >= 0; i--) {
+            Node node = toMove.get(i);
+            element.removeChild(node);
+            body().prependChild(new TextNode(" ", ""));
+            body().prependChild(node);
+        }
+    }
 
-			//Create context of the head operator
-			headContext = createRuntimeContext(configuration, accumulatorMap);
-			this.contexts.add(headContext);
-			streamOperator.setup(outputHandler.getOutput(), headContext);
-		}
+    // fast method to get first by tag name, used for html, head, body finders
+    private Element findFirstElementByTagName(String tag, Node node) {
+        if (node.nodeName().equals(tag))
+            return (Element) node;
+        else {
+            for (Node child: node.childNodes) {
+                Element found = findFirstElementByTagName(tag, child);
+                if (found != null)
+                    return found;
+            }
+        }
+        return null;
+    }
 
-		hasChainedOperators = outputHandler.getChainedOperators().size() != 1;
-		
-		// operator specific initialization
-		init();
-		
-		LOG.debug("Finish initialization for {}", getName());
-	}
-	
-	@Override
-	public final void invoke() throws Exception {
-		LOG.debug("Invoking {}", getName());
-		
-		boolean operatorOpen = false;
-		try {
-			openAllOperators();
-			operatorOpen = true;
+    @Override
+    public String outerHtml() {
+        return super.html(); // no outer wrapper tag
+    }
 
-			// let the task do its work
-			isRunning = true;
-			run();
-			
-			if (LOG.isDebugEnabled()) {
-				LOG.debug("Finished task {}", getName());
-			}
+    /**
+     Set the text of the {@code body} of this document. Any existing nodes within the body will be cleared.
+     @param text unencoded text
+     @return this document
+     */
+    @Override
+    public Element text(String text) {
+        body().text(text); // overridden to not nuke doc structure
+        return this;
+    }
 
-			// make sure no further checkpoint and notification actions happen
-			// for that we set this task as not running and make sure no other thread is
-			// currently in the locked scope before we close the operators
-			this.isRunning = false;
-			synchronized (checkpointLock) {}
-			
-			// this is part of the main logic, so if this fails, the task is considered failed
-			closeAllOperators();
-			operatorOpen = false;
-			
-			// make sure all data if flushed
-			outputHandler.flushOutputs();
-		}
-		finally {
-			this.isRunning = false;
-			
-			try {
-				if (operatorOpen) {
-					// we came here in a failure
-					closeAllOperators();
-				}
-			}
-			catch (Throwable t) {
-				LOG.error("Error closing stream operators after an exception.", t);
-				
-			}
-			finally {
-				// we must! perform this cleanup
-				
-				// release the output resources
-				if (outputHandler != null) {
-					outputHandler.releaseOutputs();
-				}
+    @Override
+    public String nodeName() {
+        return "#document";
+    }
 
-				// release this operator's resources
-				try {
-					cleanup();
-				}
-				catch (Throwable t) {
-					LOG.error("Error during cleanup of stream task.");
-				}
-			}
-		}
-	}
-	
-	@Override
-	public final void cancel() throws Exception {
-		isRunning = false;
-		cancelTask();
-	}
-	
-	private void openAllOperators() throws Exception {
-		for (StreamOperator<?> operator : outputHandler.getChainedOperators()) {
-			if (operator != null) {
-				operator.open(getTaskConfiguration());
-			}
-		}
-	}
+    /**
+     * A Document's output settings control the form of the text() and html() methods.
+     */
+    public class OutputSettings {
+        private Entities.EscapeMode escapeMode = Entities.EscapeMode.base;
+        private Charset charset = Charset.forName("UTF-8");
+        private CharsetEncoder charsetEncoder = charset.newEncoder();
+        private boolean prettyPrint = true;
+        private int indentAmount = 1;
 
-	private void closeAllOperators() throws Exception {
-		// We need to close them first to last, since upstream operators in the chain might emit
-		// elements in their close methods.
-		for (int i = outputHandler.getChainedOperators().size()-1; i >= 0; i--) {
-			StreamOperator<?> operator = outputHandler.getChainedOperators().get(i);
-			if (operator != null) {
-				operator.close();
-			}
-		}
-	}
+        public OutputSettings() {}
 
-	// ------------------------------------------------------------------------
-	//  Access to properties and utilities
-	// ------------------------------------------------------------------------
+        /**
+         * Get the document's current HTML escape mode: <code>base</code>, which provides a limited set of named HTML
+         * entities and escapes other characters as numbered entities for maximum compatibility; or <code>extended</code>,
+         * which uses the complete set of HTML named entities.
+         * <p>
+         * The default escape mode is <code>base</code>.
+         * @return the document's current escape mode
+         */
+        public Entities.EscapeMode escapeMode() {
+            return escapeMode;
+        }
 
-	/**
-	 * Gets the name of the task, in the form "taskname (2/5)".
-	 * @return The name of the task.
-	 */
-	public String getName() {
-		return getEnvironment().getTaskNameWithSubtasks();
-	}
+        /**
+         * Set the document's escape mode
+         * @param escapeMode the new escape mode to use
+         * @return the document's output settings, for chaining
+         */
+        public OutputSettings escapeMode(Entities.EscapeMode escapeMode) {
+            this.escapeMode = escapeMode;
+            return this;
+        }
 
-	public Object getCheckpointLock() {
-		return checkpointLock;
-	}
+        /**
+         * Get the document's current output charset, which is used to control which characters are escaped when
+         * generating HTML (via the <code>html()</code> methods), and which are kept intact.
+         * <p>
+         * Where possible (when parsing from a URL or File), the document's output charset is automatically set to the
+         * input charset. Otherwise, it defaults to UTF-8.
+         * @return the document's current charset.
+         */
+        public Charset charset() {
+            return charset;
+        }
 
-	// ------------------------------------------------------------------------
-	//  Checkpoint and Restore
-	// ------------------------------------------------------------------------
+        /**
+         * Update the document's output charset.
+         * @param charset the new charset to use.
+         * @return the document's output settings, for chaining
+         */
+        public OutputSettings charset(Charset charset) {
+            // todo: this should probably update the doc's meta charset
+            this.charset = charset;
+            charsetEncoder = charset.newEncoder();
+            return this;
+        }
 
-	@SuppressWarnings("unchecked")
-	@Override
-	public void setInitialState(StateHandle<Serializable> stateHandle) throws Exception {
+        /**
+         * Update the document's output charset.
+         * @param charset the new charset (by name) to use.
+         * @return the document's output settings, for chaining
+         */
+        public OutputSettings charset(String charset) {
+            charset(Charset.forName(charset));
+            return this;
+        }
 
-		// We retrieve end restore the states for the chained operators.
-		List<Tuple2<StateHandle<Serializable>, Map<String, OperatorStateHandle>>> chainedStates = 
-				(List<Tuple2<StateHandle<Serializable>, Map<String, OperatorStateHandle>>>) stateHandle.getState();
+        CharsetEncoder encoder() {
+            return charsetEncoder;
+        }
 
-		// We restore all stateful operators
-		for (int i = 0; i < chainedStates.size(); i++) {
-			Tuple2<StateHandle<Serializable>, Map<String, OperatorStateHandle>> state = chainedStates.get(i);
-			// If state is not null we need to restore it
-			if (state != null) {
-				StreamOperator<?> chainedOperator = outputHandler.getChainedOperators().get(i);
-				((StatefulStreamOperator<?>) chainedOperator).restoreInitialState(state);
-			}
-		}
-	}
+        /**
+         * Get if pretty printing is enabled. Default is true. If disabled, the HTML output methods will not re-format
+         * the output, and the output will generally look like the input.
+         * @return if pretty printing is enabled.
+         */
+        public boolean prettyPrint() {
+            return prettyPrint;
+        }
 
-	@Override
-	public void triggerCheckpoint(long checkpointId, long timestamp) throws Exception {
+        /**
+         * Enable or disable pretty printing.
+         * @param pretty new pretty print setting
+         * @return this, for chaining
+         */
+        public OutputSettings prettyPrint(boolean pretty) {
+            prettyPrint = pretty;
+            return this;
+        }
 
-		LOG.debug("Starting checkpoint {} on task {}", checkpointId, getName());
-		
-		synchronized (checkpointLock) {
-			if (isRunning) {
-				try {
-					// We wrap the states of the chained operators in a list, marking non-stateful operators with null
-					List<Tuple2<StateHandle<Serializable>, Map<String, OperatorStateHandle>>> chainedStates
-							= new ArrayList<Tuple2<StateHandle<Serializable>, Map<String, OperatorStateHandle>>>();
+        /**
+         * Get the current tag indent amount, used when pretty printing.
+         * @return the current indent amount
+         */
+        public int indentAmount() {
+            return indentAmount;
+        }
 
-					// A wrapper handle is created for the List of statehandles
-					WrapperStateHandle stateHandle;
-					try {
+        /**
+         * Set the indent amount for pretty printing
+         * @param indentAmount number of spaces to use for indenting each level. Must be >= 0.
+         * @return this, for chaining
+         */
+        public OutputSettings indentAmount(int indentAmount) {
+            Validate.isTrue(indentAmount >= 0);
+            this.indentAmount = indentAmount;
+            return this;
+        }
+    }
 
-						// We construct a list of states for chained tasks
-						for (StreamOperator<?> chainedOperator : outputHandler.getChainedOperators()) {
-							if (chainedOperator instanceof StatefulStreamOperator) {
-								chainedStates.add(((StatefulStreamOperator<?>) chainedOperator)
-										.getStateSnapshotFromFunction(checkpointId, timestamp));
-							}else{
-								chainedStates.add(null);
-							}
-						}
-
-						stateHandle = CollectionUtils.exists(chainedStates,
-								NotNullPredicate.INSTANCE) ? new WrapperStateHandle(chainedStates) : null;
-					}
-					catch (Exception e) {
-						throw new Exception("Error while drawing snapshot of the user state.", e);
-					}
-
-					// now emit the checkpoint barriers
-					outputHandler.broadcastBarrier(checkpointId, timestamp);
-
-					// now confirm the checkpoint
-					if (stateHandle == null) {
-						getEnvironment().acknowledgeCheckpoint(checkpointId);
-					} else {
-						getEnvironment().acknowledgeCheckpoint(checkpointId, stateHandle);
-					}
-				}
-				catch (Exception e) {
-					if (isRunning) {
-						throw e;
-					}
-				}
-			}
-		}
-	}
-	
-	@Override
-	public void notifyCheckpointComplete(long checkpointId) throws Exception {
-		synchronized (checkpointLock) {
-			if (isRunning) {
-				for (StreamOperator<?> chainedOperator : outputHandler.getChainedOperators()) {
-					if (chainedOperator instanceof StatefulStreamOperator) {
-						((StatefulStreamOperator<?>) chainedOperator).notifyCheckpointComplete(checkpointId);
-					}
-				}
-			}
-		}
-	}
-	
-	// ------------------------------------------------------------------------
-	//  State backend
-	// ------------------------------------------------------------------------
-	
-	private StateHandleProvider<Serializable> getStateHandleProvider() {
-		StateHandleProvider<Serializable> provider = configuration.getStateHandleProvider(userClassLoader);
-
-		// If the user did not specify a provider in the program we try to get it from the config
-		if (provider == null) {
-			String backendName = GlobalConfiguration.getString(ConfigConstants.STATE_BACKEND,
-					ConfigConstants.DEFAULT_STATE_BACKEND).toUpperCase();
-
-			StateBackend backend;
-
-			try {
-				backend = StateBackend.valueOf(backendName);
-			} catch (Exception e) {
-				throw new RuntimeException(backendName + " is not a valid state backend.\nSupported backends: jobmanager, filesystem.");
-			}
-
-			switch (backend) {
-				case JOBMANAGER:
-					LOG.info("State backend for state checkpoints is set to jobmanager.");
-					return new LocalStateHandle.LocalStateHandleProvider<Serializable>();
-				case FILESYSTEM:
-					String checkpointDir = GlobalConfiguration.getString(ConfigConstants.STATE_BACKEND_FS_DIR, null);
-					if (checkpointDir != null) {
-						LOG.info("State backend for state checkpoints is set to filesystem with directory: "
-								+ checkpointDir);
-						return FileStateHandle.createProvider(checkpointDir);
-					} else {
-						throw new RuntimeException(
-								"For filesystem checkpointing, a checkpoint directory needs to be specified.\nFor example: \"state.backend.dir: hdfs://checkpoints\"");
-					}
-				default:
-					throw new RuntimeException("Backend " + backend + " is not supported yet.");
-			}
-
-		} else {
-			LOG.info("Using user defined state backend for streaming checkpoitns.");
-			return provider;
-		}
-	}
-
-	private enum StateBackend {
-		JOBMANAGER, FILESYSTEM
-	}
-
-	// ------------------------------------------------------------------------
-	//  Utilities
-	// ------------------------------------------------------------------------
-
-	public StreamingRuntimeContext createRuntimeContext(StreamConfig conf, Map<String, Accumulator<?,?>> accumulatorMap) {
-		KeySelector<?,Serializable> statePartitioner = conf.getStatePartitioner(userClassLoader);
-
-		return new StreamingRuntimeContext(getEnvironment(), getExecutionConfig(),
-				statePartitioner, getStateHandleProvider(), accumulatorMap);
-	}
-	
-	@Override
-	public String toString() {
-		return getName();
-	}
-
-	// ------------------------------------------------------------------------
-
-	public EventListener<CheckpointBarrier> getCheckpointBarrierListener() {
-		return this.checkpointBarrierListener;
-	}
-	
-	private class CheckpointBarrierListener implements EventListener<CheckpointBarrier> {
-
-		@Override
-		public void onEvent(CheckpointBarrier barrier) {
-			try {
-				triggerCheckpoint(barrier.getId(), barrier.getTimestamp());
-			}
-			catch (Exception e) {
-				throw new RuntimeException("Error triggering a checkpoint as the result of receiving checkpoint barrier", e);
-			}
-		}
-	}
+    /**
+     * Get the document's current output settings.
+     * @return the document's current output settings.
+     */
+    public OutputSettings outputSettings() {
+        return outputSettings;
+    }
 }
+

@@ -1,10 +1,13 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
+ * Copyright 2010 The Apache Software Foundation
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -15,389 +18,472 @@
  * limitations under the License.
  */
 
+package org.apache.hadoop.hbase.ipc;
 
-package opennlp.tools.postag;
+import java.lang.reflect.Proxy;
+import java.lang.reflect.Method;
+import java.lang.reflect.Array;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
+import java.net.InetSocketAddress;
+import java.io.*;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.StringTokenizer;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.HashMap;
 
-import opennlp.tools.dictionary.Dictionary;
-import opennlp.tools.ml.EventModelSequenceTrainer;
-import opennlp.tools.ml.EventTrainer;
-import opennlp.tools.ml.SequenceTrainer;
-import opennlp.tools.ml.TrainerFactory;
-import opennlp.tools.ml.TrainerFactory.TrainerType;
-import opennlp.tools.ml.model.Event;
-import opennlp.tools.ml.model.MaxentModel;
-import opennlp.tools.ml.model.SequenceClassificationModel;
-import opennlp.tools.namefind.NameSampleSequenceStream;
-import opennlp.tools.ngram.NGramModel;
-import opennlp.tools.util.BeamSearch;
-import opennlp.tools.util.ObjectStream;
-import opennlp.tools.util.Sequence;
-import opennlp.tools.util.SequenceValidator;
-import opennlp.tools.util.StringList;
-import opennlp.tools.util.StringUtil;
-import opennlp.tools.util.TrainingParameters;
-import opennlp.tools.util.featuregen.StringPattern;
-import opennlp.tools.util.model.ModelType;
+import javax.net.SocketFactory;
 
-/**
- * A part-of-speech tagger that uses maximum entropy.  Tries to predict whether
- * words are nouns, verbs, or any of 70 other POS tags depending on their
- * surrounding context.
- *
- */
-public class POSTaggerME implements POSTagger {
-  
-  /**
-   * The maximum entropy model to use to evaluate contexts.
-   */
-  protected MaxentModel posModel;
+import org.apache.commons.logging.*;
 
-  /**
-   * The feature context generator.
-   */
-  protected POSContextGenerator contextGen;
+import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.client.Operation;
+import org.apache.hadoop.hbase.io.HbaseObjectWritable;
+import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Objects;
+import org.apache.hadoop.io.*;
+import org.apache.hadoop.ipc.RPC;
+import org.apache.hadoop.hbase.ipc.VersionedProtocol;
+import org.apache.hadoop.hbase.security.User;
+import org.apache.hadoop.security.authorize.ServiceAuthorizationManager;
+import org.apache.hadoop.conf.*;
 
-  /**
-   * Tag dictionary used for restricting words to a fixed set of tags.
-   */
-  protected TagDictionary tagDictionary;
+import org.codehaus.jackson.map.ObjectMapper;
 
-  protected Dictionary ngramDictionary;
+/** An RpcEngine implementation for Writable data. */
+class WritableRpcEngine implements RpcEngine {
+  // LOG is NOT in hbase subpackage intentionally so that the default HBase
+  // DEBUG log level does NOT emit RPC-level logging. 
+  private static final Log LOG = LogFactory.getLog("org.apache.hadoop.ipc.RPCEngine");
 
-  /**
-   * Says whether a filter should be used to check whether a tag assignment
-   * is to a word outside of a closed class.
-   */
-  protected boolean useClosedClassTagsFilter = false;
+  /* Cache a client using its socket factory as the hash key */
+  static private class ClientCache {
+    private Map<SocketFactory, HBaseClient> clients =
+      new HashMap<SocketFactory, HBaseClient>();
 
-  public static final int DEFAULT_BEAM_SIZE = 3;
+    protected ClientCache() {}
 
-  /**
-   * The size of the beam to be used in determining the best sequence of pos tags.
-   */
-  protected int size;
-
-  private Sequence bestSequence;
-
-  private SequenceClassificationModel<String> model;
-
-  private SequenceValidator<String> sequenceValidator;
-  
-  /**
-   * Initializes the current instance with the provided
-   * model and provided beam size.
-   *
-   * @param model
-   * @param beamSize
-   */
-  public POSTaggerME(POSModel model, int beamSize, int cacheSize) {
-    POSTaggerFactory factory = model.getFactory();
-    posModel = model.getPosModel();
-    contextGen = factory.getPOSContextGenerator(beamSize);
-    tagDictionary = factory.getTagDictionary();
-    size = beamSize;
-    
-    sequenceValidator = factory.getSequenceValidator();
-    
-    if (model.getPosModel() != null) {
-      this.model = new opennlp.tools.ml.BeamSearch<String>(beamSize,
-          model.getPosModel(), cacheSize);
+    /**
+     * Construct & cache an IPC client with the user-provided SocketFactory
+     * if no cached client exists.
+     *
+     * @param conf Configuration
+     * @param factory socket factory
+     * @return an IPC client
+     */
+    protected synchronized HBaseClient getClient(Configuration conf,
+        SocketFactory factory) {
+      // Construct & cache client.  The configuration is only used for timeout,
+      // and Clients have connection pools.  So we can either (a) lose some
+      // connection pooling and leak sockets, or (b) use the same timeout for
+      // all configurations.  Since the IPC is usually intended globally, not
+      // per-job, we choose (a).
+      HBaseClient client = clients.get(factory);
+      if (client == null) {
+        // Make an hbase client instead of hadoop Client.
+        client = new HBaseClient(HbaseObjectWritable.class, conf, factory);
+        clients.put(factory, client);
+      } else {
+        client.incCount();
+      }
+      return client;
     }
-    else {
-      this.model = model.getPosSequenceModel();
+
+    /**
+     * Construct & cache an IPC client with the default SocketFactory
+     * if no cached client exists.
+     *
+     * @param conf Configuration
+     * @return an IPC client
+     */
+    protected synchronized HBaseClient getClient(Configuration conf) {
+      return getClient(conf, SocketFactory.getDefault());
     }
-  }
-  
-  /**
-   * Initializes the current instance with the provided model
-   * and the default beam size of 3.
-   *
-   * @param model
-   */
-  public POSTaggerME(POSModel model) {
-    this(model, DEFAULT_BEAM_SIZE, 0);
-  }
 
-  /**
-   * Returns the number of different tags predicted by this model.
-   *
-   * @return the number of different tags predicted by this model.
-   */
-  public int getNumTags() {
-    return posModel.getNumOutcomes();
-  }
-
-  @Deprecated
-  public List<String> tag(List<String> sentence) {
-    bestSequence = model.bestSequence(sentence.toArray(new String[sentence.size()]), null, contextGen, sequenceValidator);
-    return bestSequence.getOutcomes();
-  }
-
-  public String[] tag(String[] sentence) {
-    return this.tag(sentence, null);
-  }
-
-  public String[] tag(String[] sentence, Object[] additionaContext) {
-    bestSequence = model.bestSequence(sentence, additionaContext, contextGen, sequenceValidator);
-    List<String> t = bestSequence.getOutcomes();
-    return t.toArray(new String[t.size()]);
-  }
-
-  /**
-   * Returns at most the specified number of taggings for the specified sentence.
-   *
-   * @param numTaggings The number of tagging to be returned.
-   * @param sentence An array of tokens which make up a sentence.
-   *
-   * @return At most the specified number of taggings for the specified sentence.
-   */
-  public String[][] tag(int numTaggings, String[] sentence) {
-    Sequence[] bestSequences = model.bestSequences(numTaggings, sentence, null,
-        contextGen, sequenceValidator);
-    String[][] tags = new String[bestSequences.length][];
-    for (int si=0;si<tags.length;si++) {
-      List<String> t = bestSequences[si].getOutcomes();
-      tags[si] = t.toArray(new String[t.size()]);
-    }
-    return tags;
-  }
-
-  @Deprecated
-  public Sequence[] topKSequences(List<String> sentence) {
-    return model.bestSequences(size, sentence.toArray(new String[sentence.size()]), null,
-        contextGen, sequenceValidator);
-  }
-
-  public Sequence[] topKSequences(String[] sentence) {
-    return this.topKSequences(sentence, null);
-  }
-
-  public Sequence[] topKSequences(String[] sentence, Object[] additionaContext) {
-    return model.bestSequences(size, sentence, additionaContext, contextGen, sequenceValidator);
-  }
-
-  /**
-   * Populates the specified array with the probabilities for each tag of the last tagged sentence.
-   *
-   * @param probs An array to put the probabilities into.
-   */
-  public void probs(double[] probs) {
-    bestSequence.getProbs(probs);
-  }
-
-  /**
-   * Returns an array with the probabilities for each tag of the last tagged sentence.
-   *
-   * @return an array with the probabilities for each tag of the last tagged sentence.
-   */
-  public double[] probs() {
-    return bestSequence.getProbs();
-  }
-
-  @Deprecated
-  public String tag(String sentence) {
-    List<String> toks = new ArrayList<String>();
-    StringTokenizer st = new StringTokenizer(sentence);
-    while (st.hasMoreTokens())
-      toks.add(st.nextToken());
-    List<String> tags = tag(toks);
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < tags.size(); i++)
-      sb.append(toks.get(i) + "/" + tags.get(i) + " ");
-    return sb.toString().trim();
-  }
-
-  public String[] getOrderedTags(List<String> words, List<String> tags, int index) {
-    return getOrderedTags(words,tags,index,null);
-  }
-
-  public String[] getOrderedTags(List<String> words, List<String> tags, int index,double[] tprobs) {
-    double[] probs = posModel.eval(contextGen.getContext(index,
-        words.toArray(new String[words.size()]),
-        tags.toArray(new String[tags.size()]),null));
-
-    String[] orderedTags = new String[probs.length];
-    for (int i = 0; i < probs.length; i++) {
-      int max = 0;
-      for (int ti = 1; ti < probs.length; ti++) {
-        if (probs[ti] > probs[max]) {
-          max = ti;
+    /**
+     * Stop a RPC client connection
+     * A RPC client is closed only when its reference count becomes zero.
+     * @param client client to stop
+     */
+    protected void stopClient(HBaseClient client) {
+      synchronized (this) {
+        client.decCount();
+        if (client.isZeroReference()) {
+          clients.remove(client.getSocketFactory());
         }
       }
-      orderedTags[i] = posModel.getOutcome(max);
-      if (tprobs != null){
-        tprobs[i]=probs[max];
+      if (client.isZeroReference()) {
+        client.stop();
       }
-      probs[max] = 0;
     }
-    return orderedTags;
-    
-    
   }
-  
-  public static POSModel train(String languageCode,
-      ObjectStream<POSSample> samples, TrainingParameters trainParams,
-      POSTaggerFactory posFactory) throws IOException {
-    
-    POSContextGenerator contextGenerator = posFactory.getPOSContextGenerator();
-    
-    Map<String, String> manifestInfoEntries = new HashMap<String, String>();
-    
-    TrainerType trainerType = TrainerFactory.getTrainerType(trainParams.getSettings());
-    
-    MaxentModel posModel = null;
-    SequenceClassificationModel<String> seqPosModel = null;
-    if (TrainerType.EVENT_MODEL_TRAINER.equals(trainerType)) {
-      ObjectStream<Event> es = new POSSampleEventStream(samples, contextGenerator);
-      
-      EventTrainer trainer = TrainerFactory.getEventTrainer(trainParams.getSettings(),
-          manifestInfoEntries);
-      posModel = trainer.train(es);
+
+  protected final static ClientCache CLIENTS = new ClientCache();
+
+  private static class Invoker implements InvocationHandler {
+    private Class<? extends VersionedProtocol> protocol;
+    private InetSocketAddress address;
+    private User ticket;
+    private HBaseClient client;
+    private boolean isClosed = false;
+    final private int rpcTimeout;
+
+    public Invoker(Class<? extends VersionedProtocol> protocol,
+                   InetSocketAddress address, User ticket,
+                   Configuration conf, SocketFactory factory, int rpcTimeout) {
+      this.protocol = protocol;
+      this.address = address;
+      this.ticket = ticket;
+      this.client = CLIENTS.getClient(conf, factory);
+      this.rpcTimeout = rpcTimeout;
     }
-    else if (TrainerType.EVENT_MODEL_SEQUENCE_TRAINER.equals(trainerType)) {
-      POSSampleSequenceStream ss = new POSSampleSequenceStream(samples, contextGenerator);
-      EventModelSequenceTrainer trainer = TrainerFactory.getEventModelSequenceTrainer(trainParams.getSettings(),
-          manifestInfoEntries);
-      posModel = trainer.train(ss);
+
+    public Object invoke(Object proxy, Method method, Object[] args)
+        throws Throwable {
+      final boolean logDebug = LOG.isDebugEnabled();
+      long startTime = 0;
+      if (logDebug) {
+        startTime = System.currentTimeMillis();
+      }
+
+      HbaseObjectWritable value = (HbaseObjectWritable)
+        client.call(new Invocation(method, args), address,
+                    protocol, ticket, rpcTimeout);
+      if (logDebug) {
+        // FIGURE HOW TO TURN THIS OFF!
+        long callTime = System.currentTimeMillis() - startTime;
+        LOG.debug("Call: " + method.getName() + " " + callTime);
+      }
+      return value.get();
     }
-    else if (TrainerType.SEQUENCE_TRAINER.equals(trainerType)) {
-      SequenceTrainer trainer = TrainerFactory.getSequenceModelTrainer(
-          trainParams.getSettings(), manifestInfoEntries);
-      
-      // TODO: This will probably cause issue, since the feature generator uses the outcomes array
-      
-      POSSampleSequenceStream ss = new POSSampleSequenceStream(samples, contextGenerator);
-      seqPosModel = trainer.train(ss);
+
+    /* close the IPC client that's responsible for this invoker's RPCs */
+    synchronized protected void close() {
+      if (!isClosed) {
+        isClosed = true;
+        CLIENTS.stopClient(client);
+      }
     }
-    else {
-      throw new IllegalArgumentException("Trainer type is not supported: " + trainerType);  
+  }
+
+  /** Construct a client-side proxy object that implements the named protocol,
+   * talking to a server at the named address. */
+  public VersionedProtocol getProxy(
+      Class<? extends VersionedProtocol> protocol, long clientVersion,
+      InetSocketAddress addr, User ticket,
+      Configuration conf, SocketFactory factory, int rpcTimeout)
+    throws IOException {
+
+      VersionedProtocol proxy =
+          (VersionedProtocol) Proxy.newProxyInstance(
+              protocol.getClassLoader(), new Class[] { protocol },
+              new Invoker(protocol, addr, ticket, conf, factory, rpcTimeout));
+    if (proxy instanceof VersionedProtocol) {
+      long serverVersion = ((VersionedProtocol)proxy)
+        .getProtocolVersion(protocol.getName(), clientVersion);
+      if (serverVersion != clientVersion) {
+        throw new HBaseRPC.VersionMismatch(protocol.getName(), clientVersion,
+                                      serverVersion);
+      }
     }
-    
-    return new POSModel(languageCode, posModel, manifestInfoEntries, posFactory);
+    return proxy;
   }
 
   /**
-   * @deprecated use
-   *             {@link #train(String, ObjectStream, TrainingParameters, POSTaggerFactory)}
-   *             instead and pass in a {@link POSTaggerFactory}.
+   * Stop this proxy and release its invoker's resource
+   * @param proxy the proxy to be stopped
    */
-  public static POSModel train(String languageCode, ObjectStream<POSSample> samples, TrainingParameters trainParams, 
-      POSDictionary tagDictionary, Dictionary ngramDictionary) throws IOException {
-    
-    return train(languageCode, samples, trainParams, new POSTaggerFactory(
-        ngramDictionary, tagDictionary));
+  public void stopProxy(VersionedProtocol proxy) {
+    if (proxy!=null) {
+      ((Invoker)Proxy.getInvocationHandler(proxy)).close();
+    }
   }
-  
-  /**
-   * @deprecated use
-   *             {@link #train(String, ObjectStream, TrainingParameters, POSTaggerFactory)}
-   *             instead and pass in a {@link POSTaggerFactory} and a
-   *             {@link TrainingParameters}.
-   */
-  @Deprecated
-  public static POSModel train(String languageCode, ObjectStream<POSSample> samples, ModelType modelType, POSDictionary tagDictionary,
-      Dictionary ngramDictionary, int cutoff, int iterations) throws IOException {
 
-    TrainingParameters params = new TrainingParameters(); 
-    
-    params.put(TrainingParameters.ALGORITHM_PARAM, modelType.toString());
-    params.put(TrainingParameters.ITERATIONS_PARAM, Integer.toString(iterations));
-    params.put(TrainingParameters.CUTOFF_PARAM, Integer.toString(cutoff));
-    
-    return train(languageCode, samples, params, tagDictionary, ngramDictionary);
+
+  /** Expert: Make multiple, parallel calls to a set of servers. */
+  public Object[] call(Method method, Object[][] params,
+                       InetSocketAddress[] addrs,
+                       Class<? extends VersionedProtocol> protocol,
+                       User ticket, Configuration conf)
+    throws IOException, InterruptedException {
+
+    Invocation[] invocations = new Invocation[params.length];
+    for (int i = 0; i < params.length; i++)
+      invocations[i] = new Invocation(method, params[i]);
+    HBaseClient client = CLIENTS.getClient(conf);
+    try {
+    Writable[] wrappedValues =
+      client.call(invocations, addrs, protocol, ticket);
+
+    if (method.getReturnType() == Void.TYPE) {
+      return null;
+    }
+
+    Object[] values =
+      (Object[])Array.newInstance(method.getReturnType(), wrappedValues.length);
+    for (int i = 0; i < values.length; i++)
+      if (wrappedValues[i] != null)
+        values[i] = ((HbaseObjectWritable)wrappedValues[i]).get();
+
+    return values;
+    } finally {
+      CLIENTS.stopClient(client);
+    }
   }
-  
-  public static Dictionary buildNGramDictionary(ObjectStream<POSSample> samples, int cutoff)
+
+  /** Construct a server for a protocol implementation instance listening on a
+   * port and address. */
+  public Server getServer(Class<? extends VersionedProtocol> protocol,
+                          Object instance,
+                          Class<?>[] ifaces,
+                          String bindAddress, int port,
+                          int numHandlers,
+                          int metaHandlerCount, boolean verbose,
+                          Configuration conf, int highPriorityLevel)
+    throws IOException {
+    return new Server(instance, ifaces, conf, bindAddress, port, numHandlers,
+        metaHandlerCount, verbose, highPriorityLevel);
+  }
+
+  /** An RPC Server. */
+  public static class Server extends HBaseServer {
+    private Object instance;
+    private Class<?> implementation;
+    private Class<?>[] ifaces;
+    private boolean verbose;
+    private boolean authorize = false;
+
+    // for JSON encoding
+    private static ObjectMapper mapper = new ObjectMapper();
+
+    private static final String WARN_RESPONSE_TIME =
+      "hbase.ipc.warn.response.time";
+    private static final String WARN_RESPONSE_SIZE =
+      "hbase.ipc.warn.response.size";
+
+    /** Default value for above params */
+    private static final int DEFAULT_WARN_RESPONSE_TIME = 10000; // milliseconds
+    private static final int DEFAULT_WARN_RESPONSE_SIZE = 100 * 1024 * 1024;
+
+    /** Names for suffixed metrics */
+    private static final String ABOVE_ONE_SEC_METRIC = ".aboveOneSec.";
+
+    private final int warnResponseTime;
+    private final int warnResponseSize;
+
+    private static String classNameBase(String className) {
+      String[] names = className.split("\\.", -1);
+      if (names == null || names.length == 0) {
+        return className;
+      }
+      return names[names.length-1];
+    }
+
+    /** Construct an RPC server.
+     * @param instance the instance whose methods will be called
+     * @param conf the configuration to use
+     * @param bindAddress the address to bind on to listen for connection
+     * @param port the port to listen for connections on
+     * @param numHandlers the number of method handler threads to run
+     * @param verbose whether each call should be logged
+     * @throws IOException e
+     */
+    public Server(Object instance, final Class<?>[] ifaces,
+                  Configuration conf, String bindAddress,  int port,
+                  int numHandlers, int metaHandlerCount, boolean verbose,
+                  int highPriorityLevel) throws IOException {
+      super(bindAddress, port, Invocation.class, numHandlers, metaHandlerCount,
+          conf, classNameBase(instance.getClass().getName()),
+          highPriorityLevel);
+      this.instance = instance;
+      this.implementation = instance.getClass();
+      this.verbose = verbose;
+
+      this.ifaces = ifaces;
+
+      // create metrics for the advertised interfaces this server implements.
+      String [] metricSuffixes = new String [] {ABOVE_ONE_SEC_METRIC};
+      this.rpcMetrics.createMetrics(this.ifaces, false, metricSuffixes);
+
+      this.authorize =
+        conf.getBoolean(
+            ServiceAuthorizationManager.SERVICE_AUTHORIZATION_CONFIG, false);
+
+      this.warnResponseTime = conf.getInt(WARN_RESPONSE_TIME,
+          DEFAULT_WARN_RESPONSE_TIME);
+      this.warnResponseSize = conf.getInt(WARN_RESPONSE_SIZE,
+          DEFAULT_WARN_RESPONSE_SIZE);
+    }
+
+    @Override
+    public Writable call(Class<? extends VersionedProtocol> protocol,
+        Writable param, long receivedTime, MonitoredRPCHandler status)
+    throws IOException {
+      try {
+        Invocation call = (Invocation)param;
+        if(call.getMethodName() == null) {
+          throw new IOException("Could not find requested method, the usual " +
+              "cause is a version mismatch between client and server.");
+        }
+        if (verbose) log("Call: " + call);
+        status.setRPC(call.getMethodName(), call.getParameters(), receivedTime);
+        status.setRPCPacket(param);
+        status.resume("Servicing call");
+
+        Method method =
+          protocol.getMethod(call.getMethodName(),
+                                   call.getParameterClasses());
+        method.setAccessible(true);
+
+        //Verify protocol version.
+        //Bypass the version check for VersionedProtocol
+        if (!method.getDeclaringClass().equals(VersionedProtocol.class)) {
+          long clientVersion = call.getProtocolVersion();
+          ProtocolSignature serverInfo = ((VersionedProtocol) instance)
+              .getProtocolSignature(protocol.getCanonicalName(), call
+                  .getProtocolVersion(), call.getClientMethodsHash());
+          long serverVersion = serverInfo.getVersion();
+          if (serverVersion != clientVersion) {
+            LOG.warn("Version mismatch: client version=" + clientVersion
+                + ", server version=" + serverVersion);
+            throw new RPC.VersionMismatch(protocol.getName(), clientVersion,
+                serverVersion);
+          }
+        }
+        Object impl = null;
+        if (protocol.isAssignableFrom(this.implementation)) {
+          impl = this.instance;
+        }
+        else {
+          throw new HBaseRPC.UnknownProtocolException(protocol);
+        }
+
+        long startTime = System.currentTimeMillis();
+        Object[] params = call.getParameters();
+        Object value = method.invoke(impl, params);
+        int processingTime = (int) (System.currentTimeMillis() - startTime);
+        int qTime = (int) (startTime-receivedTime);
+        if (TRACELOG.isDebugEnabled()) {
+          TRACELOG.debug("Call #" + CurCall.get().id +
+              "; Served: " + protocol.getSimpleName()+"#"+call.getMethodName() +
+              " queueTime=" + qTime +
+              " processingTime=" + processingTime +
+              " contents=" + Objects.describeQuantity(params));
+        }
+        rpcMetrics.rpcQueueTime.inc(qTime);
+        rpcMetrics.rpcProcessingTime.inc(processingTime);
+        rpcMetrics.inc(call.getMethodName(), processingTime);
+        if (verbose) log("Return: "+value);
+
+        HbaseObjectWritable retVal =
+          new HbaseObjectWritable(method.getReturnType(), value);
+        long responseSize = retVal.getWritableSize();
+        // log any RPC responses that are slower than the configured warn
+        // response time or larger than configured warning size
+        boolean tooSlow = (processingTime > warnResponseTime
+            && warnResponseTime > -1);
+        boolean tooLarge = (responseSize > warnResponseSize
+            && warnResponseSize > -1);
+        if (tooSlow || tooLarge) {
+          // when tagging, we let TooLarge trump TooSmall to keep output simple
+          // note that large responses will often also be slow.
+          logResponse(call, (tooLarge ? "TooLarge" : "TooSlow"),
+              status.getClient(), startTime, processingTime, qTime,
+              responseSize);
+          // provides a count of log-reported slow responses
+          if (tooSlow) {
+            rpcMetrics.rpcSlowResponseTime.inc(processingTime);
+          }
+        }
+        if (processingTime > 1000) {
+          // we use a hard-coded one second period so that we can clearly
+          // indicate the time period we're warning about in the name of the 
+          // metric itself
+          rpcMetrics.inc(call.getMethodName() + ABOVE_ONE_SEC_METRIC,
+              processingTime);
+        }
+
+        return retVal;
+      } catch (InvocationTargetException e) {
+        Throwable target = e.getTargetException();
+        if (target instanceof IOException) {
+          throw (IOException)target;
+        }
+        IOException ioe = new IOException(target.toString());
+        ioe.setStackTrace(target.getStackTrace());
+        throw ioe;
+      } catch (Throwable e) {
+        if (!(e instanceof IOException)) {
+          LOG.error("Unexpected throwable object ", e);
+        }
+        IOException ioe = new IOException(e.toString());
+        ioe.setStackTrace(e.getStackTrace());
+        throw ioe;
+      }
+    }
+
+    /**
+     * Logs an RPC response to the LOG file, producing valid JSON objects for
+     * client Operations.
+     * @param call The call to log.
+     * @param tag  The tag that will be used to indicate this event in the log.
+     * @param client          The address of the client who made this call.
+     * @param startTime       The time that the call was initiated, in ms.
+     * @param processingTime  The duration that the call took to run, in ms.
+     * @param qTime           The duration that the call spent on the queue 
+     *                        prior to being initiated, in ms.
+     * @param responseSize    The size in bytes of the response buffer.
+     */
+    private void logResponse(Invocation call, String tag, String clientAddress,
+        long startTime, int processingTime, int qTime, long responseSize)
       throws IOException {
-    
-    NGramModel ngramModel = new NGramModel();
-    
-    POSSample sample;
-    while((sample = samples.read()) != null) {
-      String[] words = sample.getSentence();
-      
-      if (words.length > 0)
-        ngramModel.add(new StringList(words), 1, 1);
+      Object params[] = call.getParameters();
+      // for JSON encoding
+      ObjectMapper mapper = new ObjectMapper();
+      // base information that is reported regardless of type of call
+      Map<String, Object> responseInfo = new HashMap<String, Object>();
+      responseInfo.put("starttimems", startTime);
+      responseInfo.put("processingtimems", processingTime);
+      responseInfo.put("queuetimems", qTime);
+      responseInfo.put("responsesize", responseSize);
+      responseInfo.put("client", clientAddress);
+      responseInfo.put("class", instance.getClass().getSimpleName());
+      responseInfo.put("method", call.getMethodName());
+      if (params.length == 2 && instance instanceof HRegionServer &&
+          params[0] instanceof byte[] &&
+          params[1] instanceof Operation) {
+        // if the slow process is a query, we want to log its table as well 
+        // as its own fingerprint
+        byte [] tableName =
+          HRegionInfo.parseRegionName((byte[]) params[0])[0];
+        responseInfo.put("table", Bytes.toStringBinary(tableName));
+        // annotate the response map with operation details
+        responseInfo.putAll(((Operation) params[1]).toMap());
+        // report to the log file
+        LOG.warn("(operation" + tag + "): " +
+            mapper.writeValueAsString(responseInfo));
+      } else if (params.length == 1 && instance instanceof HRegionServer &&
+          params[0] instanceof Operation) {
+        // annotate the response map with operation details
+        responseInfo.putAll(((Operation) params[0]).toMap());
+        // report to the log file
+        LOG.warn("(operation" + tag + "): " +
+            mapper.writeValueAsString(responseInfo));
+      } else {
+        // can't get JSON details, so just report call.toString() along with 
+        // a more generic tag.
+        responseInfo.put("call", call.toString());
+        LOG.warn("(response" + tag + "): " +
+            mapper.writeValueAsString(responseInfo));
+      }
     }
-    
-    ngramModel.cutoff(cutoff, Integer.MAX_VALUE);
-    
-    return ngramModel.toDictionary(true);
   }
 
-  public static void populatePOSDictionary(ObjectStream<POSSample> samples,
-      MutableTagDictionary dict, int cutoff) throws IOException {
-    System.out.println("Expanding POS Dictionary ...");
-    long start = System.nanoTime();
-
-    // the data structure will store the word, the tag, and the number of
-    // occurrences
-    Map<String, Map<String, AtomicInteger>> newEntries = new HashMap<String, Map<String, AtomicInteger>>();
-    POSSample sample;
-    while ((sample = samples.read()) != null) {
-      String[] words = sample.getSentence();
-      String[] tags = sample.getTags();
-
-      for (int i = 0; i < words.length; i++) {
-        // only store words
-        if (!StringPattern.recognize(words[i]).containsDigit()) {
-          String word;
-          if (dict.isCaseSensitive()) {
-            word = words[i];
-          } else {
-            word = StringUtil.toLowerCase(words[i]);
-          }
-
-          if (!newEntries.containsKey(word)) {
-            newEntries.put(word, new HashMap<String, AtomicInteger>());
-          }
-
-          String[] dictTags = dict.getTags(word);
-          if (dictTags != null) {
-            for (String tag : dictTags) {
-              // for this tags we start with the cutoff
-              Map<String, AtomicInteger> value = newEntries.get(word);
-              if (!value.containsKey(tag)) {
-                value.put(tag, new AtomicInteger(cutoff));
-              }
-            }
-          }
-
-          if (!newEntries.get(word).containsKey(tags[i])) {
-            newEntries.get(word).put(tags[i], new AtomicInteger(1));
-          } else {
-            newEntries.get(word).get(tags[i]).incrementAndGet();
-          }
-        }
-      }
-    }
-    
-    // now we check if the word + tag pairs have enough occurrences, if yes we
-    // add it to the dictionary 
-    for (Entry<String, Map<String, AtomicInteger>> wordEntry : newEntries
-        .entrySet()) {
-      List<String> tagsForWord = new ArrayList<String>();
-      for (Entry<String, AtomicInteger> entry : wordEntry.getValue().entrySet()) {
-        if (entry.getValue().get() >= cutoff) {
-          tagsForWord.add(entry.getKey());
-        }
-      }
-      if (tagsForWord.size() > 0) {
-        dict.put(wordEntry.getKey(),
-            tagsForWord.toArray(new String[tagsForWord.size()]));
-      }
-    }
-
-    System.out.println("... finished expanding POS Dictionary. ["
-        + (System.nanoTime() - start) / 1000000 + "ms]");
+  protected static void log(String value) {
+    String v = value;
+    if (v != null && v.length() > 55)
+      v = v.substring(0, 55)+"...";
+    LOG.info(v);
   }
 }

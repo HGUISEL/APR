@@ -1,856 +1,914 @@
 /*
- * The Apache Software License, Version 1.1
- *
- * Copyright (c) 2004 The Apache Software Foundation.  All rights
- * reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. The end-user documentation included with the redistribution, if
- *    any, must include the following acknowlegement:
- *       "This product includes software developed by the
- *        Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowlegement may appear in the software itself,
- *    if and wherever such third-party acknowlegements normally appear.
- *
- * 4. The names "Apache BSF", "Apache", and "Apache Software Foundation"
- *    must not be used to endorse or promote products derived from
- *    this software without prior written permission. For written
- *    permission, please contact apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache"
- *    nor may "Apache" appear in their names without prior written
- *    permission of the Apache Group.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many individuals
- * on behalf of the Apache Software Foundation and was originally created by
- * Sanjiva Weerawarana and others at International Business Machines
- * Corporation. For more information on the Apache Software Foundation,
- * please see <http://www.apache.org/>.
- */
 
-package org.apache.bsf;
+   Derby - Class org.apache.derby.jdbc.ClientBaseDataSource
 
-import java.util.*;
-import java.io.*;
-import java.beans.*;
-import java.security.*;
-import java.net.URL;
+   Copyright (c) 2001, 2005 The Apache Software Foundation or its licensors, where applicable.
 
-import org.apache.bsf.util.*;
-import org.apache.bsf.util.DebugLog;
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
 
-import javax.naming.*;
+      http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+*/
+
+package org.apache.derby.jdbc;
+
+import java.io.Serializable;
+import java.io.PrintWriter;
+import java.util.Properties;
+import java.util.StringTokenizer;
+import java.util.NoSuchElementException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.security.AccessController;
+import java.security.PrivilegedActionException;
+import java.sql.SQLException;
+import javax.naming.Referenceable;
+import javax.naming.Reference;
+import javax.naming.NamingException;
+import javax.naming.StringRefAddr;
+import javax.naming.RefAddr;
+
+import org.apache.derby.client.am.Configuration;
+import org.apache.derby.client.am.LogWriter;
+import org.apache.derby.client.am.SqlException;
+import org.apache.derby.client.am.SetAccessibleAction;
+import org.apache.derby.client.am.Connection;
+import org.apache.derby.client.net.NetConfiguration;
+import org.apache.derby.client.net.NetLogWriter;
+import org.apache.derby.client.ClientDataSourceFactory;
 
 /**
- * This class is the entry point to the bean scripting framework. An
- * application wishing to integrate scripting to a Java app would 
- * place an instance of a BSFManager in their code and use its services
- * to register the beans they want to make available for scripting,
- * load scripting engines, and run scripts. 
- * <p>
- * BSFManager serves as the registry of available scripting engines
- * as well. Loading and unloading of scripting engines is
- * supported as well. Each BSFManager loads one engine per language.
- * Several BSFManagers can be created per JVM.
- * 
- * @author   Sanjiva Weerawarana
- * @author   Matthew J. Duftler
- * @author   Sam Ruby
- * @author   Olivier Gruber (added original debugging support)
+ * Base class for client-side DataSource implementations.
  */
-public class BSFManager {
-    // table of registered scripting engines
-    protected static Hashtable registeredEngines = new Hashtable();
+public abstract class ClientBaseDataSource implements Serializable, Referenceable {
+    private static final long serialVersionUID = -7660172643035173692L;
 
-    // mapping of file extensions to languages
-    protected static Hashtable extn2Lang = new Hashtable();
+    // The loginTimeout jdbc 2 data source property is not supported as a jdbc 1 connection property,
+    // because loginTimeout is set by the jdbc 1 api via java.sql.DriverManager.setLoginTimeout().
+    // The databaseName, serverName, and portNumber data source properties are also not supported as connection properties
+    // because they are extracted from the jdbc 1 database url passed on the connection request.
+    // However, all other data source properties should probably also be supported as connection properties.
 
-    // table of scripting engine instances created by this manager. 
-    // only one instance of a given language engine is created by a single
-    // manager instance.
-    protected Hashtable loadedEngines = new Hashtable();
+    //---------------------contructors/finalizers---------------------------------
 
-    // table of registered beans for use by scripting engines.
-    protected ObjectRegistry objectRegistry = new ObjectRegistry();
+    // This class is abstract, hide the default constructor
+    ClientBaseDataSource() {
+    }
 
-    // prop change support containing loaded engines to inform when any
-    // of my interesting properties change
-    protected PropertyChangeSupport pcs;
-
-    // the class loader to use if a class loader is needed. Default is
-    // he who loaded me (which may be null in which case its Class.forName).
-    protected ClassLoader classLoader = getClass().getClassLoader();
-
-    // temporary directory to use to dump temporary files into. Note that
-    // if class files are dropped here then unless this dir is in the 
-    // classpath or unless the classloader knows to look here, the classes
-    // will not be found.
-    protected String tempDir = ".";
-
-    // classpath used by those that need a classpath
-    protected String classPath;
-
-    // stores BSFDeclaredBeans representing objects 
-    // introduced by a client of BSFManager
-    protected Vector declaredBeans = new Vector();
-
-    //////////////////////////////////////////////////////////////////////
+    // ---------------------------- loginTimeout -----------------------------------
     //
-    // pre-register engines that BSF supports off the shelf
+    // was serialized in 1.0 release
+    /**
+     * The time in seconds to wait for a connection request on this data source. The default value of zero indicates
+     * that either the system time out be used or no timeout limit.
+     *
+     * @serial
+     */
+    protected int loginTimeout = propertyDefault_loginTimeout;
+    public final static String propertyKey_loginTimeout = "loginTimeout";
+    public static final int propertyDefault_loginTimeout = 0;
+
+    public synchronized void setLoginTimeout(int seconds) {
+        this.loginTimeout = seconds;
+    }
+
+    public int getLoginTimeout() {
+        return this.loginTimeout;
+    }
+
+    // ---------------------------- logWriter -----------------------------------
     //
-    //////////////////////////////////////////////////////////////////////
+    /**
+     * The log writer is declared transient, and is not serialized or stored under JNDI.
+     *
+     * @see #traceLevel
+     */
+    private transient PrintWriter logWriter;
 
-    static {
-        try {
-            Enumeration e = BSFManager.class.getClassLoader().getResources("org/apache/bsf/Languages.properties");
-            while (e.hasMoreElements()) {
-                URL url = (URL)e.nextElement();
-                InputStream is = url.openStream();
+    public synchronized void setLogWriter(PrintWriter logWriter) {
+        this.logWriter = logWriter;
+    }
 
-                Properties p = new Properties();
-                p.load(is);
+    public PrintWriter getLogWriter() {
+        return this.logWriter;
+    }
 
-                Enumeration keys = p.propertyNames();
-                while (keys.hasMoreElements()) {
-                    String key = (String) keys.nextElement();
-                    String value = p.getProperty(key);
-                
-                    StringTokenizer tokens = new StringTokenizer(value, ",");
-                    String className = (String) tokens.nextToken();
-                
-                    // get the extensions for this language
-                    String exts = (String) tokens.nextToken();
-                    StringTokenizer st = new StringTokenizer(exts, "|");
-                    String[] extensions = new String[st.countTokens()];
-                    for (int i = 0; st.hasMoreTokens(); i++) {
-                        extensions[i] = ((String) st.nextToken()).trim();
+    // ---------------------------- databaseName -----------------------------------
+    //
+    // Stores the relational database name, RDBNAME.
+    // The length of the database name may be limited to 18 bytes
+    // and therefore may throw an SQLException.
+    //
+    //
+    protected String databaseName;
+    public final static String propertyKey_databaseName = "databaseName";
+
+    // databaseName is not permitted in a properties object
+
+
+    // ---------------------------- description ------------------------------
+    // A description of this data source.
+    protected String description;
+    public final static String propertyKey_description = "description";
+
+    // ---------------------------- dataSourceName -----------------------------------
+    //
+    // A data source name;
+    // used to name an underlying XADataSource,
+    // or ConnectionPoolDataSource when pooling of connections is done.
+    //
+    protected String dataSourceName;
+    public final static String propertyKey_dataSourceName = "dataSourceName";
+
+    // ---------------------------- portNumber -----------------------------------
+    //
+    protected int portNumber = propertyDefault_portNumber;
+    public final static int propertyDefault_portNumber = 1527;
+    public final static String propertyKey_portNumber = "portNumber";
+
+    // ---------------------------- serverName -----------------------------------
+    //
+    // Derby-410 fix.
+    protected String serverName = propertyDefault_serverName;
+    public final static String propertyDefault_serverName = "localhost";
+    public final static String propertyKey_serverName = "serverName";
+
+    // serverName is not permitted in a properties object
+
+    // ---------------------------- user -----------------------------------
+    //
+    // This property can be overwritten by specifing the
+    // username parameter on the DataSource.getConnection() method
+    // call.  If user is specified, then password must also be
+    // specified, either in the data source object or provided on
+    // the DataSource.getConnection() call.
+    //
+    // Each data source implementation subclass will maintain it's own <code>password</code> property.
+    // This password property may or may not be declared transient, and therefore may be serialized
+    // to a file in clear-text, care must taken by the user to prevent security breaches.
+    // Derby-406 fix
+    protected String user = propertyDefault_user;
+    public final static String propertyKey_user = "user";
+    public final static String propertyDefault_user = "APP";
+
+    public static String getUser(Properties properties) {
+        String userString = properties.getProperty(propertyKey_user);
+        return parseString(userString, propertyDefault_user);
+    }
+
+    public final static int HOLD_CURSORS_OVER_COMMIT = 1; // this matches jdbc 3 ResultSet.HOLD_CURSORS_OVER_COMMIT
+    public final static int CLOSE_CURSORS_AT_COMMIT = 2;  // this matches jdbc 3 ResultSet.CLOSE_CURSORS_AT_COMMIT
+
+
+    // ---------------------------- securityMechanism -----------------------------------
+    //
+    // The source security mechanism to use when connecting to this data source.
+    // <p>
+    // Security mechanism options are:
+    // <ul>
+    // <li> USER_ONLY_SECURITY
+    // <li> CLEAR_TEXT_PASSWORD_SECURITY
+    // <li> ENCRYPTED_PASSWORD_SECURITY
+    // <li> ENCRYPTED_USER_AND_PASSWORD_SECURITY - both password and user are encrypted
+    // </ul>
+    // The default security mechanism is USER_ONLY_SECURITY.
+    // <p>
+    // If the application specifies a security
+    // mechanism then it will be the only one attempted.
+    // If the specified security mechanism is not supported by the conversation
+    // then an exception will be thrown and there will be no additional retries.
+    // <p>
+    // This property is currently only available for the  DNC driver.
+    // <p>
+    // Both user and password need to be set for all security mechanism except USER_ONLY_SECURITY
+    // When using USER_ONLY_SECURITY, only the user property needs to be specified.
+    //
+    protected short securityMechanism = propertyDefault_securityMechanism;
+    // TODO default  should be  USER_ONLY_SECURITY. Change when working on
+    // Network Server
+    //  public final static short propertyDefault_securityMechanism = (short)
+    //  org.apache.derby.client.net.NetConfiguration.SECMEC_USRIDONL;
+    public final static short propertyDefault_securityMechanism = (short) NetConfiguration.SECMEC_USRIDONL;
+    public final static String propertyKey_securityMechanism = "securityMechanism";
+
+
+    // We use the NET layer constants to avoid a mapping for the NET driver.
+    public static short getSecurityMechanism(Properties properties) {
+        String securityMechanismString = properties.getProperty(propertyKey_securityMechanism);
+        String passwordString = properties.getProperty(propertyKey_password);
+        short setSecurityMechanism = parseShort(securityMechanismString, propertyDefault_securityMechanism);
+        return getUpgradedSecurityMechanism(setSecurityMechanism, passwordString);
+    }
+
+
+    /**
+     * Upgrade the security mechansim to USRIDPWD if it is set to USRIDONL but we have a password.
+     */
+    public static short getUpgradedSecurityMechanism(short securityMechanism, String password) {
+        // if securityMechanism is USER_ONLY (the default) we may need
+        // to change it to CLEAR_TEXT_PASSWORD in order to send the password.
+        if ((password != null) && (securityMechanism == NetConfiguration.SECMEC_USRIDONL)) {
+            return (short) NetConfiguration.SECMEC_USRIDPWD;
+        } else {
+            return securityMechanism;
+        }
+    }
+
+    // ---------------------------- getServerMessageTextOnGetMessage -----------------------------------
+    //
+    protected boolean retrieveMessageText = propertyDefault_retrieveMessageText;
+    public final static boolean propertyDefault_retrieveMessageText = true;
+    public final static String propertyKey_retrieveMessageText = "retrieveMessageText";
+
+
+    public static boolean getRetrieveMessageText(Properties properties) {
+        String retrieveMessageTextString = properties.getProperty(propertyKey_retrieveMessageText);
+        return parseBoolean(retrieveMessageTextString, propertyDefault_retrieveMessageText);
+    }
+
+    // ---------------------------- traceFile -----------------------------------
+    //
+    protected String traceFile;
+    public final static String propertyKey_traceFile = "traceFile";
+
+    public static String getTraceFile(Properties properties) {
+        return properties.getProperty(propertyKey_traceFile);
+    }
+
+    // ---------------------------- traceDirectory -----------------------------------
+    // For the suffix of the trace file when traceDirectory is enabled.
+    private transient int traceFileSuffixIndex_ = 0;
+    //
+    protected String traceDirectory;
+    public final static String propertyKey_traceDirectory = "traceDirectory";
+
+    public static String getTraceDirectory(Properties properties) {
+        return properties.getProperty(propertyKey_traceDirectory);
+    }
+
+    // ---------------------------- traceFileAppend -----------------------------------
+    //
+    protected boolean traceFileAppend = propertyDefault_traceFileAppend;
+    public final static boolean propertyDefault_traceFileAppend = false;
+    public final static String propertyKey_traceFileAppend = "traceFileAppend";
+
+    public static boolean getTraceFileAppend(Properties properties) {
+        String traceFileAppendString = properties.getProperty(propertyKey_traceFileAppend);
+        return parseBoolean(traceFileAppendString, propertyDefault_traceFileAppend);
+    }
+
+    // ---------------------------- password -----------------------------------
+    //
+    // The password property is defined in subclasses, but the method
+    // getPassword (java.util.Properties properties) is in this class to eliminate
+    // dependencies on j2ee for connections that go thru the driver manager.
+    public final static String propertyKey_password = "password";
+
+    public static String getPassword(Properties properties) {
+        return properties.getProperty("password");
+    }
+
+    protected String password;
+
+    synchronized public final void setPassword(String password) {
+        this.password = password;
+    }
+    
+    public final String getPassword() {
+    	return password;
+    }
+
+    //------------------------ interface methods ---------------------------------
+
+    public Reference getReference() throws NamingException {
+        // This method creates a new Reference object to represent this data source.
+        // The class name of the data source object is saved in the Reference,
+        // so that an object factory will know that it should create an instance
+        // of that class when a lookup operation is performed. The class
+        // name of the object factory, org.apache.derby.client.ClientBaseDataSourceFactory,
+        // is also stored in the reference.
+        // This is not required by JNDI, but is recommend in practice.
+        // JNDI will always use the object factory class specified in the reference when
+        // reconstructing an object, if a class name has been specified.
+        // See the JNDI SPI documentation
+        // for further details on this topic, and for a complete description of the Reference
+        // and StringRefAddr classes.
+        //
+        // This ClientBaseDataSource class provides several standard JDBC properties.
+        // The names and values of the data source properties are also stored
+        // in the reference using the StringRefAddr class.
+        // This is all the information needed to reconstruct a ClientBaseDataSource object.
+
+        Reference ref = new Reference(this.getClass().getName(), ClientDataSourceFactory.class.getName(), null);
+
+        Class clz = getClass();
+        Field[] fields = clz.getFields();
+        for (int i = 0; i < fields.length; i++) {
+            String name = fields[i].getName();
+            if (name.startsWith("propertyKey_")) {
+                if (Modifier.isTransient(fields[i].getModifiers())) {
+                    continue; // if it is transient, then skip this propertyKey.
+                }
+                try {
+                    String propertyKey = fields[i].get(this).toString();
+                    // search for property field.
+                    Field propertyField;
+                    clz = getClass(); // start from current class.
+                    while (true) {
+                        try {
+                            propertyField = clz.getDeclaredField(name.substring(12));
+                            break; // found the property field, so break the while loop.
+                        } catch (NoSuchFieldException nsfe) {
+                            // property field is not found at current level of class, so continue to super class.
+                            clz = clz.getSuperclass();
+                            if (clz == Object.class) {
+                                throw new NamingException("bug check: corresponding property field does not exist");
+                            }
+                            continue;
+                        }
                     }
 
-                    registerScriptingEngine(key, className, extensions);
+                    if (!Modifier.isTransient(propertyField.getModifiers())) {
+                        // if the property is not transient:
+                        // get the property.
+                        AccessController.doPrivileged(new SetAccessibleAction(propertyField, true));
+                        //propertyField.setAccessible (true);
+                        Object propertyObj = propertyField.get(this);
+                        String property = (propertyObj == null) ? null : String.valueOf(propertyObj);
+                        // add into reference.
+                        ref.add(new StringRefAddr(propertyKey, property));
+                    }
+                } catch (IllegalAccessException e) {
+                    throw new NamingException("bug check: property cannot be accessed");
+                } catch (PrivilegedActionException e) {
+                    throw new NamingException("Privileged action exception occurred.");
                 }
             }
         }
-        catch (IOException ex) {
-            ex.printStackTrace();
-            System.err.println("Error reading Languages file " + ex);
-        } 
-        catch (NoSuchElementException nsee) {
-            nsee.printStackTrace();
-            System.err.println("Syntax error in Languages resource bundle");
-        } 
-        catch (MissingResourceException mre) {
-            mre.printStackTrace();
-            System.err.println("Initialization error: " + mre.toString());
-        }
-    }
-
-    public BSFManager() {
-        pcs = new PropertyChangeSupport(this);
+        return ref;
     }
 
     /**
-     * Apply the given anonymous function of the given language to the given
-     * parameters and return the resulting value.
-     *
-     * @param lang language identifier
-     * @param source (context info) the source of this expression
-     (e.g., filename)
-     * @param lineNo (context info) the line number in source for expr
-     * @param columnNo (context info) the column number in source for expr
-     * @param funcBody the multi-line, value returning script to evaluate
-     * @param paramNames the names of the parameters above assumes
-     * @param arguments values of the above parameters
-     *
-     * @exception BSFException if anything goes wrong while running the script
+     * Not an external.  Do not document in pubs. Populates member data for this data source given a JNDI reference.
      */
-    public Object apply(String lang,
-                        String source,
-                        int lineNo,
-                        int columnNo,
-                        Object funcBody,
-                        Vector paramNames,
-                        Vector arguments)
-        throws BSFException {
-        final BSFEngine e = loadScriptingEngine(lang);
-        final String sourcef = source;
-        final int lineNof = lineNo, columnNof = columnNo;
-        final Object funcBodyf = funcBody;
-        final Vector paramNamesf = paramNames;
-        final Vector argumentsf = arguments;
-        Object result = null;
+    public void hydrateFromReference(Reference ref) throws SqlException {
+    	
+        RefAddr address;
 
-        try {
-            final Object resultf = 
-                AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                        public Object run() throws Exception {
-                            return e.apply(sourcef, lineNof, columnNof, 
-                                           funcBodyf, paramNamesf, argumentsf);
-                        }
-                    });
-            result = resultf;
-        }
-        catch (PrivilegedActionException prive) {
-            throw (BSFException) prive.getException();
-        }
-
-        return result;
-    }
-
-    /**
-     * Compile the application of the given anonymous function of the given
-     * language to the given parameters into the given <tt>CodeBuffer</tt>.
-     *
-     * @param lang language identifier
-     * @param source (context info) the source of this expression
-     (e.g., filename)
-     * @param lineNo (context info) the line number in source for expr
-     * @param columnNo (context info) the column number in source for expr
-     * @param funcBody the multi-line, value returning script to evaluate
-     * @param paramNames the names of the parameters above assumes
-     * @param arguments values of the above parameters
-     * @param cb       code buffer to compile into
-     *
-     * @exception BSFException if anything goes wrong while running the script
-     */
-    public void compileApply(String lang,
-                             String source,
-                             int lineNo,
-                             int columnNo,
-                             Object funcBody,
-                             Vector paramNames,
-                             Vector arguments,
-                             CodeBuffer cb)
-        throws BSFException {
-        final BSFEngine e = loadScriptingEngine(lang);
-        final String sourcef = source;
-        final int lineNof = lineNo, columnNof = columnNo;
-        final Object funcBodyf = funcBody;
-        final Vector paramNamesf = paramNames;
-        final Vector argumentsf = arguments;
-        final CodeBuffer cbf = cb;
-        
-        try {
-            AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                    public Object run() throws Exception {
-                        e.compileApply(sourcef, lineNof, columnNof, 
-                                       funcBodyf, paramNamesf, 
-                                       argumentsf, cbf);
-                        return null;
-                    }
-                });
-        }
-        catch (PrivilegedActionException prive) {
-            throw (BSFException) prive.getException();
-        }
-    }
-
-    /**
-     * Compile the given expression of the given language into the given 
-     * <tt>CodeBuffer</tt>.
-     *
-     * @param lang     language identifier
-     * @param source   (context info) the source of this expression
-     (e.g., filename)
-     * @param lineNo   (context info) the line number in source for expr
-     * @param columnNo (context info) the column number in source for expr
-     * @param expr     the expression to compile
-     * @param cb       code buffer to compile into
-     *
-     * @exception BSFException if any error while compiling the expression
-     */
-    public void compileExpr(String lang,
-                            String source,
-                            int lineNo,
-                            int columnNo,
-                            Object expr,
-                            CodeBuffer cb)
-        throws BSFException {
-        final BSFEngine e = loadScriptingEngine(lang);
-        final String sourcef = source;
-        final int lineNof = lineNo, columnNof = columnNo;
-        final Object exprf = expr;
-        final CodeBuffer cbf = cb;
-
-        try {
-            AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                    public Object run() throws Exception {
-                        e.compileExpr(sourcef, lineNof, columnNof, exprf, cbf);
-                        return null;
-                    }
-                });
-        }
-        catch (PrivilegedActionException prive) {
-            throw (BSFException) prive.getException();
-        }
-    }
-
-    /**
-     * Compile the given script of the given language into the given 
-     * <tt>CodeBuffer</tt>.
-     *
-     * @param lang     language identifier
-     * @param source   (context info) the source of this script
-     (e.g., filename)
-     * @param lineNo   (context info) the line number in source for script
-     * @param columnNo (context info) the column number in source for script
-     * @param script   the script to compile
-     * @param cb       code buffer to compile into
-     *
-     * @exception BSFException if any error while compiling the script
-     */
-    public void compileScript(String lang,
-                              String source,
-                              int lineNo,
-                              int columnNo,
-                              Object script,
-                              CodeBuffer cb)
-        throws BSFException {
-        final BSFEngine e = loadScriptingEngine(lang);
-        final String sourcef = source;
-        final int lineNof = lineNo, columnNof = columnNo;
-        final Object scriptf = script;
-        final CodeBuffer cbf = cb;
-
-        try {
-            AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                    public Object run() throws Exception {
-                        e.compileScript(sourcef, lineNof, columnNof, 
-                                        scriptf, cbf);
-                        return null;
-                    }
-                });
-        }
-        catch (PrivilegedActionException prive) {
-            throw (BSFException) prive.getException();
-        }
-    }
-
-    /**
-     * Declare a bean. The difference between declaring and registering 
-     * is that engines are spsed to make declared beans "pre-available"
-     * in the scripts as far as possible. That is, if a script author
-     * needs a registered bean, he needs to look it up in some way. However
-     * if he needs a declared bean, the language has the responsibility to
-     * make those beans avaialable "automatically."
-     * <p>
-     * When a bean is declared it is automatically registered as well
-     * so that any declared bean can be gotton to by looking it up as well.
-     * <p>
-     * If any of the languages that are already running in this manager
-     * says they don't like this (by throwing an exception) then this
-     * method will simply quit with that exception. That is, any engines
-     * that come after than in the engine enumeration will not even be
-     * told about this new bean. 
-     * <p>
-     * So, in general its best to declare beans before the manager has
-     * been asked to load any engines because then the user can be informed
-     * when an engine rejects it. Also, its much more likely that an engine
-     * can declare a bean at start time than it can at any time.
-     *
-     * @param beanName name to declare bean as
-     * @param bean     the bean that's being declared
-     * @param type     the type to represent the bean as
-     *
-     * @exception BSFException if any of the languages that are already
-     *            running decides to throw an exception when asked to
-     *            declare this bean.
-     */
-    public void declareBean(String beanName, Object bean, Class type)
-        throws BSFException {
-        registerBean(beanName, bean);
-
-        BSFDeclaredBean tempBean = new BSFDeclaredBean(beanName, bean, type);
-        declaredBeans.addElement(tempBean);
-
-        Enumeration enginesEnum = loadedEngines.elements();
-        BSFEngine engine;
-        while (enginesEnum.hasMoreElements()) {
-            engine = (BSFEngine) enginesEnum.nextElement();
-            engine.declareBean(tempBean);
-        }
-    }
-
-    /**
-     * Evaluate the given expression of the given language and return the
-     * resulting value.
-     *
-     * @param lang language identifier
-     * @param source (context info) the source of this expression
-     (e.g., filename)
-     * @param lineNo (context info) the line number in source for expr
-     * @param columnNo (context info) the column number in source for expr
-     * @param expr the expression to evaluate
-     *
-     * @exception BSFException if anything goes wrong while running the script
-     */
-    public Object eval(String lang,
-                       String source,
-                       int lineNo,
-                       int columnNo,
-                       Object expr)
-        throws BSFException {
-        final BSFEngine e = loadScriptingEngine(lang);
-        final String sourcef = source;
-        final int lineNof = lineNo, columnNof = columnNo;
-        final Object exprf = expr;
-        Object result = null;
-        
-        try {
-            final Object resultf =
-                AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                        public Object run() throws Exception {
-                            return e.eval(sourcef, lineNof, columnNof, exprf);
-                        }
-                    });
-            result = resultf;
-        }
-        catch (PrivilegedActionException prive) {
-            throw (BSFException) prive.getException();
-        }
-
-        return result;
-    }
-
-    //////////////////////////////////////////////////////////////////////
-    //
-    // Convenience functions for exec'ing and eval'ing scripts directly
-    // without loading and dealing with engines etc..
-    //
-    //////////////////////////////////////////////////////////////////////
-
-    /**
-     * Execute the given script of the given language.
-     *
-     * @param lang     language identifier
-     * @param source   (context info) the source of this expression
-     (e.g., filename)
-     * @param lineNo   (context info) the line number in source for expr
-     * @param columnNo (context info) the column number in source for expr
-     * @param script   the script to execute
-     *
-     * @exception BSFException if anything goes wrong while running the script
-     */
-    public void exec(String lang,
-                     String source,
-                     int lineNo,
-                     int columnNo,
-                     Object script)
-        throws BSFException {
-        final BSFEngine e = loadScriptingEngine(lang);
-        final String sourcef = source;
-        final int lineNof = lineNo, columnNof = columnNo;
-        final Object scriptf = script;
-
-        try {
-            AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                    public Object run() throws Exception {
-                        e.exec(sourcef, lineNof, columnNof, scriptf);
-                        return null;
-                    }
-                });
-        }
-        catch (PrivilegedActionException prive) {
-            throw (BSFException) prive.getException();
-        }
-    }
-
-    /**
-     * Execute the given script of the given language, attempting to
-     * emulate an interactive session w/ the language.
-     *
-     * @param lang     language identifier
-     * @param source   (context info) the source of this expression 
-     *                 (e.g., filename)
-     * @param lineNo   (context info) the line number in source for expr
-     * @param columnNo (context info) the column number in source for expr
-     * @param script   the script to execute
-     *
-     * @exception BSFException if anything goes wrong while running the script
-     */
-    public void iexec(String lang,
-                     String source,
-                     int lineNo,
-                     int columnNo,
-                     Object script)
-        throws BSFException {
-        final BSFEngine e = loadScriptingEngine(lang);
-        final String sourcef = source;
-        final int lineNof = lineNo, columnNof = columnNo;
-        final Object scriptf = script;
-
-        try {
-            AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                    public Object run() throws Exception {
-                        e.iexec(sourcef, lineNof, columnNof, scriptf);
-                        return null;
-                    }
-                });
-        }
-        catch (PrivilegedActionException prive) {
-            throw (BSFException) prive.getException();
-        }
-    }
-
-    /**
-     * Get classLoader
-     */
-    public ClassLoader getClassLoader() {
-        return classLoader;
-    }
-
-    /**
-     * Get classPath
-     */
-    public String getClassPath() {
-        if (classPath == null) {
-            try {
-                classPath = System.getProperty("java.class.path");
-            } 
-            catch (Throwable t) {
-                // prolly a security exception .. so no can do
-            }
-        }
-        return classPath;
-    }
-
-    /**
-     * Determine the language of a script file by looking at the file
-     * extension. 
-     *
-     * @param fileName the name of the file
-     *
-     * @return the scripting language the file is in if the file extension
-     *         is known to me (must have been registered via 
-     *         registerScriptingEngine).
-     *
-     * @exception BSFException if file's extension is unknown.
-     */
-    public static String getLangFromFilename(String fileName) 
-        throws BSFException {
-        int dotIndex = fileName.lastIndexOf(".");
-
-        if (dotIndex != -1) {
-            String extn = fileName.substring(dotIndex + 1);
-            String langval = (String) extn2Lang.get(extn), lang = null;
-            int index = 0, loops = 0;
-
-            if (langval != null) {
-                while ((index = langval.indexOf(":", 0)) != -1) {
-                    // Great. Multiple language engines registered
-                    // for this extension.
-                    // Try to find first one that is in our classpath.
-                    lang = langval.substring(0, index);
-                    langval = langval.substring(index + 1);
-                    loops++;
-
-                    // Test to see if in classpath
-                    try {
-                        String engineName = 
-                            (String) registeredEngines.get(lang);
-                        Class.forName(engineName);
-                    }
-                    catch (ClassNotFoundException cnfe) {
-                        // Bummer.
-                        lang = langval;
-                        continue;
-                    }
-
-                    // Got past that? Good.
-                    break;
+        Class clz = getClass();
+        Field[] fields = clz.getFields();
+        for (int i = 0; i < fields.length; i++) {
+            String name = fields[i].getName();
+            if (name.startsWith("propertyKey_")) {
+                if (Modifier.isTransient(fields[i].getModifiers())) {
+                    continue; // if it is transient, then skip this propertyKey.
                 }
-                if (loops == 0) lang = langval;
-            }
-            
-            if (lang != null && lang != "") {
-                return lang;
-            }
-        }
-        throw new BSFException(BSFException.REASON_OTHER_ERROR,
-                               "file extension missing or unknown: "
-                               + "unable to determine language for '"
-                               + fileName
-                               + "'");
-    }
-
-    /**
-     * Return the current object registry of the manager.
-     *
-     * @return the current registry.
-     */
-    public ObjectRegistry getObjectRegistry() {
-        return objectRegistry;
-    }
-
-    /**
-     * Get tempDir
-     */
-    public String getTempDir() {
-        return tempDir;
-    }
-
-    /**
-     * Determine whether a language is registered.
-     *
-     * @param lang string identifying a language
-     *
-     * @return true iff it is
-     */
-    public static boolean isLanguageRegistered(String lang) {
-        return (registeredEngines.get(lang) != null);
-    }
-
-    //////////////////////////////////////////////////////////////////////
-    //
-    // Bean scripting framework services
-    //
-    //////////////////////////////////////////////////////////////////////
-
-    /**
-     * Load a scripting engine based on the lang string identifying it.
-     *
-     * @param lang string identifying language
-     * @exception BSFException if the language is unknown (i.e., if it
-     *            has not been registered) with a reason of 
-     *            REASON_UNKNOWN_LANGUAGE. If the language is known but
-     *            if the interface can't be created for some reason, then
-     *            the reason is set to REASON_OTHER_ERROR and the actual
-     *            exception is passed on as well.
-     */
-    public BSFEngine loadScriptingEngine(String lang) throws BSFException {
-        // if its already loaded return that
-        BSFEngine eng = (BSFEngine) loadedEngines.get(lang);
-        if (eng != null) {
-            return eng;
-        }
-
-        // is it a registered language?
-        String engineClassName = (String) registeredEngines.get(lang);
-        if (engineClassName == null) {
-            throw new BSFException(BSFException.REASON_UNKNOWN_LANGUAGE,
-                                   "unsupported language: " + lang);
-        }
-
-        // create the engine and initialize it. if anything goes wrong
-        // except.
-        try {
-            Class engineClass =
-                (classLoader == null)
-                ? Class.forName(engineClassName)
-                : classLoader.loadClass(engineClassName);
-            final BSFEngine engf = (BSFEngine) engineClass.newInstance();
-            final BSFManager thisf = this;
-            final String langf = lang;
-            final Vector dbf = declaredBeans;
-            AccessController.doPrivileged(new PrivilegedExceptionAction() {
-                    public Object run() throws Exception {
-                        engf.initialize(thisf, langf, dbf);
-                        return null;
+                try {
+                    String propertyKey = fields[i].get(this).toString();
+                    // search for property field.
+                    Field propertyField;
+                    clz = getClass(); // start from current class.
+                    while (true) {
+                        try {
+                            propertyField = clz.getDeclaredField(name.substring(12));
+                            break; // found the property field, so break the while loop.
+                        } catch (NoSuchFieldException nsfe) {
+                            // property field is not found at current level of class, so continue to super class.
+                            clz = clz.getSuperclass();
+                            if (clz == Object.class) {
+                                throw new SqlException(new LogWriter(logWriter, traceLevel), "bug check: corresponding property field does not exist");
+                            }
+                            continue;
+                        }
                     }
-                });
-            eng = engf;
-            loadedEngines.put(lang, eng);
-            pcs.addPropertyChangeListener(eng);
-            return eng;
-        } 
-        catch (PrivilegedActionException prive) {
-                throw (BSFException) prive.getException();
-        }
-        catch (Throwable t) {
-            throw new BSFException(BSFException.REASON_OTHER_ERROR,
-                                   "unable to load language: " + lang,
-                                   t);
+
+                    if (!Modifier.isTransient(propertyField.getModifiers())) {
+                        // if the property is not transient:
+                        // set the property.
+                        address = ref.get(propertyKey);
+                        if (address != null) {
+                            propertyField.setAccessible(true);
+                            String type = propertyField.getType().toString();
+                            if (type.equals("boolean")) {
+                                boolean value = ((String) address.getContent()).equalsIgnoreCase("true");
+                                propertyField.setBoolean(this, value);
+                            } else if (type.equals("byte")) {
+                                byte value = Byte.parseByte((String) address.getContent());
+                                propertyField.setByte(this, value);
+                            } else if (type.equals("short")) {
+                                short value = Short.parseShort((String) address.getContent());
+                                propertyField.setShort(this, value);
+                            } else if (type.equals("int")) {
+                                int value = Integer.parseInt((String) address.getContent());
+                                propertyField.setInt(this, value);
+                            } else if (type.equals("long")) {
+                                long value = Long.parseLong((String) address.getContent());
+                                propertyField.setLong(this, value);
+                            } else if (type.equals("float")) {
+                                float value = Float.parseFloat((String) address.getContent());
+                                propertyField.setFloat(this, value);
+                            } else if (type.equals("double")) {
+                                double value = Double.parseDouble((String) address.getContent());
+                                propertyField.setDouble(this, value);
+                            } else if (type.equals("char")) {
+                                char value = ((String) address.getContent()).charAt(0);
+                                propertyField.setChar(this, value);
+                            } else {
+                                propertyField.set(this, address.getContent());
+                            }
+                        }
+                    }
+                } catch (IllegalAccessException e) {
+                    throw new SqlException(new LogWriter(this.logWriter, this.traceLevel), "bug check: property cannot be accessed");
+                }
+            }
         }
     }
 
+    // ----------------------supplemental methods---------------------------------
     /**
-     * return a handle to a bean registered in the bean registry by the
-     * application or a scripting engine. Returns null if bean is not found. 
-     *
-     * @param beanName name of bean to look up
-     *
-     * @return the bean if its found or null
+     * Not an external.  Do not document in pubs. Returns all non-transient properties of a ClientBaseDataSource.
      */
-    public Object lookupBean(String beanName) {
-        try {
-            return ((BSFDeclaredBean)objectRegistry.lookup(beanName)).bean;
-        } 
-        catch (IllegalArgumentException e) {
+    public Properties getProperties() throws SqlException {
+        Properties properties = new Properties();
+
+        Class clz = getClass();
+        Field[] fields = clz.getFields();
+        for (int i = 0; i < fields.length; i++) {
+            String name = fields[i].getName();
+            if (name.startsWith("propertyKey_")) {
+                if (Modifier.isTransient(fields[i].getModifiers())) {
+                    continue; // if it is transient, then skip this propertyKey.
+                }
+                try {
+                    String propertyKey = fields[i].get(this).toString();
+                    // search for property field.
+                    Field propertyField;
+                    clz = getClass(); // start from current class.
+                    while (true) {
+                        try {
+                            propertyField = clz.getDeclaredField(name.substring(12));
+                            break; // found the property field, so break the while loop.
+                        } catch (NoSuchFieldException nsfe) {
+                            // property field is not found at current level of class, so continue to super class.
+                            clz = clz.getSuperclass();
+                            if (clz == Object.class) {
+                                throw new SqlException(new LogWriter(logWriter, traceLevel), "bug check: corresponding property field does not exist");
+                            }
+                            continue;
+                        }
+                    }
+
+                    if (!Modifier.isTransient(propertyField.getModifiers())) {
+                        // if the property is not transient:
+                        // get the property.
+                        propertyField.setAccessible(true);
+                        Object propertyObj = propertyField.get(this);
+                        String property = String.valueOf(propertyObj); // don't use toString becuase it may be null.
+                        if ("password".equals(propertyKey)) {
+                            StringBuffer sb = new StringBuffer(property);
+                            for (int j = 0; j < property.length(); j++) {
+                                sb.setCharAt(j, '*');
+                            }
+                            property = sb.toString();
+                        }
+                        // add into prperties.
+                        properties.setProperty(propertyKey, property);
+                    }
+                } catch (IllegalAccessException e) {
+                    throw new SqlException(new LogWriter(this.logWriter, this.traceLevel), "bug check: property cannot be accessed");
+                }
+            }
+        }
+
+        return properties;
+    }
+
+    //---------------------- helper methods --------------------------------------
+
+    // The java.io.PrintWriter overrides the traceFile setting.
+    // If neither traceFile nor jdbc logWriter are set, then null is returned.
+    // logWriterInUseSuffix used only for trace directories to indicate whether
+    // log writer is use is from xads, cpds, sds, ds, driver, config, reset.
+    LogWriter computeDncLogWriterForNewConnection(String logWriterInUseSuffix) throws SqlException {
+        return computeDncLogWriterForNewConnection(logWriter, traceDirectory, traceFile, traceFileAppend, traceLevel, logWriterInUseSuffix, traceFileSuffixIndex_++);
+    }
+
+    // Called on for connection requests.
+    // The java.io.PrintWriter overrides the traceFile setting.
+    // If neither traceFile, nor logWriter, nor traceDirectory are set, then null is returned.
+    static LogWriter computeDncLogWriterForNewConnection(PrintWriter logWriter, String traceDirectory, String traceFile, boolean traceFileAppend, int traceLevel, String logWriterInUseSuffix, int traceFileSuffixIndex) throws SqlException {
+        int globaltraceFileSuffixIndex = Configuration.traceFileSuffixIndex__++;
+
+        // compute regular dnc log writer if there is any
+        LogWriter dncLogWriter = computeDncLogWriter(logWriter, traceDirectory, traceFile, traceFileAppend, logWriterInUseSuffix, traceFileSuffixIndex, traceLevel);
+        if (dncLogWriter != null) {
+            return dncLogWriter;
+        }
+        // compute global default dnc log writer if there is any
+        dncLogWriter = computeDncLogWriter(null, Configuration.traceDirectory__, Configuration.traceFile__, Configuration.traceFileAppend__, "_global", globaltraceFileSuffixIndex, Configuration.traceLevel__);
+        return dncLogWriter;
+    }
+
+    // Compute a DNC log writer before a connection is created.
+    static LogWriter computeDncLogWriter(PrintWriter logWriter, String traceDirectory, String traceFile, boolean traceFileAppend, String logWriterInUseSuffix, int traceFileSuffixIndex, int traceLevel) throws SqlException {
+        // Otherwise, the trace file will still be created even TRACE_NONE.
+        if (traceLevel == TRACE_NONE) {
             return null;
         }
+
+        PrintWriter printWriter = computePrintWriter(logWriter, traceDirectory, traceFile, traceFileAppend, logWriterInUseSuffix, traceFileSuffixIndex);
+        if (printWriter == null) {
+            return null;
+        }
+
+        LogWriter dncLogWriter = new NetLogWriter(printWriter, traceLevel);
+        if (printWriter != logWriter && traceDirectory != null)
+        // When printWriter is an internal trace file and
+        // traceDirectory is not null, each connection has
+        // its own trace file and the trace file is not cached,
+        // so we can close it when DNC log writer is closed.
+        {
+            dncLogWriter.printWriterNeedsToBeClosed_ = true;
+        }
+        return dncLogWriter;
     }
 
-    /** 
-     * Registering a bean allows a scripting engine or the application to 
-     * access that bean by name and to manipulate it.
-     *
-     * @param beanName name to register under
-     * @param bean     the bean to register
-     */
-    public void registerBean(String beanName, Object bean) {
-        BSFDeclaredBean tempBean;
+    // Compute a DNC log writer after a connection is created.
+    // Declared public for use by am.Connection.  Not a public external.
+    public static LogWriter computeDncLogWriter(Connection connection, PrintWriter logWriter, String traceDirectory, String traceFile, boolean traceFileAppend, String logWriterInUseSuffix, int traceFileSuffixIndex, int traceLevel) throws SqlException {
+        // Otherwise, the trace file will still be created even TRACE_NONE.
+        if (traceLevel == TRACE_NONE) {
+            return null;
+        }
 
-        if(bean == null) {
-            tempBean = new BSFDeclaredBean(beanName, null, null);
+        PrintWriter printWriter = computePrintWriter(logWriter, traceDirectory, traceFile, traceFileAppend, logWriterInUseSuffix, traceFileSuffixIndex);
+        if (printWriter == null) {
+            return null;
         }
-        else {
-            tempBean = new BSFDeclaredBean(beanName, bean, bean.getClass());
+
+        LogWriter dncLogWriter = connection.agent_.newLogWriter_(printWriter, traceLevel);
+        if (printWriter != logWriter && traceDirectory != null)
+        // When printWriter is an internal trace file and
+        // traceDirectory is not null, each connection has
+        // its own trace file and the trace file is not cached,
+        // so we can close it when DNC log writer is closed.
+        {
+            dncLogWriter.printWriterNeedsToBeClosed_ = true;
         }
-        objectRegistry.register(beanName, tempBean);
+        return dncLogWriter;
     }
 
-    /**
-     * Register a scripting engine in the static registry of the 
-     * BSFManager.
-     *
-     * @param lang string identifying language
-     * @param engineClassName fully qualified name of the class interfacing
-     *        the language to BSF.
-     * @param extensions array of file extensions that should be mapped to
-     *        this language type. may be null.
-     */
-    public static void registerScriptingEngine(String lang,
-                                               String engineClassName,
-                                               String[] extensions) {
-        registeredEngines.put(lang, engineClassName);
-        if (extensions != null) {
-            for (int i = 0; i < extensions.length; i++) {
-                String langstr = (String) extn2Lang.get(extensions[i]);
-                langstr = (langstr == null) ? lang : lang + ":" + langstr;
-                extn2Lang.put(extensions[i], langstr);
+    // This method handles all the override semantics.
+    // The logWriter overrides the traceFile, and traceDirectory settings.
+    // If neither traceFile, nor logWriter, nor traceDirectory are set, then null is returned.
+    static PrintWriter computePrintWriter(PrintWriter logWriter, String traceDirectory, String traceFile, boolean traceFileAppend, String logWriterInUseSuffix, int traceFileSuffixIndex) throws SqlException {
+        if (logWriter != null)  // java.io.PrintWriter is specified
+        {
+            return logWriter;
+        } else { // check trace file setting.
+            if (traceDirectory != null) {
+                String fileName;
+                if (traceFile == null) {
+                    fileName = traceDirectory + "/" + logWriterInUseSuffix + "_" + traceFileSuffixIndex;
+                } else {
+                    fileName = traceDirectory + "/" + traceFile + logWriterInUseSuffix + "_" + traceFileSuffixIndex;
+                }
+                return LogWriter.getPrintWriter(fileName, true); // no file append and not enable caching.
+            } else if (traceFile != null) {
+                return LogWriter.getPrintWriter(traceFile, traceFileAppend);
             }
         }
+        return null;
     }
 
-    /**
-     * Set the class loader for those that need to use it. Default is he
-     * who loaded me or null (i.e., its Class.forName).
-     *
-     * @param classLoader the class loader to use.
-     */
-    public void setClassLoader(ClassLoader classLoader) {
-        pcs.firePropertyChange("classLoader", this.classLoader, classLoader);
-        this.classLoader = classLoader;
+    private static boolean parseBoolean(String boolString, boolean defaultBool) {
+        if (boolString != null) {
+            return (boolString.equalsIgnoreCase("true") || boolString.equalsIgnoreCase("yes"));
+        }
+        return defaultBool;
     }
 
-    /**
-     * Set the classpath for those that need to use it. Default is the value
-     * of the java.class.path property.
-     *
-     * @param classPath the classpath to use
-     */
-    public void setClassPath(String classPath) {
-        pcs.firePropertyChange("classPath", this.classPath, classPath);
-        this.classPath = classPath;
+    private static String parseString(String string, String defaultString) {
+        if (string != null) {
+            return string;
+        }
+        return defaultString;
     }
 
-    /**
-     * Set the object registry used by this manager. By default a new
-     * one is created when the manager is new'ed and this overwrites 
-     * that one.
-     *
-     * @param objectRegistry the registry to use
-     */
-    public void setObjectRegistry(ObjectRegistry objectRegistry) {
-        this.objectRegistry = objectRegistry;
+    private static short parseShort(String shortString, short defaultShort) {
+        if (shortString != null) {
+            return Short.parseShort(shortString);
+        }
+        return defaultShort;
     }
 
-    /**
-     * Temporary directory to put stuff into (for those who need to). Note
-     * that unless this directory is in the classpath or unless the 
-     * classloader knows to look in here, any classes here will not 
-     * be found! BSFManager provides a service method to load a class 
-     * which uses either the classLoader provided by the class loader 
-     * property or, if that fails, a class loader which knows to load from 
-     * the tempdir to try to load the class. Default value of tempDir 
-     * is "." (current working dir). 
-     *
-     * @param tempDir the temporary directory
-     */
-    public void setTempDir(String tempDir) {
-        pcs.firePropertyChange("tempDir", this.tempDir, tempDir);
-        this.tempDir = tempDir;
+    private static int parseInt(String intString, int defaultInt) {
+        if (intString != null) {
+            return Integer.parseInt(intString);
+        }
+        return defaultInt;
     }
 
-    /**
-     * Gracefully terminate all engines
-     */
-    public void terminate() {
-        Enumeration enginesEnum = loadedEngines.elements();
-        BSFEngine engine;
-        while (enginesEnum.hasMoreElements()) {
-            engine = (BSFEngine) enginesEnum.nextElement();
-            engine.terminate();
+    // tokenize "property=value;property=value..." and returns new properties object
+    //This method is used both by ClientDriver to parse the url and
+    // ClientDataSource.setConnectionAttributes
+    static Properties tokenizeAttributes(String attributeString, Properties properties) throws SqlException {
+        Properties augmentedProperties;
+
+        if (attributeString == null) {
+            return properties;
         }
 
-        loadedEngines = new Hashtable();
+        if (properties != null) {
+            augmentedProperties = (Properties) properties.clone();
+        } else {
+            augmentedProperties = new Properties();
+        }
+        try {
+            StringTokenizer attrTokenizer = new StringTokenizer(attributeString, ";");
+            while (attrTokenizer.hasMoreTokens()) {
+                String v = attrTokenizer.nextToken();
+
+                int eqPos = v.indexOf('=');
+                if (eqPos == -1) {
+                    throw new SqlException(null, "Invalid attribute syntax: " + attributeString);
+                }
+
+                augmentedProperties.setProperty((v.substring(0, eqPos)).trim(), (v.substring(eqPos + 1)).trim());
+            }
+        } catch (NoSuchElementException e) {
+            // A null log writer is passed, because jdbc 1 sqlexceptions are automatically traced
+            throw new SqlException(null, e, "Invalid attribute syntax: " + attributeString);
+        }
+        checkBoolean(augmentedProperties, propertyKey_retrieveMessageText);
+        return augmentedProperties;
+
     }
 
-    /**
-     * Undeclare a previously declared bean. This removes the bean from
-     * the list of declared beans in the manager as well as asks every
-     * running engine to undeclared the bean. As with above, if any
-     * of the engines except when asked to undeclare, this method does
-     * not catch that exception. Quietly returns if the bean is unknown.
-     *
-     * @param beanName name of bean to undeclare
-     *
-     * @exception BSFException if any of the languages that are already
-     *            running decides to throw an exception when asked to
-     *            undeclare this bean.
-     */
-    public void undeclareBean(String beanName) throws BSFException {
-        unregisterBean(beanName);
+    private static void checkBoolean(Properties set, String attribute) throws SqlException {
+        final String[] booleanChoices = {"true", "false"};
+        checkEnumeration(set, attribute, booleanChoices);
+    }
 
-        BSFDeclaredBean tempBean = null;
-        for (int i = 0; i < declaredBeans.size(); i++) {
-            tempBean = (BSFDeclaredBean) declaredBeans.elementAt(i);
-            if (tempBean.name.equals(beanName)) {
-                break;
+
+    private static void checkEnumeration(Properties set, String attribute, String[] choices) throws SqlException {
+        String value = set.getProperty(attribute);
+        if (value == null) {
+            return;
+        }
+
+        for (int i = 0; i < choices.length; i++) {
+            if (value.toUpperCase(java.util.Locale.ENGLISH).equals(choices[i].toUpperCase(java.util.Locale.ENGLISH))) {
+                return;
             }
         }
 
-        if (tempBean != null) {
-            declaredBeans.removeElement(tempBean);
-
-            Enumeration enginesEnum = loadedEngines.elements();
-            while (enginesEnum.hasMoreElements()) {
-                BSFEngine engine = (BSFEngine) enginesEnum.nextElement();
-                engine.undeclareBean(tempBean);
+// The attribute value is invalid. Construct a string giving the choices for
+// display in the error message.
+        String choicesStr = "{";
+        for (int i = 0; i < choices.length; i++) {
+            if (i > 0) {
+                choicesStr += "|";
             }
+            choicesStr += choices[i];
+        }
+
+        throw new SqlException(null, "JDBC attribute " + attribute +
+                "has an invalid value " + value +
+                " Valid values are " + choicesStr);
+    }
+
+    /*
+     * Properties to be seen by Bean - access thru reflection.
+     */
+
+    // -- Stardard JDBC DataSource Properties
+
+    public synchronized void setDatabaseName(String databaseName) {
+        this.databaseName = databaseName;
+    }
+
+    public String getDatabaseName() {
+        return this.databaseName;
+    }
+
+
+    public synchronized void setDataSourceName(String dataSourceName) {
+        this.dataSourceName = dataSourceName;
+    }
+
+    public String getDataSourceName() {
+        return this.dataSourceName;
+    }
+
+    public synchronized void setDescription(String description) {
+        this.description = description;
+    }
+
+    public String getDescription() {
+        return this.description;
+    }
+
+
+    public synchronized void setPortNumber(int portNumber) {
+        this.portNumber = portNumber;
+    }
+
+    public int getPortNumber() {
+        return this.portNumber;
+    }
+
+    public synchronized void setServerName(String serverName) {
+        this.serverName = serverName;
+    }
+
+    public String getServerName() {
+        return this.serverName;
+    }
+
+
+    public synchronized void setUser(String user) {
+        this.user = user;
+    }
+
+    public String getUser() {
+        return this.user;
+    }
+
+    synchronized public void setRetrieveMessageText(boolean retrieveMessageText) {
+        this.retrieveMessageText = retrieveMessageText;
+    }
+
+    public boolean getRetrieveMessageText() {
+        return this.retrieveMessageText;
+    }
+
+    // ---------------------------- securityMechanism -----------------------------------
+    /**
+     * The source security mechanism to use when connecting to this data source.
+     * <p/>
+     * Security mechanism options are: <ul> <li> USER_ONLY_SECURITY <li> CLEAR_TEXT_PASSWORD_SECURITY <li>
+     * ENCRYPTED_PASSWORD_SECURITY <li> ENCRYPTED_USER_AND_PASSWORD_SECURITY - both password and user are encrypted
+     * </ul> The default security mechanism is USER_ONLY SECURITY
+     * <p/>
+     * If the application specifies a security mechanism then it will be the only one attempted. If the specified
+     * security mechanism is not supported by the conversation then an exception will be thrown and there will be no
+     * additional retries.
+     * <p/>
+     * This property is currently only available for the  DNC driver.
+     * <p/>
+     * Both user and password need to be set for all security mechanism except USER_ONLY_SECURITY
+     */
+    // We use the NET layer constants to avoid a mapping for the NET driver.
+    public final static short USER_ONLY_SECURITY = (short) NetConfiguration.SECMEC_USRIDONL;
+    public final static short CLEAR_TEXT_PASSWORD_SECURITY = (short) NetConfiguration.SECMEC_USRIDPWD;
+    public final static short ENCRYPTED_PASSWORD_SECURITY = (short) NetConfiguration.SECMEC_USRENCPWD;
+    public final static short ENCRYPTED_USER_AND_PASSWORD_SECURITY = (short) NetConfiguration.SECMEC_EUSRIDPWD;
+
+    synchronized public void setSecurityMechanism(short securityMechanism) {
+        this.securityMechanism = securityMechanism;
+    }
+
+    public short getSecurityMechanism() {
+        return getUpgradedSecurityMechanism(securityMechanism, password);
+    }
+
+    protected String connectionAttributes = null;
+    public final static String propertyKey_connectionAttributes = "connectionAttributes";
+
+    /**
+     * Set this property to pass in more Derby specific connection URL attributes.
+     * <BR>
+     * Any attributes that can be set using a property of this DataSource implementation
+     * (e.g user, password) should not be set in connectionAttributes. Conflicting
+     * settings in connectionAttributes and properties of the DataSource will lead to
+     * unexpected behaviour. 
+     *
+     * @param prop set to the list of Cloudscape connection attributes separated by semi-colons.   E.g., to specify an
+     *             encryption bootPassword of "x8hhk2adf", and set upgrade to true, do the following: <PRE>
+     *             ds.setConnectionAttributes("bootPassword=x8hhk2adf;upgrade=true"); </PRE> See Derby documentation for
+     *             complete list.
+     */
+    public final void setConnectionAttributes(String prop) {
+        connectionAttributes = prop;
+    }
+
+    /**
+     * @return Derby specific connection URL attributes
+     */
+    public final String getConnectionAttributes() {
+        return connectionAttributes;
+    }
+
+
+    // ---------------------------- traceLevel -----------------------------------
+    //
+
+    public final static int TRACE_NONE = 0x0;
+    public final static int TRACE_CONNECTION_CALLS = 0x1;
+    public final static int TRACE_STATEMENT_CALLS = 0x2;
+    public final static int TRACE_RESULT_SET_CALLS = 0x4;
+    public final static int TRACE_DRIVER_CONFIGURATION = 0x10;
+    public final static int TRACE_CONNECTS = 0x20;
+    public final static int TRACE_PROTOCOL_FLOWS = 0x40;
+    public final static int TRACE_RESULT_SET_META_DATA = 0x80;
+    public final static int TRACE_PARAMETER_META_DATA = 0x100;
+    public final static int TRACE_DIAGNOSTICS = 0x200;
+    public final static int TRACE_XA_CALLS = 0x800;
+    public final static int TRACE_ALL = 0xFFFFFFFF;
+
+    public final static int propertyDefault_traceLevel = TRACE_ALL;
+    public final static String propertyKey_traceLevel = "traceLevel";
+
+    protected int traceLevel = propertyDefault_traceLevel;
+
+    public static int getTraceLevel(Properties properties) {
+        String traceLevelString = properties.getProperty(propertyKey_traceLevel);
+        return parseInt(traceLevelString, propertyDefault_traceLevel);
+    }
+
+    synchronized public void setTraceLevel(int traceLevel) {
+        this.traceLevel = traceLevel;
+    }
+
+    public int getTraceLevel() {
+        return this.traceLevel;
+    }
+
+
+    public synchronized void setTraceFile(String traceFile) {
+        this.traceFile = traceFile;
+    }
+
+    public String getTraceFile() {
+        return this.traceFile;
+    }
+
+
+    public synchronized void setTraceDirectory(String traceDirectory) {
+        this.traceDirectory = traceDirectory;
+    }
+
+    public String getTraceDirectory() {
+        return this.traceDirectory;
+    }
+
+    synchronized public void setTraceFileAppend(boolean traceFileAppend) {
+        this.traceFileAppend = traceFileAppend;
+    }
+
+    public boolean getTraceFileAppend() {
+        return this.traceFileAppend;
+    }
+
+
+
+
+    // --- private helper methods
+
+
+    /**
+     * The dataSource keeps individual fields for the values that are relevant to the client. These need to be updated
+     * when set connection attributes is called.
+     */
+    void updateDataSourceValues(Properties prop) {
+        if (prop == null) {
+            return;
+        }
+        
+        if (prop.containsKey(propertyKey_user)) {
+            setUser(getUser(prop));
+        }
+        if (prop.containsKey(propertyKey_securityMechanism)) {
+            setSecurityMechanism(getSecurityMechanism(prop));
+        }
+        if (prop.containsKey(propertyKey_traceFile)) {
+            setTraceFile(getTraceFile(prop));
+        }
+        if (prop.containsKey(propertyKey_traceDirectory)) {
+            setTraceDirectory(getTraceDirectory(prop));
+        }
+        if (prop.containsKey(propertyKey_traceFileAppend)) {
+            setTraceFileAppend(getTraceFileAppend(prop));
+        }
+        if (prop.containsKey(propertyKey_securityMechanism)) {
+            setSecurityMechanism(getSecurityMechanism(prop));
+        }
+        if (prop.containsKey(propertyKey_retrieveMessageText)) {
+            setRetrieveMessageText(getRetrieveMessageText(prop));
         }
     }
 
-    /** 
-     * Unregister a previously registered bean. Silent if name is not found.
-     *
-     * @param beanName name of bean to unregister
-     */
-    public void unregisterBean(String beanName) {
-        objectRegistry.unregister(beanName);
-    }
+
 }
+
+

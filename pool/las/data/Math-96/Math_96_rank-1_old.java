@@ -1,13 +1,12 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,601 +14,1101 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.kafka.streams;
 
-package org.apache.oozie.action.hadoop;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.config.AbstractConfig;
+import org.apache.kafka.common.config.ConfigDef;
+import org.apache.kafka.common.config.ConfigDef.Importance;
+import org.apache.kafka.common.config.ConfigDef.Type;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.config.TopicConfig;
+import org.apache.kafka.common.metrics.Sensor;
+import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.errors.DeserializationExceptionHandler;
+import org.apache.kafka.streams.errors.LogAndFailExceptionHandler;
+import org.apache.kafka.streams.errors.ProductionExceptionHandler;
+import org.apache.kafka.streams.errors.DefaultProductionExceptionHandler;
+import org.apache.kafka.streams.errors.StreamsException;
+import org.apache.kafka.streams.processor.DefaultPartitionGrouper;
+import org.apache.kafka.streams.processor.FailOnInvalidTimestamp;
+import org.apache.kafka.streams.processor.TimestampExtractor;
+import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URL;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
-import java.util.jar.JarFile;
-import java.util.jar.Manifest;
-import java.util.regex.Pattern;
+import java.util.Set;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.commons.lang.StringUtils;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.filecache.DistributedCache;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.log4j.PropertyConfigurator;
-import org.apache.spark.deploy.SparkSubmit;
+import static org.apache.kafka.common.config.ConfigDef.Range.atLeast;
+import static org.apache.kafka.common.config.ConfigDef.Range.between;
+import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
+import static org.apache.kafka.common.requests.IsolationLevel.READ_COMMITTED;
 
-import com.google.common.annotations.VisibleForTesting;
+/**
+ * Configuration for a {@link KafkaStreams} instance.
+ * Can also be used to configure the Kafka Streams internal {@link KafkaConsumer}, {@link KafkaProducer} and {@link AdminClient}.
+ * To avoid consumer/producer/admin property conflicts, you should prefix those properties using
+ * {@link #consumerPrefix(String)}, {@link #producerPrefix(String)} and {@link #adminClientPrefix(String)}, respectively.
+ * <p>
+ * Example:
+ * <pre>{@code
+ * // potentially wrong: sets "metadata.max.age.ms" to 1 minute for producer AND consumer
+ * Properties streamsProperties = new Properties();
+ * streamsProperties.put(ConsumerConfig.METADATA_MAX_AGE_CONFIG, 60000);
+ * // or
+ * streamsProperties.put(ProducerConfig.METADATA_MAX_AGE_CONFIG, 60000);
+ *
+ * // suggested:
+ * Properties streamsProperties = new Properties();
+ * // sets "metadata.max.age.ms" to 1 minute for consumer only
+ * streamsProperties.put(StreamsConfig.consumerPrefix(ConsumerConfig.METADATA_MAX_AGE_CONFIG), 60000);
+ * // sets "metadata.max.age.ms" to 1 minute for producer only
+ * streamsProperties.put(StreamsConfig.producerPrefix(ProducerConfig.METADATA_MAX_AGE_CONFIG), 60000);
+ *
+ * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
+ * }</pre>
+ *
+ * This instance can also be used to pass in custom configurations to different modules (e.g. passing a special config in your customized serde class).
+ * The consumer/producer/admin prefix can also be used to distinguish these custom config values passed to different clients with the same config name.
+ * * Example:
+ * <pre>{@code
+ * Properties streamsProperties = new Properties();
+ * // sets "my.custom.config" to "foo" for consumer only
+ * streamsProperties.put(StreamsConfig.consumerPrefix("my.custom.config"), "foo");
+ * // sets "my.custom.config" to "bar" for producer only
+ * streamsProperties.put(StreamsConfig.producerPrefix("my.custom.config"), "bar");
+ * // sets "my.custom.config2" to "boom" for all clients universally
+ * streamsProperties.put("my.custom.config2", "boom");
+ *
+ * // as a result, inside producer's serde class configure(..) function,
+ * // users can now read both key-value pairs "my.custom.config" -> "foo"
+ * // and "my.custom.config2" -> "boom" from the config map
+ * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
+ * }</pre>
+ *
+ * When increasing both {@link ProducerConfig#RETRIES_CONFIG} and {@link ProducerConfig#MAX_BLOCK_MS_CONFIG} to be more resilient to non-available brokers you should also
+ * consider increasing {@link ConsumerConfig#MAX_POLL_INTERVAL_MS_CONFIG} using the following guidance:
+ * <pre>
+ *     max.poll.interval.ms > min ( max.block.ms, (retries +1) * request.timeout.ms )
+ * </pre>
+ *
+ *
+ * Kafka Streams requires at least the following properties to be set:
+ * <ul>
+ *  <li>{@link #APPLICATION_ID_CONFIG "application.id"}</li>
+ *  <li>{@link #BOOTSTRAP_SERVERS_CONFIG "bootstrap.servers"}</li>
+ * </ul>
+ *
+ * By default, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
+ * <ul>
+ *   <li>{@link ConsumerConfig#ENABLE_AUTO_COMMIT_CONFIG "enable.auto.commit"} (false) - Streams client will always disable/turn off auto committing</li>
+ * </ul>
+ *
+ * If {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} is set to {@link #EXACTLY_ONCE "exactly_once"}, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
+ * <ul>
+ *   <li>{@link ConsumerConfig#ISOLATION_LEVEL_CONFIG "isolation.level"} (read_committed) - Consumers will always read committed data only</li>
+ *   <li>{@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG "enable.idempotence"} (true) - Producer will always have idempotency enabled</li>
+ *   <li>{@link ProducerConfig#MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION "max.in.flight.requests.per.connection"} (5) - Producer will always have one in-flight request per connection</li>
+ * </ul>
+ *
+ *
+ * @see KafkaStreams#KafkaStreams(org.apache.kafka.streams.Topology, Properties)
+ * @see ConsumerConfig
+ * @see ProducerConfig
+ */
+public class StreamsConfig extends AbstractConfig {
 
-public class SparkMain extends LauncherMain {
-    private static final String MASTER_OPTION = "--master";
-    private static final String MODE_OPTION = "--deploy-mode";
-    private static final String JOB_NAME_OPTION = "--name";
-    private static final String CLASS_NAME_OPTION = "--class";
-    private static final String VERBOSE_OPTION = "--verbose";
-    private static final String DRIVER_CLASSPATH_OPTION = "--driver-class-path";
-    private static final String EXECUTOR_CLASSPATH = "spark.executor.extraClassPath=";
-    private static final String DRIVER_CLASSPATH = "spark.driver.extraClassPath=";
-    private static final String EXECUTOR_EXTRA_JAVA_OPTIONS = "spark.executor.extraJavaOptions=";
-    private static final String DRIVER_EXTRA_JAVA_OPTIONS = "spark.driver.extraJavaOptions=";
-    private static final String LOG4J_CONFIGURATION_JAVA_OPTION = "-Dlog4j.configuration=";
-    private static final String HIVE_SECURITY_TOKEN = "spark.yarn.security.tokens.hive.enabled";
-    private static final String HBASE_SECURITY_TOKEN = "spark.yarn.security.tokens.hbase.enabled";
-    private static final String CONF_OOZIE_SPARK_SETUP_HADOOP_CONF_DIR = "oozie.action.spark.setup.hadoop.conf.dir";
-    private static final String PWD = "$PWD" + File.separator + "*";
-    private static final Pattern[] PYSPARK_DEP_FILE_PATTERN = { Pattern.compile("py4\\S*src.zip"),
-            Pattern.compile("pyspark.zip") };
-    private static final Pattern SPARK_DEFAULTS_FILE_PATTERN = Pattern.compile("spark-defaults.conf");
-    private static final String SPARK_LOG4J_PROPS = "spark-log4j.properties";
-    @VisibleForTesting
-    static final Pattern[] SPARK_JOB_IDS_PATTERNS = {
-            Pattern.compile("Submitted application (application[0-9_]*)") };
-    public static final Pattern SPARK_ASSEMBLY_JAR_PATTERN = Pattern
-            .compile("^spark-assembly((?:(-|_|(\\d+\\.))\\d+(?:\\.\\d+)*))*\\.jar$");
-    public static final Pattern SPARK_YARN_JAR_PATTERN = Pattern
-            .compile("^spark-yarn((?:(-|_|(\\d+\\.))\\d+(?:\\.\\d+)*))*\\.jar$");
-    private static final Pattern SPARK_VERSION_1 = Pattern.compile("^1.*");
-    private static final String SPARK_YARN_JAR = "spark.yarn.jar";
-    private static final String SPARK_YARN_JARS = "spark.yarn.jars";
-    public static void main(String[] args) throws Exception {
-        run(SparkMain.class, args);
+    private final static Logger log = LoggerFactory.getLogger(StreamsConfig.class);
+
+    private static final ConfigDef CONFIG;
+
+    private final boolean eosEnabled;
+    private final static long DEFAULT_COMMIT_INTERVAL_MS = 30000L;
+    private final static long EOS_DEFAULT_COMMIT_INTERVAL_MS = 100L;
+
+    /**
+     * Prefix used to provide default topic configs to be applied when creating internal topics.
+     * These should be valid properties from {@link org.apache.kafka.common.config.TopicConfig TopicConfig}.
+     * It is recommended to use {@link #topicPrefix(String)}.
+     */
+    // TODO: currently we cannot get the full topic configurations and hence cannot allow topic configs without the prefix,
+    //       this can be lifted once kafka.log.LogConfig is completely deprecated by org.apache.kafka.common.config.TopicConfig
+    public static final String TOPIC_PREFIX = "topic.";
+
+    /**
+     * Prefix used to isolate {@link KafkaConsumer consumer} configs from other client configs.
+     * It is recommended to use {@link #consumerPrefix(String)} to add this prefix to {@link ConsumerConfig consumer
+     * properties}.
+     */
+    public static final String CONSUMER_PREFIX = "consumer.";
+
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the main consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. main.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    public static final String MAIN_CONSUMER_PREFIX = "main.consumer.";
+
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the restore consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. restore.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    public static final String RESTORE_CONSUMER_PREFIX = "restore.consumer.";
+
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the global consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. global.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    public static final String GLOBAL_CONSUMER_PREFIX = "global.consumer.";
+
+    /**
+     * Prefix used to isolate {@link KafkaProducer producer} configs from other client configs.
+     * It is recommended to use {@link #producerPrefix(String)} to add this prefix to {@link ProducerConfig producer
+     * properties}.
+     */
+    public static final String PRODUCER_PREFIX = "producer.";
+
+    /**
+     * Prefix used to isolate {@link org.apache.kafka.clients.admin.AdminClient admin} configs from other client configs.
+     * It is recommended to use {@link #adminClientPrefix(String)} to add this prefix to {@link ProducerConfig producer
+     * properties}.
+     */
+    public static final String ADMIN_CLIENT_PREFIX = "admin.";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.0.x}.
+     */
+    public static final String UPGRADE_FROM_0100 = "0.10.0";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.1.x}.
+     */
+    public static final String UPGRADE_FROM_0101 = "0.10.1";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.2.x}.
+     */
+    public static final String UPGRADE_FROM_0102 = "0.10.2";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.11.0.x}.
+     */
+    public static final String UPGRADE_FROM_0110 = "0.11.0";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.0.x}.
+     */
+    public static final String UPGRADE_FROM_10 = "1.0";
+
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.1.x}.
+     */
+    public static final String UPGRADE_FROM_11 = "1.1";
+
+    /**
+     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for at-least-once processing guarantees.
+     */
+    public static final String AT_LEAST_ONCE = "at_least_once";
+
+    /**
+     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for exactly-once processing guarantees.
+     */
+    public static final String EXACTLY_ONCE = "exactly_once";
+
+    /** {@code application.id} */
+    public static final String APPLICATION_ID_CONFIG = "application.id";
+    private static final String APPLICATION_ID_DOC = "An identifier for the stream processing application. Must be unique within the Kafka cluster. It is used as 1) the default client-id prefix, 2) the group-id for membership management, 3) the changelog topic prefix.";
+
+    /**{@code user.endpoint} */
+    public static final String APPLICATION_SERVER_CONFIG = "application.server";
+    private static final String APPLICATION_SERVER_DOC = "A host:port pair pointing to an embedded user defined endpoint that can be used for discovering the locations of state stores within a single KafkaStreams application";
+
+    /** {@code bootstrap.servers} */
+    public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
+
+    /** {@code buffered.records.per.partition} */
+    public static final String BUFFERED_RECORDS_PER_PARTITION_CONFIG = "buffered.records.per.partition";
+    private static final String BUFFERED_RECORDS_PER_PARTITION_DOC = "The maximum number of records to buffer per partition.";
+
+    /** {@code cache.max.bytes.buffering} */
+    public static final String CACHE_MAX_BYTES_BUFFERING_CONFIG = "cache.max.bytes.buffering";
+    private static final String CACHE_MAX_BYTES_BUFFERING_DOC = "Maximum number of memory bytes to be used for buffering across all threads";
+
+    /** {@code client.id} */
+    public static final String CLIENT_ID_CONFIG = CommonClientConfigs.CLIENT_ID_CONFIG;
+    private static final String CLIENT_ID_DOC = "An ID prefix string used for the client IDs of internal consumer, producer and restore-consumer," +
+        " with pattern '<client.id>-StreamThread-<threadSequenceNumber>-<consumer|producer|restore-consumer>'.";
+
+    /** {@code commit.interval.ms} */
+    public static final String COMMIT_INTERVAL_MS_CONFIG = "commit.interval.ms";
+    private static final String COMMIT_INTERVAL_MS_DOC = "The frequency with which to save the position of the processor." +
+        " (Note, if 'processing.guarantee' is set to '" + EXACTLY_ONCE + "', the default value is " + EOS_DEFAULT_COMMIT_INTERVAL_MS + "," +
+        " otherwise the default value is " + DEFAULT_COMMIT_INTERVAL_MS + ".";
+
+    /** {@code connections.max.idle.ms} */
+    public static final String CONNECTIONS_MAX_IDLE_MS_CONFIG = CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG;
+
+    /**
+     * {@code default.deserialization.exception.handler}
+     */
+    public static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.deserialization.exception.handler";
+    private static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.DeserializationExceptionHandler</code> interface.";
+
+    /**
+     * {@code default.production.exception.handler}
+     */
+    public static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.production.exception.handler";
+    private static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.ProductionExceptionHandler</code> interface.";
+
+    /**
+     * {@code default.windowed.key.serde.inner}
+     */
+    public static final String DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS = "default.windowed.key.serde.inner";
+
+    /**
+     * {@code default.windowed.value.serde.inner}
+     */
+    public static final String DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS = "default.windowed.value.serde.inner";
+
+    /** {@code default key.serde} */
+    public static final String DEFAULT_KEY_SERDE_CLASS_CONFIG = "default.key.serde";
+    private static final String DEFAULT_KEY_SERDE_CLASS_DOC = " Default serializer / deserializer class for key that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
+            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
+            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
+
+    /** {@code default value.serde} */
+    public static final String DEFAULT_VALUE_SERDE_CLASS_CONFIG = "default.value.serde";
+    private static final String DEFAULT_VALUE_SERDE_CLASS_DOC = "Default serializer / deserializer class for value that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
+            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
+            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
+
+    /** {@code default.timestamp.extractor} */
+    public static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG = "default.timestamp.extractor";
+    private static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC = "Default timestamp extractor class that implements the <code>org.apache.kafka.streams.processor.TimestampExtractor</code> interface.";
+
+    /** {@code metadata.max.age.ms} */
+    public static final String METADATA_MAX_AGE_CONFIG = CommonClientConfigs.METADATA_MAX_AGE_CONFIG;
+
+    /** {@code metrics.num.samples} */
+    public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;
+
+    /** {@code metrics.record.level} */
+    public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;
+
+    /** {@code metric.reporters} */
+    public static final String METRIC_REPORTER_CLASSES_CONFIG = CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG;
+
+    /** {@code metrics.sample.window.ms} */
+    public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
+
+    /** {@code num.standby.replicas} */
+    public static final String NUM_STANDBY_REPLICAS_CONFIG = "num.standby.replicas";
+    private static final String NUM_STANDBY_REPLICAS_DOC = "The number of standby replicas for each task.";
+
+    /** {@code num.stream.threads} */
+    public static final String NUM_STREAM_THREADS_CONFIG = "num.stream.threads";
+    private static final String NUM_STREAM_THREADS_DOC = "The number of threads to execute stream processing.";
+
+    /** {@code partition.grouper} */
+    public static final String PARTITION_GROUPER_CLASS_CONFIG = "partition.grouper";
+    private static final String PARTITION_GROUPER_CLASS_DOC = "Partition grouper class that implements the <code>org.apache.kafka.streams.processor.PartitionGrouper</code> interface.";
+
+    /** {@code poll.ms} */
+    public static final String POLL_MS_CONFIG = "poll.ms";
+    private static final String POLL_MS_DOC = "The amount of time in milliseconds to block waiting for input.";
+
+    /** {@code processing.guarantee} */
+    public static final String PROCESSING_GUARANTEE_CONFIG = "processing.guarantee";
+    private static final String PROCESSING_GUARANTEE_DOC = "The processing guarantee that should be used. Possible values are <code>" + AT_LEAST_ONCE + "</code> (default) and <code>" + EXACTLY_ONCE + "</code>. " +
+        "Note that exactly-once processing requires a cluster of at least three brokers by default what is the recommended setting for production; for development you can change this, by adjusting broker setting `transaction.state.log.replication.factor`.";
+
+    /** {@code receive.buffer.bytes} */
+    public static final String RECEIVE_BUFFER_CONFIG = CommonClientConfigs.RECEIVE_BUFFER_CONFIG;
+
+    /** {@code reconnect.backoff.ms} */
+    public static final String RECONNECT_BACKOFF_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MS_CONFIG;
+
+    /** {@code reconnect.backoff.max} */
+    public static final String RECONNECT_BACKOFF_MAX_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_CONFIG;
+
+    /** {@code replication.factor} */
+    public static final String REPLICATION_FACTOR_CONFIG = "replication.factor";
+    private static final String REPLICATION_FACTOR_DOC = "The replication factor for change log topics and repartition topics created by the stream processing application.";
+
+    /** {@code request.timeout.ms} */
+    public static final String REQUEST_TIMEOUT_MS_CONFIG = CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG;
+
+    /** {@code retries} */
+    public static final String RETRIES_CONFIG = CommonClientConfigs.RETRIES_CONFIG;
+
+    /** {@code retry.backoff.ms} */
+    public static final String RETRY_BACKOFF_MS_CONFIG = CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG;
+
+    /** {@code rocksdb.config.setter} */
+    public static final String ROCKSDB_CONFIG_SETTER_CLASS_CONFIG = "rocksdb.config.setter";
+    private static final String ROCKSDB_CONFIG_SETTER_CLASS_DOC = "A Rocks DB config setter class or class name that implements the <code>org.apache.kafka.streams.state.RocksDBConfigSetter</code> interface";
+
+    /** {@code security.protocol} */
+    public static final String SECURITY_PROTOCOL_CONFIG = CommonClientConfigs.SECURITY_PROTOCOL_CONFIG;
+
+    /** {@code send.buffer.bytes} */
+    public static final String SEND_BUFFER_CONFIG = CommonClientConfigs.SEND_BUFFER_CONFIG;
+
+    /** {@code state.cleanup.delay} */
+    public static final String STATE_CLEANUP_DELAY_MS_CONFIG = "state.cleanup.delay.ms";
+    private static final String STATE_CLEANUP_DELAY_MS_DOC = "The amount of time in milliseconds to wait before deleting state when a partition has migrated. Only state directories that have not been modified for at least state.cleanup.delay.ms will be removed";
+
+    /** {@code state.dir} */
+    public static final String STATE_DIR_CONFIG = "state.dir";
+    private static final String STATE_DIR_DOC = "Directory location for state store.";
+
+    /** {@code upgrade.from} */
+    public static final String UPGRADE_FROM_CONFIG = "upgrade.from";
+    public static final String UPGRADE_FROM_DOC = "Allows upgrading from versions 0.10.0/0.10.1/0.10.2/0.11.0/1.0/1.1 to version 1.2 (or newer) in a backward compatible way. " +
+        "When upgrading from 1.2 to a newer version it is not required to specify this config." +
+        "Default is null. Accepted values are \"" + UPGRADE_FROM_0100 + "\", \"" + UPGRADE_FROM_0101 + "\", \"" + UPGRADE_FROM_0102 + "\", \"" + UPGRADE_FROM_0110 + "\", \"" + UPGRADE_FROM_10 + "\", \"" + UPGRADE_FROM_11 + "\" (for upgrading from the corresponding old version).";
+
+    /** {@code windowstore.changelog.additional.retention.ms} */
+    public static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG = "windowstore.changelog.additional.retention.ms";
+    private static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC = "Added to a windows maintainMs to ensure data is not deleted from the log prematurely. Allows for clock drift. Default is 1 day";
+
+    private static final String[] NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS = new String[] {ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG};
+    private static final String[] NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS = new String[] {ConsumerConfig.ISOLATION_LEVEL_CONFIG};
+    private static final String[] NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS = new String[] {ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG,
+                                                                                        ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION};
+
+    static {
+        CONFIG = new ConfigDef()
+
+            // HIGH
+
+            .define(APPLICATION_ID_CONFIG, // required with no default value
+                    Type.STRING,
+                    Importance.HIGH,
+                    APPLICATION_ID_DOC)
+            .define(BOOTSTRAP_SERVERS_CONFIG, // required with no default value
+                    Type.LIST,
+                    Importance.HIGH,
+                    CommonClientConfigs.BOOTSTRAP_SERVERS_DOC)
+            .define(REPLICATION_FACTOR_CONFIG,
+                    Type.INT,
+                    1,
+                    Importance.HIGH,
+                    REPLICATION_FACTOR_DOC)
+            .define(STATE_DIR_CONFIG,
+                    Type.STRING,
+                    "/tmp/kafka-streams",
+                    Importance.HIGH,
+                    STATE_DIR_DOC)
+
+            // MEDIUM
+
+            .define(CACHE_MAX_BYTES_BUFFERING_CONFIG,
+                    Type.LONG,
+                    10 * 1024 * 1024L,
+                    atLeast(0),
+                    Importance.MEDIUM,
+                    CACHE_MAX_BYTES_BUFFERING_DOC)
+            .define(CLIENT_ID_CONFIG,
+                    Type.STRING,
+                    "",
+                    Importance.MEDIUM,
+                    CLIENT_ID_DOC)
+            .define(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                    Type.CLASS,
+                    LogAndFailExceptionHandler.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC)
+            .define(DEFAULT_KEY_SERDE_CLASS_CONFIG,
+                    Type.CLASS,
+                    Serdes.ByteArraySerde.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_KEY_SERDE_CLASS_DOC)
+            .define(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                    Type.CLASS,
+                    DefaultProductionExceptionHandler.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC)
+            .define(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG,
+                    Type.CLASS,
+                    FailOnInvalidTimestamp.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC)
+            .define(DEFAULT_VALUE_SERDE_CLASS_CONFIG,
+                    Type.CLASS,
+                    Serdes.ByteArraySerde.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_VALUE_SERDE_CLASS_DOC)
+            .define(NUM_STANDBY_REPLICAS_CONFIG,
+                    Type.INT,
+                    0,
+                    Importance.MEDIUM,
+                    NUM_STANDBY_REPLICAS_DOC)
+            .define(NUM_STREAM_THREADS_CONFIG,
+                    Type.INT,
+                    1,
+                    Importance.MEDIUM,
+                    NUM_STREAM_THREADS_DOC)
+            .define(PROCESSING_GUARANTEE_CONFIG,
+                    Type.STRING,
+                    AT_LEAST_ONCE,
+                    in(AT_LEAST_ONCE, EXACTLY_ONCE),
+                    Importance.MEDIUM,
+                    PROCESSING_GUARANTEE_DOC)
+            .define(SECURITY_PROTOCOL_CONFIG,
+                    Type.STRING,
+                    CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
+                    Importance.MEDIUM,
+                    CommonClientConfigs.SECURITY_PROTOCOL_DOC)
+
+            // LOW
+
+            .define(APPLICATION_SERVER_CONFIG,
+                    Type.STRING,
+                    "",
+                    Importance.LOW,
+                    APPLICATION_SERVER_DOC)
+            .define(BUFFERED_RECORDS_PER_PARTITION_CONFIG,
+                    Type.INT,
+                    1000,
+                    Importance.LOW,
+                    BUFFERED_RECORDS_PER_PARTITION_DOC)
+            .define(COMMIT_INTERVAL_MS_CONFIG,
+                    Type.LONG,
+                    DEFAULT_COMMIT_INTERVAL_MS,
+                    Importance.LOW,
+                    COMMIT_INTERVAL_MS_DOC)
+            .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
+                    ConfigDef.Type.LONG,
+                    9 * 60 * 1000L,
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
+            .define(METADATA_MAX_AGE_CONFIG,
+                    ConfigDef.Type.LONG,
+                    5 * 60 * 1000L,
+                    atLeast(0),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.METADATA_MAX_AGE_DOC)
+            .define(METRICS_NUM_SAMPLES_CONFIG,
+                    Type.INT,
+                    2,
+                    atLeast(1),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_NUM_SAMPLES_DOC)
+            .define(METRIC_REPORTER_CLASSES_CONFIG,
+                    Type.LIST,
+                    "",
+                    Importance.LOW,
+                    CommonClientConfigs.METRIC_REPORTER_CLASSES_DOC)
+            .define(METRICS_RECORDING_LEVEL_CONFIG,
+                    Type.STRING,
+                    Sensor.RecordingLevel.INFO.toString(),
+                    in(Sensor.RecordingLevel.INFO.toString(), Sensor.RecordingLevel.DEBUG.toString()),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_RECORDING_LEVEL_DOC)
+            .define(METRICS_SAMPLE_WINDOW_MS_CONFIG,
+                    Type.LONG,
+                    30000L,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_DOC)
+            .define(PARTITION_GROUPER_CLASS_CONFIG,
+                    Type.CLASS,
+                    DefaultPartitionGrouper.class.getName(),
+                    Importance.LOW,
+                    PARTITION_GROUPER_CLASS_DOC)
+            .define(POLL_MS_CONFIG,
+                    Type.LONG,
+                    100L,
+                    Importance.LOW,
+                    POLL_MS_DOC)
+            .define(RECEIVE_BUFFER_CONFIG,
+                    Type.INT,
+                    32 * 1024,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.RECEIVE_BUFFER_DOC)
+            .define(RECONNECT_BACKOFF_MS_CONFIG,
+                    Type.LONG,
+                    50L,
+                    atLeast(0L),
+                    Importance.LOW,
+                    CommonClientConfigs.RECONNECT_BACKOFF_MS_DOC)
+            .define(RECONNECT_BACKOFF_MAX_MS_CONFIG,
+                    Type.LONG,
+                    1000L,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
+            .define(RETRIES_CONFIG,
+                    Type.INT,
+                    0,
+                    between(0, Integer.MAX_VALUE),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RETRIES_DOC)
+            .define(RETRY_BACKOFF_MS_CONFIG,
+                    Type.LONG,
+                    100L,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RETRY_BACKOFF_MS_DOC)
+            .define(REQUEST_TIMEOUT_MS_CONFIG,
+                    Type.INT,
+                    40 * 1000,
+                    atLeast(0),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.REQUEST_TIMEOUT_MS_DOC)
+            .define(ROCKSDB_CONFIG_SETTER_CLASS_CONFIG,
+                    Type.CLASS,
+                    null,
+                    Importance.LOW,
+                    ROCKSDB_CONFIG_SETTER_CLASS_DOC)
+            .define(SEND_BUFFER_CONFIG,
+                    Type.INT,
+                    128 * 1024,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.SEND_BUFFER_DOC)
+            .define(STATE_CLEANUP_DELAY_MS_CONFIG,
+                    Type.LONG,
+                    10 * 60 * 1000L,
+                    Importance.LOW,
+                    STATE_CLEANUP_DELAY_MS_DOC)
+            .define(UPGRADE_FROM_CONFIG,
+                    ConfigDef.Type.STRING,
+                    null,
+                    in(null, UPGRADE_FROM_0100, UPGRADE_FROM_0101, UPGRADE_FROM_0102, UPGRADE_FROM_0110, UPGRADE_FROM_10, UPGRADE_FROM_11),
+                    Importance.LOW,
+                    UPGRADE_FROM_DOC)
+            .define(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG,
+                    Type.LONG,
+                    24 * 60 * 60 * 1000L,
+                    Importance.LOW,
+                    WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC);
+    }
+
+    // this is the list of configs for underlying clients
+    // that streams prefer different default values
+    private static final Map<String, Object> PRODUCER_DEFAULT_OVERRIDES;
+    static {
+        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>();
+        tempProducerDefaultOverrides.put(ProducerConfig.LINGER_MS_CONFIG, "100");
+        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, 10);
+
+        PRODUCER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> PRODUCER_EOS_OVERRIDES;
+    static {
+        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>(PRODUCER_DEFAULT_OVERRIDES);
+        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
+        tempProducerDefaultOverrides.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        PRODUCER_EOS_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> CONSUMER_DEFAULT_OVERRIDES;
+    static {
+        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>();
+        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1000");
+        tempConsumerDefaultOverrides.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        tempConsumerDefaultOverrides.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        tempConsumerDefaultOverrides.put("internal.leave.group.on.close", false);
+        // MAX_POLL_INTERVAL_MS_CONFIG needs to be large for streams to handle cases when
+        // streams is recovering data from state stores. We may set it to Integer.MAX_VALUE since
+        // the streams code itself catches most exceptions and acts accordingly without needing
+        // this timeout. Note however that deadlocks are not detected (by definition) so we
+        // are losing the ability to detect them by setting this value to large. Hopefully
+        // deadlocks happen very rarely or never.
+        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
+        CONSUMER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> CONSUMER_EOS_OVERRIDES;
+    static {
+        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>(CONSUMER_DEFAULT_OVERRIDES);
+        tempConsumerDefaultOverrides.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, READ_COMMITTED.name().toLowerCase(Locale.ROOT));
+        CONSUMER_EOS_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
+    }
+
+    public static class InternalConfig {
+        public static final String TASK_MANAGER_FOR_PARTITION_ASSIGNOR = "__task.manager.instance__";
+    }
+
+    /**
+     * Prefix a property with {@link #CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String consumerPrefix(final String consumerProp) {
+        return CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #MAIN_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig main consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #MAIN_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String mainConsumerPrefix(final String consumerProp) {
+        return MAIN_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #RESTORE_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig restore consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #RESTORE_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String restoreConsumerPrefix(final String consumerProp) {
+        return RESTORE_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #GLOBAL_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig global consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #GLOBAL_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String globalConsumerPrefix(final String consumerProp) {
+        return GLOBAL_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #PRODUCER_PREFIX}. This is used to isolate {@link ProducerConfig producer configs}
+     * from other client configs.
+     *
+     * @param producerProp the producer property to be masked
+     * @return PRODUCER_PREFIX + {@code producerProp}
+     */
+    public static String producerPrefix(final String producerProp) {
+        return PRODUCER_PREFIX + producerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #ADMIN_CLIENT_PREFIX}. This is used to isolate {@link AdminClientConfig admin configs}
+     * from other client configs.
+     *
+     * @param adminClientProp the admin client property to be masked
+     * @return ADMIN_CLIENT_PREFIX + {@code adminClientProp}
+     */
+    public static String adminClientPrefix(final String adminClientProp) {
+        return ADMIN_CLIENT_PREFIX + adminClientProp;
+    }
+
+    /**
+     * Prefix a property with {@link #TOPIC_PREFIX}
+     * used to provide default topic configs to be applied when creating internal topics.
+     *
+     * @param topicProp the topic property to be masked
+     * @return TOPIC_PREFIX + {@code topicProp}
+     */
+    public static String topicPrefix(final String topicProp) {
+        return TOPIC_PREFIX + topicProp;
+    }
+
+    /**
+     * Return a copy of the config definition.
+     *
+     * @return a copy of the config definition
+     */
+    public static ConfigDef configDef() {
+        return new ConfigDef(CONFIG);
+    }
+
+    /**
+     * Create a new {@code StreamsConfig} using the given properties.
+     *
+     * @param props properties that specify Kafka Streams and internal consumer/producer configuration
+     */
+    public StreamsConfig(final Map<?, ?> props) {
+        super(CONFIG, props);
+        eosEnabled = EXACTLY_ONCE.equals(getString(PROCESSING_GUARANTEE_CONFIG));
     }
 
     @Override
-    protected void run(String[] args) throws Exception {
-        boolean isPyspark = false;
-        Configuration actionConf = loadActionConf();
-        prepareHadoopConfig(actionConf);
+    protected Map<String, Object> postProcessParsedConfig(final Map<String, Object> parsedValues) {
+        final Map<String, Object> configUpdates =
+            CommonClientConfigs.postProcessReconnectBackoffConfigs(this, parsedValues);
 
-        setYarnTag(actionConf);
-        LauncherMainHadoopUtils.killChildYarnJobs(actionConf);
-        String logFile = setUpSparkLog4J(actionConf);
-        List<String> sparkArgs = new ArrayList<String>();
-
-        sparkArgs.add(MASTER_OPTION);
-        String master = actionConf.get(SparkActionExecutor.SPARK_MASTER);
-        sparkArgs.add(master);
-
-        // In local mode, everything runs here in the Launcher Job.
-        // In yarn-client mode, the driver runs here in the Launcher Job and the
-        // executor in Yarn.
-        // In yarn-cluster mode, the driver and executor run in Yarn.
-        String sparkDeployMode = actionConf.get(SparkActionExecutor.SPARK_MODE);
-        if (sparkDeployMode != null) {
-            sparkArgs.add(MODE_OPTION);
-            sparkArgs.add(sparkDeployMode);
-        }
-        boolean yarnClusterMode = master.equals("yarn-cluster")
-                || (master.equals("yarn") && sparkDeployMode != null && sparkDeployMode.equals("cluster"));
-        boolean yarnClientMode = master.equals("yarn-client")
-                || (master.equals("yarn") && sparkDeployMode != null && sparkDeployMode.equals("client"));
-
-        sparkArgs.add(JOB_NAME_OPTION);
-        sparkArgs.add(actionConf.get(SparkActionExecutor.SPARK_JOB_NAME));
-
-        String className = actionConf.get(SparkActionExecutor.SPARK_CLASS);
-        if (className != null) {
-            sparkArgs.add(CLASS_NAME_OPTION);
-            sparkArgs.add(className);
+        final boolean eosEnabled = EXACTLY_ONCE.equals(parsedValues.get(PROCESSING_GUARANTEE_CONFIG));
+        if (eosEnabled && !originals().containsKey(COMMIT_INTERVAL_MS_CONFIG)) {
+            log.debug("Using {} default value of {} as exactly once is enabled.",
+                    COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
+            configUpdates.put(COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
         }
 
-        appendOoziePropertiesToSparkConf(sparkArgs, actionConf);
-
-        String jarPath = actionConf.get(SparkActionExecutor.SPARK_JAR);
-        if(jarPath!=null && jarPath.endsWith(".py")){
-            isPyspark = true;
-        }
-        boolean addedHiveSecurityToken = false;
-        boolean addedHBaseSecurityToken = false;
-        boolean addedLog4jDriverSettings = false;
-        boolean addedLog4jExecutorSettings = false;
-        StringBuilder driverClassPath = new StringBuilder();
-        StringBuilder executorClassPath = new StringBuilder();
-        String sparkOpts = actionConf.get(SparkActionExecutor.SPARK_OPTS);
-        if (StringUtils.isNotEmpty(sparkOpts)) {
-            List<String> sparkOptions = splitSparkOpts(sparkOpts);
-            for (int i = 0; i < sparkOptions.size(); i++) {
-                String opt = sparkOptions.get(i);
-                boolean addToSparkArgs = true;
-                if (yarnClusterMode || yarnClientMode) {
-                    if (opt.startsWith(EXECUTOR_CLASSPATH)) {
-                        appendWithPathSeparator(opt.substring(EXECUTOR_CLASSPATH.length()), executorClassPath);
-                        addToSparkArgs = false;
-                    }
-                    if (opt.startsWith(DRIVER_CLASSPATH)) {
-                        appendWithPathSeparator(opt.substring(DRIVER_CLASSPATH.length()), driverClassPath);
-                        addToSparkArgs = false;
-                    }
-                    if (opt.equals(DRIVER_CLASSPATH_OPTION)) {
-                        // we need the next element after this option
-                        appendWithPathSeparator(sparkOptions.get(i + 1), driverClassPath);
-                        // increase i to skip the next element.
-                        i++;
-                        addToSparkArgs = false;
-                    }
-                }
-                if (opt.startsWith(HIVE_SECURITY_TOKEN)) {
-                    addedHiveSecurityToken = true;
-                }
-                if (opt.startsWith(HBASE_SECURITY_TOKEN)) {
-                    addedHBaseSecurityToken = true;
-                }
-                if (opt.startsWith(EXECUTOR_EXTRA_JAVA_OPTIONS) || opt.startsWith(DRIVER_EXTRA_JAVA_OPTIONS)) {
-                    if(!opt.contains(LOG4J_CONFIGURATION_JAVA_OPTION)) {
-                        opt += " " + LOG4J_CONFIGURATION_JAVA_OPTION + SPARK_LOG4J_PROPS;
-                    }else{
-                        System.out.println("Warning: Spark Log4J settings are overwritten." +
-                                " Child job IDs may not be available");
-                    }
-                    if(opt.startsWith(EXECUTOR_EXTRA_JAVA_OPTIONS)) {
-                        addedLog4jExecutorSettings = true;
-                    }else{
-                        addedLog4jDriverSettings = true;
-                    }
-                }
-                if(addToSparkArgs) {
-                    sparkArgs.add(opt);
-                }
-            }
-        }
-
-        if ((yarnClusterMode || yarnClientMode)) {
-            // Include the current working directory (of executor container)
-            // in executor classpath, because it will contain localized
-            // files
-            appendWithPathSeparator(PWD, executorClassPath);
-            appendWithPathSeparator(PWD, driverClassPath);
-
-            sparkArgs.add("--conf");
-            sparkArgs.add(EXECUTOR_CLASSPATH + executorClassPath.toString());
-
-            sparkArgs.add("--conf");
-            sparkArgs.add(DRIVER_CLASSPATH + driverClassPath.toString());
-        }
-
-        if (actionConf.get(MAPREDUCE_JOB_TAGS) != null) {
-            sparkArgs.add("--conf");
-            sparkArgs.add("spark.yarn.tags=" + actionConf.get(MAPREDUCE_JOB_TAGS));
-        }
-
-        if (!addedHiveSecurityToken) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(HIVE_SECURITY_TOKEN + "=false");
-        }
-        if (!addedHBaseSecurityToken) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(HBASE_SECURITY_TOKEN + "=false");
-        }
-        if(!addedLog4jExecutorSettings) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(EXECUTOR_EXTRA_JAVA_OPTIONS + LOG4J_CONFIGURATION_JAVA_OPTION + SPARK_LOG4J_PROPS);
-        }
-        if(!addedLog4jDriverSettings) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(DRIVER_EXTRA_JAVA_OPTIONS + LOG4J_CONFIGURATION_JAVA_OPTION + SPARK_LOG4J_PROPS);
-        }
-        File defaultConfFile = getMatchingFile(SPARK_DEFAULTS_FILE_PATTERN);
-        if (defaultConfFile != null) {
-            sparkArgs.add("--properties-file");
-            sparkArgs.add(SPARK_DEFAULTS_FILE_PATTERN.toString());
-        }
-
-        if ((yarnClusterMode || yarnClientMode)) {
-            LinkedList<URI> fixedUris = fixFsDefaultUris(DistributedCache.getCacheFiles(actionConf));
-            JarFilter jarfilter = new JarFilter(fixedUris, jarPath);
-            jarfilter.filter();
-            jarPath = jarfilter.getApplicationJar();
-            fixedUris.add(new Path(SPARK_LOG4J_PROPS).toUri());
-            String cachedFiles = StringUtils.join(fixedUris, ",");
-            if (cachedFiles != null && !cachedFiles.isEmpty()) {
-                sparkArgs.add("--files");
-                sparkArgs.add(cachedFiles);
-            }
-            fixedUris = fixFsDefaultUris(DistributedCache.getCacheArchives(actionConf));
-            String cachedArchives = StringUtils.join(fixedUris, ",");
-            if (cachedArchives != null && !cachedArchives.isEmpty()) {
-                sparkArgs.add("--archives");
-                sparkArgs.add(cachedArchives);
-            }
-            setSparkYarnJarsConf(sparkArgs, jarfilter.getSparkYarnJar(), jarfilter.getSparkVersion());
-        }
-
-        if (!sparkArgs.contains(VERBOSE_OPTION)) {
-            sparkArgs.add(VERBOSE_OPTION);
-        }
-
-        sparkArgs.add(jarPath);
-        for (String arg : args) {
-            sparkArgs.add(arg);
-        }
-        if (isPyspark){
-            createPySparkLibFolder();
-        }
-
-
-        System.out.println("Spark Action Main class        : " + SparkSubmit.class.getName());
-        System.out.println();
-        System.out.println("Oozie Spark action configuration");
-        System.out.println("=================================================================");
-        System.out.println();
-        for (String arg : sparkArgs) {
-            System.out.println("                    " + arg);
-        }
-        System.out.println();
-        try {
-            runSpark(sparkArgs.toArray(new String[sparkArgs.size()]));
-        }
-        finally {
-            System.out.println("\n<<< Invocation of Spark command completed <<<\n");
-            writeExternalChildIDs(logFile, SPARK_JOB_IDS_PATTERNS, "Spark");
-        }
+        return configUpdates;
     }
 
-    private void prepareHadoopConfig(Configuration actionConf) throws IOException {
-        // Copying oozie.action.conf.xml into hadoop configuration *-site files.
-        if (actionConf.getBoolean(CONF_OOZIE_SPARK_SETUP_HADOOP_CONF_DIR, false)) {
-            String actionXml = System.getProperty("oozie.action.conf.xml");
-            if (actionXml != null) {
-                File currentDir = new File(actionXml).getParentFile();
-                writeHadoopConfig(actionXml, currentDir);
+    private Map<String, Object> getCommonConsumerConfigs() {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(CONSUMER_PREFIX, ConsumerConfig.configNames());
+
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS);
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS);
+
+        final Map<String, Object> consumerProps = new HashMap<>(eosEnabled ? CONSUMER_EOS_OVERRIDES : CONSUMER_DEFAULT_OVERRIDES);
+        consumerProps.putAll(getClientCustomProps());
+        consumerProps.putAll(clientProvidedProps);
+
+        // bootstrap.servers should be from StreamsConfig
+        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
+
+        return consumerProps;
+    }
+
+    private void checkIfUnexpectedUserSpecifiedConsumerConfig(final Map<String, Object> clientProvidedProps, final String[] nonConfigurableConfigs) {
+        // Streams does not allow users to configure certain consumer/producer configurations, for example,
+        // enable.auto.commit. In cases where user tries to override such non-configurable
+        // consumer/producer configurations, log a warning and remove the user defined value from the Map.
+        // Thus the default values for these consumer/producer configurations that are suitable for
+        // Streams will be used instead.
+        final Object maxInflightRequests = clientProvidedProps.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
+        if (eosEnabled && maxInflightRequests != null && 5 < (int) maxInflightRequests) {
+            throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + " can't exceed 5 when using the idempotent producer");
+        }
+        for (final String config: nonConfigurableConfigs) {
+            if (clientProvidedProps.containsKey(config)) {
+                final String eosMessage =  PROCESSING_GUARANTEE_CONFIG + " is set to " + EXACTLY_ONCE + ". Hence, ";
+                final String nonConfigurableConfigMessage = "Unexpected user-specified %s config: %s found. %sUser setting (%s) will be ignored and the Streams default setting (%s) will be used ";
+
+                if (CONSUMER_DEFAULT_OVERRIDES.containsKey(config)) {
+                    if (!clientProvidedProps.get(config).equals(CONSUMER_DEFAULT_OVERRIDES.get(config))) {
+                        log.warn(String.format(nonConfigurableConfigMessage, "consumer", config, "", clientProvidedProps.get(config),  CONSUMER_DEFAULT_OVERRIDES.get(config)));
+                        clientProvidedProps.remove(config);
+                    }
+                } else if (eosEnabled) {
+                    if (CONSUMER_EOS_OVERRIDES.containsKey(config)) {
+                        if (!clientProvidedProps.get(config).equals(CONSUMER_EOS_OVERRIDES.get(config))) {
+                            log.warn(String.format(nonConfigurableConfigMessage,
+                                    "consumer", config, eosMessage, clientProvidedProps.get(config), CONSUMER_EOS_OVERRIDES.get(config)));
+                            clientProvidedProps.remove(config);
+                        }
+                    } else if (PRODUCER_EOS_OVERRIDES.containsKey(config)) {
+                        if (!clientProvidedProps.get(config).equals(PRODUCER_EOS_OVERRIDES.get(config))) {
+                            log.warn(String.format(nonConfigurableConfigMessage,
+                                    "producer", config, eosMessage, clientProvidedProps.get(config), PRODUCER_EOS_OVERRIDES.get(config)));
+                            clientProvidedProps.remove(config);
+                        }
+                    }
+                }
             }
+
         }
     }
 
     /**
-     * SparkActionExecutor sets the SPARK_HOME environment variable to the local directory.
-     * Spark is looking for the pyspark.zip and py4j-VERSION-src.zip files in the python/lib folder under SPARK_HOME.
-     * This function creates the subfolders and copies the zips from the local folder.
-     * @throws OozieActionConfiguratorException  if the zip files are missing
-     * @throws IOException if there is an error during file copy
-     */
-    private void createPySparkLibFolder() throws OozieActionConfiguratorException, IOException {
-        File pythonLibDir = new File("python/lib");
-        if(!pythonLibDir.exists()){
-            pythonLibDir.mkdirs();
-            System.out.println("PySpark lib folder " + pythonLibDir.getAbsolutePath() + " folder created.");
-        }
-
-        for(Pattern fileNamePattern : PYSPARK_DEP_FILE_PATTERN) {
-            File file = getMatchingPyFile(fileNamePattern);
-            File destination = new File(pythonLibDir, file.getName());
-            FileUtils.copyFile(file, destination);
-            System.out.println("Copied " + file + " to " + destination.getAbsolutePath());
-        }
-    }
-
-    /**
-     * Searches for a file in the current directory that matches the given pattern.
-     * If there are multiple files matching the pattern returns one of them.
-     * @param fileNamePattern the pattern to look for
-     * @return the file if there is one
-     * @throws OozieActionConfiguratorException if there is are no files matching the pattern
-     */
-    private File getMatchingPyFile(Pattern fileNamePattern) throws OozieActionConfiguratorException {
-        File f = getMatchingFile(fileNamePattern);
-        if (f != null) {
-            return f;
-        }
-        throw new OozieActionConfiguratorException("Missing py4j and/or pyspark zip files. Please add them to "
-                + "the lib folder or to the Spark sharelib.");
-    }
-
-    /**
-     * Searches for a file in the current directory that matches the given
-     * pattern. If there are multiple files matching the pattern returns one of
-     * them.
+     * Get the configs to the {@link KafkaConsumer consumer}.
+     * Properties using the prefix {@link #CONSUMER_PREFIX} will be used in favor over their non-prefixed versions
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
      *
-     * @param fileNamePattern the pattern to look for
-     * @return the file if there is one else it returns null
+     * @param groupId      consumer groupId
+     * @param clientId     clientId
+     * @return Map of the consumer configuration.
+     * @Deprecated use {@link StreamsConfig#getMainConsumerConfigs(String, String)}
      */
-    private static File getMatchingFile(Pattern fileNamePattern) throws OozieActionConfiguratorException {
-        File localDir = new File(".");
-        for(String fileName : localDir.list()){
-            if(fileNamePattern.matcher(fileName).find()){
-                return new File(fileName);
-            }
-        }
-        return null;
-    }
-
-    private void runSpark(String[] args) throws Exception {
-        System.out.println("=================================================================");
-        System.out.println();
-        System.out.println(">>> Invoking Spark class now >>>");
-        System.out.println();
-        System.out.flush();
-        SparkSubmit.main(args);
+    @Deprecated
+    public Map<String, Object> getConsumerConfigs(final String groupId,
+                                                  final String clientId) {
+        return getMainConsumerConfigs(groupId, clientId);
     }
 
     /**
-     * Converts the options to be Spark-compatible.
-     * <ul>
-     *     <li>Parameters are separated by whitespace and can be groupped using double quotes</li>
-     *     <li>Quotes should be removed</li>
-     *     <li>Adjacent whitespace separators are treated as one</li>
-     * </ul>
-     * @param sparkOpts the options for Spark
-     * @return the options parsed into a list
+     * Get the configs to the {@link KafkaConsumer main consumer}.
+     * Properties using the prefix {@link #MAIN_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #MAIN_CONSUMER_PREFIX)
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #MAIN_CONSUMER_PREFIX}, main consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param groupId      consumer groupId
+     * @param clientId     clientId
+     * @return Map of the consumer configuration.
      */
-    static List<String> splitSparkOpts(String sparkOpts){
-        List<String> result = new ArrayList<String>();
-        StringBuilder currentWord = new StringBuilder();
-        boolean insideQuote = false;
-        for (int i = 0; i < sparkOpts.length(); i++) {
-            char c = sparkOpts.charAt(i);
-            if (c == '"') {
-                insideQuote = !insideQuote;
-            } else if (Character.isWhitespace(c) && !insideQuote) {
-                if (currentWord.length() > 0) {
-                    result.add(currentWord.toString());
-                    currentWord.setLength(0);
-                }
+    public Map<String, Object> getMainConsumerConfigs(final String groupId,
+                                                      final String clientId) {
+        Map<String, Object> consumerProps = getCommonConsumerConfigs();
+
+        // Get main consumer override configs
+        Map<String, Object> mainConsumerProps = originalsWithPrefix(MAIN_CONSUMER_PREFIX);
+        for (Map.Entry<String, Object> entry: mainConsumerProps.entrySet()) {
+            consumerProps.put(entry.getKey(), entry.getValue());
+        }
+
+        // add client id with stream client id prefix, and group id
+        consumerProps.put(APPLICATION_ID_CONFIG, groupId);
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        consumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-consumer");
+
+        // add configs required for stream partition assignor
+        consumerProps.put(UPGRADE_FROM_CONFIG, getString(UPGRADE_FROM_CONFIG));
+        consumerProps.put(REPLICATION_FACTOR_CONFIG, getInt(REPLICATION_FACTOR_CONFIG));
+        consumerProps.put(APPLICATION_SERVER_CONFIG, getString(APPLICATION_SERVER_CONFIG));
+        consumerProps.put(NUM_STANDBY_REPLICAS_CONFIG, getInt(NUM_STANDBY_REPLICAS_CONFIG));
+        consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, StreamsPartitionAssignor.class.getName());
+        consumerProps.put(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG, getLong(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG));
+
+        // add admin retries configs for creating topics
+        final AdminClientConfig adminClientDefaultConfig = new AdminClientConfig(getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames()));
+        consumerProps.put(adminClientPrefix(AdminClientConfig.RETRIES_CONFIG), adminClientDefaultConfig.getInt(AdminClientConfig.RETRIES_CONFIG));
+
+        // verify that producer batch config is no larger than segment size, then add topic configs required for creating topics
+        final Map<String, Object> topicProps = originalsWithPrefix(TOPIC_PREFIX, false);
+
+        if (topicProps.containsKey(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG))) {
+            final int segmentSize = Integer.parseInt(topicProps.get(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG)).toString());
+            final Map<String, Object> producerProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
+            final int batchSize;
+            if (producerProps.containsKey(ProducerConfig.BATCH_SIZE_CONFIG)) {
+                batchSize = Integer.parseInt(producerProps.get(ProducerConfig.BATCH_SIZE_CONFIG).toString());
             } else {
-                currentWord.append(c);
+                final ProducerConfig producerDefaultConfig = new ProducerConfig(new Properties());
+                batchSize = producerDefaultConfig.getInt(ProducerConfig.BATCH_SIZE_CONFIG);
+            }
+
+            if (segmentSize < batchSize) {
+                throw new IllegalArgumentException(String.format("Specified topic segment size %d is is smaller than the configured producer batch size %d, this will cause produced batch not able to be appended to the topic",
+                        segmentSize,
+                        batchSize));
             }
         }
-        if(currentWord.length()>0) {
-            result.add(currentWord.toString());
-        }
-        return result;
+
+        consumerProps.putAll(topicProps);
+
+        return consumerProps;
     }
 
-    public static String setUpSparkLog4J(Configuration distcpConf) throws IOException {
-        // Logfile to capture job IDs
-        String hadoopJobId = System.getProperty("oozie.launcher.job.id");
-        if (hadoopJobId == null) {
-            throw new RuntimeException("Launcher Hadoop Job ID system,property not set");
+    /**
+     * Get the configs for the {@link KafkaConsumer restore-consumer}.
+     * Properties using the prefix {@link #RESTORE_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #RESTORE_CONSUMER_PREFIX)
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #RESTORE_CONSUMER_PREFIX}, restore consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param clientId clientId
+     * @return Map of the restore consumer configuration.
+     */
+    public Map<String, Object> getRestoreConsumerConfigs(final String clientId) {
+        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
+
+        // Get restore consumer override configs
+        Map<String, Object> restoreConsumerProps = originalsWithPrefix(RESTORE_CONSUMER_PREFIX);
+        for (Map.Entry<String, Object> entry: restoreConsumerProps.entrySet()) {
+            baseConsumerProps.put(entry.getKey(), entry.getValue());
         }
-        String logFile = new File("spark-oozie-" + hadoopJobId + ".log").getAbsolutePath();
-        Properties hadoopProps = new Properties();
 
-        // Preparing log4j configuration
-        URL log4jFile = Thread.currentThread().getContextClassLoader().getResource("log4j.properties");
-        if (log4jFile != null) {
-            // getting hadoop log4j configuration
-            hadoopProps.load(log4jFile.openStream());
+        // no need to set group id for a restore consumer
+        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
+        // add client id with stream client id prefix
+        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-restore-consumer");
+        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+
+        return baseConsumerProps;
+    }
+
+    /**
+     * Get the configs for the {@link KafkaConsumer global consumer}.
+     * Properties using the prefix {@link #GLOBAL_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #GLOBAL_CONSUMER_PREFIX)
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #GLOBAL_CONSUMER_PREFIX}, global consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param clientId clientId
+     * @return Map of the global consumer configuration.
+     */
+    public Map<String, Object> getGlobalConsumerConfigs(final String clientId) {
+        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
+
+        // Get global consumer override configs
+        Map<String, Object> globalConsumerProps = originalsWithPrefix(GLOBAL_CONSUMER_PREFIX);
+        for (Map.Entry<String, Object> entry: globalConsumerProps.entrySet()) {
+            baseConsumerProps.put(entry.getKey(), entry.getValue());
         }
 
-        String logLevel = distcpConf.get("oozie.spark.log.level", "INFO");
-        String rootLogLevel = distcpConf.get("oozie.action." + LauncherMapper.ROOT_LOGGER_LEVEL, "INFO");
+        // no need to set group id for a global consumer
+        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
+        // add client id with stream client id prefix
+        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-global-consumer");
+        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
 
-        hadoopProps.setProperty("log4j.rootLogger", rootLogLevel + ", A");
-        hadoopProps.setProperty("log4j.logger.org.apache.spark", logLevel + ", A, jobid");
-        hadoopProps.setProperty("log4j.additivity.org.apache.spark", "false");
-        hadoopProps.setProperty("log4j.appender.A", "org.apache.log4j.ConsoleAppender");
-        hadoopProps.setProperty("log4j.appender.A.layout", "org.apache.log4j.PatternLayout");
-        hadoopProps.setProperty("log4j.appender.A.layout.ConversionPattern", "%d [%t] %-5p %c %x - %m%n");
-        hadoopProps.setProperty("log4j.appender.jobid", "org.apache.log4j.FileAppender");
-        hadoopProps.setProperty("log4j.appender.jobid.file", logFile);
-        hadoopProps.setProperty("log4j.appender.jobid.layout", "org.apache.log4j.PatternLayout");
-        hadoopProps.setProperty("log4j.appender.jobid.layout.ConversionPattern", "%d [%t] %-5p %c %x - %m%n");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapred", "INFO, jobid");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.mapreduce.Job", "INFO, jobid");
-        hadoopProps.setProperty("log4j.logger.org.apache.hadoop.yarn.client.api.impl.YarnClientImpl", "INFO, jobid");
+        return baseConsumerProps;
+    }
 
-        String localProps = new File(SPARK_LOG4J_PROPS).getAbsolutePath();
-        OutputStream os1 = new FileOutputStream(localProps);
+    /**
+     * Get the configs for the {@link KafkaProducer producer}.
+     * Properties using the prefix {@link #PRODUCER_PREFIX} will be used in favor over their non-prefixed versions
+     * except in the case of {@link ProducerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     *
+     * @param clientId clientId
+     * @return Map of the producer configuration.
+     */
+    public Map<String, Object> getProducerConfigs(final String clientId) {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
+
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS);
+
+        // generate producer configs from original properties and overridden maps
+        final Map<String, Object> props = new HashMap<>(eosEnabled ? PRODUCER_EOS_OVERRIDES : PRODUCER_DEFAULT_OVERRIDES);
+        props.putAll(getClientCustomProps());
+        props.putAll(clientProvidedProps);
+
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
+        // add client id with stream client id prefix
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-producer");
+
+        return props;
+    }
+
+    /**
+     * Get the configs for the {@link org.apache.kafka.clients.admin.AdminClient admin client}.
+     * @param clientId clientId
+     * @return Map of the admin client configuration.
+     */
+    public Map<String, Object> getAdminConfigs(final String clientId) {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames());
+
+        final Map<String, Object> props = new HashMap<>();
+        props.putAll(getClientCustomProps());
+        props.putAll(clientProvidedProps);
+
+        // add client id with stream client id prefix
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-admin");
+
+        return props;
+    }
+
+    private Map<String, Object> getClientPropsWithPrefix(final String prefix,
+                                                         final Set<String> configNames) {
+        final Map<String, Object> props = clientProps(configNames, originals());
+        props.putAll(originalsWithPrefix(prefix));
+        return props;
+    }
+
+    /**
+     * Get a map of custom configs by removing from the originals all the Streams, Consumer, Producer, and AdminClient configs.
+     * Prefixed properties are also removed because they are already added by {@link #getClientPropsWithPrefix(String, Set)}.
+     * This allows to set a custom property for a specific client alone if specified using a prefix, or for all
+     * when no prefix is used.
+     *
+     * @return a map with the custom properties
+     */
+    private Map<String, Object> getClientCustomProps() {
+        final Map<String, Object> props = originals();
+        props.keySet().removeAll(CONFIG.names());
+        props.keySet().removeAll(ConsumerConfig.configNames());
+        props.keySet().removeAll(ProducerConfig.configNames());
+        props.keySet().removeAll(AdminClientConfig.configNames());
+        props.keySet().removeAll(originalsWithPrefix(CONSUMER_PREFIX, false).keySet());
+        props.keySet().removeAll(originalsWithPrefix(PRODUCER_PREFIX, false).keySet());
+        props.keySet().removeAll(originalsWithPrefix(ADMIN_CLIENT_PREFIX, false).keySet());
+        return props;
+    }
+
+    /**
+     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_KEY_SERDE_CLASS_CONFIG key Serde
+     * class}.
+     *
+     * @return an configured instance of key Serde class
+     */
+    public Serde defaultKeySerde() {
+        Object keySerdeConfigSetting = get(DEFAULT_KEY_SERDE_CLASS_CONFIG);
         try {
-            hadoopProps.store(os1, "");
+            Serde<?> serde = getConfiguredInstance(DEFAULT_KEY_SERDE_CLASS_CONFIG, Serde.class);
+            serde.configure(originals(), true);
+            return serde;
+        } catch (final Exception e) {
+            throw new StreamsException(
+                String.format("Failed to configure key serde %s", keySerdeConfigSetting), e);
         }
-        finally {
-            os1.close();
-        }
-        PropertyConfigurator.configure(SPARK_LOG4J_PROPS);
-        return logFile;
     }
 
     /**
-     * Convert URIs into the default format which Spark expects
+     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_VALUE_SERDE_CLASS_CONFIG value
+     * Serde class}.
      *
-     * @param files
-     * @return
-     * @throws IOException
-     * @throws URISyntaxException
+     * @return an configured instance of value Serde class
      */
-    private LinkedList<URI> fixFsDefaultUris(URI[] files) throws IOException, URISyntaxException {
-        if (files == null) {
-            return null;
+    public Serde defaultValueSerde() {
+        Object valueSerdeConfigSetting = get(DEFAULT_VALUE_SERDE_CLASS_CONFIG);
+        try {
+            Serde<?> serde = getConfiguredInstance(DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serde.class);
+            serde.configure(originals(), false);
+            return serde;
+        } catch (final Exception e) {
+            throw new StreamsException(
+                String.format("Failed to configure value serde %s", valueSerdeConfigSetting), e);
         }
-        LinkedList<URI> listUris = new LinkedList<URI>();
-        FileSystem fs = FileSystem.get(new Configuration(true));
-        for (int i = 0; i < files.length; i++) {
-            URI fileUri = files[i];
-            listUris.add(getFixedUri(fs, fileUri));
-        }
-        return listUris;
+    }
+
+    public TimestampExtractor defaultTimestampExtractor() {
+        return getConfiguredInstance(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG, TimestampExtractor.class);
+    }
+
+    public DeserializationExceptionHandler defaultDeserializationExceptionHandler() {
+        return getConfiguredInstance(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG, DeserializationExceptionHandler.class);
+    }
+
+    public ProductionExceptionHandler defaultProductionExceptionHandler() {
+        return getConfiguredInstance(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG, ProductionExceptionHandler.class);
     }
 
     /**
-     * Sets spark.yarn.jars for Spark 2.X. Sets spark.yarn.jar for Spark 1.X.
+     * Override any client properties in the original configs with overrides
      *
-     * @param sparkArgs
-     * @param sparkYarnJar
-     * @param sparkVersion
+     * @param configNames The given set of configuration names.
+     * @param originals   The original configs to be filtered.
+     * @return client config with any overrides
      */
-    private void setSparkYarnJarsConf(List<String> sparkArgs, String sparkYarnJar, String sparkVersion) {
-        if (SPARK_VERSION_1.matcher(sparkVersion).find()) {
-            // In Spark 1.X.X, set spark.yarn.jar to avoid
-            // multiple distribution
-            sparkArgs.add("--conf");
-            sparkArgs.add(SPARK_YARN_JAR + "=" + sparkYarnJar);
-                }
-        else {
-            // In Spark 2.X.X, set spark.yarn.jars
-            sparkArgs.add("--conf");
-            sparkArgs.add(SPARK_YARN_JARS + "=" + sparkYarnJar);
-        }
-    }
-
-    private static String getJarVersion(File jarFile) throws IOException {
-        @SuppressWarnings("resource")
-        Manifest manifest = new JarFile(jarFile).getManifest();
-        return manifest.getMainAttributes().getValue("Specification-Version");
-    }
-
-    /*
-     * Get properties that needs to be passed to Spark as Spark configuration from actionConf.
-     */
-    @VisibleForTesting
-    protected void appendOoziePropertiesToSparkConf(List<String> sparkArgs, Configuration actionConf) {
-        for (Map.Entry<String, String> oozieConfig : actionConf
-                .getValByRegex("^oozie\\.(?!launcher|spark).+").entrySet()) {
-            sparkArgs.add("--conf");
-            sparkArgs.add(String.format("spark.%s=%s", oozieConfig.getKey(), oozieConfig.getValue()));
-        }
-    }
-
-    private void appendWithPathSeparator(String what, StringBuilder to){
-        if(to.length() > 0){
-            to.append(File.pathSeparator);
-        }
-        to.append(what);
-    }
-
-    private static URI getFixedUri(URI fileUri) throws URISyntaxException, IOException {
-        FileSystem fs = FileSystem.get(new Configuration(true));
-        return getFixedUri(fs, fileUri);
-    }
-
-    /**
-     * Spark compares URIs based on scheme, host and port. Here we convert URIs
-     * into the default format so that Spark won't think those belong to
-     * different file system. This will avoid an extra copy of files which
-     * already exists on same hdfs.
-     *
-     * @param fs
-     * @param fileUri
-     * @return fixed uri
-     * @throws URISyntaxException
-     */
-    private static URI getFixedUri(FileSystem fs, URI fileUri) throws URISyntaxException {
-        if (fs.getUri().getScheme().equals(fileUri.getScheme())
-                && (fs.getUri().getHost().equals(fileUri.getHost()) || fileUri.getHost() == null)
-                && (fs.getUri().getPort() == -1 || fileUri.getPort() == -1
-                        || fs.getUri().getPort() == fileUri.getPort())) {
-            return new URI(fs.getUri().getScheme(), fileUri.getUserInfo(), fs.getUri().getHost(), fs.getUri().getPort(),
-                    fileUri.getPath(), fileUri.getQuery(), fileUri.getFragment());
-        }
-        return fileUri;
-    }
-
-    /**
-     * This class is used for filtering out unwanted jars.
-     */
-    static class JarFilter {
-        private String sparkVersion = "1.X.X";
-        private String sparkYarnJar;
-        private String applicationJar;
-        private LinkedList<URI> listUris = null;
-
-        /**
-         * @param listUris List of URIs to be filtered
-         * @param jarPath Application jar
-         * @throws IOException
-         * @throws URISyntaxException
-         */
-        public JarFilter(LinkedList<URI> listUris, String jarPath) throws URISyntaxException, IOException {
-            this.listUris = listUris;
-            applicationJar = jarPath;
-            Path p = new Path(jarPath);
-            if (p.isAbsolute()) {
-                applicationJar = getFixedUri(p.toUri()).toString();
+    private Map<String, Object> clientProps(final Set<String> configNames,
+                                            final Map<String, Object> originals) {
+        // iterate all client config names, filter out non-client configs from the original
+        // property map and use the overridden values when they are not specified by users
+        final Map<String, Object> parsed = new HashMap<>();
+        for (final String configName: configNames) {
+            if (originals.containsKey(configName)) {
+                parsed.put(configName, originals.get(configName));
             }
         }
 
-        /**
-         * Filters out the Spark yarn jar and application jar. Also records
-         * spark yarn jar's version.
-         *
-         * @throws OozieActionConfiguratorException
-         */
-        public void filter() throws OozieActionConfiguratorException {
-            Iterator<URI> iterator = listUris.iterator();
-            File matchedFile = null;
-            Path applJarPath = new Path(applicationJar);
-            while (iterator.hasNext()) {
-                URI uri = iterator.next();
-                Path p = new Path(uri);
-                if (SPARK_YARN_JAR_PATTERN.matcher(p.getName()).find()) {
-                    matchedFile = getMatchingFile(SPARK_YARN_JAR_PATTERN);
-                }
-                else if (SPARK_ASSEMBLY_JAR_PATTERN.matcher(p.getName()).find()) {
-                    matchedFile = getMatchingFile(SPARK_ASSEMBLY_JAR_PATTERN);
-                }
-                if (matchedFile != null) {
-                    sparkYarnJar = uri.toString();
-                    try {
-                        sparkVersion = getJarVersion(matchedFile);
-                        System.out.println("Spark Version " + sparkVersion);
-                    }
-                    catch (IOException io) {
-                        System.out.println(
-                                "Unable to open " + matchedFile.getPath() + ". Default Spark Version " + sparkVersion);
-                    }
-                    iterator.remove();
-                    matchedFile = null;
-                }
-                // Here we skip the application jar, because
-                // (if uris are same,) it will get distributed multiple times
-                // - one time with --files and another time as application jar.
-                if (isApplicationJar(p.getName(), uri, applJarPath)) {
-                    String fragment = uri.getFragment();
-                    applicationJar = fragment != null && fragment.length() > 0 ? fragment : uri.toString();
-                    iterator.remove();
-                }
-            }
-        }
+        return parsed;
+    }
 
-        /**
-         * Checks if a file is application jar
-         *
-         * @param fileName fileName name of the file
-         * @param fileUri fileUri URI of the file
-         * @param applJarPath Path of application jar
-         * @return true if fileName or fileUri is the application jar
-         */
-        private boolean isApplicationJar(String fileName, URI fileUri, Path applJarPath) {
-            return (fileName.equals(applicationJar) || fileUri.toString().equals(applicationJar)
-                    || applJarPath.getName().equals(fileName)
-                    || applicationJar.equals(fileUri.getFragment()));
-        }
-
-        public String getApplicationJar() {
-            return applicationJar;
-        }
-
-        public String getSparkYarnJar() {
-            return sparkYarnJar;
-        }
-
-        public String getSparkVersion() {
-            return sparkVersion;
-        }
-
+    public static void main(final String[] args) {
+        System.out.println(CONFIG.toHtmlTable());
     }
 }

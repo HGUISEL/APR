@@ -1,126 +1,226 @@
+/*
+ * ====================================================================
+ * 
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 2001-2003 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer. 
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution,
+ *    if any, must include the following acknowledgement:  
+ *       "This product includes software developed by the 
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowledgement may appear in the software itself,
+ *    if and wherever such third-party acknowledgements normally appear.
+ *
+ * 4. The names "Apache", "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written 
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache",
+ *    "Apache" nor may "Apache" appear in their name without prior 
+ *    written permission of the Apache Software Foundation.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
+ */ 
+
+package org.apache.commons.codec.language;
+
+import org.apache.commons.codec.EncoderException;
+import org.apache.commons.codec.StringEncoder;
+
 /**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Encodes a string into a soundex value.  Soundex is an encoding used to
+ * relate similar names, but can also be used as a general purpose
+ * scheme to find word with similar phonemes. 
+ * 
+ * @author bayard@generationjava.com
+ * @author Tim O'Brien
+ * @author Gary Gregory
+ * @version $Id: Soundex.java,v 1.10 2003/11/04 02:43:09 ggregory Exp $
  */
+public class Soundex implements StringEncoder {
 
-package org.apache.hadoop.hive.common;
+    /**
+     * This static variable contains an instance of the
+     * Soundex using the US_ENGLISH mapping.
+     */
+    public static final Soundex US_ENGLISH = new Soundex();
 
-import java.util.Arrays;
+    /**
+     * This is a default mapping of the 26 letters used
+     * in US english.
+     */
+    public static final char[] US_ENGLISH_MAPPING =
+        "01230120022455012623010202".toCharArray();
 
-public class ValidTxnListImpl implements ValidTxnList {
+    /**
+     * The maximum length of a Soundex code - Soundex codes are
+     * only four characters by definition.
+     */
+    private int maxLength = 4;
+    
+    /**
+     * Every letter of the alphabet is "mapped" to a numerical 
+     * value.  This char array holds the values to which each
+     * letter is mapped.  This implementation contains a default
+     * map for US_ENGLISH
+     */
+    private char[] soundexMapping;
 
-  private long[] exceptions;
-  private long highWatermark;
-
-  public ValidTxnListImpl() {
-    this(new long[0], Long.MAX_VALUE);
-  }
-
-  public ValidTxnListImpl(long[] exceptions, long highWatermark) {
-    if (exceptions.length == 0) {
-      this.exceptions = exceptions;
-    } else {
-      this.exceptions = exceptions.clone();
-      Arrays.sort(this.exceptions);
-    }
-    this.highWatermark = highWatermark;
-  }
-
-  public ValidTxnListImpl(String value) {
-    readFromString(value);
-  }
-
-  @Override
-  public boolean isTxnCommitted(long txnid) {
-    if (highWatermark < txnid) {
-      return false;
-    }
-    return Arrays.binarySearch(exceptions, txnid) < 0;
-  }
-
-  @Override
-  public RangeResponse isTxnRangeCommitted(long minTxnId, long maxTxnId) {
-    // check the easy cases first
-    if (highWatermark < minTxnId) {
-      return RangeResponse.NONE;
-    } else if (exceptions.length > 0 && exceptions[0] > maxTxnId) {
-      return RangeResponse.ALL;
+    /**
+     * Creates an instance of the Soundex object using the default
+     * US_ENGLISH mapping.
+     */
+    public Soundex() {
+        this(US_ENGLISH_MAPPING);
     }
 
-    // since the exceptions and the range in question overlap, count the
-    // exceptions in the range
-    long count = Math.max(0, maxTxnId - highWatermark);
-    for(long txn: exceptions) {
-      if (minTxnId <= txn && txn <= maxTxnId) {
-        count += 1;
-      }
+    /**
+     * Creates a soundex instance using a custom mapping.  This
+     * constructor can be used to customize the mapping, and/or possibly
+     * provide an internationalized mapping for a non-Western character
+     * set.
+     *
+     * @param mapping Mapping array to use when finding the corresponding
+     *                code for a given character
+     */
+    public Soundex(char[] mapping) {
+        this.setSoundexMapping(mapping);
     }
 
-    if (count == 0) {
-      return RangeResponse.ALL;
-    } else if (count == (maxTxnId - minTxnId + 1)) {
-      return RangeResponse.NONE;
-    } else {
-      return RangeResponse.SOME;
+    /**
+     * Encodes an Object using the soundex algorithm.  This method
+     * is provided in order to satisfy the requirements of the
+     * Encoder interface, and will throw an EncoderException if the
+     * supplied object is not of type java.lang.String.
+     *
+     * @param pObject Object to encode
+     * @return An object (or type java.lang.String) containing the 
+     *         soundex code which corresponds to the String supplied.
+     * @throws EncoderException if the parameter supplied is not
+     *                          of type java.lang.String
+     */
+    public Object encode(Object pObject) throws EncoderException {
+
+        Object result;
+
+        if (!(pObject instanceof java.lang.String)) {
+            throw new EncoderException("Parameter supplied to Soundex encode is not of type java.lang.String"); 
+        } else {
+            result = soundex((String) pObject);
+        }
+
+        return result;
+
     }
-  }
 
-  @Override
-  public String toString() {
-    return writeToString();
-  }
-
-  @Override
-  public String writeToString() {
-    StringBuilder buf = new StringBuilder();
-    buf.append(highWatermark);
-    if (exceptions.length == 0) {
-      buf.append(':');
-    } else {
-      for(long except: exceptions) {
-        buf.append(':');
-        buf.append(except);
-      }
+    /**
+     * Encodes a String using the soundex algorithm. 
+     *
+     * @param pString A String object to encode
+     * @return A Soundex code corresponding to the String supplied
+     */
+    public String encode(String pString) {
+        return (soundex(pString));   
     }
-    return buf.toString();
-  }
 
-  @Override
-  public void readFromString(String src) {
-    if (src == null) {
-      highWatermark = Long.MAX_VALUE;
-      exceptions = new long[0];
-    } else {
-      String[] values = src.split(":");
-      highWatermark = Long.parseLong(values[0]);
-      exceptions = new long[values.length - 1];
-      for(int i = 1; i < values.length; ++i) {
-        exceptions[i-1] = Long.parseLong(values[i]);
-      }
+    /**
+     * Used internally by the SoundEx algorithm.
+     *
+     * @param c character to use to retrieve mapping code
+     * @return Mapping code for a particular character
+     */
+    private char getMappingCode(char c) {
+        if (!Character.isLetter(c)) {
+            return 0;
+        } else {
+            return this.getSoundexMapping()[Character.toUpperCase(c) - 'A'];
+        }
     }
-  }
 
-  @Override
-  public long getHighWatermark() {
-    return highWatermark;
-  }
+    /**
+     * Returns the maxLength.  Standard Soundex
+     * @return int
+     */
+    public int getMaxLength() {
+        return this.maxLength;
+    }
 
-  @Override
-  public long[] getOpenTransactions() {
-    return exceptions;
-  }
+    /**
+     * @return Returns the soundexMapping.
+     */
+    private char[] getSoundexMapping() {
+        return this.soundexMapping;
+    }
+
+    /**
+     * Sets the maxLength.
+     * @param maxLength The maxLength to set
+     */
+    public void setMaxLength(int maxLength) {
+        this.maxLength = maxLength;
+    }
+
+    /**
+     * @param soundexMapping The soundexMapping to set.
+     */
+    private void setSoundexMapping(char[] soundexMapping) {
+        this.soundexMapping = soundexMapping;
+    }
+
+    /**
+     * Retreives the Soundex code for a given String object.
+     *
+     * @param str String to encode using the Soundex algorithm
+     * @return A soundex code for the String supplied
+     */
+    public String soundex(String str) {
+        if (null == str || str.length() == 0) { return str; }
+        
+        char out[] = { '0', '0', '0', '0' };
+        char last, mapped;
+        int incount = 1, count = 1;
+        out[0] = Character.toUpperCase(str.charAt(0));
+        last = getMappingCode(str.charAt(0));
+        while ((incount < str.length()) && (mapped = getMappingCode(str.charAt(incount++))) != 0 && (count < this.getMaxLength())) {
+                if ((mapped != '0') && (mapped != last)) {
+                    out[count++] = mapped;
+                }
+                last = mapped;
+            }
+        return new String(out);
+    }
+
 }
-

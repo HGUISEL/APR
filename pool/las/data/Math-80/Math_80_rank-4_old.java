@@ -1,269 +1,177 @@
 /*
- * ====================================================================
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Copyright (C) 2011 Google Inc.
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * ====================================================================
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation.  For more
- * information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.http.impl.client.cache;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.Date;
+package com.google.gson.internal;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.http.Header;
-import org.apache.http.HttpHost;
-import org.apache.http.HttpRequest;
-import org.apache.http.HttpResponse;
-import org.apache.http.annotation.ThreadSafe;
-import org.apache.http.client.cache.HeaderConstants;
-import org.apache.http.client.cache.HttpCacheEntry;
-import org.apache.http.client.cache.HttpCacheStorage;
-import org.apache.http.impl.cookie.DateParseException;
-import org.apache.http.impl.cookie.DateUtils;
-import org.apache.http.protocol.HTTP;
+import com.google.gson.InstanceCreator;
+import com.google.gson.reflect.TypeToken;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 /**
- * Given a particular HttpRequest, flush any cache entries that this request
- * would invalidate.
- *
- * @since 4.1
+ * Returns a function that can construct an instance of a requested type.
  */
-@ThreadSafe // so long as the cache implementation is thread-safe
-class CacheInvalidator {
+public final class ConstructorConstructor {
+  private final Map<Type, InstanceCreator<?>> instanceCreators;
 
-    private final HttpCacheStorage storage;
-    private final CacheKeyGenerator cacheKeyGenerator;
+  public ConstructorConstructor(Map<Type, InstanceCreator<?>> instanceCreators) {
+    this.instanceCreators = instanceCreators;
+  }
 
-    private final Log log = LogFactory.getLog(getClass());
+  public ConstructorConstructor() {
+    this(Collections.<Type, InstanceCreator<?>>emptyMap());
+  }
 
-    /**
-     * Create a new {@link CacheInvalidator} for a given {@link HttpCache} and
-     * {@link CacheKeyGenerator}.
-     *
-     * @param uriExtractor Provides identifiers for the keys to store cache entries
-     * @param storage the cache to store items away in
-     */
-    public CacheInvalidator(
-            final CacheKeyGenerator uriExtractor,
-            final HttpCacheStorage storage) {
-        this.cacheKeyGenerator = uriExtractor;
-        this.storage = storage;
-    }
+  public <T> ObjectConstructor<T> get(TypeToken<T> typeToken) {
+    final Type type = typeToken.getType();
+    final Class<? super T> rawType = typeToken.getRawType();
 
-    /**
-     * Remove cache entries from the cache that are no longer fresh or
-     * have been invalidated in some way.
-     *
-     * @param host The backend host we are talking to
-     * @param req The HttpRequest to that host
-     */
-    public void flushInvalidatedCacheEntries(final HttpHost host, final HttpRequest req)  {
-        if (requestShouldNotBeCached(req)) {
-            log.debug("Request should not be cached");
+    // first try an instance creator
 
-            String theUri = cacheKeyGenerator.getURI(host, req);
-
-            HttpCacheEntry parent = getEntry(theUri);
-
-            log.debug("parent entry: " + parent);
-
-            if (parent != null) {
-                for (String variantURI : parent.getVariantMap().values()) {
-                    flushEntry(variantURI);
-                }
-                flushEntry(theUri);
-            }
-            URL reqURL = getAbsoluteURL(theUri);
-            if (reqURL == null) {
-                log.error("Couldn't transform request into valid URL");
-                return;
-            }
-            Header clHdr = req.getFirstHeader("Content-Location");
-            if (clHdr != null) {
-                String contentLocation = clHdr.getValue();
-                if (!flushAbsoluteUriFromSameHost(reqURL, contentLocation)) {
-                    flushRelativeUriFromSameHost(reqURL, contentLocation);
-                }
-            }
-            Header lHdr = req.getFirstHeader("Location");
-            if (lHdr != null) {
-                flushAbsoluteUriFromSameHost(reqURL, lHdr.getValue());
-            }
+    @SuppressWarnings("unchecked") // types must agree
+    final InstanceCreator<T> creator = (InstanceCreator<T>) instanceCreators.get(type);
+    if (creator != null) {
+      return new ObjectConstructor<T>() {
+        public T construct() {
+          return creator.createInstance(type);
         }
+      };
     }
 
-    private void flushEntry(final String uri) {
+    ObjectConstructor<T> defaultConstructor = newDefaultConstructor(rawType);
+    if (defaultConstructor != null) {
+      return defaultConstructor;
+    }
+
+    ObjectConstructor<T> defaultImplementation = newDefaultImplementationConstructor(rawType);
+    if (defaultImplementation != null) {
+      return defaultImplementation;
+    }
+
+    // finally try unsafe
+    return newUnsafeAllocator(type, rawType);
+  }
+
+  private <T> ObjectConstructor<T> newDefaultConstructor(Class<? super T> rawType) {
+    try {
+      final Constructor<? super T> constructor = rawType.getDeclaredConstructor();
+      if (!constructor.isAccessible()) {
+        constructor.setAccessible(true);
+      }
+      return new ObjectConstructor<T>() {
+        @SuppressWarnings("unchecked") // T is the same raw type as is requested
+        public T construct() {
+          try {
+            Object[] args = null;
+            return (T) constructor.newInstance(args);
+          } catch (InstantiationException e) {
+            // TODO: JsonParseException ?
+            throw new RuntimeException("Failed to invoke " + constructor + " with no args", e);
+          } catch (InvocationTargetException e) {
+            // TODO: don't wrap if cause is unchecked!
+            // TODO: JsonParseException ?
+            throw new RuntimeException("Failed to invoke " + constructor + " with no args",
+                e.getTargetException());
+          } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+          }
+        }
+      };
+    } catch (NoSuchMethodException e) {
+      return null;
+    }
+  }
+
+  /**
+   * Constructors for common interface types like Map and List and their
+   * subytpes.
+   */
+  @SuppressWarnings("unchecked") // use runtime checks to guarantee that 'T' is what it is
+  private <T> ObjectConstructor<T> newDefaultImplementationConstructor(Class<? super T> rawType) {
+    if (Collection.class.isAssignableFrom(rawType)) {
+      if (SortedSet.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new TreeSet<Object>();
+          }
+        };
+      } else if (Set.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new LinkedHashSet<Object>();
+          }
+        };
+      } else if (Queue.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new LinkedList<Object>();
+          }
+        };
+      } else {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new ArrayList<Object>();
+          }
+        };
+      }
+    }
+
+    if (Map.class.isAssignableFrom(rawType)) {
+      return new ObjectConstructor<T>() {
+        public T construct() {
+          // TODO: if the map's key type is a string, should this be StringMap?
+          return (T) new LinkedHashMap<Object, Object>();
+        }
+      };
+      // TODO: SortedMap ?
+    }
+
+    return null;
+  }
+
+  private <T> ObjectConstructor<T> newUnsafeAllocator(
+      final Type type, final Class<? super T> rawType) {
+    return new ObjectConstructor<T>() {
+      private final UnsafeAllocator unsafeAllocator = UnsafeAllocator.create();
+      @SuppressWarnings("unchecked")
+      public T construct() {
         try {
-            storage.removeEntry(uri);
-        } catch (IOException ioe) {
-            log.warn("unable to flush cache entry", ioe);
+          Object newInstance = unsafeAllocator.newInstance(rawType);
+          return (T) newInstance;
+        } catch (Exception e) {
+          throw new RuntimeException(("Unable to invoke no-args constructor for " + type + ". "
+              + "Register an InstanceCreator with Gson for this type may fix this problem."), e);
         }
-    }
+      }
+    };
+  }
 
-    private HttpCacheEntry getEntry(final String theUri) {
-        try {
-            return storage.getEntry(theUri);
-        } catch (IOException ioe) {
-            log.warn("could not retrieve entry from storage", ioe);
-        }
-        return null;
-    }
-
-    protected void flushUriIfSameHost(final URL requestURL, final URL targetURL) {
-        URL canonicalTarget = getAbsoluteURL(cacheKeyGenerator.canonicalizeUri(targetURL.toString()));
-        if (canonicalTarget == null) {
-            return;
-        }
-        if (canonicalTarget.getAuthority().equalsIgnoreCase(requestURL.getAuthority())) {
-            flushEntry(canonicalTarget.toString());
-        }
-    }
-
-    protected void flushRelativeUriFromSameHost(final URL reqURL, final String relUri) {
-        URL relURL = getRelativeURL(reqURL, relUri);
-        if (relURL == null) {
-            return;
-        }
-        flushUriIfSameHost(reqURL, relURL);
-    }
-
-
-    protected boolean flushAbsoluteUriFromSameHost(final URL reqURL, final String uri) {
-        URL absURL = getAbsoluteURL(uri);
-        if (absURL == null) {
-            return false;
-        }
-        flushUriIfSameHost(reqURL,absURL);
-        return true;
-    }
-
-    private URL getAbsoluteURL(final String uri) {
-        URL absURL = null;
-        try {
-            absURL = new URL(uri);
-        } catch (MalformedURLException mue) {
-            // nop
-        }
-        return absURL;
-    }
-
-    private URL getRelativeURL(final URL reqURL, final String relUri) {
-        URL relURL = null;
-        try {
-            relURL = new URL(reqURL,relUri);
-        } catch (MalformedURLException e) {
-            // nop
-        }
-        return relURL;
-    }
-
-    protected boolean requestShouldNotBeCached(final HttpRequest req) {
-        String method = req.getRequestLine().getMethod();
-        return notGetOrHeadRequest(method);
-    }
-
-    private boolean notGetOrHeadRequest(final String method) {
-        return !(HeaderConstants.GET_METHOD.equals(method) || HeaderConstants.HEAD_METHOD
-                .equals(method));
-    }
-
-    /** Flushes entries that were invalidated by the given response
-     * received for the given host/request pair.
-     */
-    public void flushInvalidatedCacheEntries(final HttpHost host,
-            final HttpRequest request, final HttpResponse response) {
-        int status = response.getStatusLine().getStatusCode();
-        if (status < 200 || status > 299) {
-            return;
-        }
-        URL reqURL = getAbsoluteURL(cacheKeyGenerator.getURI(host, request));
-        if (reqURL == null) {
-            return;
-        }
-        URL canonURL = getContentLocationURL(reqURL, response);
-        if (canonURL == null) {
-            return;
-        }
-        String cacheKey = cacheKeyGenerator.canonicalizeUri(canonURL.toString());
-        HttpCacheEntry entry = getEntry(cacheKey);
-        if (entry == null) {
-            return;
-        }
-
-        // do not invalidate if response is strictly older than entry
-        // or if the etags match
-
-        if (responseDateOlderThanEntryDate(response, entry)) {
-            return;
-        }
-        if (!responseAndEntryEtagsDiffer(response, entry)) {
-            return;
-        }
-
-        flushUriIfSameHost(reqURL, canonURL);
-    }
-
-    private URL getContentLocationURL(final URL reqURL, final HttpResponse response) {
-        Header clHeader = response.getFirstHeader("Content-Location");
-        if (clHeader == null) {
-            return null;
-        }
-        String contentLocation = clHeader.getValue();
-        URL canonURL = getAbsoluteURL(contentLocation);
-        if (canonURL != null) {
-            return canonURL;
-        }
-        return getRelativeURL(reqURL, contentLocation);
-    }
-
-    private boolean responseAndEntryEtagsDiffer(final HttpResponse response,
-            final HttpCacheEntry entry) {
-        Header entryEtag = entry.getFirstHeader(HeaderConstants.ETAG);
-        Header responseEtag = response.getFirstHeader(HeaderConstants.ETAG);
-        if (entryEtag == null || responseEtag == null) {
-            return false;
-        }
-        return (!entryEtag.getValue().equals(responseEtag.getValue()));
-    }
-
-    private boolean responseDateOlderThanEntryDate(final HttpResponse response,
-            final HttpCacheEntry entry) {
-        Header entryDateHeader = entry.getFirstHeader(HTTP.DATE_HEADER);
-        Header responseDateHeader = response.getFirstHeader(HTTP.DATE_HEADER);
-        if (entryDateHeader == null || responseDateHeader == null) {
-            /* be conservative; should probably flush */
-            return false;
-        }
-        try {
-            Date entryDate = DateUtils.parseDate(entryDateHeader.getValue());
-            Date responseDate = DateUtils.parseDate(responseDateHeader.getValue());
-            return responseDate.before(entryDate);
-        } catch (DateParseException e) {
-            /* flushing is always safe */
-            return false;
-        }
-    }
+  @Override public String toString() {
+    return instanceCreators.toString();
+  }
 }

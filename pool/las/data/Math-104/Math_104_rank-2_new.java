@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,1019 +14,948 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.felix.http.base.internal.whiteboard;
 
-import static org.osgi.service.http.runtime.dto.DTOConstants.FAILURE_REASON_NO_SERVLET_CONTEXT_MATCHING;
-import static org.osgi.service.http.runtime.dto.DTOConstants.FAILURE_REASON_SHADOWED_BY_OTHER_SERVICE;
-import static org.osgi.service.http.runtime.dto.DTOConstants.FAILURE_REASON_UNKNOWN;
-import static org.osgi.service.http.runtime.dto.DTOConstants.FAILURE_REASON_VALIDATION_FAILED;
+package org.apache.openejb.config;
 
+import org.apache.openejb.OpenEJBException;
+import org.apache.openejb.cdi.CompositeBeans;
+import org.apache.openejb.config.sys.JSonConfigReader;
+import org.apache.openejb.config.sys.JaxbOpenejb;
+import org.apache.openejb.config.sys.Resource;
+import org.apache.openejb.config.sys.Resources;
+import org.apache.openejb.core.ParentClassLoaderFinder;
+import org.apache.openejb.jee.ApplicationClient;
+import org.apache.openejb.jee.Beans;
+import org.apache.openejb.jee.Connector;
+import org.apache.openejb.jee.Connector10;
+import org.apache.openejb.jee.EjbJar;
+import org.apache.openejb.jee.FacesConfig;
+import org.apache.openejb.jee.HandlerChains;
+import org.apache.openejb.jee.JavaWsdlMapping;
+import org.apache.openejb.jee.JaxbJavaee;
+import org.apache.openejb.jee.Keyable;
+import org.apache.openejb.jee.Listener;
+import org.apache.openejb.jee.TldTaglib;
+import org.apache.openejb.jee.WebApp;
+import org.apache.openejb.jee.WebFragment;
+import org.apache.openejb.jee.Webservices;
+import org.apache.openejb.jee.bval.ValidationConfigType;
+import org.apache.openejb.jee.jpa.EntityMappings;
+import org.apache.openejb.jee.jpa.fragment.PersistenceFragment;
+import org.apache.openejb.jee.jpa.fragment.PersistenceUnitFragment;
+import org.apache.openejb.jee.jpa.unit.JaxbPersistenceFactory;
+import org.apache.openejb.jee.jpa.unit.Persistence;
+import org.apache.openejb.jee.jpa.unit.PersistenceUnit;
+import org.apache.openejb.jee.oejb2.GeronimoEjbJarType;
+import org.apache.openejb.jee.oejb2.JaxbOpenejbJar2;
+import org.apache.openejb.jee.oejb2.OpenejbJarType;
+import org.apache.openejb.jee.oejb3.JaxbOpenejbJar3;
+import org.apache.openejb.jee.oejb3.OpenejbJar;
+import org.apache.openejb.loader.IO;
+import org.apache.openejb.loader.SystemInstance;
+import org.apache.openejb.sxc.ApplicationClientXml;
+import org.apache.openejb.sxc.EjbJarXml;
+import org.apache.openejb.sxc.FacesConfigXml;
+import org.apache.openejb.sxc.HandlerChainsXml;
+import org.apache.openejb.sxc.TldTaglibXml;
+import org.apache.openejb.sxc.WebXml;
+import org.apache.openejb.sxc.WebservicesXml;
+import org.apache.openejb.util.LengthInputStream;
+import org.apache.openejb.util.LogCategory;
+import org.apache.openejb.util.Logger;
+import org.apache.openejb.util.Saxs;
+import org.apache.openejb.util.URLs;
+import org.xml.sax.Attributes;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
+
+import javax.xml.bind.JAXBElement;
+import javax.xml.bind.JAXBException;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.parsers.SAXParser;
+import javax.xml.parsers.SAXParserFactory;
+import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.io.InputStream;
+import java.net.URL;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.Dictionary;
-import java.util.HashMap;
-import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
-import javax.annotation.Nonnull;
-import javax.servlet.FilterChain;
-import javax.servlet.ServletContext;
-import javax.servlet.ServletContextEvent;
-import javax.servlet.ServletContextListener;
-import javax.servlet.ServletException;
-import javax.servlet.ServletRequest;
-import javax.servlet.ServletResponse;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
-import javax.servlet.http.HttpSessionEvent;
+public class ReadDescriptors implements DynamicDeployer {
+    private static final Logger logger = Logger.getInstance(LogCategory.OPENEJB_STARTUP, ReadDescriptors.class);
 
-import org.apache.felix.http.base.internal.console.HttpServicePlugin;
-import org.apache.felix.http.base.internal.context.ExtServletContext;
-import org.apache.felix.http.base.internal.handler.FilterHandler;
-import org.apache.felix.http.base.internal.handler.HttpServiceServletHandler;
-import org.apache.felix.http.base.internal.handler.HttpSessionWrapper;
-import org.apache.felix.http.base.internal.handler.ListenerHandler;
-import org.apache.felix.http.base.internal.handler.PreprocessorHandler;
-import org.apache.felix.http.base.internal.handler.ServletHandler;
-import org.apache.felix.http.base.internal.handler.WhiteboardFilterHandler;
-import org.apache.felix.http.base.internal.handler.WhiteboardListenerHandler;
-import org.apache.felix.http.base.internal.handler.WhiteboardServletHandler;
-import org.apache.felix.http.base.internal.logger.SystemLogger;
-import org.apache.felix.http.base.internal.registry.EventListenerRegistry;
-import org.apache.felix.http.base.internal.registry.HandlerRegistry;
-import org.apache.felix.http.base.internal.runtime.AbstractInfo;
-import org.apache.felix.http.base.internal.runtime.FilterInfo;
-import org.apache.felix.http.base.internal.runtime.ListenerInfo;
-import org.apache.felix.http.base.internal.runtime.PreprocessorInfo;
-import org.apache.felix.http.base.internal.runtime.ResourceInfo;
-import org.apache.felix.http.base.internal.runtime.ServletContextHelperInfo;
-import org.apache.felix.http.base.internal.runtime.ServletInfo;
-import org.apache.felix.http.base.internal.runtime.WhiteboardServiceInfo;
-import org.apache.felix.http.base.internal.runtime.dto.FailedDTOHolder;
-import org.apache.felix.http.base.internal.runtime.dto.PreprocessorDTOBuilder;
-import org.apache.felix.http.base.internal.runtime.dto.RegistryRuntime;
-import org.apache.felix.http.base.internal.runtime.dto.ServletContextDTOBuilder;
-import org.apache.felix.http.base.internal.service.HttpServiceFactory;
-import org.apache.felix.http.base.internal.service.HttpServiceRuntimeImpl;
-import org.apache.felix.http.base.internal.service.ResourceServlet;
-import org.apache.felix.http.base.internal.whiteboard.tracker.FilterTracker;
-import org.apache.felix.http.base.internal.whiteboard.tracker.ListenersTracker;
-import org.apache.felix.http.base.internal.whiteboard.tracker.PreprocessorTracker;
-import org.apache.felix.http.base.internal.whiteboard.tracker.ResourceTracker;
-import org.apache.felix.http.base.internal.whiteboard.tracker.ServletContextHelperTracker;
-import org.apache.felix.http.base.internal.whiteboard.tracker.ServletTracker;
-import org.osgi.framework.Bundle;
-import org.osgi.framework.BundleContext;
-import org.osgi.framework.Constants;
-import org.osgi.framework.Filter;
-import org.osgi.framework.InvalidSyntaxException;
-import org.osgi.framework.ServiceFactory;
-import org.osgi.framework.ServiceReference;
-import org.osgi.framework.ServiceRegistration;
-import org.osgi.service.http.context.ServletContextHelper;
-import org.osgi.service.http.runtime.HttpServiceRuntime;
-import org.osgi.service.http.runtime.HttpServiceRuntimeConstants;
-import org.osgi.service.http.runtime.dto.DTOConstants;
-import org.osgi.service.http.runtime.dto.PreprocessorDTO;
-import org.osgi.service.http.runtime.dto.ServletContextDTO;
-import org.osgi.service.http.whiteboard.HttpWhiteboardConstants;
-import org.osgi.service.http.whiteboard.Preprocessor;
-import org.osgi.util.tracker.ServiceTracker;
+    private static final boolean ROOT_URL_FROM_WEBINF = SystemInstance.get().getOptions().get("openejb.jpa.root-url-from-webinf", false);
 
-public final class WhiteboardManager
-{
-    /** The bundle context of the http bundle. */
-    private final BundleContext httpBundleContext;
+    public static final TldTaglib SKIP_TAGLIB = new TldTaglib();
 
-    /** The http service factory. */
-    private final HttpServiceFactory httpServiceFactory;
+    @SuppressWarnings({"unchecked"})
+    public AppModule deploy(final AppModule appModule) throws OpenEJBException {
+        for (final EjbModule ejbModule : appModule.getEjbModules()) {
 
-    private final HttpServiceRuntimeImpl serviceRuntime;
-
-    private final List<ServiceTracker<?, ?>> trackers = new ArrayList<ServiceTracker<?, ?>>();
-
-    private final HttpServicePlugin plugin;
-
-    /** A map containing all servlet context registrations. Mapped by context name */
-    private final Map<String, List<WhiteboardContextHandler>> contextMap = new HashMap<String, List<WhiteboardContextHandler>>();
-
-    /** A map with all servlet/filter registrations, mapped by abstract info. */
-    private final Map<WhiteboardServiceInfo<?>, List<WhiteboardContextHandler>> servicesMap = new HashMap<WhiteboardServiceInfo<?>, List<WhiteboardContextHandler>>();
-
-    private volatile List<PreprocessorHandler> preprocessorHandlers = Collections.emptyList();
-
-    private final HandlerRegistry registry;
-
-    private final FailureStateHandler failureStateHandler = new FailureStateHandler();
-
-    private volatile ServletContext webContext;
-
-    private volatile ServiceRegistration<ServletContextHelper> defaultContextRegistration;
-
-    private volatile ServiceRegistration<HttpServiceRuntime> runtimeServiceReg;
-
-    /**
-     * Create a new whiteboard http manager
-     *
-     * @param bundleContext The bundle context of the http bundle
-     * @param httpServiceFactory The http service factory
-     * @param registry The handler registry
-     */
-    public WhiteboardManager(final BundleContext bundleContext,
-            final HttpServiceFactory httpServiceFactory,
-            final HandlerRegistry registry)
-    {
-        this.httpBundleContext = bundleContext;
-        this.httpServiceFactory = httpServiceFactory;
-        this.registry = registry;
-        this.serviceRuntime = new HttpServiceRuntimeImpl(registry, this, bundleContext);
-        this.plugin = new HttpServicePlugin(bundleContext, this.serviceRuntime);
-    }
-
-    /**
-     * Start the whiteboard manager
-     * @param containerContext The servlet context
-     */
-    public void start(final ServletContext containerContext, @Nonnull final Dictionary<String, Object> httpServiceProps)
-    {
-        // runtime service gets the same props for now
-        this.serviceRuntime.setAllAttributes(httpServiceProps);
-
-        this.serviceRuntime.setAttribute(HttpServiceRuntimeConstants.HTTP_SERVICE_ID,
-                Collections.singletonList(this.httpServiceFactory.getHttpServiceServiceId()));
-        this.runtimeServiceReg = this.httpBundleContext.registerService(HttpServiceRuntime.class,
-                serviceRuntime,
-                this.serviceRuntime.getAttributes());
-        this.serviceRuntime.setServiceReference(this.runtimeServiceReg.getReference());
-
-        this.webContext = containerContext;
-
-
-        // add context for http service
-        final List<WhiteboardContextHandler> list = new ArrayList<WhiteboardContextHandler>();
-        final ServletContextHelperInfo info = new ServletContextHelperInfo(Integer.MAX_VALUE,
-                HttpServiceFactory.HTTP_SERVICE_CONTEXT_SERVICE_ID,
-                HttpServiceFactory.HTTP_SERVICE_CONTEXT_NAME, "/", null);
-        list.add(new HttpServiceContextHandler(info, registry.getRegistry(HttpServiceFactory.HTTP_SERVICE_CONTEXT_SERVICE_ID),
-                httpServiceFactory, webContext, this.httpBundleContext.getBundle()));
-        this.contextMap.put(HttpServiceFactory.HTTP_SERVICE_CONTEXT_NAME, list);
-
-        // add default context
-        final Dictionary<String, Object> props = new Hashtable<String, Object>();
-        props.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_CONTEXT_NAME, HttpWhiteboardConstants.HTTP_WHITEBOARD_DEFAULT_CONTEXT_NAME);
-        props.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_CONTEXT_PATH, "/");
-        props.put(Constants.SERVICE_RANKING, Integer.MIN_VALUE);
-        this.defaultContextRegistration = httpBundleContext.registerService(
-                ServletContextHelper.class,
-                new ServiceFactory<ServletContextHelper>()
-                {
-
-                    @Override
-                    public ServletContextHelper getService(
-                            final Bundle bundle,
-                            final ServiceRegistration<ServletContextHelper> registration)
-                    {
-                        return new ServletContextHelper(bundle)
-                        {
-                            // nothing to override
-                        };
-                    }
-
-                    @Override
-                    public void ungetService(
-                            final Bundle bundle,
-                            final ServiceRegistration<ServletContextHelper> registration,
-                            final ServletContextHelper service)
-                    {
-                        // nothing to do
-                    }
-                }, props);
-        addTracker(new FilterTracker(this.httpBundleContext, this));
-        addTracker(new ListenersTracker(this.httpBundleContext, this));
-        addTracker(new PreprocessorTracker(this.httpBundleContext, this));
-        addTracker(new ResourceTracker(this.httpBundleContext, this));
-        addTracker(new ServletContextHelperTracker(this.httpBundleContext, this));
-        addTracker(new ServletTracker(this.httpBundleContext, this));
-
-        this.plugin.register();
-    }
-
-    /**
-     * Add a tracker and start it
-     * @param tracker The tracker instance
-     */
-    private void addTracker(ServiceTracker<?, ?> tracker)
-    {
-        this.trackers.add(tracker);
-        tracker.open();
-    }
-
-    /**
-     * Stop the instance
-     */
-    public void stop()
-    {
-        this.plugin.unregister();
-        for(final ServiceTracker<?, ?> t : this.trackers)
-        {
-            t.close();
-        }
-        this.trackers.clear();
-
-        this.serviceRuntime.setServiceReference(null);
-
-        this.preprocessorHandlers = Collections.emptyList();
-        this.contextMap.clear();
-        this.servicesMap.clear();
-        this.failureStateHandler.clear();
-        this.registry.reset();
-
-        if (this.defaultContextRegistration != null)
-        {
-            this.defaultContextRegistration.unregister();
-            this.defaultContextRegistration = null;
-        }
-
-        if ( this.runtimeServiceReg != null )
-        {
-            this.runtimeServiceReg.unregister();
-            this.runtimeServiceReg = null;
-        }
-        this.webContext = null;
-    }
-
-    public void sessionDestroyed(@Nonnull final HttpSession session, final Set<Long> contextIds)
-    {
-        for(final Long contextId : contextIds)
-        {
-            final WhiteboardContextHandler handler = this.getContextHandler(contextId);
-            if ( handler != null )
-            {
-                final ExtServletContext context = handler.getServletContext(this.httpBundleContext.getBundle());
-                new HttpSessionWrapper(contextId, session, context, true).invalidate();
-                handler.ungetServletContext(this.httpBundleContext.getBundle());
+            if (ejbModule.getEjbJar() == null) {
+                readEjbJar(ejbModule, appModule);
             }
-        }
-    }
 
-    /**
-     * Handle session id changes
-     * @param session The session where the id changed
-     * @param oldSessionId The old session id
-     * @param contextIds The context ids using that session
-     */
-    public void sessionIdChanged(@Nonnull final HttpSessionEvent event, String oldSessionId, final Set<Long> contextIds)
-    {
-        for(final Long contextId : contextIds)
-        {
-            final WhiteboardContextHandler handler = this.getContextHandler(contextId);
-            if ( handler != null )
-            {
-                handler.getRegistry().getEventListenerRegistry().sessionIdChanged(event, oldSessionId);
+            if (ejbModule.getOpenejbJar() == null) {
+                readOpenejbJar(ejbModule);
             }
-        }
-    }
 
-    /**
-     * Activate a servlet context helper.
-     *
-     * @param handler The context handler
-     * @return {@code true} if activation succeeded.
-     */
-    private boolean activate(final WhiteboardContextHandler handler)
-    {
-        if ( !handler.activate(this.registry) )
-        {
-            return false;
-        }
-
-        final List<WhiteboardServiceInfo<?>> services = new ArrayList<WhiteboardServiceInfo<?>>();
-        for(final Map.Entry<WhiteboardServiceInfo<?>, List<WhiteboardContextHandler>> entry : this.servicesMap.entrySet())
-        {
-            final WhiteboardServiceInfo<?> info = entry.getKey();
-
-            if ( info.getContextSelectionFilter().match(handler.getContextInfo().getServiceReference()) )
-            {
-                final int reason = checkForServletRegistrationInHttpServiceContext(handler, info);
-                if ( reason == -1 )
-                {
-                    entry.getValue().add(handler);
-                    if ( entry.getValue().size() == 1 )
-                    {
-                        this.failureStateHandler.remove(info);
-                    }
-                    if ( info instanceof ListenerInfo && ((ListenerInfo)info).isListenerType(ServletContextListener.class.getName()) )
-                    {
-                        // servlet context listeners will be registered directly
-                        this.registerWhiteboardService(handler, info);
-                    }
-                    else
-                    {
-                        // registration of other services will be delayed
-                        services.add(info);
-                    }
-                }
+            if (ejbModule.getBeans() == null) {
+                readBeans(ejbModule);
             }
-        }
-        // notify context listeners first
-        handler.getRegistry().getEventListenerRegistry().contextInitialized();
 
-        // register services
-        for(final WhiteboardServiceInfo<?> info : services)
-        {
-            this.registerWhiteboardService(handler, info);
+            readValidationConfigType(ejbModule);
+            readCmpOrm(ejbModule);
+            readResourcesXml(ejbModule);
         }
 
-        return true;
-    }
-
-    /**
-     * Deactivate a servlet context.
-     *
-     * @param handler A context handler
-     */
-    private void deactivate(final WhiteboardContextHandler handler)
-    {
-        // services except context listeners first
-        final List<WhiteboardServiceInfo<?>> listeners = new ArrayList<WhiteboardServiceInfo<?>>();
-        final Iterator<Map.Entry<WhiteboardServiceInfo<?>, List<WhiteboardContextHandler>>> i = this.servicesMap.entrySet().iterator();
-        while ( i.hasNext() )
-        {
-            final Map.Entry<WhiteboardServiceInfo<?>, List<WhiteboardContextHandler>> entry = i.next();
-            if ( entry.getValue().remove(handler) )
-            {
-                if ( !this.failureStateHandler.remove(entry.getKey(), handler.getContextInfo().getServiceId()) )
-                {
-                    if ( entry.getKey() instanceof ListenerInfo && ((ListenerInfo)entry.getKey()).isListenerType(ServletContextListener.class.getName()) )
-                    {
-                        listeners.add(entry.getKey());
-                    }
-                    else
-                    {
-                        this.unregisterWhiteboardService(handler, entry.getKey());
-                    }
-                }
-                if ( entry.getValue().isEmpty() )
-                {
-                    this.failureStateHandler.addFailure(entry.getKey(), FAILURE_REASON_NO_SERVLET_CONTEXT_MATCHING);
-                }
-            }
-        }
-        // context listeners last
-        handler.getRegistry().getEventListenerRegistry().contextDestroyed();
-        for(final WhiteboardServiceInfo<?> info : listeners)
-        {
-            this.unregisterWhiteboardService(handler, info);
+        for (final ClientModule clientModule : appModule.getClientModules()) {
+            readAppClient(clientModule, appModule);
+            readValidationConfigType(clientModule);
+            readResourcesXml(clientModule);
         }
 
-        handler.deactivate(this.registry);
-    }
+        for (final ConnectorModule connectorModule : appModule.getConnectorModules()) {
+            readConnector(connectorModule, appModule);
+            readValidationConfigType(connectorModule);
+            readResourcesXml(connectorModule);
+        }
 
-    /**
-     * Add a servlet context helper.
-     *
-     * @param info The servlet context helper info
-     * @return {@code true} if the service matches this http whiteboard service
-     */
-    public boolean addContextHelper(final ServletContextHelperInfo info)
-    {
-        // no failure DTO and no logging if not matching
-        if ( isMatchingService(info) )
-        {
-            if ( info.isValid() )
-            {
-                synchronized ( this.contextMap )
-                {
-                    final WhiteboardContextHandler handler = new WhiteboardContextHandler(info,
-                            this.webContext,
-                            this.httpBundleContext.getBundle());
+        for (final WebModule webModule : appModule.getWebModules()) {
+            readWebApp(webModule, appModule);
+            readValidationConfigType(webModule);
+            readResourcesXml(webModule);
+        }
 
-                    // check for activate/deactivate
-                    List<WhiteboardContextHandler> handlerList = this.contextMap.get(info.getName());
-                    if ( handlerList == null )
-                    {
-                        handlerList = new ArrayList<WhiteboardContextHandler>();
-                    }
-                    final boolean activate = handlerList.isEmpty() || handlerList.get(0).compareTo(handler) > 0;
-                    if ( activate )
-                    {
-                        // try to activate
-                        if ( this.activate(handler) )
-                        {
-                            handlerList.add(handler);
-                            Collections.sort(handlerList);
-                            this.contextMap.put(info.getName(), handlerList);
+        final List<Object> persistenceUrls = (List<Object>) appModule.getAltDDs().get("persistence.xml");
+        if (persistenceUrls != null) {
+            for (final Object persistenceUrl : persistenceUrls) {
+                final boolean url = persistenceUrl instanceof URL;
+                final Source source = getSource(persistenceUrl);
 
-                            // check for deactivate
-                            if ( handlerList.size() > 1 )
-                            {
-                                final WhiteboardContextHandler oldHead = handlerList.get(1);
-                                this.deactivate(oldHead);
+                final String moduleName;
+                final String path;
+                final String rootUrl;
+                if (url) {
+                    final URL pUrl = (URL) persistenceUrl;
+                    File file = URLs.toFile(pUrl);
+                    path = file.getAbsolutePath();
 
-                                this.failureStateHandler.addFailure(oldHead.getContextInfo(), FAILURE_REASON_SHADOWED_BY_OTHER_SERVICE);
-                            }
-                        }
-                        else
-                        {
-                            this.failureStateHandler.addFailure(info, DTOConstants.FAILURE_REASON_SERVICE_NOT_GETTABLE);
+                    if (file.getName().endsWith("persistence.xml")) {
+                        final File parentFile = file.getParentFile();
+                        final String parent = parentFile.getName();
+                        if (parent.equalsIgnoreCase("WEB-INF") || parent.equalsIgnoreCase("META-INF")) {
+                            file = parentFile.getParentFile();
+                        } else { // we don't really know so simply go back (users will often put persistence.xml in root resource folder with arquillian)
+                            file = file.getParentFile();
                         }
                     }
-                    else
-                    {
-                        handlerList.add(handler);
-                        Collections.sort(handlerList);
-                        this.contextMap.put(info.getName(), handlerList);
+                    moduleName = file.toURI().toString();
 
-                        this.failureStateHandler.addFailure(info, FAILURE_REASON_SHADOWED_BY_OTHER_SERVICE);
+                    String tmpRootUrl = moduleName;
+
+                    final String extForm = pUrl.toExternalForm();
+                    if (extForm.contains("WEB-INF/classes/META-INF/")) {
+                        if (!ROOT_URL_FROM_WEBINF) {
+                            tmpRootUrl = extForm.substring(0, extForm.indexOf("/META-INF"));
+                        } else {
+                            tmpRootUrl = extForm.substring(0, extForm.indexOf("/classes/META-INF"));
+                        }
                     }
+                    if (tmpRootUrl.endsWith(".war")) {
+                        tmpRootUrl = tmpRootUrl.substring(0, tmpRootUrl.length() - ".war".length());
+                    }
+                    rootUrl = tmpRootUrl;
+                } else {
+                    moduleName = "";
+                    rootUrl = "";
+                    path = null;
                 }
-            }
-            else
-            {
-                this.failureStateHandler.addFailure(info, FAILURE_REASON_VALIDATION_FAILED);
-            }
-            updateRuntimeChangeCount();
-            return true;
-        }
-        return false;
-    }
 
-    /**
-     * Remove a servlet context helper
-     *
-     * @param The servlet context helper info
-     */
-    public void removeContextHelper(final ServletContextHelperInfo info)
-    {
-        if ( info.isValid() )
-        {
-            synchronized ( this.contextMap )
-            {
-                final List<WhiteboardContextHandler> handlerList = this.contextMap.get(info.getName());
-                if ( handlerList != null )
-                {
-                    final Iterator<WhiteboardContextHandler> i = handlerList.iterator();
-                    boolean first = true;
-                    boolean activateNext = false;
-                    while ( i.hasNext() )
-                    {
-                        final WhiteboardContextHandler handler = i.next();
-                        if ( handler.getContextInfo().equals(info) )
-                        {
-                            i.remove();
-                            // check for deactivate
-                            if ( first )
-                            {
-                                this.deactivate(handler);
-                                activateNext = true;
-                            }
-                            break;
-                        }
-                        first = false;
+                try {
+                    final Persistence persistence = JaxbPersistenceFactory.getPersistence(Persistence.class, source.get());
+                    final PersistenceModule persistenceModule = new PersistenceModule(appModule, rootUrl, persistence);
+                    persistenceModule.getWatchedResources().add(moduleName);
+                    if (url && "file".equals(((URL) persistenceUrl).getProtocol())) {
+                        persistenceModule.getWatchedResources().add(path);
                     }
-                    if ( handlerList.isEmpty() )
-                    {
-                        this.contextMap.remove(info.getName());
-                    }
-                    else if ( activateNext )
-                    {
-                        // Try to activate next
-                        boolean done = false;
-                        while ( !handlerList.isEmpty() && !done)
-                        {
-                            final WhiteboardContextHandler newHead = handlerList.get(0);
-                            this.failureStateHandler.removeAll(newHead.getContextInfo());
-
-                            if ( this.activate(newHead) )
-                            {
-                                done = true;
-                            }
-                            else
-                            {
-                                handlerList.remove(0);
-
-                                this.failureStateHandler.addFailure(newHead.getContextInfo(), DTOConstants.FAILURE_REASON_SERVICE_NOT_GETTABLE);
-                            }
-                        }
-                    }
+                    appModule.addPersistenceModule(persistenceModule);
+                } catch (final Exception e1) {
+                    DeploymentLoader.logger.error("Unable to load Persistence Unit from EAR: " + appModule.getJarLocation() + ", module: " + moduleName + ". Exception: " + e1.getMessage(), e1);
                 }
             }
         }
-        this.failureStateHandler.removeAll(info);
-        updateRuntimeChangeCount();
-    }
 
-    /**
-     * Find the list of matching contexts for the whiteboard service
-     */
-    private List<WhiteboardContextHandler> getMatchingContexts(final WhiteboardServiceInfo<?> info)
-    {
-        final List<WhiteboardContextHandler> result = new ArrayList<WhiteboardContextHandler>();
-        for(final List<WhiteboardContextHandler> handlerList : this.contextMap.values())
-        {
-            final WhiteboardContextHandler h = handlerList.get(0);
-            // check whether the servlet context helper is visible to the whiteboard bundle
-            // see chapter 140.2
-            boolean visible = h.getContextInfo().getServiceId() < 0; // internal ones are always visible
-            if ( !visible )
-            {
-                final String filterString = "(" + Constants.SERVICE_ID + "=" + String.valueOf(h.getContextInfo().getServiceId()) + ")";
-                try
-                {
-                    final Collection<ServiceReference<ServletContextHelper>> col = info.getServiceReference().getBundle().getBundleContext().getServiceReferences(ServletContextHelper.class, filterString);
-                    if ( !col.isEmpty() )
-                    {
-                        visible = true;
-                    }
-                }
-                catch ( final InvalidSyntaxException ise )
-                {
-                    // we ignore this and treat it as an invisible service
-                }
-            }
-            if ( visible )
-            {
-                if ( h.getContextInfo().getServiceReference() != null )
-                {
-                    if ( info.getContextSelectionFilter().match(h.getContextInfo().getServiceReference()) )
-                    {
-                        result.add(h);
-                    }
-                }
-                else
-                {
-                    final Map<String, String> props = new HashMap<String, String>();
-                    props.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_CONTEXT_NAME, h.getContextInfo().getName());
-                    props.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_CONTEXT_PATH, h.getContextInfo().getPath());
-                    props.put(HttpWhiteboardConstants.HTTP_SERVICE_CONTEXT_PROPERTY, h.getContextInfo().getName());
+        final List<URL> persistenceFragmentUrls = (List<URL>) appModule.getAltDDs().get("persistence-fragment.xml");
+        if (persistenceFragmentUrls != null) {
+            for (final URL persistenceFragmentUrl : persistenceFragmentUrls) {
+                try {
+                    final PersistenceFragment persistenceFragment = JaxbPersistenceFactory.getPersistence(PersistenceFragment.class, persistenceFragmentUrl);
+                    // merging
+                    for (final PersistenceUnitFragment fragmentUnit : persistenceFragment.getPersistenceUnitFragment()) {
+                        for (final PersistenceModule persistenceModule : appModule.getPersistenceModules()) {
+                            final Persistence persistence = persistenceModule.getPersistence();
+                            for (final PersistenceUnit unit : persistence.getPersistenceUnit()) {
+                                if (!fragmentUnit.getName().equals(unit.getName())) {
+                                    continue;
+                                }
 
-                    if ( info.getContextSelectionFilter().matches(props) )
-                    {
-                        result.add(h);
-                    }
-                }
-            }
-        }
-        return result;
-    }
+                                if (!persistenceFragment.getVersion().equals(persistence.getVersion())) {
+                                    logger.error("persistence unit version and fragment version are different, fragment will be ignored");
+                                    continue;
+                                }
 
-    /**
-     * Add new whiteboard service to the registry
-     *
-     * @param info Whiteboard service info
-     * @return {@code true} if it matches this http service runtime
-     */
-    public boolean addWhiteboardService(@Nonnull final WhiteboardServiceInfo<?> info)
-    {
-        // no logging and no DTO if other target service
-        if ( isMatchingService(info) )
-        {
-            if ( info.isValid() )
-            {
-                if ( info instanceof PreprocessorInfo )
-                {
-                    final PreprocessorHandler handler = new PreprocessorHandler(this.httpBundleContext,
-                            this.webContext, ((PreprocessorInfo)info));
-                    final int result = handler.init();
-                    if ( result == -1 )
-                    {
-                        synchronized ( this.preprocessorHandlers )
-                        {
-                            final List<PreprocessorHandler> newList = new ArrayList<PreprocessorHandler>(this.preprocessorHandlers);
-                            newList.add(handler);
-                            Collections.sort(newList);
-                            this.preprocessorHandlers = newList;
-                        }
-                    }
-                    else
-                    {
-                        this.failureStateHandler.addFailure(info, FAILURE_REASON_VALIDATION_FAILED);
-                    }
-                    updateRuntimeChangeCount();
-                    return true;
-                }
-                synchronized ( this.contextMap )
-                {
-                    final List<WhiteboardContextHandler> handlerList = this.getMatchingContexts(info);
-                    this.servicesMap.put(info, handlerList);
-                    if (handlerList.isEmpty())
-                    {
-                        this.failureStateHandler.addFailure(info, FAILURE_REASON_NO_SERVLET_CONTEXT_MATCHING);
-                    }
-                    else
-                    {
-                        for(final WhiteboardContextHandler h : handlerList)
-                        {
-                            final int result = this.checkForServletRegistrationInHttpServiceContext(h, info);
-                            if ( result == -1)
-                            {
-                                this.registerWhiteboardService(h, info);
-                                if ( info instanceof ListenerInfo && ((ListenerInfo)info).isListenerType(ServletContextListener.class.getName()) )
-                                {
-                                    final ListenerHandler handler = h.getRegistry().getEventListenerRegistry().getServletContextListener((ListenerInfo)info);
-                                    if ( handler != null )
-                                    {
-                                        final ServletContextListener listener = (ServletContextListener)handler.getListener();
-                                        if ( listener != null )
-                                        {
-                                            EventListenerRegistry.contextInitialized(handler.getListenerInfo(), listener, new ServletContextEvent(handler.getContext()));
-                                        }
+                                if ("file".equals(persistenceFragmentUrl.getProtocol())) {
+                                    persistenceModule.getWatchedResources().add(URLs.toFile(persistenceFragmentUrl).getAbsolutePath());
+                                }
+
+                                for (final String clazz : fragmentUnit.getClazz()) {
+                                    if (!unit.getClazz().contains(clazz)) {
+                                        logger.info("Adding class " + clazz + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getClazz().add(clazz);
                                     }
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-            else
-            {
-                this.failureStateHandler.addFailure(info, FAILURE_REASON_VALIDATION_FAILED);
-            }
-            updateRuntimeChangeCount();
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Check if a registration for a servlet or resource is tried against the http context
-     * of the http service
-     * @param h The handler
-     * @param info The info
-     * @return {@code -1} if everything is ok, error code otherwise
-     */
-    private int checkForServletRegistrationInHttpServiceContext(final WhiteboardContextHandler h,
-            final WhiteboardServiceInfo<?> info)
-    {
-        if ( h.getContextInfo().getServiceId() == HttpServiceFactory.HTTP_SERVICE_CONTEXT_SERVICE_ID )
-        {
-            // In order to be compatible with the implementation of the http service 1.0
-            // we need still support servlet/resource registrations not using the
-            // 1.1 HTTP_SERVICE_CONTEXT_PROPERTY property. (contains is not the best check but
-            // it should do the trick)
-          	if ( info instanceof ResourceInfo && info.getContextSelection().contains(HttpWhiteboardConstants.HTTP_SERVICE_CONTEXT_PROPERTY))
-        	    {
-                this.failureStateHandler.addFailure(info, HttpServiceFactory.HTTP_SERVICE_CONTEXT_SERVICE_ID, DTOConstants.FAILURE_REASON_VALIDATION_FAILED);
-
-                return DTOConstants.FAILURE_REASON_VALIDATION_FAILED;
-            }
-        	    else if ( info instanceof ServletInfo && info.getContextSelection().contains(HttpWhiteboardConstants.HTTP_SERVICE_CONTEXT_PROPERTY))
-        	    {
-        		    final ServletInfo servletInfo = (ServletInfo)info;
-        		    final boolean nameIsEmpty = servletInfo.getName() == null || servletInfo.getName().isEmpty();
-        		    final boolean errorPageIsEmpty = servletInfo.getErrorPage() == null || servletInfo.getErrorPage().length == 0;
-        		    final boolean patternIsEmpty = servletInfo.getPatterns() == null || servletInfo.getPatterns().length == 0;
-        		    if ( !nameIsEmpty || !errorPageIsEmpty )
-        		    {
-        			    if ( patternIsEmpty )
-        			    {
-        				    // no pattern, so this is valid
-        				    return -1;
-        			    }
-        		    }
-
-    		        // pattern is invalid, regardless of the other values
-    		        this.failureStateHandler.addFailure(info, HttpServiceFactory.HTTP_SERVICE_CONTEXT_SERVICE_ID, DTOConstants.FAILURE_REASON_VALIDATION_FAILED);
-
-    		        return DTOConstants.FAILURE_REASON_VALIDATION_FAILED;
-        	    }
-        }
-
-        return -1;
-    }
-
-    /**
-     * Remove whiteboard service from the registry.
-     *
-     * @param info The service id of the whiteboard service
-     */
-    public void removeWhiteboardService(final WhiteboardServiceInfo<?> info )
-    {
-        synchronized ( this.contextMap )
-        {
-            if ( !failureStateHandler.remove(info) )
-            {
-                if ( info instanceof PreprocessorInfo )
-                {
-                    synchronized ( this.preprocessorHandlers )
-                    {
-                        final List<PreprocessorHandler> newList = new ArrayList<PreprocessorHandler>(this.preprocessorHandlers);
-                        final Iterator<PreprocessorHandler> iter = newList.iterator();
-                        while ( iter.hasNext() )
-                        {
-                            final PreprocessorHandler handler = iter.next();
-                            if ( handler.getPreprocessorInfo().compareTo((PreprocessorInfo)info) == 0 )
-                            {
-                                iter.remove();
-                                this.preprocessorHandlers = newList;
-                                updateRuntimeChangeCount();
-                                return;
-                            }
-                        }
-                        // not found, nothing to do
-                    }
-                    return;
-                }
-                final List<WhiteboardContextHandler> handlerList = this.servicesMap.remove(info);
-                if ( handlerList != null )
-                {
-                    for(final WhiteboardContextHandler h : handlerList)
-                    {
-                        if ( !failureStateHandler.remove(info, h.getContextInfo().getServiceId()) )
-                        {
-                            if ( info instanceof ListenerInfo && ((ListenerInfo)info).isListenerType(ServletContextListener.class.getName()) )
-                            {
-                                final ListenerHandler handler = h.getRegistry().getEventListenerRegistry().getServletContextListener((ListenerInfo)info);
-                                if ( handler != null )
-                                {
-                                    final ServletContextListener listener = (ServletContextListener) handler.getListener();
-                                    if ( listener != null )
-                                    {
-                                        EventListenerRegistry.contextDestroyed(handler.getListenerInfo(), listener, new ServletContextEvent(handler.getContext()));
+                                for (final String mappingFile : fragmentUnit.getMappingFile()) {
+                                    if (!unit.getMappingFile().contains(mappingFile)) {
+                                        logger.info("Adding mapping file " + mappingFile + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getMappingFile().add(mappingFile);
                                     }
                                 }
+                                for (final String jarFile : fragmentUnit.getJarFile()) {
+                                    if (!unit.getJarFile().contains(jarFile)) {
+                                        logger.info("Adding jar file " + jarFile + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getJarFile().add(jarFile);
+                                    }
+                                }
+                                if (fragmentUnit.isExcludeUnlistedClasses()) {
+                                    unit.setExcludeUnlistedClasses(true);
+                                    logger.info("Excluding unlisted classes for persistence unit " + fragmentUnit.getName());
+                                } // else let the main persistence unit decide
                             }
-                            this.unregisterWhiteboardService(h, info);
                         }
+                    }
+                } catch (final Exception e1) {
+                    DeploymentLoader.logger.error("Unable to load Persistence Unit Fragment from EAR: " + appModule.getJarLocation() + ", fragment: " + persistenceFragmentUrl.toString() + ". Exception: " + e1.getMessage(), e1);
+                }
+            }
+        }
+
+        return appModule;
+    }
+
+    public static void readResourcesXml(final Module module) {
+        { // xml
+            final Source url = getSource(module.getAltDDs().get("resources.xml"));
+            if (url != null) {
+                try {
+                    final Resources openejb = JaxbOpenejb.unmarshal(Resources.class, url.get());
+                    module.initResources(check(openejb));
+                } catch (final Exception e) {
+                    logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
+                }
+            }
+        }
+        { // json
+            final Source url = getSource(module.getAltDDs().get("resources.json"));
+            if (url != null) {
+                try {
+                    final Resources openejb = JSonConfigReader.read(Resources.class, url.get());
+                    module.initResources(check(openejb));
+                } catch (final Exception e) {
+                    logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
+                }
+            }
+        }
+    }
+
+    public static Resources check(final Resources resources) {
+        final List<Resource> resourceList = resources.getResource();
+        for (final Resource resource : resourceList) {
+            if (resource.getClassName() != null) {
+                try {
+                    ParentClassLoaderFinder.Helper.get().loadClass(resource.getClassName());
+                    continue;
+                } catch (Exception e) {
+                    // ignore if this class is not found in the classloader
+                }
+
+                // if the resource class cannot be loaded,
+                // set the lazy property to true
+                // and the app classloader property to true
+
+                final Boolean lazySpecified = Boolean.valueOf(resource.getProperties().getProperty("Lazy", "false"));
+
+                resource.getProperties().setProperty("Lazy", "true");
+                resource.getProperties().setProperty("UseAppClassLoader", "true");
+
+                if (!lazySpecified) {
+                    resource.getProperties().setProperty("InitializeAfterDeployment", "true");
+                }
+            }
+        }
+
+        return resources;
+    }
+
+    private void readValidationConfigType(final Module module) throws OpenEJBException {
+        if (module.getValidationConfig() != null) {
+            return;
+        }
+
+        final Source value = getSource(module.getAltDDs().get("validation.xml"));
+        if (value != null) {
+            try {
+                final ValidationConfigType validationConfigType = JaxbOpenejb.unmarshal(ValidationConfigType.class, value.get(), false);
+                module.setValidationConfig(validationConfigType);
+            } catch (final Exception e) {
+                logger.warning("can't read validation.xml to construct a validation factory, it will be ignored");
+            }
+        }
+    }
+
+    private void readOpenejbJar(final EjbModule ejbModule) throws OpenEJBException {
+        final Source source = getSource(ejbModule.getAltDDs().get("openejb-jar.xml"));
+
+        if (source != null) {
+            try {
+                // Attempt to parse it first as a v3 descriptor
+                final OpenejbJar openejbJar = JaxbOpenejbJar3.unmarshal(OpenejbJar.class, source.get()).postRead();
+                ejbModule.setOpenejbJar(openejbJar);
+            } catch (final Exception v3ParsingException) {
+                // Attempt to parse it second as a v2 descriptor
+                final OpenejbJar openejbJar = new OpenejbJar();
+                ejbModule.setOpenejbJar(openejbJar);
+
+                try {
+                    final JAXBElement element = (JAXBElement) JaxbOpenejbJar2.unmarshal(OpenejbJarType.class, source.get());
+                    final OpenejbJarType o2 = (OpenejbJarType) element.getValue();
+                    ejbModule.getAltDDs().put("openejb-jar.xml", o2);
+
+                    final GeronimoEjbJarType g2 = OpenEjb2Conversion.convertToGeronimoOpenejbXml(o2);
+
+                    ejbModule.getAltDDs().put("geronimo-openejb.xml", g2);
+                } catch (final Exception v2ParsingException) {
+                    // Now we have to determine which error to throw; the v3 file exception or the fallback v2 file exception.
+                    final Exception[] realIssue = {v3ParsingException};
+
+                    try {
+                        final SAXParserFactory factory = Saxs.namespaceAwareFactory();
+                        final SAXParser parser = factory.newSAXParser();
+                        parser.parse(source.get(), new DefaultHandler() {
+                            public void startElement(final String uri, final String localName, final String qName, final Attributes attributes) throws SAXException {
+                                if (localName.equals("environment")) {
+                                    realIssue[0] = v2ParsingException;
+                                    throw new SAXException("Throw exception to stop parsing");
+                                }
+                                if (uri == null) {
+                                    return;
+                                }
+                                if (uri.contains("openejb-jar-2.") || uri.contains("geronimo.apache.org/xml/ns")) {
+                                    realIssue[0] = v2ParsingException;
+                                    throw new SAXException("Throw exception to stop parsing");
+                                }
+                            }
+                        });
+                    } catch (final Exception dontCare) {
+                        // no-op
+                    }
+
+                    String filePath = "<error: could not be written>";
+                    try {
+                        File tempFile;
+                        try {
+                            tempFile = File.createTempFile("openejb-jar-", ".xml");
+                        } catch (final Throwable e) {
+                            final File tmp = new File("tmp");
+                            if (!tmp.exists() && !tmp.mkdirs()) {
+                                throw new IOException("Failed to create local tmp directory: " + tmp.getAbsolutePath());
+                            }
+
+                            tempFile = File.createTempFile("openejb-jar-", ".xml", tmp);
+                        }
+                        try {
+                            IO.copy(source.get(), tempFile);
+                        } catch (final IOException e) {
+                            // no-op
+                        }
+                        filePath = tempFile.getAbsolutePath();
+                    } catch (final IOException e) {
+                        // no-op
+                    }
+
+                    final Exception e = realIssue[0];
+                    if (e instanceof SAXException) {
+                        throw new OpenEJBException("Cannot parse the openejb-jar.xml. Xml content written to: " + filePath, e);
+                    } else if (e instanceof JAXBException) {
+                        throw new OpenEJBException("Cannot unmarshall the openejb-jar.xml. Xml content written to: " + filePath, e);
+                    } else if (e instanceof IOException) {
+                        throw new OpenEJBException("Cannot read the openejb-jar.xml.", e);
+                    } else {
+                        throw new OpenEJBException("Encountered unknown error parsing the openejb-jar.xml.", e);
                     }
                 }
             }
-            this.failureStateHandler.removeAll(info);
         }
-        updateRuntimeChangeCount();
-    }
 
-    /**
-     * Register whiteboard service in the http service
-     * @param handler Context handler
-     * @param info Whiteboard service info
-     */
-    private void registerWhiteboardService(final WhiteboardContextHandler handler, final WhiteboardServiceInfo<?> info)
-    {
-        try
-        {
-            int failureCode = -1;
-            if ( info instanceof ServletInfo )
-            {
-                final ExtServletContext servletContext = handler.getServletContext(info.getServiceReference().getBundle());
-                if ( servletContext == null )
-                {
-                    failureCode = DTOConstants.FAILURE_REASON_SERVLET_CONTEXT_FAILURE;
+        final Source source1 = getSource(ejbModule.getAltDDs().get("geronimo-openejb.xml"));
+        if (source1 != null) {
+            try {
+                GeronimoEjbJarType geronimoEjbJarType = null;
+                final Object o = JaxbOpenejbJar2.unmarshal(GeronimoEjbJarType.class, source1.get());
+                if (o instanceof GeronimoEjbJarType) {
+                    geronimoEjbJarType = (GeronimoEjbJarType) o;
+                } else if (o instanceof JAXBElement) {
+                    final JAXBElement element = (JAXBElement) o;
+                    geronimoEjbJarType = (GeronimoEjbJarType) element.getValue();
                 }
-                else
-                {
-                    final ServletHandler servletHandler = new WhiteboardServletHandler(
-                        handler.getContextInfo().getServiceId(),
-                        servletContext,
-                        (ServletInfo)info,
-                        handler.getBundleContext(),
-                        info.getServiceReference().getBundle(),
-                        this.httpBundleContext.getBundle());
-                    handler.getRegistry().registerServlet(servletHandler);
+                if (geronimoEjbJarType != null) {
+                    final Object nested = geronimoEjbJarType.getOpenejbJar();
+                    if (nested != null && nested instanceof OpenejbJar) {
+                        final OpenejbJar existingOpenejbJar = ejbModule.getOpenejbJar();
+                        if (existingOpenejbJar == null || existingOpenejbJar.getEjbDeploymentCount() <= 0) {
+                            final OpenejbJar openejbJar = (OpenejbJar) nested;
+                            ejbModule.getAltDDs().put("openejb-jar.xml", openejbJar);
+                            ejbModule.setOpenejbJar(openejbJar);
+                        }
+                    }
+                    ejbModule.getAltDDs().put("geronimo-openejb.xml", geronimoEjbJarType);
                 }
+            } catch (final Exception e) {
+                throw new OpenEJBException("Failed parsing geronimo-openejb.xml", e);
             }
-            else if ( info instanceof FilterInfo )
-            {
-                final ExtServletContext servletContext = handler.getServletContext(info.getServiceReference().getBundle());
-                if ( servletContext == null )
-                {
-                    failureCode = DTOConstants.FAILURE_REASON_SERVLET_CONTEXT_FAILURE;
-                }
-                else
-                {
-                    final FilterHandler filterHandler = new WhiteboardFilterHandler(
-                            handler.getContextInfo().getServiceId(),
-                            servletContext,
-                            (FilterInfo)info,
-                            handler.getBundleContext());
-                    handler.getRegistry().registerFilter(filterHandler);
-                }
-            }
-            else if ( info instanceof ResourceInfo )
-            {
-                final ServletInfo servletInfo = ((ResourceInfo)info).getServletInfo();
-                final ExtServletContext servletContext = handler.getServletContext(info.getServiceReference().getBundle());
-                if ( servletContext == null )
-                {
-                    failureCode = DTOConstants.FAILURE_REASON_SERVLET_CONTEXT_FAILURE;
-                }
-                else
-                {
-                    final ServletHandler servleHandler = new HttpServiceServletHandler(
-                            handler.getContextInfo().getServiceId(),
-                            servletContext,
-                            servletInfo,
-                            new ResourceServlet(servletInfo.getPrefix()));
-                    handler.getRegistry().registerServlet(servleHandler);
-                }
-            }
-
-            else if ( info instanceof ListenerInfo )
-            {
-                final ExtServletContext servletContext = handler.getServletContext(info.getServiceReference().getBundle());
-                if ( servletContext == null )
-                {
-                    failureCode = DTOConstants.FAILURE_REASON_SERVLET_CONTEXT_FAILURE;
-                }
-                else
-                {
-                    final ListenerHandler listenerHandler = new WhiteboardListenerHandler(
-                            handler.getContextInfo().getServiceId(),
-                            servletContext,
-                            (ListenerInfo)info,
-                            handler.getBundleContext());
-                    handler.getRegistry().registerListeners(listenerHandler);
-                }
-            }
-            else
-            {
-                // This should never happen, but we log anyway
-                SystemLogger.error("Unknown whiteboard service " + info.getServiceReference(), null);
-            }
-            if ( failureCode != -1 )
-            {
-                this.failureStateHandler.addFailure(info, handler.getContextInfo().getServiceId(), failureCode);
-            }
-        }
-        catch (final Exception e)
-        {
-            this.failureStateHandler.addFailure(info, handler.getContextInfo().getServiceId(), FAILURE_REASON_UNKNOWN, e);
-        }
-    }
-
-    /**
-     * Unregister whiteboard service from the http service
-     * @param handler Context handler
-     * @param info Whiteboard service info
-     */
-    private void unregisterWhiteboardService(final WhiteboardContextHandler handler, final WhiteboardServiceInfo<?> info)
-    {
-        try
-        {
-            if ( info instanceof ServletInfo )
-            {
-                handler.getRegistry().unregisterServlet((ServletInfo)info, true);
-                handler.ungetServletContext(info.getServiceReference().getBundle());
-            }
-            else if ( info instanceof FilterInfo )
-            {
-                handler.getRegistry().unregisterFilter((FilterInfo)info, true);
-                handler.ungetServletContext(info.getServiceReference().getBundle());
-            }
-            else if ( info instanceof ResourceInfo )
-            {
-                handler.getRegistry().unregisterServlet(((ResourceInfo)info).getServletInfo(), true);
-                handler.ungetServletContext(info.getServiceReference().getBundle());
-            }
-
-            else if ( info instanceof ListenerInfo )
-            {
-                handler.getRegistry().unregisterListeners((ListenerInfo) info);
-                handler.ungetServletContext(info.getServiceReference().getBundle());
-            }
-        }
-        catch (final Exception e)
-        {
-            SystemLogger.error("Exception while unregistering whiteboard service " + info.getServiceReference(), e);
         }
 
     }
 
-    /**
-     * Check whether the service is specifying a target http service runtime
-     * and if so if that is matching this runtime
-     */
-    private boolean isMatchingService(final AbstractInfo<?> info)
-    {
-        final String target = info.getTarget();
-        if ( target != null )
-        {
-            try
-            {
-                final Filter f = this.httpBundleContext.createFilter(target);
-                return f.match(this.runtimeServiceReg.getReference());
-            }
-            catch ( final InvalidSyntaxException ise)
-            {
-                // log and ignore service
-                SystemLogger.error("Invalid target filter expression for " + info.getServiceReference() + " : " + target, ise);
-                return false;
+    private void readAppClient(final ClientModule clientModule, final AppModule appModule) throws OpenEJBException {
+        if (clientModule.getApplicationClient() != null) {
+            return;
+        }
+
+        final Object data = clientModule.getAltDDs().get("application-client.xml");
+        if (data instanceof ApplicationClient) {
+            clientModule.setApplicationClient((ApplicationClient) data);
+        } else if (data instanceof URL) {
+            final URL url = (URL) data;
+            final ApplicationClient applicationClient = readApplicationClient(url);
+            clientModule.setApplicationClient(applicationClient);
+        } else {
+            if (!clientModule.isEjbModuleGenerated()) {
+                DeploymentLoader.logger.debug("No application-client.xml found assuming annotations present: " + appModule.getJarLocation() + ", module: " + clientModule.getModuleId());
+                clientModule.setApplicationClient(new ApplicationClient());
             }
         }
-        return true;
     }
 
-    private WhiteboardContextHandler getContextHandler(final Long contextId)
-    {
-        synchronized ( this.contextMap )
-        {
-            for(final List<WhiteboardContextHandler> handlerList : this.contextMap.values())
-            {
-                final WhiteboardContextHandler h = handlerList.get(0);
-                if ( h.getContextInfo().getServiceId() == contextId )
-                {
-                    return h;
+    public void readEjbJar(final EjbModule ejbModule, final AppModule appModule) throws OpenEJBException {
+        if (ejbModule.getEjbJar() != null) {
+            return;
+        }
+
+        final Source data = getSource(ejbModule.getAltDDs().get("ejb-jar.xml"));
+        if (data != null) {
+            try {
+                final EjbJar ejbJar = readEjbJar(data.get());
+                ejbModule.setEjbJar(ejbJar);
+            } catch (final IOException e) {
+                throw new OpenEJBException(e);
+            }
+        } else {
+            DeploymentLoader.logger.debug("No ejb-jar.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + ejbModule.getModuleId());
+            ejbModule.setEjbJar(new EjbJar());
+        }
+    }
+
+    private static void checkDuplicatedByBeansXml(final List<String> list, final List<String> duplicated) {
+        final Iterator<String> it = list.iterator();
+        while (it.hasNext()) {
+            final String str = it.next();
+            if (list.indexOf(str) != list.lastIndexOf(str)) {
+                duplicated.add(str);
+            }
+        }
+    }
+
+    public static void checkDuplicatedByBeansXml(final Beans beans, final Beans complete) {
+        checkDuplicatedByBeansXml(beans.getAlternativeClasses(), complete.getDuplicatedAlternatives().getClasses());
+        checkDuplicatedByBeansXml(beans.getAlternativeStereotypes(), complete.getDuplicatedAlternatives().getStereotypes());
+        checkDuplicatedByBeansXml(beans.getDecorators(), complete.getDuplicatedDecorators());
+        checkDuplicatedByBeansXml(beans.getInterceptors(), complete.getDuplicatedInterceptors());
+    }
+
+    private void readBeans(final EjbModule ejbModule) throws OpenEJBException {
+        if (ejbModule.getBeans() != null) {
+            return;
+        }
+
+        final Object raw = ejbModule.getAltDDs().get("beans.xml");
+        final Source data = getSource(raw);
+        if (data != null) {
+            try {
+                final Beans beans = readBeans(data.get());
+                checkDuplicatedByBeansXml(beans, beans);
+                if (UrlSource.class.isInstance(data)) {
+                    beans.setUri(UrlSource.class.cast(data).getUrl().toExternalForm());
+                } else {
+                    beans.setUri("jar:file://" + ejbModule.getModuleId() + "!/META-INF/beans.xml");
+                }
+                ejbModule.setBeans(beans);
+            } catch (final IOException e) {
+                throw new OpenEJBException(e);
+            }
+        } else if (raw instanceof Beans) {
+            ejbModule.setBeans((Beans) raw);
+        } else if (List.class.isInstance(raw)) {
+            final CompositeBeans compositeBeans = new CompositeBeans();
+            final List list = List.class.cast(raw);
+            if (!list.isEmpty()) {
+                for (final Object o : list) {
+                    try {
+                        final UrlSource urlSource = UrlSource.class.cast(o);
+                        mergeBeansXml(compositeBeans, readBeans(urlSource.get()), urlSource.getUrl());
+                    } catch (final IOException e) {
+                        throw new OpenEJBException(e);
+                    }
+                }
+                ejbModule.setBeans(compositeBeans);
+            }
+        }
+    }
+
+    private static Beans mergeBeansXml(final CompositeBeans current, final Beans beans, final URL url) {
+        current.mergeClasses(url, beans);
+        current.getScan().getExclude().addAll(beans.getScan().getExclude());
+
+        // check is done here since later we lost the data of the origin
+        ReadDescriptors.checkDuplicatedByBeansXml(beans, current);
+
+        final String beanDiscoveryMode = beans.getBeanDiscoveryMode();
+        current.getDiscoveryByUrl().put(url, beanDiscoveryMode == null ? "ALL" : beanDiscoveryMode);
+        return current;
+    }
+
+    // package scoped for testing
+    void readCmpOrm(final EjbModule ejbModule) throws OpenEJBException {
+        final Object data = ejbModule.getAltDDs().get("openejb-cmp-orm.xml");
+        if (data != null && !(data instanceof EntityMappings)) {
+            if (data instanceof URL) {
+                final URL url = (URL) data;
+                try {
+                    final EntityMappings entitymappings = (EntityMappings) JaxbJavaee.unmarshalJavaee(EntityMappings.class, IO.read(url));
+                    ejbModule.getAltDDs().put("openejb-cmp-orm.xml", entitymappings);
+                } catch (final SAXException e) {
+                    throw new OpenEJBException("Cannot parse the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+                } catch (final JAXBException e) {
+                    throw new OpenEJBException("Cannot unmarshall the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+                } catch (final IOException e) {
+                    throw new OpenEJBException("Cannot read the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+                } catch (final Exception e) {
+                    throw new OpenEJBException("Encountered unknown error parsing the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
                 }
             }
         }
+    }
+
+    private void readConnector(final ConnectorModule connectorModule, final AppModule appModule) throws OpenEJBException {
+        if (connectorModule.getConnector() != null) {
+            return;
+        }
+
+        final Object data = connectorModule.getAltDDs().get("ra.xml");
+        if (data instanceof Connector) {
+            connectorModule.setConnector((Connector) data);
+        } else if (data instanceof URL) {
+            final URL url = (URL) data;
+            final Connector connector = readConnector(url);
+            connectorModule.setConnector(connector);
+        } else {
+            DeploymentLoader.logger.debug("No ra.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + connectorModule.getModuleId());
+            connectorModule.setConnector(new Connector());
+        }
+    }
+
+    private void readWebApp(final WebModule webModule, final AppModule appModule) throws OpenEJBException {
+        if (webModule.getWebApp() != null) {
+            mergeWebFragments(webModule);
+            return;
+        }
+
+        final Object data = webModule.getAltDDs().get("web.xml");
+        if (data instanceof WebApp) {
+            webModule.setWebApp((WebApp) data);
+        } else if (data instanceof URL) {
+            final URL url = (URL) data;
+            final WebApp webApp = readWebApp(url);
+            webModule.setWebApp(webApp);
+        } else {
+            DeploymentLoader.logger.debug("No web.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + webModule.getModuleId());
+            webModule.setWebApp(new WebApp());
+        }
+
+        mergeWebFragments(webModule);
+    }
+
+    private void mergeWebFragments(final WebModule webModule) {
+        // web-fragment.xml, to get jndi entries to merge, other stuff is done by tomcat ATM
+        final Collection<URL> urls = Collection.class.cast(webModule.getAltDDs().get("web-fragment.xml"));
+        if (urls != null) {
+            for (final URL rawUrl : urls) {
+                if (rawUrl != null) {
+                    final Source url = getSource(rawUrl);
+                    try {
+                        final WebFragment webFragment = WebFragment.class.cast(JaxbJavaee.unmarshal(WebFragment.class, url.get(), false));
+
+                        // in tomcat if the env entry is already don't override it
+                        mergeOnlyMissingEntries(webModule.getWebApp().getPersistenceContextRefMap(), webFragment.getPersistenceContextRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getPersistenceUnitRefMap(), webFragment.getPersistenceUnitRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getMessageDestinationRefMap(), webFragment.getMessageDestinationRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getDataSourceMap(), webFragment.getDataSource());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getJMSConnectionFactoriesMap(), webFragment.getJMSConnectionFactories());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getEjbLocalRefMap(), webFragment.getEjbLocalRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getEjbRefMap(), webFragment.getEjbRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getServiceRefMap(), webFragment.getServiceRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getEnvEntryMap(), webFragment.getEnvEntry());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getResourceEnvRefMap(), webFragment.getResourceEnvRef());
+                        mergeOnlyMissingEntries(webModule.getWebApp().getResourceRefMap(), webFragment.getResourceRef());
+                    } catch (final Exception e) {
+                        logger.warning("can't read " + url.toString(), e);
+                    }
+                }
+            }
+        }
+    }
+
+    private static <A extends Keyable<String>> void mergeOnlyMissingEntries(final Map<String, A> existing, final Collection<A> news) {
+        for (final A entry : news) {
+            final String key = entry.getKey();
+            if (!existing.containsKey(key)) {
+                existing.put(key, entry);
+            }
+        }
+    }
+
+    public static ApplicationClient readApplicationClient(final URL url) throws OpenEJBException {
+        final ApplicationClient applicationClient;
+        try {
+            applicationClient = ApplicationClientXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the application-client.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the application-client.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the application-client.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the application-client.xml file: " + url.toExternalForm(), e);
+        }
+        return applicationClient;
+    }
+
+    public static EjbJar readEjbJar(final InputStream is) throws OpenEJBException {
+        try {
+            final String content = IO.slurp(is);
+            if (isEmptyEjbJar(new ByteArrayInputStream(content.getBytes()))) {
+                final String id = getId(new ByteArrayInputStream(content.getBytes()));
+                return new EjbJar(id);
+            }
+            return EjbJarXml.unmarshal(new ByteArrayInputStream(content.getBytes()));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered error parsing the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
+        }
+    }
+
+    public static Beans readBeans(final InputStream inputStream) throws OpenEJBException {
+        try {
+            final String content = IO.slurp(inputStream).trim();
+            if (content.length() == 0) { // otherwise we want to read <beans /> attributes
+                final Beans beans = new Beans();
+                beans.setBeanDiscoveryMode("ALL"); // backward compatibility
+                return beans;
+            }
+            return (Beans) JaxbJavaee.unmarshalJavaee(Beans.class, new ByteArrayInputStream(content.getBytes()));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the beans.xml", e);// file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            e.printStackTrace();
+            throw new OpenEJBException("Cannot unmarshall the beans.xml", e);// file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the beans.xml", e);// file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the beans.xml", e);// file: " + url.toExternalForm(), e);
+        }
+    }
+
+    private static boolean isEmptyEjbJar(final InputStream is) throws IOException, ParserConfigurationException, SAXException {
+        return isEmpty(is, "ejb-jar");
+    }
+
+    private static boolean isEmpty(final InputStream is, final String rootElement) throws IOException, ParserConfigurationException, SAXException {
+        final LengthInputStream in = new LengthInputStream(is);
+        final InputSource inputSource = new InputSource(in);
+
+        final SAXParser parser;
+
+        final Thread thread = Thread.currentThread();
+        final ClassLoader original = thread.getContextClassLoader();
+        thread.setContextClassLoader(Saxs.class.getClassLoader());
+        try {
+            parser = Saxs.namespaceAwareFactory().newSAXParser();
+        } finally {
+            thread.setContextClassLoader(original);
+        }
+
+        try {
+            parser.parse(inputSource, new DefaultHandler() {
+                public void startElement(final String uri, final String localName, final String qName, final Attributes att) throws SAXException {
+                    if (!localName.equals(rootElement)) {
+                        throw new SAXException(localName);
+                    }
+                }
+
+                public InputSource resolveEntity(final String publicId, final String systemId) throws IOException, SAXException {
+                    return new InputSource(new ByteArrayInputStream(new byte[0]));
+                }
+            });
+            return true;
+        } catch (final SAXException e) {
+            return in.getLength() == 0;
+        }
+    }
+
+    private static String getId(final InputStream is) {
+        final String[] id = {null};
+
+        try {
+            final LengthInputStream in = new LengthInputStream(is);
+            final InputSource inputSource = new InputSource(in);
+
+            final SAXParser parser = Saxs.namespaceAwareFactory().newSAXParser();
+
+            parser.parse(inputSource, new DefaultHandler() {
+                public void startElement(final String uri, final String localName, final String qName, final Attributes att) throws SAXException {
+                    id[0] = att.getValue("id");
+                }
+
+                public InputSource resolveEntity(final String publicId, final String systemId) throws IOException, SAXException {
+                    return new InputSource(new ByteArrayInputStream(new byte[0]));
+                }
+            });
+        } catch (final Exception e) {
+            // no-op
+        }
+
+        return id[0];
+    }
+
+    public static Webservices readWebservices(final URL url) throws OpenEJBException {
+        try {
+            return WebservicesXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
+        }
+    }
+
+    public static HandlerChains readHandlerChains(final URL url) throws OpenEJBException {
+        try {
+            return HandlerChainsXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
+        }
+    }
+
+    public static JavaWsdlMapping readJaxrpcMapping(final URL url) throws OpenEJBException {
+        final JavaWsdlMapping wsdlMapping;
+        try {
+            wsdlMapping = (JavaWsdlMapping) JaxbJavaee.unmarshalJavaee(JavaWsdlMapping.class, IO.read(url));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the JaxRPC mapping file: " + url.toExternalForm(), e);
+        }
+        return wsdlMapping;
+    }
+
+    public static Connector readConnector(final URL url) throws OpenEJBException {
+        Connector connector;
+        try {
+            connector = (Connector) JaxbJavaee.unmarshalJavaee(Connector.class, IO.read(url));
+        } catch (final JAXBException e) {
+            try {
+                final Connector10 connector10 = (Connector10) JaxbJavaee.unmarshalJavaee(Connector10.class, IO.read(url));
+                connector = Connector.newConnector(connector10);
+            } catch (final ParserConfigurationException | SAXException e1) {
+                throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
+            } catch (final JAXBException e1) {
+                throw new OpenEJBException("Cannot unmarshall the ra.xml file: " + url.toExternalForm(), e);
+            } catch (final IOException e1) {
+                throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
+            }
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the ra.xml file: " + url.toExternalForm(), e);
+        }
+        return connector;
+    }
+
+    public static WebApp readWebApp(final URL url) throws OpenEJBException {
+        final WebApp webApp;
+        try {
+            webApp = WebXml.unmarshal(url);
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the web.xml file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the web.xml file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the web.xml file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the web.xml file: " + url.toExternalForm(), e);
+        }
+        return webApp;
+    }
+
+    public static TldTaglib readTldTaglib(final URL url) throws OpenEJBException {
+        // TOMEE-164 Optimization on reading built-in tld files
+        if (url.getPath().contains("jstl-1.2.jar") || (url.getPath().contains("taglibs-standard-") && url.getPath().contains(".jar!"))) {
+            return SKIP_TAGLIB;
+        }
+        if (url.getPath().contains("myfaces-impl")) { // we should return SKIP_TAGLIB too
+            final TldTaglib taglib = new TldTaglib();
+            final Listener listener = new Listener();
+            listener.setListenerClass("org.apache.myfaces.webapp.StartupServletContextListener");
+            taglib.getListener().add(listener);
+            return taglib;
+        }
+
+        try {
+            return TldTaglibXml.unmarshal(url);
+        } catch (final SAXException e) {
+            final String message = "Cannot parse the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        } catch (final JAXBException e) {
+            final String message = "Cannot unmarshall the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        } catch (final IOException e) {
+            final String message = "Cannot read the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        } catch (final Exception e) {
+            final String message = "Encountered unknown error parsing the JSP tag library definition file: " + url.toExternalForm();
+            logger.warning(message);
+            logger.debug(message, e);
+        }
+        return SKIP_TAGLIB;
+    }
+
+    public static FacesConfig readFacesConfig(final URL url) throws OpenEJBException {
+        try {
+            final Source src = getSource(url);
+            if (src == null) {
+                return new FacesConfig();
+            }
+
+            final String content = IO.slurp(src.get());
+            if (isEmpty(new ByteArrayInputStream(content.getBytes()), "faces-config")) {
+                return new FacesConfig();
+            }
+            return FacesConfigXml.unmarshal(new ByteArrayInputStream(content.getBytes()));
+        } catch (final SAXException e) {
+            throw new OpenEJBException("Cannot parse the faces configuration file: " + url.toExternalForm(), e);
+        } catch (final JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the faces configuration file: " + url.toExternalForm(), e);
+        } catch (final IOException e) {
+            throw new OpenEJBException("Cannot read the faces configuration file: " + url.toExternalForm(), e);
+        } catch (final Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the faces configuration file: " + url.toExternalForm(), e);
+        }
+    }
+
+    private static Source getSource(final Object o) {
+        if (o instanceof URL) {
+            return new UrlSource((URL) o);
+        }
+
+        if (o instanceof Source) {
+            return (Source) o;
+        }
+
+        if (o instanceof String) {
+            return new StringSource((String) o);
+        }
+
         return null;
     }
 
-    public RegistryRuntime getRuntimeInfo()
-    {
-        final FailedDTOHolder failedDTOHolder = new FailedDTOHolder();
-
-        final Collection<ServletContextDTO> contextDTOs = new ArrayList<ServletContextDTO>();
-
-        // get sort list of context handlers
-        final List<WhiteboardContextHandler> contextHandlerList = new ArrayList<WhiteboardContextHandler>();
-        synchronized ( this.contextMap )
-        {
-            for (final List<WhiteboardContextHandler> list : this.contextMap.values())
-            {
-                if ( !list.isEmpty() )
-                {
-                    contextHandlerList.add(list.get(0));
-                }
-            }
-            this.failureStateHandler.getRuntimeInfo(failedDTOHolder);
-        }
-        Collections.sort(contextHandlerList);
-
-        for (final WhiteboardContextHandler handler : contextHandlerList)
-        {
-            final ServletContextDTO scDTO = ServletContextDTOBuilder.build(handler.getContextInfo(), handler.getSharedContext(), -1);
-
-            if ( registry.getRuntimeInfo(scDTO, failedDTOHolder) )
-            {
-                contextDTOs.add(scDTO);
-            }
-        }
-
-        final List<PreprocessorDTO> preprocessorDTOs = new ArrayList<PreprocessorDTO>();
-        final List<PreprocessorHandler> localHandlers = this.preprocessorHandlers;
-        for(final PreprocessorHandler handler : localHandlers)
-        {
-            preprocessorDTOs.add(PreprocessorDTOBuilder.build(handler.getPreprocessorInfo(), -1));
-        }
-
-        return new RegistryRuntime(failedDTOHolder, contextDTOs, preprocessorDTOs);
+    public interface Source {
+        InputStream get() throws IOException;
     }
 
-    /**
-     * Invoke all preprocessors
-     *
-     * @param req The request
-     * @param res The response
-     * @return {@code true} to continue with dispatching, {@code false} to terminate the request.
-     * @throws IOException
-     * @throws ServletException
-     */
-    public void invokePreprocessors(final HttpServletRequest req,
-    		final HttpServletResponse res,
-    		final Preprocessor dispatcher)
-    throws ServletException, IOException
-    {
-        final List<PreprocessorHandler> localHandlers = this.preprocessorHandlers;
-        if ( localHandlers.isEmpty() )
-        {
-        	// no preprocessors, we can directly execute
-            dispatcher.doFilter(req, res, null);
-        }
-        else
-        {
-	        final FilterChain chain = new FilterChain()
-	        {
-	        	private int index = 0;
+    public static class UrlSource implements Source {
+        private final URL url;
 
-	            @Override
-	            public void doFilter(final ServletRequest request, final ServletResponse response)
-	            throws IOException, ServletException
-	            {
-	            	if ( index == localHandlers.size() )
-	            	{
-	            		dispatcher.doFilter(request, response, null);
-	            	}
-	            	else
-	            	{
-	            		final PreprocessorHandler handler = localHandlers.get(index);
-	            		index++;
-	            		handler.handle(request, response, this);
-	            	}
-	            }
-	        };
-	        chain.doFilter(req, res);
+        public UrlSource(final URL url) {
+            this.url = url;
+        }
+
+        @Override
+        public InputStream get() throws IOException {
+            return IO.read(url);
+        }
+
+        public URL getUrl() {
+            return url;
+        }
+
+        @Override
+        public String toString() {
+            return "UrlSource{url=" + url + '}';
         }
     }
 
-    private void updateRuntimeChangeCount()
-    {
-        this.serviceRuntime.updateChangeCount(this.runtimeServiceReg);
+    public static class StringSource implements Source {
+        private final byte[] bytes;
+        private final String toString;
+
+        public StringSource(final String content) {
+            toString = content;
+            bytes = content.getBytes();
+        }
+
+        @Override
+        public InputStream get() throws IOException {
+            return new ByteArrayInputStream(bytes);
+        }
+
+        @Override
+        public String toString() {
+            return "StringSource{content=" + toString + '}';
+        }
     }
 }

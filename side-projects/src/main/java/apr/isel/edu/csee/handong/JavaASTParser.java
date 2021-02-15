@@ -8,8 +8,8 @@ import java.util.*;
 public class JavaASTParser {
     private String sourceCode;
     private CompilationUnit compilationUnit;
-    public HashMap<String, Integer> nodeCount = new HashMap<String, Integer>();
-    public HashMap<String, Set<String>> parentCollection = new HashMap<String, Set<String>>();
+    public HashMap<String, Integer> nodeCountMap = new HashMap<String, Integer>();
+    public HashMap<String, Set<String>> parentCollectionMap = new HashMap<String, Set<String>>();
 
     JavaASTParser(String sourceCode) {
         this.sourceCode = sourceCode;
@@ -50,11 +50,11 @@ public class JavaASTParser {
 
                 String currentNodeName = node.getClass().getSimpleName();
                 String parentNodeName = parentNode.getClass().getSimpleName();
-                parentCollection.putIfAbsent(currentNodeName, new HashSet<String>());
-                Set<String> parentSet = parentCollection.get(currentNodeName);
+                parentCollectionMap.putIfAbsent(currentNodeName, new HashSet<String>());
+                Set<String> parentSet = parentCollectionMap.get(currentNodeName);
                 parentSet.add(parentNodeName);
 
-                parentCollection.put(currentNodeName, parentSet);
+                parentCollectionMap.put(currentNodeName, parentSet);
                 return super.preVisit2(node);
             }
         });
@@ -65,8 +65,8 @@ public class JavaASTParser {
             @Override
             public boolean preVisit2(ASTNode node) {
                 String nodeName = node.getClass().getSimpleName();
-                nodeCount.putIfAbsent(nodeName, 0);
-                nodeCount.put(nodeName, nodeCount.get(nodeName) + 1);
+                nodeCountMap.putIfAbsent(nodeName, 0);
+                nodeCountMap.put(nodeName, nodeCountMap.get(nodeName) + 1);
                 return super.preVisit2(node);
             }
         });
@@ -81,12 +81,12 @@ public class JavaASTParser {
         return compilationUnit;
     }
 
-    public HashMap<String, Integer> getNodeCount() {
-        return nodeCount;
+    public HashMap<String, Integer> getnodeCountMap() {
+        return nodeCountMap;
     }
 
-    public HashMap<String, Set<String>> getParentCollection() {
-        return parentCollection;
+    public HashMap<String, Set<String>> getparentCollectionMap() {
+        return parentCollectionMap;
     }
 
 

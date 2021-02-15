@@ -1,776 +1,171 @@
-/**
- *
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
- */
-package org.apache.bookkeeper.client;
+/*
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.UUID;
+   Derby - Class org.apache.derby.client.ClientDataSource
 
-import org.apache.bookkeeper.bookie.Bookie;
-import org.apache.bookkeeper.client.AsyncCallback.OpenCallback;
-import org.apache.bookkeeper.client.AsyncCallback.RecoverCallback;
-import org.apache.bookkeeper.client.BookKeeper.SyncOpenCallback;
-import org.apache.bookkeeper.client.LedgerFragmentReplicator.SingleFragmentCallback;
-import org.apache.bookkeeper.conf.ClientConfiguration;
-import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.MultiCallback;
-import org.apache.bookkeeper.proto.BookkeeperInternalCallbacks.Processor;
-import org.apache.bookkeeper.util.IOUtils;
-import org.apache.bookkeeper.util.ZkUtils;
-import org.apache.zookeeper.AsyncCallback;
-import org.apache.zookeeper.CreateMode;
-import org.apache.zookeeper.KeeperException;
-import org.apache.zookeeper.ZKUtil;
-import org.apache.zookeeper.ZooDefs.Ids;
-import org.apache.zookeeper.ZooKeeper;
-import org.apache.zookeeper.KeeperException.Code;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+   Copyright (c) 2001, 2005 The Apache Software Foundation or its licensors, where applicable.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+*/
+
+package org.apache.derby.jdbc;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import javax.sql.DataSource;
+
+import org.apache.derby.client.am.LogWriter;
+import org.apache.derby.client.am.SqlException;
+import org.apache.derby.client.net.NetConnection;
+import org.apache.derby.client.net.NetLogWriter;
 
 /**
- * Admin client for BookKeeper clusters
+ * ClientDataSource is a simple data source implementation that can be used for establishing connections in a
+ * non-pooling, non-distributed environment. The class ClientConnectionPoolDataSource can be used in a connection pooling environment,
+ * and the class ClientXADataSource can be used in a distributed, and pooling environment.
+ * <p/>
+ * The example below registers a DNC data source object with a JNDI naming service.
+ * <pre>
+ * org.apache.derby.client.ClientDataSource dataSource = new org.apache.derby.client.ClientDataSource ();
+ * dataSource.setServerName ("my_derby_database_server");
+ * dataSource.setDatabaseName ("my_derby_database_name");
+ * javax.naming.Context context = new javax.naming.InitialContext();
+ * context.bind ("jdbc/my_datasource_name", dataSource);
+ * </pre>
+ * The first line of code in the example creates a data source object. The next two lines initialize the data source's
+ * properties. Then a Java object that references the initial JNDI naming context is created by calling the
+ * InitialContext() constructor, which is provided by JNDI. System properties (not shown) are used to tell JNDI the
+ * service provider to use. The JNDI name space is hierarchical, similar to the directory structure of many file
+ * systems. The data source object is bound to a logical JNDI name by calling Context.bind(). In this case the JNDI name
+ * identifies a subcontext, "jdbc", of the root naming context and a logical name, "my_datasource_name", within the jdbc
+ * subcontext. This is all of the code required to deploy a data source object within JNDI. This example is provided
+ * mainly for illustrative purposes. We expect that developers or system administrators will normally use a GUI tool to
+ * deploy a data source object.
+ * <p/>
+ * Once a data source has been registered with JNDI, it can then be used by a JDBC application, as is shown in the
+ * following example.
+ * <pre>
+ * javax.naming.Context context = new javax.naming.InitialContext ();
+ * javax.sql.DataSource dataSource = (javax.sql.DataSource) context.lookup ("jdbc/my_datasource_name");
+ * java.sql.Connection connection = dataSource.getConnection ("user", "password");
+ * </pre>
+ * The first line in the example creates a Java object that references the initial JNDI naming context. Next, the
+ * initial naming context is used to do a lookup operation using the logical name of the data source. The
+ * Context.lookup() method returns a reference to a Java Object, which is narrowed to a javax.sql.DataSource object. In
+ * the last line, the DataSource.getConnection() method is called to produce a database connection.
+ * <p/>
+ * This simple data source subclass of ClientBaseDataSource maintains it's own private <code>password</code> property.
+ * <p/>
+ * The specified password, along with the user, is validated by DERBY.  This property can be overwritten by specifing
+ * the password parameter on the DataSource.getConnection() method call.
+ * <p/>
+ * This password property is not declared transient, and therefore may be serialized to a file in clear-text, or stored
+ * to a JNDI server in clear-text when the data source is saved. Care must taken by the user to prevent security
+ * breaches.
+ * <p/>
  */
-public class BookKeeperAdmin {
-    private static Logger LOG = LoggerFactory.getLogger(BookKeeperAdmin.class);
+public class ClientDataSource extends ClientBaseDataSource implements DataSource {
+    private final static long serialVersionUID = 1894299584216955553L;
+    public static final String className__ = "org.apache.derby.jdbc.ClientDataSource";
 
-    static final String COLON = ":";
+    // If a newer version of a serialized object has to be compatible with an older version, it is important that the newer version abides
+    // by the rules for compatible and incompatible changes.
+    //
+    // A compatible change is one that can be made to a new version of the class, which still keeps the stream compatible with older
+    // versions of the class. Examples of compatible changes are:
+    //
+    // Addition of new fields or classes does not affect serialization, as any new data in the stream is simply ignored by older
+    // versions. When the instance of an older version of the class is deserialized, the newly added field will be set to its default
+    // value.
+    // You can field change access modifiers like private, public, protected or package as they are not reflected to the serial
+    // stream.
+    // You can change a transient or static field to a non-transient or non-static field, as it is similar to adding a field.
+    // You can change the access modifiers for constructors and methods of the class. For instance a previously private method
+    // can now be made public, an instance method can be changed to static, etc. The only exception is that you cannot change
+    // the default signatures for readObject() and writeObject() if you are implementing custom serialization. The serialization
+    // process looks at only instance data, and not the methods of a class.
+    //
+    // Changes which would render the stream incompatible are:
+    //
+    // Once a class implements the Serializable interface, you cannot later make it implement the Externalizable interface, since
+    // this will result in the creation of an incompatible stream.
+    // Deleting fields can cause a problem. Now, when the object is serialized, an earlier version of the class would set the old
+    // field to its default value since nothing was available within the stream. Consequently, this default data may lead the newly
+    // created object to assume an invalid state.
+    // Changing a non-static into static or non-transient into transient is not permitted as it is equivalent to deleting fields.
+    // You also cannot change the field types within a class, as this would cause a failure when attempting to read in the original
+    // field into the new field.
+    // You cannot alter the position of the class in the class hierarchy. Since the fully-qualified class name is written as part of
+    // the bytestream, this change will result in the creation of an incompatible stream.
+    // You cannot change the name of the class or the package it belongs to, as that information is written to the stream during
+    // serialization.
 
-    // ZK client instance
-    private ZooKeeper zk;
-    // ZK ledgers related String constants
-    private final String bookiesPath;
-
-    // BookKeeper client instance
-    private BookKeeper bkc;
-    
-    // LedgerFragmentReplicator instance
-    private LedgerFragmentReplicator lfr;
-
-    /*
-     * Random number generator used to choose an available bookie server to
-     * replicate data from a dead bookie.
-     */
-    private Random rand = new Random();
 
     /**
-     * Constructor that takes in a ZooKeeper servers connect string so we know
-     * how to connect to ZooKeeper to retrieve information about the BookKeeper
-     * cluster. We need this before we can do any type of admin operations on
-     * the BookKeeper cluster.
+     * Creates a simple DERBY data source with default property values for a non-pooling, non-distributed environment.
+     * No particular DatabaseName or other properties are associated with the data source.
+     * <p/>
+     * Every Java Bean should provide a constructor with no arguments since many beanboxes attempt to instantiate a bean
+     * by invoking its no-argument constructor.
+     */
+    public ClientDataSource() {
+        super();
+    }
+
+
+    // ---------------------------interface methods-------------------------------
+
+    /**
+     * Attempt to establish a database connection in a non-pooling, non-distributed environment.
      *
-     * @param zkServers
-     *            Comma separated list of hostname:port pairs for the ZooKeeper
-     *            servers cluster.
-     * @throws IOException
-     *             throws this exception if there is an error instantiating the
-     *             ZooKeeper client.
-     * @throws InterruptedException
-     *             Throws this exception if there is an error instantiating the
-     *             BookKeeper client.
-     * @throws KeeperException
-     *             Throws this exception if there is an error instantiating the
-     *             BookKeeper client.
-     */
-    public BookKeeperAdmin(String zkServers) throws IOException, InterruptedException, KeeperException {
-        this(new ClientConfiguration().setZkServers(zkServers));
-    }
-
-    /**
-     * Constructor that takes in a configuration object so we know
-     * how to connect to ZooKeeper to retrieve information about the BookKeeper
-     * cluster. We need this before we can do any type of admin operations on
-     * the BookKeeper cluster.
+     * @return a Connection to the database
      *
-     * @param conf
-     *           Client Configuration Object
-     * @throws IOException
-     *             throws this exception if there is an error instantiating the
-     *             ZooKeeper client.
-     * @throws InterruptedException
-     *             Throws this exception if there is an error instantiating the
-     *             BookKeeper client.
-     * @throws KeeperException
-     *             Throws this exception if there is an error instantiating the
-     *             BookKeeper client.
+     * @throws java.sql.SQLException if a database-access error occurs.
      */
-    public BookKeeperAdmin(ClientConfiguration conf) throws IOException, InterruptedException, KeeperException {
-        // Create the ZooKeeper client instance
-        zk = ZkUtils.createConnectedZookeeperClient(conf.getZkServers(),
-                conf.getZkTimeout());
-        // Create the bookie path
-        bookiesPath = conf.getZkAvailableBookiesPath();
-        // Create the BookKeeper client instance
-        bkc = new BookKeeper(conf, zk);
-        this.lfr = new LedgerFragmentReplicator(bkc);
+    public Connection getConnection() throws SQLException {
+        return getConnection(getUser(), getPassword());
     }
 
     /**
-     * Constructor that takes in a BookKeeper instance . This will be useful,
-     * when users already has bk instance ready.
-     * 
-     * @param bkc
-     *            - bookkeeper instance
-     */
-    public BookKeeperAdmin(final BookKeeper bkc) {
-        this.bkc = bkc;
-        this.zk = bkc.zk;
-        this.bookiesPath = bkc.getConf().getZkAvailableBookiesPath();
-        this.lfr = new LedgerFragmentReplicator(bkc);
-    }
-
-    /**
-     * Gracefully release resources that this client uses.
+     * Attempt to establish a database connection in a non-pooling, non-distributed environment.
      *
-     * @throws InterruptedException
-     *             if there is an error shutting down the clients that this
-     *             class uses.
-     */
-    public void close() throws InterruptedException, BKException {
-        bkc.close();
-        zk.close();
-    }
-
-    /**
-     * Open a ledger as an administrator. This means that no digest password
-     * checks are done. Otherwise, the call is identical to BookKeeper#asyncOpenLedger
+     * @param user     the database user on whose behalf the Connection is being made
+     * @param password the user's password
      *
-     * @param lId
-     *          ledger identifier
-     * @param cb
-     *          Callback which will receive a LedgerHandle object
-     * @param ctx
-     *          optional context object, to be passwd to the callback (can be null)
+     * @return a Connection to the database
      *
-     * @see BookKeeper#asyncOpenLedger
+     * @throws java.sql.SQLException if a database-access error occurs.
      */
-    public void asyncOpenLedger(final long lId, final OpenCallback cb, final Object ctx) {
-        new LedgerOpenOp(bkc, lId, cb, ctx).initiate();
-    }
-    
-    /**
-     * Open a ledger as an administrator. This means that no digest password
-     * checks are done. Otherwise, the call is identical to
-     * BookKeeper#openLedger
-     * 
-     * @param lId
-     *            - ledger identifier
-     * @see BookKeeper#openLedger
-     */
-    public LedgerHandle openLedger(final long lId) throws InterruptedException,
-            BKException {
-        SyncCounter counter = new SyncCounter();
-        counter.inc();
-        new LedgerOpenOp(bkc, lId, new SyncOpenCallback(), counter).initiate();
-        /*
-         * Wait
-         */
-        counter.block(0);
-        if (counter.getrc() != BKException.Code.OK) {
-            throw BKException.create(counter.getrc());
+    public Connection getConnection(String user, String password) throws SQLException {
+        // Jdbc 2 connections will write driver trace info on a
+        // datasource-wide basis using the jdbc 2 data source log writer.
+        // This log writer may be narrowed to the connection-level
+        // This log writer will be passed to the agent constructor.
+        
+        try
+        {
+            LogWriter dncLogWriter = super.computeDncLogWriterForNewConnection("_sds");
+            updateDataSourceValues(tokenizeAttributes(getConnectionAttributes(), null));
+            return ClientDriver.getFactory().newNetConnection
+                    ((NetLogWriter) dncLogWriter, user,
+                    password, this, -1, false);
         }
-
-        return counter.getLh();
-    }
-
-    /**
-     * Open a ledger as an administrator without recovering the ledger. This means
-     * that no digest password  checks are done. Otherwise, the call is identical
-     * to BookKeeper#asyncOpenLedgerNoRecovery
-     *
-     * @param lId
-     *          ledger identifier
-     * @param cb
-     *          Callback which will receive a LedgerHandle object
-     * @param ctx
-     *          optional context object, to be passwd to the callback (can be null)
-     *
-     * @see BookKeeper#asyncOpenLedgerNoRecovery
-     */
-    public void asyncOpenLedgerNoRecovery(final long lId, final OpenCallback cb, final Object ctx) {
-        new LedgerOpenOp(bkc, lId, cb, ctx).initiateWithoutRecovery();
-    }
-    
-    /**
-     * Open a ledger as an administrator without recovering the ledger. This
-     * means that no digest password checks are done. Otherwise, the call is
-     * identical to BookKeeper#openLedgerNoRecovery
-     * 
-     * @param lId
-     *            ledger identifier
-     * @see BookKeeper#openLedgerNoRecovery
-     */
-    public LedgerHandle openLedgerNoRecovery(final long lId)
-            throws InterruptedException, BKException {
-        SyncCounter counter = new SyncCounter();
-        counter.inc();
-        new LedgerOpenOp(bkc, lId, new SyncOpenCallback(), counter)
-                .initiateWithoutRecovery();
-        /*
-         * Wait
-         */
-        counter.block(0);
-        if (counter.getrc() != BKException.Code.OK) {
-            throw BKException.create(counter.getrc());
+        catch(SqlException se)
+        {
+            throw se.getSQLException();
         }
-
-        return counter.getLh();
+        
     }
 
-    // Object used for calling async methods and waiting for them to complete.
-    static class SyncObject {
-        boolean value;
-        int rc;
-
-        public SyncObject() {
-            value = false;
-            rc = BKException.Code.OK;
-        }
-    }
-
-    /**
-     * Synchronous method to rebuild and recover the ledger fragments data that
-     * was stored on the source bookie. That bookie could have failed completely
-     * and now the ledger data that was stored on it is under replicated. An
-     * optional destination bookie server could be given if we want to copy all
-     * of the ledger fragments data on the failed source bookie to it.
-     * Otherwise, we will just randomly distribute the ledger fragments to the
-     * active set of bookies, perhaps based on load. All ZooKeeper ledger
-     * metadata will be updated to point to the new bookie(s) that contain the
-     * replicated ledger fragments.
-     *
-     * @param bookieSrc
-     *            Source bookie that had a failure. We want to replicate the
-     *            ledger fragments that were stored there.
-     * @param bookieDest
-     *            Optional destination bookie that if passed, we will copy all
-     *            of the ledger fragments from the source bookie over to it.
-     */
-    public void recoverBookieData(final InetSocketAddress bookieSrc, final InetSocketAddress bookieDest)
-            throws InterruptedException, BKException {
-        SyncObject sync = new SyncObject();
-        // Call the async method to recover bookie data.
-        asyncRecoverBookieData(bookieSrc, bookieDest, new RecoverCallback() {
-            @Override
-            public void recoverComplete(int rc, Object ctx) {
-                LOG.info("Recover bookie operation completed with rc: " + rc);
-                SyncObject syncObj = (SyncObject) ctx;
-                synchronized (syncObj) {
-                    syncObj.rc = rc;
-                    syncObj.value = true;
-                    syncObj.notify();
-                }
-            }
-        }, sync);
-
-        // Wait for the async method to complete.
-        synchronized (sync) {
-            while (sync.value == false) {
-                sync.wait();
-            }
-        }
-        if (sync.rc != BKException.Code.OK) {
-            throw BKException.create(sync.rc);
-        }
-    }
-
-    /**
-     * Async method to rebuild and recover the ledger fragments data that was
-     * stored on the source bookie. That bookie could have failed completely and
-     * now the ledger data that was stored on it is under replicated. An
-     * optional destination bookie server could be given if we want to copy all
-     * of the ledger fragments data on the failed source bookie to it.
-     * Otherwise, we will just randomly distribute the ledger fragments to the
-     * active set of bookies, perhaps based on load. All ZooKeeper ledger
-     * metadata will be updated to point to the new bookie(s) that contain the
-     * replicated ledger fragments.
-     *
-     * @param bookieSrc
-     *            Source bookie that had a failure. We want to replicate the
-     *            ledger fragments that were stored there.
-     * @param bookieDest
-     *            Optional destination bookie that if passed, we will copy all
-     *            of the ledger fragments from the source bookie over to it.
-     * @param cb
-     *            RecoverCallback to invoke once all of the data on the dead
-     *            bookie has been recovered and replicated.
-     * @param context
-     *            Context for the RecoverCallback to call.
-     */
-    public void asyncRecoverBookieData(final InetSocketAddress bookieSrc, final InetSocketAddress bookieDest,
-                                       final RecoverCallback cb, final Object context) {
-        // Sync ZK to make sure we're reading the latest bookie data.
-        zk.sync(bookiesPath, new AsyncCallback.VoidCallback() {
-            @Override
-            public void processResult(int rc, String path, Object ctx) {
-                if (rc != Code.OK.intValue()) {
-                    LOG.error("ZK error syncing: ", KeeperException.create(KeeperException.Code.get(rc), path));
-                    cb.recoverComplete(BKException.Code.ZKException, context);
-                    return;
-                }
-                getAvailableBookies(bookieSrc, bookieDest, cb, context);
-            };
-        }, null);
-    }
-
-    /**
-     * This method asynchronously gets the set of available Bookies that the
-     * dead input bookie's data will be copied over into. If the user passed in
-     * a specific destination bookie, then just use that one. Otherwise, we'll
-     * randomly pick one of the other available bookies to use for each ledger
-     * fragment we are replicating.
-     *
-     * @param bookieSrc
-     *            Source bookie that had a failure. We want to replicate the
-     *            ledger fragments that were stored there.
-     * @param bookieDest
-     *            Optional destination bookie that if passed, we will copy all
-     *            of the ledger fragments from the source bookie over to it.
-     * @param cb
-     *            RecoverCallback to invoke once all of the data on the dead
-     *            bookie has been recovered and replicated.
-     * @param context
-     *            Context for the RecoverCallback to call.
-     */
-    private void getAvailableBookies(final InetSocketAddress bookieSrc, final InetSocketAddress bookieDest,
-                                     final RecoverCallback cb, final Object context) {
-        final List<InetSocketAddress> availableBookies = new LinkedList<InetSocketAddress>();
-        if (bookieDest != null) {
-            availableBookies.add(bookieDest);
-            // Now poll ZK to get the active ledgers
-            getActiveLedgers(bookieSrc, bookieDest, cb, context, availableBookies);
-        } else {
-            zk.getChildren(bookiesPath, null, new AsyncCallback.ChildrenCallback() {
-                @Override
-                public void processResult(int rc, String path, Object ctx, List<String> children) {
-                    if (rc != Code.OK.intValue()) {
-                        LOG.error("ZK error getting bookie nodes: ", KeeperException.create(KeeperException.Code
-                                  .get(rc), path));
-                        cb.recoverComplete(BKException.Code.ZKException, context);
-                        return;
-                    }
-                    for (String bookieNode : children) {
-                        String parts[] = bookieNode.split(COLON);
-                        if (parts.length < 2) {
-                            LOG.error("Bookie Node retrieved from ZK has invalid name format: " + bookieNode);
-                            cb.recoverComplete(BKException.Code.ZKException, context);
-                            return;
-                        }
-                        availableBookies.add(new InetSocketAddress(parts[0], Integer.parseInt(parts[1])));
-                    }
-                    // Now poll ZK to get the active ledgers
-                    getActiveLedgers(bookieSrc, null, cb, context, availableBookies);
-                }
-            }, null);
-        }
-    }
-
-    /**
-     * This method asynchronously polls ZK to get the current set of active
-     * ledgers. From this, we can open each ledger and look at the metadata to
-     * determine if any of the ledger fragments for it were stored at the dead
-     * input bookie.
-     *
-     * @param bookieSrc
-     *            Source bookie that had a failure. We want to replicate the
-     *            ledger fragments that were stored there.
-     * @param bookieDest
-     *            Optional destination bookie that if passed, we will copy all
-     *            of the ledger fragments from the source bookie over to it.
-     * @param cb
-     *            RecoverCallback to invoke once all of the data on the dead
-     *            bookie has been recovered and replicated.
-     * @param context
-     *            Context for the RecoverCallback to call.
-     * @param availableBookies
-     *            List of Bookie Servers that are available to use for
-     *            replicating data on the failed bookie. This could contain a
-     *            single bookie server if the user explicitly chose a bookie
-     *            server to replicate data to.
-     */
-    private void getActiveLedgers(final InetSocketAddress bookieSrc, final InetSocketAddress bookieDest,
-                                  final RecoverCallback cb, final Object context, final List<InetSocketAddress> availableBookies) {
-        // Wrapper class around the RecoverCallback so it can be used
-        // as the final VoidCallback to process ledgers
-        class RecoverCallbackWrapper implements AsyncCallback.VoidCallback {
-            final RecoverCallback cb;
-
-            RecoverCallbackWrapper(RecoverCallback cb) {
-                this.cb = cb;
-            }
-
-            @Override
-            public void processResult(int rc, String path, Object ctx) {
-                cb.recoverComplete(rc, ctx);
-            }
-        }
-
-        Processor<Long> ledgerProcessor = new Processor<Long>() {
-            @Override
-            public void process(Long ledgerId, AsyncCallback.VoidCallback iterCallback) {
-                recoverLedger(bookieSrc, ledgerId, iterCallback, availableBookies);
-            }
-        };
-        bkc.getLedgerManager().asyncProcessLedgers(
-            ledgerProcessor, new RecoverCallbackWrapper(cb),
-            context, BKException.Code.OK, BKException.Code.LedgerRecoveryException);
-    }
-
-    /**
-     * Get a new random bookie, but ensure that it isn't one that is already
-     * in the ensemble for the ledger.
-     */
-    private InetSocketAddress getNewBookie(final List<InetSocketAddress> bookiesAlreadyInEnsemble, 
-                                           final List<InetSocketAddress> availableBookies) 
-            throws BKException.BKNotEnoughBookiesException {
-        ArrayList<InetSocketAddress> candidates = new ArrayList<InetSocketAddress>();
-        candidates.addAll(availableBookies);
-        candidates.removeAll(bookiesAlreadyInEnsemble);
-        if (candidates.size() == 0) {
-            throw new BKException.BKNotEnoughBookiesException();
-        }
-        return candidates.get(rand.nextInt(candidates.size()));
-    }
-
-    /**
-     * This method asynchronously recovers a given ledger if any of the ledger
-     * entries were stored on the failed bookie.
-     *
-     * @param bookieSrc
-     *            Source bookie that had a failure. We want to replicate the
-     *            ledger fragments that were stored there.
-     * @param lId
-     *            Ledger id we want to recover.
-     * @param ledgerIterCb
-     *            IterationCallback to invoke once we've recovered the current
-     *            ledger.
-     * @param availableBookies
-     *            List of Bookie Servers that are available to use for
-     *            replicating data on the failed bookie. This could contain a
-     *            single bookie server if the user explicitly chose a bookie
-     *            server to replicate data to.
-     */
-    private void recoverLedger(final InetSocketAddress bookieSrc, final long lId,
-                               final AsyncCallback.VoidCallback ledgerIterCb, final List<InetSocketAddress> availableBookies) {
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Recovering ledger : " + lId);
-        }
-
-        asyncOpenLedgerNoRecovery(lId, new OpenCallback() {
-            @Override
-            public void openComplete(int rc, final LedgerHandle lh, Object ctx) {
-                if (rc != Code.OK.intValue()) {
-                    LOG.error("BK error opening ledger: " + lId, BKException.create(rc));
-                    ledgerIterCb.processResult(rc, null, null);
-                    return;
-                }
-
-                LedgerMetadata lm = lh.getLedgerMetadata();
-                if (!lm.isClosed() &&
-                    lm.getEnsembles().size() > 0) {
-                    Long lastKey = lm.getEnsembles().lastKey();
-                    ArrayList<InetSocketAddress> lastEnsemble = lm.getEnsembles().get(lastKey);
-                    // the original write has not removed faulty bookie from
-                    // current ledger ensemble. to avoid data loss issue in
-                    // the case of concurrent updates to the ensemble composition,
-                    // the recovery tool should first close the ledger
-                    if (lastEnsemble.contains(bookieSrc)) {
-                        // close opened non recovery ledger handle
-                        try {
-                            lh.close();
-                        } catch (Exception ie) {
-                            LOG.warn("Error closing non recovery ledger handle for ledger " + lId, ie);
-                        }
-                        asyncOpenLedger(lId, new OpenCallback() {
-                            @Override
-                            public void openComplete(int newrc, final LedgerHandle newlh, Object newctx) {
-                                if (newrc != Code.OK.intValue()) {
-                                    LOG.error("BK error close ledger: " + lId, BKException.create(newrc));
-                                    ledgerIterCb.processResult(newrc, null, null);
-                                    return;
-                                }
-                                // do recovery
-                                recoverLedger(bookieSrc, lId, ledgerIterCb, availableBookies);
-                            }
-                        }, null);
-                        return;
-                    }
-                }
-
-                /*
-                 * This List stores the ledger fragments to recover indexed by
-                 * the start entry ID for the range. The ensembles TreeMap is
-                 * keyed off this.
-                 */
-                final List<Long> ledgerFragmentsToRecover = new LinkedList<Long>();
-                /*
-                 * This Map will store the start and end entry ID values for
-                 * each of the ledger fragment ranges. The only exception is the
-                 * current active fragment since it has no end yet. In the event
-                 * of a bookie failure, a new ensemble is created so the current
-                 * ensemble should not contain the dead bookie we are trying to
-                 * recover.
-                 */
-                Map<Long, Long> ledgerFragmentsRange = new HashMap<Long, Long>();
-                Long curEntryId = null;
-                for (Map.Entry<Long, ArrayList<InetSocketAddress>> entry : lh.getLedgerMetadata().getEnsembles()
-                         .entrySet()) {
-                    if (curEntryId != null)
-                        ledgerFragmentsRange.put(curEntryId, entry.getKey() - 1);
-                    curEntryId = entry.getKey();
-                    if (entry.getValue().contains(bookieSrc)) {
-                        /*
-                         * Current ledger fragment has entries stored on the
-                         * dead bookie so we'll need to recover them.
-                         */
-                        ledgerFragmentsToRecover.add(entry.getKey());
-                    }
-                }
-                // add last ensemble otherwise if the failed bookie existed in
-                // the last ensemble of a closed ledger. the entries belonged to
-                // last ensemble would not be replicated.
-                if (curEntryId != null) {
-                    ledgerFragmentsRange.put(curEntryId, lh.getLastAddConfirmed());
-                }
-                /*
-                 * See if this current ledger contains any ledger fragment that
-                 * needs to be re-replicated. If not, then just invoke the
-                 * multiCallback and return.
-                 */
-                if (ledgerFragmentsToRecover.size() == 0) {
-                    ledgerIterCb.processResult(BKException.Code.OK, null, null);
-                    return;
-                }
-
-                /*
-                 * Multicallback for ledger. Once all fragments for the ledger have been recovered
-                 * trigger the ledgerIterCb
-                 */
-                MultiCallback ledgerFragmentsMcb
-                    = new MultiCallback(ledgerFragmentsToRecover.size(), ledgerIterCb, null,
-                                        BKException.Code.OK, BKException.Code.LedgerRecoveryException);
-                /*
-                 * Now recover all of the necessary ledger fragments
-                 * asynchronously using a MultiCallback for every fragment.
-                 */
-                for (final Long startEntryId : ledgerFragmentsToRecover) {
-                    Long endEntryId = ledgerFragmentsRange.get(startEntryId);
-                    InetSocketAddress newBookie = null;
-                    try {
-                        newBookie = getNewBookie(lh.getLedgerMetadata().getEnsembles().get(startEntryId),
-                                                 availableBookies);
-                    } catch (BKException.BKNotEnoughBookiesException bke) {
-                        ledgerFragmentsMcb.processResult(BKException.Code.NotEnoughBookiesException, 
-                                                         null, null);
-                        continue;
-                    }
-                    
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug("Replicating fragment from [" + startEntryId 
-                                  + "," + endEntryId + "] of ledger " + lh.getId()
-                                  + " to " + newBookie);
-                    }
-                    try {
-                        LedgerFragmentReplicator.SingleFragmentCallback cb = new LedgerFragmentReplicator.SingleFragmentCallback(
-                                                                               ledgerFragmentsMcb, lh, startEntryId, bookieSrc, newBookie);
-                        ArrayList<InetSocketAddress> currentEnsemble =  lh.getLedgerMetadata().getEnsemble(startEntryId);
-                        int bookieIndex = -1;
-                        if (null != currentEnsemble) {
-                            for (int i = 0; i < currentEnsemble.size(); i++) {
-                                if (currentEnsemble.get(i).equals(bookieSrc)) {
-                                    bookieIndex = i;
-                                    break;
-                                }
-                            }
-                        }
-                        LedgerFragment ledgerFragment = new LedgerFragment(lh,
-                                startEntryId, endEntryId, bookieIndex);
-                        asyncRecoverLedgerFragment(lh, ledgerFragment, cb, newBookie);
-                    } catch(InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
-                }
-            }
-            }, null);
-    }
-
-    /**
-     * This method asynchronously recovers a ledger fragment which is a
-     * contiguous portion of a ledger that was stored in an ensemble that
-     * included the failed bookie.
-     * 
-     * @param lh
-     *            - LedgerHandle for the ledger
-     * @param lf
-     *            - LedgerFragment to replicate
-     * @param ledgerFragmentMcb
-     *            - MultiCallback to invoke once we've recovered the current
-     *            ledger fragment.
-     * @param newBookie
-     *            - New bookie we want to use to recover and replicate the
-     *            ledger entries that were stored on the failed bookie.
-     */
-    private void asyncRecoverLedgerFragment(final LedgerHandle lh,
-            final LedgerFragment ledgerFragment,
-            final LedgerFragmentReplicator.SingleFragmentCallback ledgerFragmentMcb,
-            final InetSocketAddress newBookie) throws InterruptedException {
-        lfr.replicate(lh, ledgerFragment, ledgerFragmentMcb, newBookie);
-    }
-
-    /**
-     * Replicate the Ledger fragment to target Bookie passed.
-     * 
-     * @param lh
-     *            - ledgerHandle
-     * @param lf
-     *            - LedgerFragment to replicate
-     * @param targetBookieAddress
-     *            - target Bookie, to where entries should be replicated.
-     */
-    public void replicateLedgerFragment(LedgerHandle lh,
-            final LedgerFragment ledgerFragment,
-            InetSocketAddress targetBookieAddress) throws InterruptedException,
-            BKException {
-        final SyncCounter syncCounter = new SyncCounter();
-        ResultCallBack resultCallBack = new ResultCallBack(syncCounter);
-        SingleFragmentCallback sfcb = new SingleFragmentCallback(
-                resultCallBack, lh, ledgerFragment.getFirstStoredEntryId(),
-                ledgerFragment.getAddress(), targetBookieAddress);
-        syncCounter.inc();
-        lfr.replicate(lh, ledgerFragment, sfcb, targetBookieAddress);
-        syncCounter.block(0);
-        if (syncCounter.getrc() != BKException.Code.OK) {
-            throw BKException.create(syncCounter.getrc());
-        }
-    }
-
-    /** This is the class for getting the replication result */
-    static class ResultCallBack implements AsyncCallback.VoidCallback {
-        private SyncCounter sync;
-
-        public ResultCallBack(SyncCounter sync) {
-            this.sync = sync;
-        }
-
-        @Override
-        public void processResult(int rc, String s, Object obj) {
-            sync.setrc(rc);
-            sync.dec();
-        }
-    }
-
-    /**
-     * Format the BookKeeper metadata in zookeeper
-     * 
-     * @param isInteractive
-     *            Whether format should ask prompt for confirmation if old data
-     *            exists or not.
-     * @param force
-     *            If non interactive and force is true, then old data will be
-     *            removed without prompt.
-     * @return Returns true if format succeeds else false.
-     */
-    public static boolean format(ClientConfiguration conf,
-            boolean isInteractive, boolean force) throws Exception {
-
-        ZooKeeper zkc = ZkUtils.createConnectedZookeeperClient(conf.getZkServers(),
-                conf.getZkTimeout());
-        BookKeeper bkc = null;
-        try {
-            boolean ledgerRootExists = null != zkc.exists(
-                    conf.getZkLedgersRootPath(), false);
-            boolean availableNodeExists = null != zkc.exists(
-                    conf.getZkAvailableBookiesPath(), false);
-
-            // Create ledgers root node if not exists
-            if (!ledgerRootExists) {
-                zkc.create(conf.getZkLedgersRootPath(), "".getBytes(),
-                        Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-            }
-            // create available bookies node if not exists
-            if (!availableNodeExists) {
-                zkc.create(conf.getZkAvailableBookiesPath(), "".getBytes(),
-                        Ids.OPEN_ACL_UNSAFE, CreateMode.PERSISTENT);
-            }
-
-            // If old data was there then confirm with admin.
-            if (ledgerRootExists) {
-                boolean confirm = false;
-                if (!isInteractive) {
-                    // If non interactive and force is set, then delete old
-                    // data.
-                    if (force) {
-                        confirm = true;
-                    } else {
-                        confirm = false;
-                    }
-                } else {
-                    // Confirm with the admin.
-                    confirm = IOUtils
-                            .confirmPrompt("Are you sure to format bookkeeper metadata ?");
-                }
-                if (!confirm) {
-                    LOG.error("BookKeeper metadata Format aborted!!");
-                    return false;
-                }
-            }
-            bkc = new BookKeeper(conf, zkc);
-            // Format all ledger metadata layout
-            bkc.ledgerManagerFactory.format(conf, zkc);
-
-            // Clear the cookies
-            try {
-                ZKUtil.deleteRecursive(zkc, conf.getZkLedgersRootPath()
-                        + "/cookies");
-            } catch (KeeperException.NoNodeException e) {
-                LOG.debug("cookies node not exists in zookeeper to delete");
-            }
-
-            // Clear the INSTANCEID
-            try {
-                zkc.delete(conf.getZkLedgersRootPath() + "/" + Bookie.INSTANCEID, -1);
-            } catch (KeeperException.NoNodeException e) {
-                LOG.debug("INSTANCEID not exists in zookeeper to delete");
-            }
-
-            // create INSTANCEID
-            String instanceId = UUID.randomUUID().toString();
-            zkc.create(conf.getZkLedgersRootPath() + "/" + Bookie.INSTANCEID,
-                    instanceId.getBytes(), Ids.OPEN_ACL_UNSAFE,
-                    CreateMode.PERSISTENT);
-
-            LOG.info("Successfully formatted BookKeeper metadata");
-        } finally {
-            if (null != bkc) {
-                bkc.close();
-            }
-            if (null != zkc) {
-                zkc.close();
-            }
-        }
-        return true;
-    }
 }
+

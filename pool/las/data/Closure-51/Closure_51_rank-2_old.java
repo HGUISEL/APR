@@ -1,504 +1,665 @@
-/****************************************************************
- * Licensed to the Apache Software Foundation (ASF) under one   *
- * or more contributor license agreements.  See the NOTICE file *
- * distributed with this work for additional information        *
- * regarding copyright ownership.  The ASF licenses this file   *
- * to you under the Apache License, Version 2.0 (the            *
- * "License"); you may not use this file except in compliance   *
- * with the License.  You may obtain a copy of the License at   *
- *                                                              *
- *   http://www.apache.org/licenses/LICENSE-2.0                 *
- *                                                              *
- * Unless required by applicable law or agreed to in writing,   *
- * software distributed under the License is distributed on an  *
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY       *
- * KIND, either express or implied.  See the License for the    *
- * specific language governing permissions and limitations      *
- * under the License.                                           *
- ****************************************************************/
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-package org.apache.james.imap.api.message.request;
+package org.apache.commons.dbcp2;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
-import org.apache.james.imap.api.message.IdRange;
+import java.net.URL;
+import java.sql.CallableStatement;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.util.Map;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+import java.io.InputStream;
+import java.io.Reader;
+import java.sql.SQLException;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
+/* JDBC_4_ANT_KEY_END */
 
 /**
- * Atom key used by a search. Build instances by factory methods.
+ * A base delegating implementation of {@link CallableStatement}.
+ * <p>
+ * All of the methods from the {@link CallableStatement} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement Statement tracking and
+ * logging of code which created the Statement. Tracking the
+ * Statement ensures that the Connection which created it can
+ * close any open Statement's on Connection close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House
+ * @author Dirk Verbeeck
+ * @version $Revision$ $Date$
  */
-public final class SearchKey {
-
-    // NUMBERS
-    public static final int TYPE_SEQUENCE_SET = 1;
-
-    public static final int TYPE_UID = 2;
-
-    // NO PARAMETERS
-    public static final int TYPE_ALL = 3;
-
-    public static final int TYPE_ANSWERED = 4;
-
-    public static final int TYPE_DELETED = 5;
-
-    public static final int TYPE_DRAFT = 6;
-
-    public static final int TYPE_FLAGGED = 7;
-
-    public static final int TYPE_NEW = 8;
-
-    public static final int TYPE_OLD = 9;
-
-    public static final int TYPE_RECENT = 10;
-
-    public static final int TYPE_SEEN = 11;
-
-    public static final int TYPE_UNANSWERED = 12;
-
-    public static final int TYPE_UNDELETED = 13;
-
-    public static final int TYPE_UNDRAFT = 14;
-
-    public static final int TYPE_UNFLAGGED = 15;
-
-    public static final int TYPE_UNSEEN = 16;
-
-    // ONE VALUE
-    public static final int TYPE_BCC = 17;
-
-    public static final int TYPE_BODY = 18;
-
-    public static final int TYPE_CC = 19;
-
-    public static final int TYPE_FROM = 20;
-
-    public static final int TYPE_KEYWORD = 21;
-
-    public static final int TYPE_SUBJECT = 22;
-
-    public static final int TYPE_TEXT = 23;
-
-    public static final int TYPE_TO = 24;
-
-    public static final int TYPE_UNKEYWORD = 25;
-
-    // ONE DATE
-    public static final int TYPE_BEFORE = 26;
-
-    public static final int TYPE_ON = 27;
-
-    public static final int TYPE_SENTBEFORE = 28;
-
-    public static final int TYPE_SENTON = 29;
-
-    public static final int TYPE_SENTSINCE = 30;
-
-    public static final int TYPE_SINCE = 31;
-
-    // FIELD VALUE
-    public static final int TYPE_HEADER = 32;
-
-    // ONE NUMBER
-    public static final int TYPE_LARGER = 33;
-
-    public static final int TYPE_SMALLER = 34;
-
-    // NOT
-    public static final int TYPE_NOT = 35;
-
-    // OR
-    public static final int TYPE_OR = 36;
-
-    // AND
-    public static final int TYPE_AND = 37;
-
-    public static final int TYPE_YOUNGER = 38;
-    public static final int TYPE_OLDER = 39;
-
-    public static final int TYPE_MODSEQ = 40;
-
-    private static final SearchKey UNSEEN = new SearchKey(TYPE_UNSEEN, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey UNFLAGGED = new SearchKey(TYPE_UNFLAGGED, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey UNDRAFT = new SearchKey(TYPE_UNDRAFT, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey UNDELETED = new SearchKey(TYPE_UNDELETED, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey UNANSWERED = new SearchKey(TYPE_UNANSWERED, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey SEEN = new SearchKey(TYPE_SEEN, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey RECENT = new SearchKey(TYPE_RECENT, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey OLD = new SearchKey(TYPE_OLD, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey NEW = new SearchKey(TYPE_NEW, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey FLAGGED = new SearchKey(TYPE_FLAGGED, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey DRAFT = new SearchKey(TYPE_DRAFT, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey DELETED = new SearchKey(TYPE_DELETED, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey ANSWERED = new SearchKey(TYPE_ANSWERED, null, null, 0, null, null, null, -1, -1);
-
-    private static final SearchKey ALL = new SearchKey(TYPE_ALL, null, null, 0, null, null, null, -1, -1);
-
-    // NUMBERS
-    public static SearchKey buildSequenceSet(IdRange[] ids) {
-        return new SearchKey(TYPE_SEQUENCE_SET, null, null, 0, null, null, ids, -1, -1);
-    }
-
-    public static SearchKey buildUidSet(IdRange[] ids) {
-        return new SearchKey(TYPE_UID, null, null, 0, null, null, ids, -1, -1);
-    }
-
-    // NO PARAMETERS
-    public static SearchKey buildAll() {
-        return ALL;
-    }
-
-    public static SearchKey buildAnswered() {
-        return ANSWERED;
-    }
-
-    public static SearchKey buildDeleted() {
-        return DELETED;
-    }
-
-    public static SearchKey buildDraft() {
-        return DRAFT;
-    }
-
-    public static SearchKey buildFlagged() {
-        return FLAGGED;
-    }
-
-    public static SearchKey buildNew() {
-        return NEW;
-    }
-
-    public static SearchKey buildOld() {
-        return OLD;
-    }
-
-    public static SearchKey buildRecent() {
-        return RECENT;
-    }
-
-    public static SearchKey buildSeen() {
-        return SEEN;
-    }
-
-    public static SearchKey buildUnanswered() {
-        return UNANSWERED;
-    }
-
-    public static SearchKey buildUndeleted() {
-        return UNDELETED;
-    }
-
-    public static SearchKey buildUndraft() {
-        return UNDRAFT;
-    }
-
-    public static SearchKey buildUnflagged() {
-        return UNFLAGGED;
-    }
-
-    public static SearchKey buildUnseen() {
-        return UNSEEN;
-    }
-
-    // ONE VALUE
-    public static SearchKey buildBcc(String value) {
-        return new SearchKey(TYPE_BCC, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildBody(String value) {
-        return new SearchKey(TYPE_BODY, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildCc(String value) {
-        return new SearchKey(TYPE_CC, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildFrom(String value) {
-        return new SearchKey(TYPE_FROM, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildKeyword(String value) {
-        return new SearchKey(TYPE_KEYWORD, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildSubject(String value) {
-        return new SearchKey(TYPE_SUBJECT, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildText(String value) {
-        return new SearchKey(TYPE_TEXT, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildTo(String value) {
-        return new SearchKey(TYPE_TO, null, null, 0, null, value, null, -1, -1);
-    }
-
-    public static SearchKey buildUnkeyword(String value) {
-        return new SearchKey(TYPE_UNKEYWORD, null, null, 0, null, value, null, -1, -1);
-    }
-    // ONE DATE
-    public static SearchKey buildYounger(long seconds) {
-        return new SearchKey(TYPE_YOUNGER, null, null, 0, null, null, null, seconds, -1);
-    }
-
-    public static SearchKey buildOlder(long seconds) {
-        return new SearchKey(TYPE_OLDER, null, null, 0, null, null, null, seconds, -1);
-    }
-
-    
-    // ONE DATE
-    public static SearchKey buildBefore(DayMonthYear date) {
-        return new SearchKey(TYPE_BEFORE, date, null, 0, null, null, null, -1, -1);
-    }
-
-    public static SearchKey buildOn(DayMonthYear date) {
-        return new SearchKey(TYPE_ON, date, null, 0, null, null, null, -1, -1);
-    }
-
-    public static SearchKey buildSentBefore(DayMonthYear date) {
-        return new SearchKey(TYPE_SENTBEFORE, date, null, 0, null, null, null, -1, -1);
-    }
-
-    public static SearchKey buildSentOn(DayMonthYear date) {
-        return new SearchKey(TYPE_SENTON, date, null, 0, null, null, null, -1, -1);
-    }
-
-    public static SearchKey buildSentSince(DayMonthYear date) {
-        return new SearchKey(TYPE_SENTSINCE, date, null, 0, null, null, null, -1, -1);
-    }
-
-    public static SearchKey buildSince(DayMonthYear date) {
-        return new SearchKey(TYPE_SINCE, date, null, 0, null, null, null, -1, -1);
-    }
-
-    // FIELD VALUE
-    public static SearchKey buildHeader(String name, String value) {
-        return new SearchKey(TYPE_HEADER, null, null, 0, name, value, null, -1, -1);
-    }
-
-    // ONE NUMBER
-    public static SearchKey buildLarger(long size) {
-        return new SearchKey(TYPE_LARGER, null, null, size, null, null, null, -1, -1);
-    }
-
-    public static SearchKey buildSmaller(long size) {
-        return new SearchKey(TYPE_SMALLER, null, null, size, null, null, null, -1, -1);
-    }
-
-    // NOT
-    public static SearchKey buildNot(SearchKey key) {
-        final List<SearchKey> keys = new ArrayList<SearchKey>();
-        keys.add(key);
-        return new SearchKey(TYPE_NOT, null, keys, 0, null, null, null, -1, -1);
-    }
-
-    // OR
-    public static SearchKey buildOr(SearchKey keyOne, SearchKey keyTwo) {
-        final List<SearchKey> keys = new ArrayList<SearchKey>();
-        keys.add(keyOne);
-        keys.add(keyTwo);
-        return new SearchKey(TYPE_OR, null, keys, 0, null, null, null, -1, -1);
-    }
+public class DelegatingCallableStatement extends DelegatingPreparedStatement
+        implements CallableStatement {
 
     /**
-     * Componses an <code>AND</code> key from given keys.
-     * 
-     * @param keys
-     *            <code>List</code> of {@link SearchKey}'s composing this key
-     * @return <code>SearchKey</code>, not null
+     * Create a wrapper for the Statement which traces this
+     * Statement to the Connection which created it and the
+     * code which created it.
+     *
+     * @param c the {@link DelegatingConnection} that created this statement
+     * @param s the {@link CallableStatement} to delegate all calls to
      */
-    public static SearchKey buildAnd(List<SearchKey> keys) {
-        return new SearchKey(TYPE_AND, null, keys, 0, null, null, null, -1, -1);
+    public DelegatingCallableStatement(DelegatingConnection c,
+                                       CallableStatement s) {
+        super(c, s);
     }
 
-    public static SearchKey buildModSeq(long modSeq) {
-        return new SearchKey(TYPE_ANSWERED, null, null, 0, null, null, null, -1, modSeq);
-    }
-    private final int type;
-
-    private final DayMonthYear date;
-
-    private final List<SearchKey> keys;
-
-    private final long size;
-
-    private final String name;
-
-    private final String value;
-
-    private final IdRange[] sequence;
-
-    private final long seconds;
-
-    private final long modSeq;
-
-    private SearchKey(int type, DayMonthYear date, List<SearchKey> keys, long number, String name, String value, IdRange[] sequence, long seconds, long modSeq) {
-        super();
-        this.type = type;
-        this.date = date;
-        this.keys = keys;
-        this.size = number;
-        this.name = name;
-        this.value = value;
-        this.sequence = sequence;
-        this.seconds = seconds;
-        this.modSeq = modSeq;
-    }
-
-    /**
-     * Gets a date value to be search upon.
-     * 
-     * @return the date when: {@link #TYPE_BEFORE}, {@link #TYPE_ON},
-     *         {@link #TYPE_SENTBEFORE}, {@link #TYPE_SENTON},
-     *         {@link #TYPE_SENTSINCE}, {@link #TYPE_SINCE}; otherwise null
-     */
-    public DayMonthYear getDate() {
-        return date;
-    }
-    
-    /**
-     * Return the search seconds
-     * 
-     * @return seconds
-     */
-    public long getSeconds() {
-        return seconds;
-    }
-
-    /**
-     * Gets sequence numbers.
-     * 
-     * @return msn when {@link #TYPE_SEQUENCE_SET}, uids when {@link #TYPE_UID},
-     *         null otherwise
-     */
-    public IdRange[] getSequenceNumbers() {
-        return sequence;
-    }
-
-    /**
-     * Gets the field name.
-     * 
-     * @return the field name when {@link #TYPE_HEADER}, null otherwise
-     */
-    public String getName() {
-        return name;
-    }
-
-    /**
-     * Gets the size searched for.
-     * 
-     * @return the size when {@link #TYPE_LARGER} or {@link #TYPE_SMALLER},
-     *         otherwise 0
-     */
-    public long getSize() {
-        return size;
-    }
-
-    /**
-     * Gets key two.
-     * 
-     * @return <code>List</code> of <code>SearchKey</code>'s when
-     *         {@link #TYPE_OR}, {@link #TYPE_AND} or {@link #TYPE_NOT}
-     *         otherwise null
-     */
-    public List<SearchKey> getKeys() {
-        return keys;
-    }
-
-    /**
-     * Gets the type of key.
-     * 
-     * @return the type
-     */
-    public int getType() {
-        return type;
-    }
-
-    /**
-     * Gets the value to be searched for.
-     * 
-     * @return the value, or null when this type is not associated with a value.
-     */
-    public String getValue() {
-        return value;
-    }
-
-    /**
-     * Gets the size searched for.
-     * 
-     * @return the size when {@link #TYPE_MODSEQ}
-     *         otherwise -1
-     */
-    public long getModSeq() {
-        return modSeq;
-    }
-    /**
-     * @see java.lang.Object#hashCode()
-     */
-    public int hashCode() {
-        final int PRIME = 31;
-        int result = 1;
-        result = PRIME * result + ((date == null) ? 0 : date.hashCode());
-        result = PRIME * result + ((name == null) ? 0 : name.hashCode());
-        if (sequence != null) {
-            result = PRIME * result + sequence.length;
-        }
-        result = PRIME * result + (int) (size ^ (size >>> 32));
-        result = PRIME * result + ((keys == null) ? 0 : keys.hashCode());
-        result = PRIME * result + type;
-        result = PRIME * result + ((value == null) ? 0 : value.hashCode());
-        return result;
-    }
-
-    /**
-     * @see java.lang.Object#equals(java.lang.Object)
-     */
     public boolean equals(Object obj) {
-        if (this == obj)
-            return true;
-        if (obj == null)
+    	if (this == obj) return true;
+        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
+        if (delegate == null) {
             return false;
-        if (getClass() != obj.getClass())
-            return false;
-        final SearchKey other = (SearchKey) obj;
-        if (date == null) {
-            if (other.date != null)
-                return false;
-        } else if (!date.equals(other.date))
-            return false;
-        if (name == null) {
-            if (other.name != null)
-                return false;
-        } else if (!name.equals(other.name))
-            return false;
-        if (!Arrays.equals(sequence, other.sequence))
-            return false;
-        if (size != other.size)
-            return false;
-        if (keys == null) {
-            if (other.keys != null)
-                return false;
-        } else if (!keys.equals(other.keys))
-            return false;
-        if (type != other.type)
-            return false;
-        if (value == null) {
-            if (other.value != null)
-                return false;
-        } else if (!value.equals(other.value))
-            return false;
-        return true;
+        }
+        if (obj instanceof DelegatingCallableStatement) {
+            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
     }
+
+    /** Sets my delegate. */
+    public void setDelegate(CallableStatement s) {
+        super.setDelegate(s);
+        _stmt = s;
+    }
+
+    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
+
+    public boolean wasNull() throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public String getString(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int i, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(int i) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public URL getURL(int parameterIndex) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void setURL(String parameterName, URL val) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setBoolean(String parameterName, boolean x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setByte(String parameterName, byte x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setShort(String parameterName, short x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setInt(String parameterName, int x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setLong(String parameterName, long x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setFloat(String parameterName, float x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDouble(String parameterName, double x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setString(String parameterName, String x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setBytes(String parameterName, byte [] x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setDate(String parameterName, Date x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
+
+    public void setObject(String parameterName, Object x) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
+    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
+
+    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
+
+    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
+    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+
+    public String getString(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public byte[] getBytes(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String parameterName, Map map) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public URL getURL(String parameterName) throws SQLException
+    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
+
+/* JDBC_4_ANT_KEY_BEGIN */
+
+    public RowId getRowId(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public RowId getRowId(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getRowId(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setRowId(String parameterName, RowId value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setRowId(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNString(String parameterName, String value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNString(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNClob(String parameterName, NClob value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public NClob getNClob(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public NClob getNClob(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNClob(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getSQLXML(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNString(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(int parameterIndex) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getCharacterStream(String parameterName) throws SQLException {
+        checkOpen();
+        try {
+            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void setBlob(String parameterName, Blob blob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, blob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Clob clob) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, clob);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void setClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }    }
+
+    public void setNClob(String parameterName, Reader reader) throws SQLException {
+        checkOpen();
+        try {
+            ((CallableStatement)_stmt).setNClob(parameterName, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+/* JDBC_4_ANT_KEY_END */
 }

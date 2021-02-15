@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -6,185 +6,307 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.commons.bcel6.generic;
 
-import org.apache.commons.bcel6.Constants;
+package org.apache.commons.cli;
 
-/** 
- * Wrapper class for push operations, which are implemented either as BIPUSH,
- * LDC or xCONST_n instructions.
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+
+/**
+ * The class PosixParser provides an implementation of the 
+ * {@link Parser#flatten(Options,String[],boolean) flatten} method.
  *
- * @version $Id$
+ * @author John Keyes (john at integralsource.com)
+ * @see Parser
+ * @version $Revision$
  */
-public final class PUSH implements CompoundInstruction, VariableLengthInstruction {
+public class PosixParser extends Parser {
 
-    private Instruction instruction;
+    /** holder for flattened tokens */
+    private List tokens = new ArrayList();
 
+    /** specifies if bursting should continue */
+    private boolean eatTheRest;
+
+    /** holder for the current option */
+    private Option currentOption;
+
+    /** the command line Options */
+    private Options options;
 
     /**
-     * This constructor also applies for values of type short, char, byte 
+     * Resets the members to their original state i.e. remove
+     * all of <code>tokens</code> entries, set <code>eatTheRest</code>
+     * to false and set <code>currentOption</code> to null.
+     */
+    private void init()
+    {
+        eatTheRest = false;
+        tokens.clear();
+        currentOption = null;
+    }
+
+    /**
+     * <p>An implementation of {@link Parser}'s abstract
+     * {@link Parser#flatten(Options,String[],boolean) flatten} method.</p>
      *
-     * @param cp Constant pool
-     * @param value to be pushed 
+     * <p>The following are the rules used by this flatten method.
+     * <ol>
+     *  <li>if <code>stopAtNonOption</code> is <b>true</b> then do not
+     *  burst anymore of <code>arguments</code> entries, just add each
+     *  successive entry without further processing.  Otherwise, ignore
+     *  <code>stopAtNonOption</code>.</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>--</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>-</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is two characters
+     *  in length and the first character is "<b>-</b>" then check if this
+     *  is a valid {@link Option} id.  If it is a valid id, then add the
+     *  entry to the list of processed tokens and set the current {@link Option}
+     *  member.  If it is not a valid id and <code>stopAtNonOption</code>
+     *  is true, then the remaining entries are copied to the list of 
+     *  processed tokens.  Otherwise, the current entry is ignored.</li>
+     *  <li>if the current <code>arguments</code> entry is more than two
+     *  characters in length and the first character is "<b>-</b>" then
+     *  we need to burst the entry to determine its constituents.  For more
+     *  information on the bursting algorithm see 
+     *  {@link PosixParser#burstToken(String, boolean) burstToken}.</li>
+     *  <li>if the current <code>arguments</code> entry is not handled 
+     *  by any of the previous rules, then the entry is added to the list
+     *  of processed tokens.</li>
+     * </ol>
+     * </p>
+     *
+     * @param options The command line {@link Options}
+     * @param arguments The command line arguments to be parsed
+     * @param stopAtNonOption Specifies whether to stop flattening
+     * when an non option is found.
+     * @return The flattened <code>arguments</code> String array.
      */
-    public PUSH(ConstantPoolGen cp, int value) {
-        if ((value >= -1) && (value <= 5)) {
-            instruction = InstructionConstants.INSTRUCTIONS[Constants.ICONST_0 + value];
-        } else if ((value >= -128) && (value <= 127)) {
-            instruction = new BIPUSH((byte) value);
-        } else if ((value >= -32768) && (value <= 32767)) {
-            instruction = new SIPUSH((short) value);
-        } else {
-            instruction = new LDC(cp.addInteger(value));
+    protected String[] flatten(Options options, String[] arguments, boolean stopAtNonOption)
+    {
+        init();
+        this.options = options;
+
+        // an iterator for the command line tokens
+        Iterator iter = Arrays.asList(arguments).iterator();
+
+        // process each command line token
+        while (iter.hasNext())
+        {
+            // get the next command line token
+            String token = (String) iter.next();
+
+            // handle SPECIAL TOKEN
+            if (token.startsWith("--"))
+            {
+                if (token.indexOf('=') != -1)
+                {
+                    tokens.add(token.substring(0, token.indexOf('=')));
+                    tokens.add(token.substring(token.indexOf('=') + 1, token.length()));
+                }
+                else
+                {
+                    tokens.add(token);
+                }
+            }
+
+            // single hyphen
+            else if ("-".equals(token))
+            {
+                processSingleHyphen(token);
+            }
+            else if (token.startsWith("-"))
+            {
+                int tokenLength = token.length();
+
+                if (tokenLength == 2)
+                {
+                    processOptionToken(token, stopAtNonOption);
+                }
+                else if (options.hasOption(token))
+                {
+                    tokens.add(token);
+                }
+                // requires bursting
+                else
+                {
+                    burstToken(token, stopAtNonOption);
+                }
+            }
+            else
+            {
+                if (stopAtNonOption)
+                {
+                    process(token);
+                }
+                else
+                {
+                    tokens.add(token);
+                }
+            }
+
+            gobble(iter);
+        }
+
+        return (String[]) tokens.toArray(new String[tokens.size()]);
+    }
+
+    /**
+     * Adds the remaining tokens to the processed tokens list.
+     *
+     * @param iter An iterator over the remaining tokens
+     */
+    private void gobble(Iterator iter)
+    {
+        if (eatTheRest)
+        {
+            while (iter.hasNext())
+            {
+                tokens.add(iter.next());
+            }
         }
     }
 
-
     /**
-     * @param cp Constant pool
-     * @param value to be pushed 
+     * <p>If there is a current option and it can have an argument
+     * value then add the token to the processed tokens list and 
+     * set the current option to null.</p>
+     *
+     * <p>If there is a current option and it can have argument
+     * values then add the token to the processed tokens list.</p>
+     *
+     * <p>If there is not a current option add the special token
+     * "<b>--</b>" and the current <code>value</code> to the processed
+     * tokens list.  The add all the remaining <code>argument</code>
+     * values to the processed tokens list.</p>
+     *
+     * @param value The current token
      */
-    public PUSH(ConstantPoolGen cp, boolean value) {
-        instruction = InstructionConstants.INSTRUCTIONS[Constants.ICONST_0 + (value ? 1 : 0)];
-    }
-
-
-    /**
-     * @param cp Constant pool
-     * @param value to be pushed 
-     */
-    public PUSH(ConstantPoolGen cp, float value) {
-        if (value == 0.0) {
-            instruction = InstructionConstants.FCONST_0;
-        } else if (value == 1.0) {
-            instruction = InstructionConstants.FCONST_1;
-        } else if (value == 2.0) {
-            instruction = InstructionConstants.FCONST_2;
-        } else {
-            instruction = new LDC(cp.addFloat(value));
+    private void process(String value)
+    {
+        if (currentOption != null && currentOption.hasArg())
+        {
+            if (currentOption.hasArg())
+            {
+                tokens.add(value);
+                currentOption = null;
+            }
+            else if (currentOption.hasArgs())
+            {
+                tokens.add(value);
+            }
         }
-    }
-
-
-    /**
-     * @param cp Constant pool
-     * @param value to be pushed 
-     */
-    public PUSH(ConstantPoolGen cp, long value) {
-        if (value == 0) {
-            instruction = InstructionConstants.LCONST_0;
-        } else if (value == 1) {
-            instruction = InstructionConstants.LCONST_1;
-        } else {
-            instruction = new LDC2_W(cp.addLong(value));
-        }
-    }
-
-
-    /**
-     * @param cp Constant pool
-     * @param value to be pushed 
-     */
-    public PUSH(ConstantPoolGen cp, double value) {
-        if (value == 0.0) {
-            instruction = InstructionConstants.DCONST_0;
-        } else if (value == 1.0) {
-            instruction = InstructionConstants.DCONST_1;
-        } else {
-            instruction = new LDC2_W(cp.addDouble(value));
-        }
-    }
-
-
-    /**
-     * @param cp Constant pool
-     * @param value to be pushed 
-     */
-    public PUSH(ConstantPoolGen cp, String value) {
-        if (value == null) {
-            instruction = InstructionConstants.ACONST_NULL;
-        } else {
-            instruction = new LDC(cp.addString(value));
+        else
+        {
+            eatTheRest = true;
+            tokens.add("--");
+            tokens.add(value);
         }
     }
 
     /**
-     * 
-     * @param cp
-     * @param value
+     * If it is a hyphen then add the hyphen directly to
+     * the processed tokens list.
+     *
+     * @param hyphen The hyphen token
      */
-    public PUSH(ConstantPoolGen cp, ObjectType value) {
-        if (value == null) {
-            instruction = InstructionConstants.ACONST_NULL;
-        } else {
-            instruction = new LDC(cp.addClass(value));
+    private void processSingleHyphen(String hyphen)
+    {
+        tokens.add(hyphen);
+    }
+
+    /**
+     * <p>If an {@link Option} exists for <code>token</code> then
+     * set the current option and add the token to the processed 
+     * list.</p>
+     *
+     * <p>If an {@link Option} does not exist and <code>stopAtNonOption</code>
+     * is set then ignore the current token and add the remaining tokens
+     * to the processed tokens list directly.</p>
+     *
+     * @param token The current option token
+     * @param stopAtNonOption Specifies whether flattening should halt
+     * at the first non option.
+     */
+    private void processOptionToken(String token, boolean stopAtNonOption)
+    {
+        if (this.options.hasOption(token))
+        {
+            currentOption = this.options.getOption(token);
+            tokens.add(token);
+        }
+        else if (stopAtNonOption)
+        {
+            eatTheRest = true;
         }
     }
-    
+
     /**
-     * @param cp Constant pool
-     * @param value to be pushed 
+     * <p>Breaks <code>token</code> into its constituent parts
+     * using the following algorithm.
+     * <ul>
+     *  <li>ignore the first character ("<b>-</b>")</li>
+     *  <li>foreach remaining character check if an {@link Option}
+     *  exists with that id.</li>
+     *  <li>if an {@link Option} does exist then add that character
+     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
+     *  <li>if the {@link Option} can have an argument value and there 
+     *  are remaining characters in the token then add the remaining 
+     *  characters as a token to the list of processed tokens.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b> 
+     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
+     *  "<b>--</b>" followed by the remaining characters and also 
+     *  the remaining tokens directly to the processed tokens list.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
+     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
+     *  character prepended with "<b>-</b>".</li>
+     * </ul>
+     * </p>
+     *
+     * @param token The current token to be <b>burst</b>
+     * @param stopAtNonOption Specifies whether to stop processing
+     * at the first non-Option encountered.
      */
-    public PUSH(ConstantPoolGen cp, Number value) {
-        if ((value instanceof Integer) || (value instanceof Short) || (value instanceof Byte)) {
-            instruction = new PUSH(cp, value.intValue()).instruction;
-        } else if (value instanceof Double) {
-            instruction = new PUSH(cp, value.doubleValue()).instruction;
-        } else if (value instanceof Float) {
-            instruction = new PUSH(cp, value.floatValue()).instruction;
-        } else if (value instanceof Long) {
-            instruction = new PUSH(cp, value.longValue()).instruction;
-        } else {
-            throw new ClassGenException("What's this: " + value);
+    protected void burstToken(String token, boolean stopAtNonOption)
+    {
+        for (int i = 1; i < token.length(); i++)
+        {
+            String ch = String.valueOf(token.charAt(i));
+
+            if (options.hasOption(ch))
+            {
+                tokens.add("-" + ch);
+                currentOption = options.getOption(ch);
+
+                if (currentOption.hasArg() && (token.length() != (i + 1)))
+                {
+                    tokens.add(token.substring(i + 1));
+
+                    break;
+                }
+            }
+            else if (stopAtNonOption)
+            {
+                process(token.substring(i));
+                break;
+            }
+            else
+            {
+                tokens.add(token);
+                break;
+            }
         }
-    }
-
-
-    /**
-     * creates a push object from a Character value. Warning: Make sure not to attempt to allow
-     * autoboxing to create this value parameter, as an alternative constructor will be called
-     * 
-     * @param cp Constant pool
-     * @param value to be pushed 
-     */
-    public PUSH(ConstantPoolGen cp, Character value) {
-        this(cp, value.charValue());
-    }
-
-
-    /**
-     * @param cp Constant pool
-     * @param value to be pushed 
-     */
-    public PUSH(ConstantPoolGen cp, Boolean value) {
-        this(cp, value.booleanValue());
-    }
-
-
-    public final InstructionList getInstructionList() {
-        return new InstructionList(instruction);
-    }
-
-
-    public final Instruction getInstruction() {
-        return instruction;
-    }
-
-
-    /**
-     * @return mnemonic for instruction
-     */
-    @Override
-    public String toString() {
-        return instruction.toString() + " (PUSH)";
     }
 }

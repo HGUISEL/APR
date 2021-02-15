@@ -1,503 +1,1377 @@
-/**
- * Copyright (C) 2015 DataTorrent, Inc.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package com.datatorrent.stram;
+package com.fasterxml.jackson.databind.type;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
+import java.lang.reflect.*;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.apache.commons.lang3.SerializationUtils;
-import org.apache.hadoop.fs.FileContext;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.ipc.ProtocolSignature;
-import org.apache.hadoop.net.NetUtils;
-
-import com.datatorrent.api.Context;
-import com.datatorrent.api.DAG;
-import com.datatorrent.api.LocalMode.Controller;
-import com.datatorrent.api.Operator;
-import com.datatorrent.bufferserver.server.Server;
-import com.datatorrent.bufferserver.storage.DiskStorage;
-import com.datatorrent.common.util.AsyncFSStorageAgent;
-import com.datatorrent.common.util.FSStorageAgent;
-import com.datatorrent.stram.StreamingContainerAgent.ContainerStartRequest;
-import com.datatorrent.stram.StreamingContainerManager.ContainerResource;
-import com.datatorrent.stram.api.StreamingContainerUmbilicalProtocol;
-import com.datatorrent.stram.api.StreamingContainerUmbilicalProtocol.ContainerHeartbeatResponse;
-import com.datatorrent.stram.api.StreamingContainerUmbilicalProtocol.StreamingContainerContext;
-import com.datatorrent.stram.engine.Node;
-import com.datatorrent.stram.engine.OperatorContext;
-import com.datatorrent.stram.engine.StreamingContainer;
-import com.datatorrent.stram.engine.WindowGenerator;
-import com.datatorrent.stram.plan.logical.LogicalPlan;
-import com.datatorrent.stram.plan.logical.LogicalPlan.OperatorMeta;
-import com.datatorrent.stram.plan.physical.PTOperator;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.util.ArrayBuilders;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.LRUMap;
 
 /**
- * Launcher for topologies in local mode within a single process.
- * Child containers are mapped to threads.
- *
- * @since 0.3.2
+ * Class used for creating concrete {@link JavaType} instances,
+ * given various inputs.
+ *<p>
+ * Instances of this class are accessible using {@link com.fasterxml.jackson.databind.ObjectMapper}
+ * as well as many objects it constructs (like
+* {@link com.fasterxml.jackson.databind.DeserializationConfig} and
+ * {@link com.fasterxml.jackson.databind.SerializationConfig})),
+ * but usually those objects also 
+ * expose convenience methods (<code>constructType</code>).
+ * So, you can do for example:
+ *<pre>
+ *   JavaType stringType = mapper.constructType(String.class);
+ *</pre>
+ * However, more advanced methods are only exposed by factory so that you
+ * may need to use:
+ *<pre>
+ *   JavaType stringCollection = mapper.getTypeFactory().constructCollectionType(List.class, String.class);
+ *</pre>
  */
-public class StramLocalCluster implements Runnable, Controller
+@SuppressWarnings({"rawtypes" })
+public final class TypeFactory
+    implements java.io.Serializable
 {
-  private static final Logger LOG = LoggerFactory.getLogger(StramLocalCluster.class);
-  // assumes execution as unit test
-  private static File CLUSTER_WORK_DIR = new File("target", StramLocalCluster.class.getName());
-  protected final StreamingContainerManager dnmgr;
-  private final UmbilicalProtocolLocalImpl umbilical;
-  private InetSocketAddress bufferServerAddress;
-  private boolean perContainerBufferServer;
-  private Server bufferServer = null;
-  private final Map<String, LocalStreamingContainer> childContainers = new ConcurrentHashMap<String, LocalStreamingContainer>();
-  private int containerSeq = 0;
-  private boolean appDone = false;
-  private final Map<String, StreamingContainer> injectShutdown = new ConcurrentHashMap<String, StreamingContainer>();
-  private boolean heartbeatMonitoringEnabled = true;
+    private static final long serialVersionUID = 1L;
 
-  public interface MockComponentFactory
-  {
-    WindowGenerator setupWindowGenerator();
-  }
+    private final static JavaType[] NO_TYPES = new JavaType[0];
 
-  private MockComponentFactory mockComponentFactory;
-
-  private class UmbilicalProtocolLocalImpl implements StreamingContainerUmbilicalProtocol
-  {
-    @Override
-    public long getProtocolVersion(String protocol, long clientVersion)
-            throws IOException
-    {
-      throw new UnsupportedOperationException("not implemented in local mode");
-    }
-
-    @Override
-    public ProtocolSignature getProtocolSignature(String protocol,
-            long clientVersion, int clientMethodsHash) throws IOException
-    {
-      throw new UnsupportedOperationException("not implemented in local mode");
-    }
-
-    @Override
-    public void reportError(String containerId, int[] operators, String msg)
-    {
-      try {
-        log(containerId, msg);
-      }
-      catch (IOException ex) {
-        // ignore
-      }
-    }
-
-    @Override
-    public void log(String containerId, String msg) throws IOException
-    {
-      LOG.info("{} msg: {}", containerId, msg);
-    }
-
-    @Override
-    public StreamingContainerContext getInitContext(String containerId)
-            throws IOException
-    {
-      StreamingContainerAgent sca = dnmgr.getContainerAgent(containerId);
-      StreamingContainerContext scc = sca.getInitContext();
-      scc.deployBufferServer = perContainerBufferServer;
-      return scc;
-    }
-
-    @Override
-    public ContainerHeartbeatResponse processHeartbeat(ContainerHeartbeat msg)
-    {
-      if (injectShutdown.containsKey(msg.getContainerId())) {
-        ContainerHeartbeatResponse r = new ContainerHeartbeatResponse();
-        r.shutdown = true;
-        return r;
-      }
-      try {
-        ContainerHeartbeatResponse rsp = dnmgr.processHeartbeat(msg);
-        if (rsp != null) {
-          // clone to not share attributes (stream codec etc.) between threads.
-          rsp = SerializationUtils.clone(rsp);
-        }
-        return rsp;
-      }
-      finally {
-        LocalStreamingContainer c = childContainers.get(msg.getContainerId());
-        synchronized (c.heartbeatCount) {
-          c.heartbeatCount.incrementAndGet();
-          c.heartbeatCount.notifyAll();
-        }
-      }
-    }
-
-  }
-
-  public static class LocalStreamingContainer extends StreamingContainer
-  {
     /**
-     * Count heartbeat from container and allow other threads to wait for it.
+     * Globally shared singleton. Not accessed directly; non-core
+     * code should use per-ObjectMapper instance (via configuration objects).
+     * Core Jackson code uses {@link #defaultInstance} for accessing it.
      */
-    private final AtomicInteger heartbeatCount = new AtomicInteger();
-    private final WindowGenerator windowGenerator;
+    protected final static TypeFactory instance = new TypeFactory();
 
-    public LocalStreamingContainer(String containerId, StreamingContainerUmbilicalProtocol umbilical, WindowGenerator winGen)
-    {
-      super(containerId, umbilical);
-      this.windowGenerator = winGen;
+    protected final static TypeBindings EMPTY_BINDINGS = TypeBindings.emptyBindings();
+
+    /*
+    /**********************************************************
+    /* Constants for "well-known" classes
+    /**********************************************************
+     */
+
+    // // // Let's assume that a small set of core primitive/basic types
+    // // // will not be modified, and can be freely shared to streamline
+    // // // parts of processing
+
+    private final static Class<?> CLS_STRING = String.class;
+    private final static Class<?> CLS_OBJECT = Object.class;
+
+    private final static Class<?> CLS_COMPARABLE = Comparable.class;
+    private final static Class<?> CLS_CLASS = Class.class;
+    private final static Class<?> CLS_ENUM = Enum.class;
+
+    private final static Class<?> CLS_BOOL = Boolean.TYPE;
+    private final static Class<?> CLS_INT = Integer.TYPE;
+    private final static Class<?> CLS_LONG = Long.TYPE;
+
+    /*
+    /**********************************************************
+    /* Cached pre-constructed JavaType instances
+    /**********************************************************
+     */
+
+    // note: these are primitive, hence no super types
+    protected final static SimpleType CORE_TYPE_BOOL = new SimpleType(CLS_BOOL);
+    protected final static SimpleType CORE_TYPE_INT = new SimpleType(CLS_INT);
+    protected final static SimpleType CORE_TYPE_LONG = new SimpleType(CLS_LONG);
+
+    // and as to String... well, for now, ignore its super types
+    protected final static SimpleType CORE_TYPE_STRING = new SimpleType(CLS_STRING);
+
+    // @since 2.7
+    protected final static SimpleType CORE_TYPE_OBJECT = new SimpleType(CLS_OBJECT);
+
+    /**
+     * Cache {@link Comparable} because it is both parameteric (relatively costly to
+     * resolve) and mostly useless (no special handling), better handle directly
+     *
+     * @since 2.7
+     */
+    protected final static SimpleType CORE_TYPE_COMPARABLE = new SimpleType(CLS_COMPARABLE);
+
+    /**
+     * Cache {@link Enum} because it is parametric AND self-referential (costly to
+     * resolve) and useless in itself (no special handling).
+     *
+     * @since 2.7
+     */
+    protected final static SimpleType CORE_TYPE_ENUM = new SimpleType(CLS_ENUM);
+
+    /**
+     * Cache {@link Class} because it is nominally parametric, but has no really
+     * useful information.
+     *
+     * @since 2.7
+     */
+    protected final static SimpleType CORE_TYPE_CLASS = new SimpleType(CLS_CLASS);
+
+    /**
+     * Since type resolution can be expensive (specifically when resolving
+     * actual generic types), we will use small cache to avoid repetitive
+     * resolution of core types
+     */
+    protected final LRUMap<Class<?>, JavaType> _typeCache = new LRUMap<Class<?>, JavaType>(16, 100);
+
+    /*
+    /**********************************************************
+    /* Configuration
+    /**********************************************************
+     */
+
+    /**
+     * Registered {@link TypeModifier}s: objects that can change details
+     * of {@link JavaType} instances factory constructs.
+     */
+    protected final TypeModifier[] _modifiers;
+
+    protected final TypeParser _parser;
+    
+    /**
+     * ClassLoader used by this factory [databind#624].
+     */
+    protected final ClassLoader _classLoader;
+
+    /*
+    /**********************************************************
+    /* Life-cycle
+    /**********************************************************
+     */
+
+    private TypeFactory() {
+        _parser = new TypeParser(this);
+        _modifiers = null;
+        _classLoader = null;
     }
 
-    public static void run(StreamingContainer stramChild, StreamingContainerContext ctx) throws Exception
+    protected TypeFactory(TypeParser p, TypeModifier[] mods) {
+        this(p, mods, null);
+    }
+    
+    protected TypeFactory(TypeParser p, TypeModifier[] mods, ClassLoader classLoader) {
+        // As per [databind#894] must ensure we have back-linkage from TypeFactory:
+        _parser = p.withFactory(this);
+        _modifiers = mods;
+        _classLoader = classLoader;
+    }
+
+    public TypeFactory withModifier(TypeModifier mod) 
     {
-      LOG.debug("Got context: " + ctx);
-      stramChild.setup(ctx);
-      boolean hasError = true;
-      try {
-        // main thread enters heartbeat loop
-        stramChild.heartbeatLoop();
-        hasError = false;
-      }
-      finally {
-        // teardown
+        if (mod == null) { // mostly for unit tests
+            return new TypeFactory(_parser, _modifiers, _classLoader);
+        }
+        if (_modifiers == null) {
+            return new TypeFactory(_parser, new TypeModifier[] { mod }, _classLoader);
+        }
+        return new TypeFactory(_parser, ArrayBuilders.insertInListNoDup(_modifiers, mod), _classLoader);
+    }
+    
+    public TypeFactory withClassLoader(ClassLoader classLoader) {
+        return new TypeFactory(_parser, _modifiers, classLoader);
+    }
+
+    /**
+     * Method used to access the globally shared instance, which has
+     * no custom configuration. Used by <code>ObjectMapper</code> to
+     * get the default factory when constructed.
+     */
+    public static TypeFactory defaultInstance() { return instance; }
+
+    /**
+     * Method that will clear up any cached type definitions that may
+     * be cached by this {@link TypeFactory} instance.
+     * This method should not be commonly used, that is, only use it
+     * if you know there is a problem with retention of type definitions;
+     * the most likely (and currently only known) problem is retention
+     * of {@link Class} instances via {@link JavaType} reference.
+     * 
+     * @since 2.4.1
+     */
+    public void clearCache() {
+        _typeCache.clear();
+    }
+
+    public ClassLoader getClassLoader() {
+        return _classLoader;
+    }
+    
+    /*
+    /**********************************************************
+    /* Static methods for non-instance-specific functionality
+    /**********************************************************
+     */
+    
+    /**
+     * Method for constructing a marker type that indicates missing generic
+     * type information, which is handled same as simple type for
+     * <code>java.lang.Object</code>.
+     */
+    public static JavaType unknownType() {
+        return defaultInstance()._unknownType();
+    }
+
+    /**
+     * Static helper method that can be called to figure out type-erased
+     * call for given JDK type. It can be called statically since type resolution
+     * process can never change actual type-erased class; thereby static
+     * default instance is used for determination.
+     */
+    public static Class<?> rawClass(Type t) {
+        if (t instanceof Class<?>) {
+            return (Class<?>) t;
+        }
+        // Should be able to optimize bit more in future...
+        return defaultInstance().constructType(t).getRawClass();
+    }
+
+    /*
+    /**********************************************************
+    /* Low-level helper methods
+    /**********************************************************
+     */
+
+    /**
+     * Low-level lookup method moved from {@link com.fasterxml.jackson.databind.util.ClassUtil},
+     * to allow for overriding of lookup functionality in environments like OSGi.
+     *
+     * @since 2.6
+     */
+    public Class<?> findClass(String className) throws ClassNotFoundException
+    {
+        if (className.indexOf('.') < 0) {
+            Class<?> prim = _findPrimitive(className);
+            if (prim != null) {
+                return prim;
+            }
+        }
+        // Two-phase lookup: first using context ClassLoader; then default
+        Throwable prob = null;
+        ClassLoader loader = this.getClassLoader();
+        if (loader == null) {
+          loader = 	Thread.currentThread().getContextClassLoader();
+        }
+        if (loader != null) {
+            try {
+                return classForName(className, true, loader);
+            } catch (Exception e) {
+                prob = ClassUtil.getRootCause(e);
+            }
+        }
         try {
-          stramChild.teardown();
+            return classForName(className);
+        } catch (Exception e) {
+            if (prob == null) {
+                prob = ClassUtil.getRootCause(e);
+            }
         }
-        catch (Exception e) {
-          if (!hasError) {
-            throw e;
-          }
+        if (prob instanceof RuntimeException) {
+            throw (RuntimeException) prob;
         }
-      }
+        throw new ClassNotFoundException(prob.getMessage(), prob);
+    }
+    
+    protected Class<?> classForName(String name, boolean initialize,
+                                   ClassLoader loader) throws ClassNotFoundException {
+    	return Class.forName(name, true, loader);
+    }
+    
+    protected Class<?> classForName(String name) throws ClassNotFoundException {
+        return Class.forName(name);
     }
 
-    public void waitForHeartbeat(int waitMillis) throws InterruptedException
+    protected Class<?> _findPrimitive(String className)
     {
-      synchronized (heartbeatCount) {
-        heartbeatCount.wait(waitMillis);
-      }
+        if ("int".equals(className)) return Integer.TYPE;
+        if ("long".equals(className)) return Long.TYPE;
+        if ("float".equals(className)) return Float.TYPE;
+        if ("double".equals(className)) return Double.TYPE;
+        if ("boolean".equals(className)) return Boolean.TYPE;
+        if ("byte".equals(className)) return Byte.TYPE;
+        if ("char".equals(className)) return Character.TYPE;
+        if ("short".equals(className)) return Short.TYPE;
+        if ("void".equals(className)) return Void.TYPE;
+        return null;
     }
+    
+    /*
+    /**********************************************************
+    /* Type conversion, parameterization resolution methods
+    /**********************************************************
+     */
 
-    @Override
-    public void teardown()
+    /**
+     * Factory method for creating a subtype of given base type, as defined
+     * by specified subclass; but retaining generic type information if any.
+     * Can be used, for example, to get equivalent of "HashMap&lt;String,Integer&gt;"
+     * from "Map&lt;String,Integer&gt;" by giving <code>HashMap.class</code>
+     * as subclass.
+     */
+    public JavaType constructSpecializedType(JavaType baseType, Class<?> subclass)
     {
-      super.teardown();
-    }
-
-    @Override
-    protected WindowGenerator setupWindowGenerator(long smallestWindowId)
-    {
-      if (windowGenerator != null) {
-        return windowGenerator;
-      }
-      return super.setupWindowGenerator(smallestWindowId);
-    }
-
-    OperatorContext getNodeContext(int id)
-    {
-      return nodes.get(id).context;
-    }
-
-    Operator getOperator(int id)
-    {
-      return nodes.get(id).getOperator();
-    }
-
-    Map<Integer, Node<?>> getNodes()
-    {
-      return Collections.unmodifiableMap(nodes);
-    }
-
-  }
-
-  /**
-   * Starts the child "container" as thread.
-   */
-  private class LocalStramChildLauncher implements Runnable
-  {
-    final String containerId;
-    final LocalStreamingContainer child;
-
-    @SuppressWarnings("CallToThreadStartDuringObjectConstruction")
-    private LocalStramChildLauncher(ContainerStartRequest cdr)
-    {
-      this.containerId = "container-" + containerSeq++;
-      WindowGenerator wingen = null;
-      if (mockComponentFactory != null) {
-        wingen = mockComponentFactory.setupWindowGenerator();
-      }
-      this.child = new LocalStreamingContainer(containerId, umbilical, wingen);
-      ContainerResource cr = new ContainerResource(cdr.container.getResourceRequestPriority(), containerId, "localhost", cdr.container.getRequiredMemoryMB(), cdr.container.getRequiredVCores(), null);
-      StreamingContainerAgent sca = dnmgr.assignContainer(cr, perContainerBufferServer ? null : NetUtils.getConnectAddress(bufferServerAddress));
-      if (sca != null) {
-        Thread launchThread = new Thread(this, containerId);
-        launchThread.start();
-        childContainers.put(containerId, child);
-        LOG.info("Started container {}", containerId);
-      }
-    }
-
-    @Override
-    public void run()
-    {
-      try {
-        StreamingContainerContext ctx = umbilical.getInitContext(containerId);
-        LocalStreamingContainer.run(child, ctx);
-      }
-      catch (Exception e) {
-        LOG.error("Container {} failed", containerId, e);
-        throw new RuntimeException(e);
-      }
-      finally {
-        childContainers.remove(containerId);
-        LOG.info("Container {} terminating.", containerId);
-      }
-    }
-
-  }
-
-  public StramLocalCluster(LogicalPlan dag) throws IOException, ClassNotFoundException
-  {
-    dag.validate();
-    // ensure plan can be serialized
-    cloneLogicalPlan(dag);
-    // convert to URI so we always write to local file system,
-    // even when the environment has a default HDFS location.
-    String pathUri = CLUSTER_WORK_DIR.toURI().toString();
-    try {
-      FileContext.getLocalFSFileContext().delete(new Path(pathUri/*CLUSTER_WORK_DIR.getAbsolutePath()*/), true);
-    }
-    catch (IllegalArgumentException e) {
-      throw e;
-    }
-    catch (IOException e) {
-      throw new RuntimeException("could not cleanup test dir", e);
-    }
-
-    dag.getAttributes().put(LogicalPlan.APPLICATION_ID, "app_local_" + System.currentTimeMillis());
-    if (dag.getAttributes().get(LogicalPlan.APPLICATION_PATH) == null) {
-      dag.getAttributes().put(LogicalPlan.APPLICATION_PATH, pathUri);
-    }
-    if (dag.getAttributes().get(OperatorContext.STORAGE_AGENT) == null) {
-      dag.setAttribute(OperatorContext.STORAGE_AGENT, new AsyncFSStorageAgent(new Path(pathUri, LogicalPlan.SUBDIR_CHECKPOINTS).toString(), null));
-    }
-    this.dnmgr = new StreamingContainerManager(dag);
-    this.umbilical = new UmbilicalProtocolLocalImpl();
-
-    if (!perContainerBufferServer) {
-      StreamingContainer.eventloop.start();
-      bufferServer = new Server(0, 1024 * 1024,8);
-      bufferServer.setSpoolStorage(new DiskStorage());
-      SocketAddress bindAddr = bufferServer.run(StreamingContainer.eventloop);
-      this.bufferServerAddress = ((InetSocketAddress)bindAddr);
-      LOG.info("Buffer server started: {}", bufferServerAddress);
-    }
-  }
-
-  public static LogicalPlan cloneLogicalPlan(LogicalPlan lp) throws IOException, ClassNotFoundException
-  {
-    ByteArrayOutputStream bos = new ByteArrayOutputStream();
-    LogicalPlan.write(lp, bos);
-    LOG.debug("serialized size: {}", bos.toByteArray().length);
-    bos.flush();
-    ByteArrayInputStream bis = new ByteArrayInputStream(bos.toByteArray());
-    return LogicalPlan.read(bis);
-  }
-
-  LocalStreamingContainer getContainer(String id)
-  {
-    return this.childContainers.get(id);
-  }
-
-  public StreamingContainerManager getStreamingContainerManager()
-  {
-    return dnmgr;
-  }
-
-  public DAG getDAG()
-  {
-    return dnmgr.getPhysicalPlan().getLogicalPlan();
-  }
-
-  public StramLocalCluster(LogicalPlan dag, MockComponentFactory mcf) throws Exception
-  {
-    this(dag);
-    this.mockComponentFactory = mcf;
-  }
-
-  /**
-   * Simulate container failure for testing purposes.
-   *
-   * @param c
-   */
-  void failContainer(StreamingContainer c)
-  {
-    injectShutdown.put(c.getContainerId(), c);
-    c.triggerHeartbeat();
-    LOG.info("Container {} failed, launching new container.", c.getContainerId());
-    dnmgr.scheduleContainerRestart(c.getContainerId());
-    // simplify testing: remove immediately rather than waiting for thread to exit
-    this.childContainers.remove(c.getContainerId());
-  }
-
-  public PTOperator findByLogicalNode(OperatorMeta logicalNode)
-  {
-    List<PTOperator> nodes = dnmgr.getPhysicalPlan().getOperators(logicalNode);
-    if (nodes.isEmpty()) {
-      return null;
-    }
-    return nodes.get(0);
-  }
-
-  List<PTOperator> getPlanOperators(OperatorMeta logicalNode)
-  {
-    return dnmgr.getPhysicalPlan().getOperators(logicalNode);
-  }
-
-  /**
-   * Return the container that has the given operator deployed.
-   * Returns null if the specified operator is not deployed.
-   *
-   * @param planOperator
-   * @return
-   */
-  public LocalStreamingContainer getContainer(PTOperator planOperator)
-  {
-    LocalStreamingContainer container;
-    String cid = planOperator.getContainer().getExternalId();
-    if (cid != null) {
-      if ((container = getContainer(cid)) != null) {
-        if (container.getNodeContext(planOperator.getId()) != null) {
-          return container;
+        // simple optimization to avoid costly introspection if type-erased type does NOT differ
+        final Class<?> rawBase = baseType.getRawClass();
+        if (rawBase == subclass) {
+            return baseType;
         }
-      }
-    }
-    return null;
-  }
 
-  StreamingContainerAgent getContainerAgent(StreamingContainer c)
-  {
-    return this.dnmgr.getContainerAgent(c.getContainerId());
-  }
+        JavaType newType;
 
-  @Override
-  public void runAsync()
-  {
-    new Thread(this, "master").start();
-  }
+        // also: if we start from untyped, not much to save
+        do { // bogus loop to be able to break
+            if (rawBase == Object.class) {
+                newType = _fromClass(null, subclass, TypeBindings.emptyBindings());
+                break;
+            }
+            if (!rawBase.isAssignableFrom(subclass)) {
+                throw new IllegalArgumentException(String.format(
+                        "Class %s not subtype of %s", subclass.getName(), baseType));
+            }
+            // A few special cases where we can simplify handling:
 
-  @Override
-  public void shutdown()
-  {
-    appDone = true;
-  }
+            // (1) Original target type has no generics -- just resolve subtype
+            if (baseType.getBindings().isEmpty()) {
+                newType = _fromClass(null, subclass, TypeBindings.emptyBindings());     
+                break;
+            }
+            // (2) A small set of "well-known" List/Map subtypes where can take a short-cut
+            if (baseType.isContainerType()) {
+                if (baseType.isMapLikeType()) {
+                    if ((subclass == HashMap.class)
+                            || (subclass == LinkedHashMap.class)
+                            || (subclass == EnumMap.class)
+                            || (subclass == TreeMap.class)) {
+                        newType = _fromClass(null, subclass,
+                                TypeBindings.create(subclass, baseType.getKeyType(), baseType.getContentType()));
+                        break;
+                    }
+                } else if (baseType.isCollectionLikeType()) {
+                    if ((subclass == ArrayList.class)
+                            || (subclass == LinkedList.class)
+                            || (subclass == HashSet.class)
+                            || (subclass == TreeSet.class)) {
+                        newType = _fromClass(null, subclass,
+                                TypeBindings.create(subclass, baseType.getContentType()));
+                        break;
+                    }
+                    // 29-Oct-2015, tatu: One further shortcut: there are variants of `EnumSet`,
+                    //    but they are impl details and we basically do not care...
+                    if (rawBase == EnumSet.class) {
+                        return baseType;
+                    }
+                }
+            }
+            // (3) Sub-class does not take type parameters -- just resolve subtype
+            int typeParamCount = subclass.getTypeParameters().length;
+            if (typeParamCount == 0) {
+                newType = _fromClass(null, subclass, TypeBindings.emptyBindings());     
+                break;
+            }
+            
+            // If not, we'll need to do more thorough forward+backwards resolution. Sigh.
+            // !!! TODO (as of 28-Jan-2016, at least)
+            
+            // 20-Oct-2015, tatu: Container, Map-types somewhat special. There is
+            //    a way to fully resolve and merge hierarchies; but that gets expensive
+            //    so let's, for now, try to create close-enough approximation that
+            //    is not 100% same, structurally, but has equivalent information for
+            //    our specific neeeds.
+            // 29-Mar-2016, tatu: See [databind#1173]  (and test `TypeResolverTest`)
+            //  for a case where this code does get invoked: not ideal
+            if (baseType.isInterface()) {
+                newType = baseType.refine(subclass, TypeBindings.emptyBindings(), null,
+                        new JavaType[] { baseType });
+            } else {
+                newType = baseType.refine(subclass, TypeBindings.emptyBindings(), baseType,
+                        NO_TYPES);
+            }
+            // Only SimpleType returns null, but if so just resolve regularly
+            if (newType == null) {
+                // But otherwise gets bit tricky, as we need to partially resolve the type hierarchy
+                // (hopefully passing null Class for root is ok)
+                TypeBindings tb = null;
 
-  @Override
-  public void setHeartbeatMonitoringEnabled(boolean enabled)
-  {
-    this.heartbeatMonitoringEnabled = enabled;
-  }
+                // 14-Apr-2016, tatu: One possible short-cut; if type parameter counts
+                //   match, chances are they ought to match. Let's take our chances...
+                if (baseType.containedTypeCount() == typeParamCount) {
+                    if (typeParamCount == 1) {
+                        tb = TypeBindings.create(subclass, baseType.containedType(0));
+                    } else if (typeParamCount == 2) {
+                        tb = TypeBindings.create(subclass, baseType.containedType(0),
+                                baseType.containedType(1));
+                    }
+                }
+                newType = _fromClass(null, subclass,
+                        (tb == null) ? TypeBindings.emptyBindings() : tb);
+            }
+        } while (false);
 
-  public void setPerContainerBufferServer(boolean perContainerBufferServer)
-  {
-    this.perContainerBufferServer = perContainerBufferServer;
-  }
+        // except possibly handlers
+//      newType = newType.withHandlersFrom(baseType);
+        return newType;
 
-  @Override
-  public void run()
-  {
-    run(0);
-  }
-
-  @Override
-  @SuppressWarnings({"SleepWhileInLoop", "ResultOfObjectAllocationIgnored"})
-  public void run(long runMillis)
-  {
-    long endMillis = System.currentTimeMillis() + runMillis;
-
-    while (!appDone) {
-
-      for (String containerIdStr: dnmgr.containerStopRequests.values()) {
-        // teardown child thread
-        StreamingContainer c = childContainers.get(containerIdStr);
-        if (c != null) {
-          ContainerHeartbeatResponse r = new ContainerHeartbeatResponse();
-          r.shutdown = true;
-          c.processHeartbeatResponse(r);
+        // 20-Oct-2015, tatu: Old simplistic approach
+        
+        /*
+        // Currently mostly SimpleType instances can become something else
+        if (baseType instanceof SimpleType) {
+            // and only if subclass is an array, Collection or Map
+            if (subclass.isArray()
+                || Map.class.isAssignableFrom(subclass)
+                || Collection.class.isAssignableFrom(subclass)) {
+                // need to assert type compatibility...
+                if (!baseType.getRawClass().isAssignableFrom(subclass)) {
+                    throw new IllegalArgumentException("Class "+subclass.getClass().getName()+" not subtype of "+baseType);
+                }
+                // this _should_ work, right?
+                JavaType subtype = _fromClass(null, subclass, TypeBindings.emptyBindings());
+                // one more thing: handlers to copy?
+                Object h = baseType.getValueHandler();
+                if (h != null) {
+                    subtype = subtype.withValueHandler(h);
+                }
+                h = baseType.getTypeHandler();
+                if (h != null) {
+                    subtype = subtype.withTypeHandler(h);
+                }
+                return subtype;
+            }
         }
-        dnmgr.containerStopRequests.remove(containerIdStr);
-        LOG.info("Container {} restart.", containerIdStr);
-        dnmgr.scheduleContainerRestart(containerIdStr);
-        //dnmgr.removeContainerAgent(containerIdStr);
-      }
-
-      // start containers
-      while (!dnmgr.containerStartRequests.isEmpty()) {
-        ContainerStartRequest cdr = dnmgr.containerStartRequests.poll();
-        if (cdr != null) {
-          new LocalStramChildLauncher(cdr);
+        // But there is the need for special case for arrays too, it seems
+        if (baseType instanceof ArrayType) {
+            if (subclass.isArray()) {
+                // actually see if it might be a no-op first:
+                ArrayType at = (ArrayType) baseType;
+                Class<?> rawComp = subclass.getComponentType();
+                if (at.getContentType().getRawClass() == rawComp) {
+                    return baseType;
+                }
+                JavaType componentType = _fromAny(null, rawComp, null);
+                return ((ArrayType) baseType).withComponentType(componentType);
+            }
         }
-      }
 
-      if (heartbeatMonitoringEnabled) {
-        // monitor child containers
-        dnmgr.monitorHeartbeat();
-      }
-
-      if (childContainers.isEmpty() && dnmgr.containerStartRequests.isEmpty()) {
-        appDone = true;
-      }
-
-      if (runMillis > 0 && System.currentTimeMillis() > endMillis) {
-        appDone = true;
-      }
-
-      if (Thread.interrupted()) {
-        break;
-      }
-
-      if (!appDone) {
-        try {
-          Thread.sleep(1000);
-        }
-        catch (InterruptedException e) {
-          LOG.info("Sleep interrupted " + e.getMessage());
-          break;
-        }
-      }
+        // otherwise regular narrowing should work just fine
+        return baseType.narrowBy(subclass);
+        */
     }
 
-    for (LocalStreamingContainer lsc: childContainers.values()) {
-      injectShutdown.put(lsc.getContainerId(), lsc);
-      lsc.triggerHeartbeat();
+    /**
+     * Method similar to {@link #constructSpecializedType}, but that creates a
+     * less-specific type of given type. Usually this is as simple as simply
+     * finding super-type with type erasure of <code>superClass</code>, but
+     * there may be need for some additional work-arounds.
+     *
+     * @param superClass
+     *
+     * @since 2.7
+     */
+    public JavaType constructGeneralizedType(JavaType baseType, Class<?> superClass)
+    {
+        // simple optimization to avoid costly introspection if type-erased type does NOT differ
+        final Class<?> rawBase = baseType.getRawClass();
+        if (rawBase == superClass) {
+            return baseType;
+        }
+        JavaType superType = baseType.findSuperType(superClass);
+        if (superType == null) {
+            // Most likely, caller did not verify sub/super-type relationship
+            if (!superClass.isAssignableFrom(rawBase)) {
+                throw new IllegalArgumentException(String.format(
+                        "Class %s not a super-type of %s", superClass.getName(), baseType));
+            }
+            // 01-Nov-2015, tatu: Should never happen, but ch
+            throw new IllegalArgumentException(String.format(
+                    "Internal error: class %s not included as super-type for %s",
+                    superClass.getName(), baseType));
+        }
+        return superType;
     }
 
-    LOG.info("Application finished.");
-    if (!perContainerBufferServer) {
-      StreamingContainer.eventloop.stop(bufferServer);
-      StreamingContainer.eventloop.stop();
+    /**
+     * Factory method for constructing a {@link JavaType} out of its canonical
+     * representation (see {@link JavaType#toCanonical()}).
+     * 
+     * @param canonical Canonical string representation of a type
+     * 
+     * @throws IllegalArgumentException If canonical representation is malformed,
+     *   or class that type represents (including its generic parameters) is
+     *   not found
+     */
+    public JavaType constructFromCanonical(String canonical) throws IllegalArgumentException
+    {
+        return _parser.parse(canonical);
     }
-  }
 
+    /**
+     * Method that is to figure out actual type parameters that given
+     * class binds to generic types defined by given (generic)
+     * interface or class.
+     * This could mean, for example, trying to figure out
+     * key and value types for Map implementations.
+     * 
+     * @param type Sub-type (leaf type) that implements <code>expType</code>
+     */
+    public JavaType[] findTypeParameters(JavaType type, Class<?> expType)
+    {
+        JavaType match = type.findSuperType(expType);
+        if (match == null) {
+            return NO_TYPES;
+        }
+        return match.getBindings().typeParameterArray();
+    }
+
+    /**
+     * @deprecated Since 2.7 resolve raw type first, then find type parameters
+     */
+    @Deprecated // since 2.7    
+    public JavaType[] findTypeParameters(Class<?> clz, Class<?> expType, TypeBindings bindings) {
+        return findTypeParameters(constructType(clz, bindings), expType);
+    }
+    
+    /**
+     * @deprecated Since 2.7 resolve raw type first, then find type parameters
+     */
+    @Deprecated // since 2.7    
+    public JavaType[] findTypeParameters(Class<?> clz, Class<?> expType) {
+        return findTypeParameters(constructType(clz), expType);
+    }
+
+    /**
+     * Method that can be called to figure out more specific of two
+     * types (if they are related; that is, one implements or extends the
+     * other); or if not related, return the primary type.
+     * 
+     * @param type1 Primary type to consider
+     * @param type2 Secondary type to consider
+     * 
+     * @since 2.2
+     */
+    public JavaType moreSpecificType(JavaType type1, JavaType type2)
+    {
+        if (type1 == null) {
+            return type2;
+        }
+        if (type2 == null) {
+            return type1;
+        }
+        Class<?> raw1 = type1.getRawClass();
+        Class<?> raw2 = type2.getRawClass();
+        if (raw1 == raw2) {
+            return type1;
+        }
+        // TODO: maybe try sub-classing, to retain generic types?
+        if (raw1.isAssignableFrom(raw2)) {
+            return type2;
+        }
+        return type1;
+    }
+    
+    /*
+    /**********************************************************
+    /* Public factory methods
+    /**********************************************************
+     */
+
+    public JavaType constructType(Type type) {
+        return _fromAny(null, type, EMPTY_BINDINGS);
+    }
+
+    public JavaType constructType(Type type, TypeBindings bindings) {
+        return _fromAny(null, type, bindings);
+    }
+    
+    public JavaType constructType(TypeReference<?> typeRef)
+    {
+        // 19-Oct-2015, tatu: Simpler variant like so should work
+        return _fromAny(null, typeRef.getType(), EMPTY_BINDINGS);
+
+        // but if not, due to funky sub-classing, type variables, what follows
+        // is a more complete processing a la Java ClassMate.
+
+        /*
+        final Class<?> refdRawType = typeRef.getClass();
+        JavaType type = _fromClass(null, refdRawType, EMPTY_BINDINGS);
+        JavaType genType = type.findSuperType(TypeReference.class);
+        if (genType == null) { // sanity check; shouldn't occur
+            throw new IllegalArgumentException("Unparameterized GenericType instance ("+refdRawType.getName()+")");
+        }
+        TypeBindings b = genType.getBindings();
+        JavaType[] params = b.typeParameterArray();
+        if (params.length == 0) {
+            throw new IllegalArgumentException("Unparameterized GenericType instance ("+refdRawType.getName()+")");
+        }
+        return params[0];
+        */
+    }
+
+    /**
+     * @deprecated Since 2.7 (accidentally removed in 2.7.0; added back in 2.7.1)
+     */
+    @Deprecated
+    public JavaType constructType(Type type, Class<?> contextClass) {
+        TypeBindings bindings = (contextClass == null)
+                ? TypeBindings.emptyBindings() : constructType(contextClass).getBindings();
+        return _fromAny(null, type, bindings);
+    }
+
+    /**
+     * @deprecated Since 2.7 (accidentally removed in 2.7.0; added back in 2.7.1)
+     */
+    @Deprecated
+    public JavaType constructType(Type type, JavaType contextType) {
+        TypeBindings bindings = (contextType == null)
+                ? TypeBindings.emptyBindings() : contextType.getBindings();
+        return _fromAny(null, type, bindings);
+    }
+
+    /*
+    /**********************************************************
+    /* Direct factory methods
+    /**********************************************************
+     */
+
+    /**
+     * Method for constructing an {@link ArrayType}.
+     *<p>
+     * NOTE: type modifiers are NOT called on array type itself; but are called
+     * for element type (and other contained types)
+     */
+    public ArrayType constructArrayType(Class<?> elementType) {
+        return ArrayType.construct(_fromAny(null, elementType, null), null);
+    }
+    
+    /**
+     * Method for constructing an {@link ArrayType}.
+     *<p>
+     * NOTE: type modifiers are NOT called on array type itself; but are called
+     * for contained types.
+     */
+    public ArrayType constructArrayType(JavaType elementType) {
+        return ArrayType.construct(elementType, null);
+    }
+
+    /**
+     * Method for constructing a {@link CollectionType}.
+     *<p>
+     * NOTE: type modifiers are NOT called on Collection type itself; but are called
+     * for contained types.
+     */
+    public CollectionType constructCollectionType(Class<? extends Collection> collectionClass, Class<?> elementClass) {
+        return constructCollectionType(collectionClass,
+                _fromClass(null, elementClass, EMPTY_BINDINGS));
+    }
+
+    /**
+     * Method for constructing a {@link CollectionType}.
+     *<p>
+     * NOTE: type modifiers are NOT called on Collection type itself; but are called
+     * for contained types.
+     */
+    public CollectionType constructCollectionType(Class<? extends Collection> collectionClass, JavaType elementType) {
+        // 19-Oct-2015, tatu: Allow case of no-type-variables, since it seems likely to be
+        //    a valid use case here
+        return (CollectionType) _fromClass(null, collectionClass,
+                TypeBindings.create(collectionClass, elementType));
+    }
+
+    /**
+     * Method for constructing a {@link CollectionLikeType}.
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type itself; but are called
+     * for contained types.
+     */
+    public CollectionLikeType constructCollectionLikeType(Class<?> collectionClass, Class<?> elementClass) {
+        return constructCollectionLikeType(collectionClass,
+                _fromClass(null, elementClass, EMPTY_BINDINGS));
+    }
+    
+    /**
+     * Method for constructing a {@link CollectionLikeType}.
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type itself; but are called
+     * for contained types.
+     */
+    public CollectionLikeType constructCollectionLikeType(Class<?> collectionClass, JavaType elementType) {
+        JavaType type = _fromClass(null, collectionClass,
+                TypeBindings.createIfNeeded(collectionClass, elementType));
+        if (type instanceof CollectionLikeType) {
+            return (CollectionLikeType) type;
+        }
+        return CollectionLikeType.upgradeFrom(type, elementType);
+    }
+
+    /**
+     * Method for constructing a {@link MapType} instance
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type itself; but are called
+     * for contained types.
+     */
+    public MapType constructMapType(Class<? extends Map> mapClass, Class<?> keyClass, Class<?> valueClass) {
+        JavaType kt, vt;
+        if (mapClass == Properties.class) {
+            kt = vt = CORE_TYPE_STRING;
+        } else {
+            kt = _fromClass(null, keyClass, EMPTY_BINDINGS);
+            vt = _fromClass(null, valueClass, EMPTY_BINDINGS);
+        }
+        return constructMapType(mapClass, kt, vt);
+    }
+
+    /**
+     * Method for constructing a {@link MapType} instance
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type itself; but are called
+     * for contained types.
+     */
+    public MapType constructMapType(Class<? extends Map> mapClass, JavaType keyType, JavaType valueType) {
+        return (MapType) _fromClass(null, mapClass,
+                TypeBindings.create(mapClass, new JavaType[] {
+                        keyType, valueType
+                }));
+    }
+
+    /**
+     * Method for constructing a {@link MapLikeType} instance
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type itself; but are called
+     * for contained types.
+     */
+    public MapLikeType constructMapLikeType(Class<?> mapClass, Class<?> keyClass, Class<?> valueClass) {
+        return constructMapLikeType(mapClass,
+                _fromClass(null, keyClass, EMPTY_BINDINGS),
+                _fromClass(null, valueClass, EMPTY_BINDINGS));
+    }
+
+    /**
+     * Method for constructing a {@link MapLikeType} instance
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type itself; but are called
+     * for contained types.
+     */
+    public MapLikeType constructMapLikeType(Class<?> mapClass, JavaType keyType, JavaType valueType) {
+        // 19-Oct-2015, tatu: Allow case of no-type-variables, since it seems likely to be
+        //    a valid use case here
+        JavaType type = _fromClass(null, mapClass,
+                TypeBindings.createIfNeeded(mapClass, new JavaType[] { keyType, valueType }));
+        if (type instanceof MapLikeType) {
+            return (MapLikeType) type;
+        }
+        return MapLikeType.upgradeFrom(type, keyType, valueType);
+    }
+
+    /**
+     * Method for constructing a type instance with specified parameterization.
+     *<p>
+     * NOTE: was briefly deprecated for 2.6.
+     */
+    public JavaType constructSimpleType(Class<?> rawType, JavaType[] parameterTypes) {
+        return _fromClass(null, rawType, TypeBindings.create(rawType, parameterTypes));
+    }
+
+    /**
+     * Method for constructing a type instance with specified parameterization.
+     *
+     * @since 2.6
+     *
+     * @deprecated Since 2.7
+     */
+    @Deprecated
+    public JavaType constructSimpleType(Class<?> rawType, Class<?> parameterTarget,
+            JavaType[] parameterTypes)
+    {
+        return constructSimpleType(rawType, parameterTypes);
+    } 
+
+    /**
+     * @since 2.6
+     */
+    public JavaType constructReferenceType(Class<?> rawType, JavaType referredType)
+    {
+        return ReferenceType.construct(rawType, null, // no bindings
+                null, null, // or super-class, interfaces?
+                referredType);
+    }
+
+    /**
+     * Method that will force construction of a simple type, without trying to
+     * check for more specialized types.
+     *<p> 
+     * NOTE: no type modifiers are called on type either, so calling this method
+     * should only be used if caller really knows what it's doing...
+     */
+    public JavaType uncheckedSimpleType(Class<?> cls) {
+        // 18-Oct-2015, tatu: Not sure how much problem missing super-type info is here
+        return _constructSimple(cls, EMPTY_BINDINGS, null, null);
+    }
+
+    /**
+     * Factory method for constructing {@link JavaType} that
+     * represents a parameterized type. For example, to represent
+     * type <code>List&lt;Set&lt;Integer>></code>, you could
+     * call
+     *<pre>
+     *  JavaType inner = TypeFactory.constructParametrizedType(Set.class, Set.class, Integer.class);
+     *  return TypeFactory.constructParametrizedType(ArrayList.class, List.class, inner);
+     *</pre>
+     *<p>
+     * The reason for first two arguments to be separate is that parameterization may
+     * apply to a super-type. For example, if generic type was instead to be
+     * constructed for <code>ArrayList&lt;Integer></code>, the usual call would be:
+     *<pre>
+     *  TypeFactory.constructParametrizedType(ArrayList.class, List.class, Integer.class);
+     *</pre>
+     * since parameterization is applied to {@link java.util.List}.
+     * In most cases distinction does not matter, but there are types where it does;
+     * one such example is parameterization of types that implement {@link java.util.Iterator}.
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type.
+     * 
+     * @param parametrized Actual full type
+     * @param parameterClasses Type parameters to apply
+     *
+     * @since 2.5 NOTE: was briefly deprecated for 2.6
+     */
+    public JavaType constructParametricType(Class<?> parametrized, Class<?>... parameterClasses) {
+        int len = parameterClasses.length;
+        JavaType[] pt = new JavaType[len];
+        for (int i = 0; i < len; ++i) {
+            pt[i] = _fromClass(null, parameterClasses[i], null);
+        }
+        return constructParametricType(parametrized, pt);
+    }
+
+    /**
+     * Factory method for constructing {@link JavaType} that
+     * represents a parameterized type. For example, to represent
+     * type <code>List&lt;Set&lt;Integer>></code>, you could
+     * call
+     *<pre>
+     *  JavaType inner = TypeFactory.constructParametrizedType(Set.class, Set.class, Integer.class);
+     *  return TypeFactory.constructParametrizedType(ArrayList.class, List.class, inner);
+     *</pre>
+     *<p>
+     * The reason for first two arguments to be separate is that parameterization may
+     * apply to a super-type. For example, if generic type was instead to be
+     * constructed for <code>ArrayList&lt;Integer></code>, the usual call would be:
+     *<pre>
+     *  TypeFactory.constructParametrizedType(ArrayList.class, List.class, Integer.class);
+     *</pre>
+     * since parameterization is applied to {@link java.util.List}.
+     * In most cases distinction does not matter, but there are types where it does;
+     * one such example is parameterization of types that implement {@link java.util.Iterator}.
+     *<p>
+     * NOTE: type modifiers are NOT called on constructed type.
+     * 
+     * @param rawType Actual type-erased type
+     * @param parameterTypes Type parameters to apply
+     * 
+     * @since 2.5 NOTE: was briefly deprecated for 2.6
+     */
+    public JavaType constructParametricType(Class<?> rawType, JavaType... parameterTypes)
+    {
+        return _fromClass(null, rawType, TypeBindings.create(rawType, parameterTypes));
+    }
+
+    /**
+     * @since 2.5 -- but will probably deprecated in 2.7 or 2.8 (not needed with 2.7)
+     */
+    public JavaType constructParametrizedType(Class<?> parametrized, Class<?> parametersFor,
+            JavaType... parameterTypes)
+    {
+        return constructParametricType(parametrized, parameterTypes);
+    }
+
+    /**
+     * @since 2.5 -- but will probably deprecated in 2.7 or 2.8 (not needed with 2.7)
+     */
+    public JavaType constructParametrizedType(Class<?> parametrized, Class<?> parametersFor,
+            Class<?>... parameterClasses)
+    {
+        return constructParametricType(parametrized, parameterClasses);
+    }
+
+    /*
+    /**********************************************************
+    /* Direct factory methods for "raw" variants, used when
+    /* parameterization is unknown
+    /**********************************************************
+     */
+
+    /**
+     * Method that can be used to construct "raw" Collection type; meaning that its
+     * parameterization is unknown.
+     * This is similar to using <code>Object.class</code> parameterization,
+     * and is equivalent to calling:
+     *<pre>
+     *  typeFactory.constructCollectionType(collectionClass, typeFactory.unknownType());
+     *</pre>
+     *<p>
+     * This method should only be used if parameterization is completely unavailable.
+     */
+    public CollectionType constructRawCollectionType(Class<? extends Collection> collectionClass) {
+        return constructCollectionType(collectionClass, unknownType());
+    }
+
+    /**
+     * Method that can be used to construct "raw" Collection-like type; meaning that its
+     * parameterization is unknown.
+     * This is similar to using <code>Object.class</code> parameterization,
+     * and is equivalent to calling:
+     *<pre>
+     *  typeFactory.constructCollectionLikeType(collectionClass, typeFactory.unknownType());
+     *</pre>
+     *<p>
+     * This method should only be used if parameterization is completely unavailable.
+     */
+    public CollectionLikeType constructRawCollectionLikeType(Class<?> collectionClass) {
+        return constructCollectionLikeType(collectionClass, unknownType());
+    }
+
+    /**
+     * Method that can be used to construct "raw" Map type; meaning that its
+     * parameterization is unknown.
+     * This is similar to using <code>Object.class</code> parameterization,
+     * and is equivalent to calling:
+     *<pre>
+     *  typeFactory.constructMapType(collectionClass, typeFactory.unknownType(), typeFactory.unknownType());
+     *</pre>
+     *<p>
+     * This method should only be used if parameterization is completely unavailable.
+     */
+    public MapType constructRawMapType(Class<? extends Map> mapClass) {
+        return constructMapType(mapClass, unknownType(), unknownType());
+    }
+
+    /**
+     * Method that can be used to construct "raw" Map-like type; meaning that its
+     * parameterization is unknown.
+     * This is similar to using <code>Object.class</code> parameterization,
+     * and is equivalent to calling:
+     *<pre>
+     *  typeFactory.constructMapLikeType(collectionClass, typeFactory.unknownType(), typeFactory.unknownType());
+     *</pre>
+     *<p>
+     * This method should only be used if parameterization is completely unavailable.
+     */
+    public MapLikeType constructRawMapLikeType(Class<?> mapClass) {
+        return constructMapLikeType(mapClass, unknownType(), unknownType());
+    }
+
+    /*
+    /**********************************************************
+    /* Low-level factory methods
+    /**********************************************************
+     */
+
+    private JavaType _mapType(Class<?> rawClass, TypeBindings bindings,
+            JavaType superClass, JavaType[] superInterfaces)
+    {
+        JavaType kt, vt;
+        
+        // 28-May-2015, tatu: Properties are special, as per [databind#810]; fake "correct" parameter sig
+        if (rawClass == Properties.class) {
+            kt = vt = CORE_TYPE_STRING;
+        } else {
+            List<JavaType> typeParams = bindings.getTypeParameters();
+            // ok to have no types ("raw")
+            switch (typeParams.size()) {
+            case 0: // acceptable?
+                kt = vt = _unknownType();
+                break;
+            case 2:
+                kt = typeParams.get(0);
+                vt = typeParams.get(1);
+                break;
+            default:
+                throw new IllegalArgumentException("Strange Map type "+rawClass.getName()+": can not determine type parameters");
+            }
+        }
+        return MapType.construct(rawClass, bindings, superClass, superInterfaces, kt, vt);
+    }
+
+    private JavaType _collectionType(Class<?> rawClass, TypeBindings bindings,
+            JavaType superClass, JavaType[] superInterfaces)
+    {
+        List<JavaType> typeParams = bindings.getTypeParameters();
+        // ok to have no types ("raw")
+        JavaType ct;
+        if (typeParams.isEmpty()) {
+            ct = _unknownType();
+        } else if (typeParams.size() == 1) {
+            ct = typeParams.get(0);
+        } else {
+            throw new IllegalArgumentException("Strange Collection type "+rawClass.getName()+": can not determine type parameters");
+        }
+        return CollectionType.construct(rawClass, bindings, superClass, superInterfaces, ct);
+    }
+
+    private JavaType _referenceType(Class<?> rawClass, TypeBindings bindings,
+            JavaType superClass, JavaType[] superInterfaces)
+    {
+        List<JavaType> typeParams = bindings.getTypeParameters();
+        // ok to have no types ("raw")
+        JavaType ct;
+        if (typeParams.isEmpty()) {
+            ct = _unknownType();
+        } else if (typeParams.size() == 1) {
+            ct = typeParams.get(0);
+        } else {
+            throw new IllegalArgumentException("Strange Reference type "+rawClass.getName()+": can not determine type parameters");
+        }
+        return ReferenceType.construct(rawClass, bindings, superClass, superInterfaces, ct);
+    }
+
+    /**
+     * Factory method to call when no special {@link JavaType} is needed,
+     * no generic parameters are passed. Default implementation may check
+     * pre-constructed values for "well-known" types, but if none found
+     * will simply call {@link #_newSimpleType}
+     *
+     * @since 2.7
+     */
+    protected JavaType _constructSimple(Class<?> raw, TypeBindings bindings,
+            JavaType superClass, JavaType[] superInterfaces)
+    {
+        if (bindings.isEmpty()) {
+            JavaType result = _findWellKnownSimple(raw);
+            if (result != null) {
+                return result;
+            }
+        }
+        return _newSimpleType(raw, bindings, superClass, superInterfaces);
+    }
+
+    /**
+     * Factory method that is to create a new {@link SimpleType} with no
+     * checks whatsoever. Default implementation calls the single argument
+     * constructor of {@link SimpleType}.
+     *
+     * @since 2.7
+     */
+    protected JavaType _newSimpleType(Class<?> raw, TypeBindings bindings,
+            JavaType superClass, JavaType[] superInterfaces)
+    {
+        return new SimpleType(raw, bindings, superClass, superInterfaces);
+    }
+
+    protected JavaType _unknownType() {
+        /* 15-Sep-2015, tatu: Prior to 2.7, we constructed new instance for each call.
+         *    This may have been due to potential mutability of the instance; but that
+         *    should not be issue any more, and creation is somewhat wasteful. So let's
+         *    try reusing singleton/flyweight instance.
+         */
+        return CORE_TYPE_OBJECT;
+    }
+
+    /**
+     * Helper method called to see if requested, non-generic-parameterized
+     * type is one of common, "well-known" types, instances of which are
+     * pre-constructed and do not need dynamic caching.
+     *
+     * @since 2.7
+     */
+    protected JavaType _findWellKnownSimple(Class<?> clz) {
+        if (clz.isPrimitive()) {
+            if (clz == CLS_BOOL) return CORE_TYPE_BOOL;
+            if (clz == CLS_INT) return CORE_TYPE_INT;
+            if (clz == CLS_LONG) return CORE_TYPE_LONG;
+        } else {
+            if (clz == CLS_STRING) return CORE_TYPE_STRING;
+            if (clz == CLS_OBJECT) return CORE_TYPE_OBJECT; // since 2.7
+        }
+        return null;
+    }
+
+    /*
+    /**********************************************************
+    /* Actual type resolution, traversal
+    /**********************************************************
+     */
+
+    /**
+     * Factory method that can be used if type information is passed
+     * as Java typing returned from <code>getGenericXxx</code> methods
+     * (usually for a return or argument type).
+     */
+    protected JavaType _fromAny(ClassStack context, Type type, TypeBindings bindings)
+    {
+        JavaType resultType;
+
+        // simple class?
+        if (type instanceof Class<?>) {
+            // Important: remove possible bindings since this is type-erased thingy
+            resultType = _fromClass(context, (Class<?>) type, EMPTY_BINDINGS);
+        }
+        // But if not, need to start resolving.
+        else if (type instanceof ParameterizedType) {
+            resultType = _fromParamType(context, (ParameterizedType) type, bindings);
+        }
+        else if (type instanceof JavaType) { // [databind#116]
+            // no need to modify further if we already had JavaType
+            return (JavaType) type;
+        }
+        else if (type instanceof GenericArrayType) {
+            resultType = _fromArrayType(context, (GenericArrayType) type, bindings);
+        }
+        else if (type instanceof TypeVariable<?>) {
+            resultType = _fromVariable(context, (TypeVariable<?>) type, bindings);
+        }
+        else if (type instanceof WildcardType) {
+            resultType = _fromWildcard(context, (WildcardType) type, bindings);
+        } else {
+            // sanity check
+            throw new IllegalArgumentException("Unrecognized Type: "+((type == null) ? "[null]" : type.toString()));
+        }
+        /* 21-Feb-2016, nateB/tatu: as per [databind#1129] (applied for 2.7.2),
+         *   we do need to let all kinds of types to be refined, esp. for Scala module.
+         */
+        if (_modifiers != null) {
+            TypeBindings b = resultType.getBindings();
+            if (b == null) {
+                b = EMPTY_BINDINGS;
+            }
+            for (TypeModifier mod : _modifiers) {
+                JavaType t = mod.modifyType(resultType, type, b, this);
+                if (t == null) {
+                    throw new IllegalStateException(String.format(
+                            "TypeModifier %s (of type %s) return null for type %s",
+                            mod, mod.getClass().getName(), resultType));
+                }
+                resultType = t;
+            }
+        }
+        return resultType;
+    }
+
+    /**
+     * @param bindings Mapping of formal parameter declarations (for generic
+     *   types) into actual types
+     */
+    protected JavaType _fromClass(ClassStack context, Class<?> rawType, TypeBindings bindings)
+    {
+        // Very first thing: small set of core types we know well:
+        JavaType result = _findWellKnownSimple(rawType);
+        if (result != null) {
+            return result;
+        }
+        // Barring that, we may have recently constructed an instance:
+        // !!! TODO 16-Oct-2015, tatu: For now let's only cached non-parameterized; otherwise
+        //     need better cache key
+        boolean cachable = (bindings == null) || bindings.isEmpty();
+        if (cachable) {
+            result = _typeCache.get(rawType); // ok, cache object is synced
+            if (result != null) {
+                return result;
+            }
+        }
+
+        // 15-Oct-2015, tatu: recursive reference?
+        if (context == null) {
+            context = new ClassStack(rawType);
+        } else {
+            ClassStack prev = context.find(rawType);
+            if (prev != null) {
+                // Self-reference: needs special handling, then...
+                ResolvedRecursiveType selfRef = new ResolvedRecursiveType(rawType, EMPTY_BINDINGS);
+                prev.addSelfReference(selfRef);
+                return selfRef;
+            }
+            // no, but need to update context to allow for proper cycle resolution
+            context = context.child(rawType);
+        }
+
+        // First: do we have an array type?
+        if (rawType.isArray()) {
+            result = ArrayType.construct(_fromAny(context, rawType.getComponentType(), bindings),
+                    bindings);
+        } else {
+            // If not, need to proceed by first resolving parent type hierarchy
+            
+            JavaType superClass;
+            JavaType[] superInterfaces;
+
+            if (rawType.isInterface()) {
+                superClass = null;
+                superInterfaces = _resolveSuperInterfaces(context, rawType, bindings);
+            } else {
+                // Note: even Enums can implement interfaces, so can not drop those
+                superClass = _resolveSuperClass(context, rawType, bindings);
+                superInterfaces = _resolveSuperInterfaces(context, rawType, bindings);
+            }
+
+            // 19-Oct-2015, tatu: Bit messy, but we need to 'fix' java.util.Properties here...
+            if (rawType == Properties.class) {
+                result = MapType.construct(rawType, bindings, superClass, superInterfaces,
+                        CORE_TYPE_STRING, CORE_TYPE_STRING);
+            }
+            // And then check what flavor of type we got. Start by asking resolved
+            // super-type if refinement is all that is needed?
+            else if (superClass != null) {
+                result = superClass.refine(rawType, bindings, superClass, superInterfaces);
+            }
+            // if not, perhaps we are now resolving a well-known class or interface?
+            if (result == null) {
+                result = _fromWellKnownClass(context, rawType, bindings, superClass, superInterfaces); 
+                if (result == null) {
+                    result = _fromWellKnownInterface(context, rawType, bindings, superClass, superInterfaces);
+                    if (result == null) {
+                        // but if nothing else, "simple" class for now:
+                        result = _newSimpleType(rawType, bindings, superClass, superInterfaces);
+                    }
+                }
+            }
+        }
+        context.resolveSelfReferences(result);
+
+        if (cachable) {
+            _typeCache.putIfAbsent(rawType, result); // cache object syncs
+        }
+        return result;
+    }
+
+    protected JavaType _resolveSuperClass(ClassStack context, Class<?> rawType, TypeBindings parentBindings)
+    {
+        Type parent = ClassUtil.getGenericSuperclass(rawType);
+        if (parent == null) {
+            return null;
+        }
+        return _fromAny(context, parent, parentBindings);
+    }
+
+    protected JavaType[] _resolveSuperInterfaces(ClassStack context, Class<?> rawType, TypeBindings parentBindings)
+    {
+        Type[] types = ClassUtil.getGenericInterfaces(rawType);
+        if (types == null || types.length == 0) {
+            return NO_TYPES;
+        }
+        int len = types.length;
+        JavaType[] resolved = new JavaType[len];
+        for (int i = 0; i < len; ++i) {
+            Type type = types[i];
+            resolved[i] = _fromAny(context, type, parentBindings);
+        }
+        return resolved;
+    }
+
+    /**
+     * Helper class used to check whether exact class for which type is being constructed
+     * is one of well-known base interfaces or classes that indicates alternate
+     * {@link JavaType} implementation.
+     */
+    protected JavaType _fromWellKnownClass(ClassStack context, Class<?> rawType, TypeBindings bindings,
+            JavaType superClass, JavaType[] superInterfaces)
+    {
+        // Quite simple when we resolving exact class/interface; start with that
+        if (rawType == Map.class) {
+            return _mapType(rawType, bindings, superClass, superInterfaces);
+        }
+        if (rawType == Collection.class) {
+            return _collectionType(rawType, bindings, superClass, superInterfaces);
+        }
+        // and since 2.6 one referential type
+        if (rawType == AtomicReference.class) {
+            return _referenceType(rawType, bindings, superClass, superInterfaces);
+        }
+        // 01-Nov-2015, tatu: As of 2.7, couple of potential `CollectionLikeType`s (like
+        //    `Iterable`, `Iterator`), and `MapLikeType`s (`Map.Entry`) are not automatically
+        //    detected, related to difficulties in propagating type upwards (Iterable, for
+        //    example, is a weak, tag-on type). They may be detectable in future.
+        return null;
+    }
+
+    protected JavaType _fromWellKnownInterface(ClassStack context, Class<?> rawType, TypeBindings bindings,
+            JavaType superClass, JavaType[] superInterfaces)
+    {
+        // But that's not all: may be possible current type actually implements an
+        // interface type. So...
+        final int intCount = superInterfaces.length;
+
+        for (int i = 0; i < intCount; ++i) {
+            JavaType result = superInterfaces[i].refine(rawType, bindings, superClass, superInterfaces);
+            if (result != null) {
+                return result;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * This method deals with parameterized types, that is,
+     * first class generic classes.
+     */
+    protected JavaType _fromParamType(ClassStack context, ParameterizedType ptype,
+            TypeBindings parentBindings)
+    {
+        // Assumption here is we'll always get Class, not one of other Types
+        Class<?> rawType = (Class<?>) ptype.getRawType();
+
+        // 29-Oct-2015, tatu: For performance reasons, let's streamline handling of
+        //   couple of not-so-useful parametric types
+        if (rawType == CLS_ENUM) {
+            return CORE_TYPE_ENUM;
+        }
+        if (rawType == CLS_COMPARABLE) {
+            return CORE_TYPE_COMPARABLE;
+        }
+        if (rawType == CLS_CLASS) {
+            return CORE_TYPE_CLASS;
+        }
+
+        // First: what is the actual base type? One odd thing is that 'getRawType'
+        // returns Type, not Class<?> as one might expect. But let's assume it is
+        // always of type Class: if not, need to add more code to resolve it to Class.        
+        Type[] args = ptype.getActualTypeArguments();
+        int paramCount = (args == null) ? 0 : args.length;
+        JavaType[] pt;
+        TypeBindings newBindings;        
+
+        if (paramCount == 0) {
+            newBindings = EMPTY_BINDINGS;
+        } else {
+            pt = new JavaType[paramCount];
+            for (int i = 0; i < paramCount; ++i) {
+                pt[i] = _fromAny(context, args[i], parentBindings);
+            }
+            newBindings = TypeBindings.create(rawType, pt);
+        }
+        return _fromClass(context, rawType, newBindings);
+    }
+
+    protected JavaType _fromArrayType(ClassStack context, GenericArrayType type, TypeBindings bindings)
+    {
+        JavaType elementType = _fromAny(context, type.getGenericComponentType(), bindings);
+        return ArrayType.construct(elementType, bindings);
+    }
+
+    protected JavaType _fromVariable(ClassStack context, TypeVariable<?> var, TypeBindings bindings)
+    {
+        // ideally should find it via bindings:
+        final String name = var.getName();
+        JavaType type = bindings.findBoundType(name);
+        if (type != null) {
+            return type;
+        }
+        // but if not, use bounds... note that approach here is simplistic; not taking
+        // into account possible multiple bounds, nor consider upper bounds.
+        if (bindings.hasUnbound(name)) {
+            return CORE_TYPE_OBJECT;
+        }
+        bindings = bindings.withUnboundVariable(name);
+
+        Type[] bounds = var.getBounds();
+        return _fromAny(context, bounds[0], bindings);
+    }
+
+    protected JavaType _fromWildcard(ClassStack context, WildcardType type, TypeBindings bindings)
+    {
+        /* Similar to challenges with TypeVariable, we may have multiple upper bounds.
+         * But it is also possible that if upper bound defaults to Object, we might
+         * want to consider lower bounds instead.
+         * For now, we won't try anything more advanced; above is just for future reference.
+         */
+        return _fromAny(context, type.getUpperBounds()[0], bindings);
+    }
 }

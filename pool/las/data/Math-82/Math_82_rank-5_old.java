@@ -1,747 +1,1083 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE
- * file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
- * License. You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.flink.python.api;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.Arrays;
-import java.util.HashMap;
-import org.apache.flink.api.java.DataSet;
-import org.apache.flink.api.java.ExecutionEnvironment;
-import org.apache.flink.api.java.LocalEnvironment;
-import org.apache.flink.api.java.io.PrintingOutputFormat;
-import org.apache.flink.api.java.io.TupleCsvInputFormat;
-import org.apache.flink.api.java.operators.AggregateOperator;
-import org.apache.flink.api.java.operators.CoGroupRawOperator;
-import org.apache.flink.api.java.operators.CrossOperator.DefaultCross;
-import org.apache.flink.api.java.operators.CrossOperator.ProjectCross;
-import org.apache.flink.api.java.operators.Grouping;
-import org.apache.flink.api.java.operators.JoinOperator.DefaultJoin;
-import org.apache.flink.api.java.operators.JoinOperator.ProjectJoin;
-import org.apache.flink.api.java.operators.Keys;
-import org.apache.flink.api.java.operators.SortedGrouping;
-import org.apache.flink.api.java.operators.UdfOperator;
-import org.apache.flink.api.java.operators.UnsortedGrouping;
-import org.apache.flink.api.java.tuple.Tuple;
-import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.GlobalConfiguration;
-import org.apache.flink.core.fs.FileSystem;
-import org.apache.flink.core.fs.Path;
-import org.apache.flink.python.api.PythonOperationInfo.DatasizeHint;
-import static org.apache.flink.python.api.PythonOperationInfo.DatasizeHint.HUGE;
-import static org.apache.flink.python.api.PythonOperationInfo.DatasizeHint.NONE;
-import static org.apache.flink.python.api.PythonOperationInfo.DatasizeHint.TINY;
-import org.apache.flink.python.api.PythonOperationInfo.ProjectionEntry;
-import org.apache.flink.python.api.functions.PythonCoGroup;
-import org.apache.flink.python.api.functions.PythonCombineIdentity;
-import org.apache.flink.python.api.functions.PythonMapPartition;
-import org.apache.flink.python.api.streaming.Receiver;
-import org.apache.flink.python.api.streaming.StreamPrinter;
-import org.apache.flink.runtime.filecache.FileCache;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+package org.apache.commons.dbcp2;
+
+import java.sql.ResultSet;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.io.InputStream;
+import java.sql.SQLWarning;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.io.Reader;
+import java.sql.Statement;
+import java.util.Map;
+import java.sql.Connection;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
+/* JDBC_4_ANT_KEY_END */
 
 /**
- * This class allows the execution of a Flink plan written in python.
+ * A base delegating implementation of {@link ResultSet}.
+ * <p>
+ * All of the methods from the {@link ResultSet} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement result set tracking and
+ * logging of code which created the ResultSet. Tracking the
+ * ResultSet ensures that the Statment which created it can
+ * close any open ResultSet's on Statement close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House
+ * @author Dirk Verbeeck
+ * @version $Revision$ $Date$
  */
-public class PythonPlanBinder {
-	static final Logger LOG = LoggerFactory.getLogger(PythonPlanBinder.class);
-
-	public static final String ARGUMENT_PYTHON_2 = "2";
-	public static final String ARGUMENT_PYTHON_3 = "3";
-
-	public static final String FLINK_PYTHON_DC_ID = "flink";
-	public static final String FLINK_PYTHON_PLAN_NAME = "/plan.py";
-
-	public static final String FLINK_PYTHON2_BINARY_KEY = "python.binary.python2";
-	public static final String FLINK_PYTHON3_BINARY_KEY = "python.binary.python3";
-	public static final String PLANBINDER_CONFIG_BCVAR_COUNT = "PLANBINDER_BCVAR_COUNT";
-	public static final String PLANBINDER_CONFIG_BCVAR_NAME_PREFIX = "PLANBINDER_BCVAR_";
-	public static String FLINK_PYTHON2_BINARY_PATH = GlobalConfiguration.getString(FLINK_PYTHON2_BINARY_KEY, "python");
-	public static String FLINK_PYTHON3_BINARY_PATH = GlobalConfiguration.getString(FLINK_PYTHON3_BINARY_KEY, "python3");
-
-	private static final String FLINK_PYTHON_FILE_PATH = System.getProperty("java.io.tmpdir") + "/flink_plan";
-	private static final String FLINK_PYTHON_REL_LOCAL_PATH = "/resources/python";
-	private static final String FLINK_DIR = System.getenv("FLINK_ROOT_DIR");
-	private static String FULL_PATH;
-
-	public static StringBuilder arguments = new StringBuilder();
-
-	private Process process;
-
-	public static boolean usePython3 = false;
-
-	private static String FLINK_HDFS_PATH = "hdfs:/tmp";
-	public static final String FLINK_TMP_DATA_DIR = System.getProperty("java.io.tmpdir") + "/flink_data";
-
-	public static boolean DEBUG = false;
-
-	private HashMap<Integer, Object> sets = new HashMap();
-	public ExecutionEnvironment env;
-	private Receiver receiver;
-
-	public static final int MAPPED_FILE_SIZE = 1024 * 1024 * 64;
-
-	/**
-	 * Entry point for the execution of a python plan.
-	 *
-	 * @param args planPath[ package1[ packageX[ - parameter1[ parameterX]]]]
-	 * @throws Exception
-	 */
-	public static void main(String[] args) throws Exception {
-		if (args.length < 2) {
-			System.out.println("Usage: ./bin/pyflink<2/3>.sh <pathToScript>[ <pathToPackage1>[ <pathToPackageX]][ - <parameter1>[ <parameterX>]]");
-			return;
-		}
-		usePython3 = args[0].equals(ARGUMENT_PYTHON_3);
-		PythonPlanBinder binder = new PythonPlanBinder();
-		binder.runPlan(Arrays.copyOfRange(args, 1, args.length));
-	}
-
-	public PythonPlanBinder() throws IOException {
-		FLINK_PYTHON2_BINARY_PATH = GlobalConfiguration.getString(FLINK_PYTHON2_BINARY_KEY, "python");
-		FLINK_PYTHON3_BINARY_PATH = GlobalConfiguration.getString(FLINK_PYTHON3_BINARY_KEY, "python3");
-		FULL_PATH = FLINK_DIR != null
-				? FLINK_DIR + FLINK_PYTHON_REL_LOCAL_PATH //command-line
-				: FileSystem.getLocalFileSystem().getWorkingDirectory().toString() //testing
-				+ "/src/main/python/org/apache/flink/python/api";
-	}
-
-	private void runPlan(String[] args) throws Exception {
-		env = ExecutionEnvironment.getExecutionEnvironment();
-
-		int split = 0;
-		for (int x = 0; x < args.length; x++) {
-			if (args[x].compareTo("-") == 0) {
-				split = x;
-			}
-		}
-
-		try {
-			prepareFiles(Arrays.copyOfRange(args, 0, split == 0 ? 1 : split));
-			startPython(Arrays.copyOfRange(args, split == 0 ? args.length : split + 1, args.length));
-			receivePlan();
-
-			if (env instanceof LocalEnvironment) {
-				FLINK_HDFS_PATH = "file:" + System.getProperty("java.io.tmpdir") + "/flink";
-			}
-
-			distributeFiles(env);
-			env.execute();
-			close();
-		} catch (Exception e) {
-			close();
-			throw e;
-		}
-	}
-
-	//=====Setup========================================================================================================
-	/**
-	 * Copies all files to a common directory (FLINK_PYTHON_FILE_PATH). This allows us to distribute it as one big
-	 * package, and resolves PYTHONPATH issues.
-	 *
-	 * @param filePaths
-	 * @throws IOException
-	 * @throws URISyntaxException
-	 */
-	private void prepareFiles(String... filePaths) throws IOException, URISyntaxException {
-		//Flink python package
-		String tempFilePath = FLINK_PYTHON_FILE_PATH;
-		clearPath(tempFilePath);
-		FileCache.copy(new Path(FULL_PATH), new Path(tempFilePath), false);
-
-		//plan file		
-		copyFile(filePaths[0], FLINK_PYTHON_PLAN_NAME);
-
-		//additional files/folders
-		for (int x = 1; x < filePaths.length; x++) {
-			copyFile(filePaths[x], null);
-		}
-	}
-
-	private static void clearPath(String path) throws IOException, URISyntaxException {
-		FileSystem fs = FileSystem.get(new URI(path));
-		if (fs.exists(new Path(path))) {
-			fs.delete(new Path(path), true);
-		}
-	}
-
-	private static void copyFile(String path, String name) throws IOException, URISyntaxException {
-		if (path.endsWith("/")) {
-			path = path.substring(0, path.length() - 1);
-		}
-		String identifier = name == null ? path.substring(path.lastIndexOf("/")) : name;
-		String tmpFilePath = FLINK_PYTHON_FILE_PATH + "/" + identifier;
-		clearPath(tmpFilePath);
-		Path p = new Path(path);
-		FileCache.copy(p.makeQualified(FileSystem.get(p.toUri())), new Path(tmpFilePath), true);
-	}
-
-	private static void distributeFiles(ExecutionEnvironment env) throws IOException, URISyntaxException {
-		clearPath(FLINK_HDFS_PATH);
-		FileCache.copy(new Path(FLINK_PYTHON_FILE_PATH), new Path(FLINK_HDFS_PATH), true);
-		env.registerCachedFile(FLINK_HDFS_PATH, FLINK_PYTHON_DC_ID);
-		clearPath(FLINK_PYTHON_FILE_PATH);
-	}
-
-	private void startPython(String[] args) throws IOException {
-		for (String arg : args) {
-			arguments.append(" ").append(arg);
-		}
-		receiver = new Receiver(null);
-		receiver.open(FLINK_TMP_DATA_DIR + "/output");
-
-		String pythonBinaryPath = usePython3 ? FLINK_PYTHON3_BINARY_PATH : FLINK_PYTHON2_BINARY_PATH;
-
-		try {
-			Runtime.getRuntime().exec(pythonBinaryPath);
-		} catch (IOException ex) {
-			throw new RuntimeException(pythonBinaryPath + " does not point to a valid python binary.");
-		}
-		process = Runtime.getRuntime().exec(pythonBinaryPath + " -B " + FLINK_PYTHON_FILE_PATH + FLINK_PYTHON_PLAN_NAME + arguments.toString());
-
-		new StreamPrinter(process.getInputStream()).start();
-		new StreamPrinter(process.getErrorStream()).start();
-
-		try {
-			Thread.sleep(2000);
-		} catch (InterruptedException ex) {
-		}
-
-		try {
-			int value = process.exitValue();
-			if (value != 0) {
-				throw new RuntimeException("Plan file caused an error. Check log-files for details.");
-			}
-			if (value == 0) {
-				throw new RuntimeException("Plan file exited prematurely without an error.");
-			}
-		} catch (IllegalThreadStateException ise) {//Process still running
-		}
-
-		process.getOutputStream().write("plan\n".getBytes());
-		process.getOutputStream().write((FLINK_TMP_DATA_DIR + "/output\n").getBytes());
-		process.getOutputStream().flush();
-	}
-
-	private void close() {
-		try { //prevent throwing exception so that previous exceptions aren't hidden.
-			if (!DEBUG) {
-				FileSystem hdfs = FileSystem.get(new URI(FLINK_HDFS_PATH));
-				hdfs.delete(new Path(FLINK_HDFS_PATH), true);
-			}
-
-			FileSystem local = FileSystem.getLocalFileSystem();
-			local.delete(new Path(FLINK_PYTHON_FILE_PATH), true);
-			local.delete(new Path(FLINK_TMP_DATA_DIR), true);
-			receiver.close();
-		} catch (NullPointerException npe) {
-		} catch (IOException ioe) {
-			LOG.error("PythonAPI file cleanup failed. " + ioe.getMessage());
-		} catch (URISyntaxException use) { // can't occur
-		}
-		try {
-			process.exitValue();
-		} catch (NullPointerException npe) { //exception occurred before process was started
-		} catch (IllegalThreadStateException ise) { //process still active
-			process.destroy();
-		}
-	}
-
-	//====Plan==========================================================================================================
-	private void receivePlan() throws IOException {
-		receiveParameters();
-		receiveOperations();
-	}
-
-	//====Environment===================================================================================================
-	/**
-	 * This enum contains the identifiers for all supported environment parameters.
-	 */
-	private enum Parameters {
-		DOP,
-		MODE,
-		RETRY,
-		DEBUG
-	}
-
-	private void receiveParameters() throws IOException {
-		for (int x = 0; x < 4; x++) {
-			Tuple value = (Tuple) receiver.getRecord(true);
-			switch (Parameters.valueOf(((String) value.getField(0)).toUpperCase())) {
-				case DOP:
-					Integer dop = (Integer) value.getField(1);
-					env.setParallelism(dop);
-					break;
-				case MODE:
-					FLINK_HDFS_PATH = (Boolean) value.getField(1) ? "file:/tmp/flink" : "hdfs:/tmp/flink";
-					break;
-				case RETRY:
-					int retry = (Integer) value.getField(1);
-					env.setNumberOfExecutionRetries(retry);
-					break;
-				case DEBUG:
-					DEBUG = (Boolean) value.getField(1);
-					break;
-			}
-		}
-		if (env.getParallelism() < 0) {
-			env.setParallelism(1);
-		}
-	}
-
-	//====Operations====================================================================================================
-	/**
-	 * This enum contains the identifiers for all supported DataSet operations.
-	 */
-	protected enum Operation {
-		SOURCE_CSV, SOURCE_TEXT, SOURCE_VALUE, SOURCE_SEQ, SINK_CSV, SINK_TEXT, SINK_PRINT,
-		PROJECTION, SORT, UNION, FIRST, DISTINCT, GROUPBY, AGGREGATE,
-		REBALANCE, PARTITION_HASH,
-		BROADCAST,
-		COGROUP, CROSS, CROSS_H, CROSS_T, FILTER, FLATMAP, GROUPREDUCE, JOIN, JOIN_H, JOIN_T, MAP, REDUCE, MAPPARTITION
-	}
-
-	private void receiveOperations() throws IOException {
-		Integer operationCount = (Integer) receiver.getRecord(true);
-		for (int x = 0; x < operationCount; x++) {
-			String identifier = (String) receiver.getRecord();
-			Operation op = null;
-			try {
-				op = Operation.valueOf(identifier.toUpperCase());
-			} catch (IllegalArgumentException iae) {
-				throw new IllegalArgumentException("Invalid operation specified: " + identifier);
-			}
-			if (op != null) {
-				switch (op) {
-					case SOURCE_CSV:
-						createCsvSource(createOperationInfo(op));
-						break;
-					case SOURCE_TEXT:
-						createTextSource(createOperationInfo(op));
-						break;
-					case SOURCE_VALUE:
-						createValueSource(createOperationInfo(op));
-						break;
-					case SOURCE_SEQ:
-						createSequenceSource(createOperationInfo(op));
-						break;
-					case SINK_CSV:
-						createCsvSink(createOperationInfo(op));
-						break;
-					case SINK_TEXT:
-						createTextSink(createOperationInfo(op));
-						break;
-					case SINK_PRINT:
-						createPrintSink(createOperationInfo(op));
-						break;
-					case BROADCAST:
-						createBroadcastVariable(createOperationInfo(op));
-						break;
-					case AGGREGATE:
-						createAggregationOperation(createOperationInfo(op));
-						break;
-					case DISTINCT:
-						createDistinctOperation(createOperationInfo(op));
-						break;
-					case FIRST:
-						createFirstOperation(createOperationInfo(op));
-						break;
-					case PARTITION_HASH:
-						createHashPartitionOperation(createOperationInfo(op));
-						break;
-					case PROJECTION:
-						createProjectOperation(createOperationInfo(op));
-						break;
-					case REBALANCE:
-						createRebalanceOperation(createOperationInfo(op));
-						break;
-					case GROUPBY:
-						createGroupOperation(createOperationInfo(op));
-						break;
-					case SORT:
-						createSortOperation(createOperationInfo(op));
-						break;
-					case UNION:
-						createUnionOperation(createOperationInfo(op));
-						break;
-					case COGROUP:
-						createCoGroupOperation(createOperationInfo(op));
-						break;
-					case CROSS:
-						createCrossOperation(NONE, createOperationInfo(op));
-						break;
-					case CROSS_H:
-						createCrossOperation(HUGE, createOperationInfo(op));
-						break;
-					case CROSS_T:
-						createCrossOperation(TINY, createOperationInfo(op));
-						break;
-					case FILTER:
-						createFilterOperation(createOperationInfo(op));
-						break;
-					case FLATMAP:
-						createFlatMapOperation(createOperationInfo(op));
-						break;
-					case GROUPREDUCE:
-						createGroupReduceOperation(createOperationInfo(op));
-						break;
-					case JOIN:
-						createJoinOperation(NONE, createOperationInfo(op));
-						break;
-					case JOIN_H:
-						createJoinOperation(HUGE, createOperationInfo(op));
-						break;
-					case JOIN_T:
-						createJoinOperation(TINY, createOperationInfo(op));
-						break;
-					case MAP:
-						createMapOperation(createOperationInfo(op));
-						break;
-					case MAPPARTITION:
-						createMapPartitionOperation(createOperationInfo(op));
-						break;
-					case REDUCE:
-						createReduceOperation(createOperationInfo(op));
-						break;
-				}
-			}
-		}
-	}
-
-	/**
-	 * This method creates an OperationInfo object based on the operation-identifier passed.
-	 *
-	 * @param operationIdentifier
-	 * @return
-	 * @throws IOException
-	 */
-	private PythonOperationInfo createOperationInfo(Operation operationIdentifier) throws IOException {
-		return new PythonOperationInfo(receiver, operationIdentifier);
-	}
-
-	private void createCsvSource(PythonOperationInfo info) throws IOException {
-		if (!(info.types instanceof TupleTypeInfo)) {
-			throw new RuntimeException("The output type of a csv source has to be a tuple. The derived type is " + info);
-		}
-
-		sets.put(info.setID, env.createInput(new TupleCsvInputFormat(new Path(info.path),
-				info.lineDelimiter, info.fieldDelimiter, (TupleTypeInfo) info.types), info.types)
-				.name("CsvSource"));
-	}
-
-	private void createTextSource(PythonOperationInfo info) throws IOException {
-		sets.put(info.setID, env.readTextFile(info.path).name("TextSource"));
-	}
-
-	private void createValueSource(PythonOperationInfo info) throws IOException {
-		sets.put(info.setID, env.fromElements(info.values).name("ValueSource"));
-	}
-
-	private void createSequenceSource(PythonOperationInfo info) throws IOException {
-		sets.put(info.setID, env.generateSequence(info.from, info.to).name("SequenceSource"));
-	}
-
-	private void createCsvSink(PythonOperationInfo info) throws IOException {
-		DataSet parent = (DataSet) sets.get(info.parentID);
-		parent.writeAsCsv(info.path, info.lineDelimiter, info.fieldDelimiter, info.writeMode).name("CsvSink");
-	}
-
-	private void createTextSink(PythonOperationInfo info) throws IOException {
-		DataSet parent = (DataSet) sets.get(info.parentID);
-		parent.writeAsText(info.path, info.writeMode).name("TextSink");
-	}
-
-	private void createPrintSink(PythonOperationInfo info) throws IOException {
-		DataSet parent = (DataSet) sets.get(info.parentID);
-		parent.output(new PrintingOutputFormat(info.toError));
-	}
-
-	private void createBroadcastVariable(PythonOperationInfo info) throws IOException {
-		UdfOperator op1 = (UdfOperator) sets.get(info.parentID);
-		DataSet op2 = (DataSet) sets.get(info.otherID);
-
-		op1.withBroadcastSet(op2, info.name);
-		Configuration c = ((UdfOperator) op1).getParameters();
-
-		if (c == null) {
-			c = new Configuration();
-		}
-
-		int count = c.getInteger(PLANBINDER_CONFIG_BCVAR_COUNT, 0);
-		c.setInteger(PLANBINDER_CONFIG_BCVAR_COUNT, count + 1);
-		c.setString(PLANBINDER_CONFIG_BCVAR_NAME_PREFIX + count, info.name);
-
-		op1.withParameters(c);
-	}
-
-	private void createAggregationOperation(PythonOperationInfo info) throws IOException {
-		DataSet op = (DataSet) sets.get(info.parentID);
-		AggregateOperator ao = op.aggregate(info.aggregates[0].agg, info.aggregates[0].field);
-
-		for (int x = 1; x < info.count; x++) {
-			ao = ao.and(info.aggregates[x].agg, info.aggregates[x].field);
-		}
-
-		sets.put(info.setID, ao.name("Aggregation"));
-	}
-
-	private void createDistinctOperation(PythonOperationInfo info) throws IOException {
-		DataSet op = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, info.keys.length == 0 ? op.distinct() : op.distinct(info.keys).name("Distinct"));
-	}
-
-	private void createFirstOperation(PythonOperationInfo info) throws IOException {
-		DataSet op = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op.first(info.count).name("First"));
-	}
-
-	private void createGroupOperation(PythonOperationInfo info) throws IOException {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op1.groupBy(info.keys));
-	}
-
-	private void createHashPartitionOperation(PythonOperationInfo info) throws IOException {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op1.partitionByHash(info.keys));
-	}
-
-	private void createProjectOperation(PythonOperationInfo info) throws IOException {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op1.project(info.fields).name("Projection"));
-	}
-
-	private void createRebalanceOperation(PythonOperationInfo info) throws IOException {
-		DataSet op = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op.rebalance().name("Rebalance"));
-	}
-
-	private void createSortOperation(PythonOperationInfo info) throws IOException {
-		Grouping op1 = (Grouping) sets.get(info.parentID);
-		if (op1 instanceof UnsortedGrouping) {
-			sets.put(info.setID, ((UnsortedGrouping) op1).sortGroup(info.field, info.order));
-			return;
-		}
-		if (op1 instanceof SortedGrouping) {
-			sets.put(info.setID, ((SortedGrouping) op1).sortGroup(info.field, info.order));
-		}
-	}
-
-	private void createUnionOperation(PythonOperationInfo info) throws IOException {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		DataSet op2 = (DataSet) sets.get(info.otherID);
-		sets.put(info.setID, op1.union(op2).name("Union"));
-	}
-
-	private void createCoGroupOperation(PythonOperationInfo info) {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		DataSet op2 = (DataSet) sets.get(info.otherID);
-		sets.put(info.setID, new CoGroupRawOperator(
-				op1,
-				op2,
-				new Keys.ExpressionKeys(info.keys1, op1.getType()),
-				new Keys.ExpressionKeys(info.keys2, op2.getType()),
-				new PythonCoGroup(info.setID, info.types),
-				info.types, info.name));
-	}
-
-	private void createCrossOperation(DatasizeHint mode, PythonOperationInfo info) {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		DataSet op2 = (DataSet) sets.get(info.otherID);
-
-		DefaultCross defaultResult;
-		switch (mode) {
-			case NONE:
-				defaultResult = op1.cross(op2);
-				break;
-			case HUGE:
-				defaultResult = op1.crossWithHuge(op2);
-				break;
-			case TINY:
-				defaultResult = op1.crossWithTiny(op2);
-				break;
-			default:
-				throw new IllegalArgumentException("Invalid Cross mode specified: " + mode);
-		}
-		if (info.types != null && (info.projections == null || info.projections.length == 0)) {
-			sets.put(info.setID, defaultResult.mapPartition(new PythonMapPartition(info.setID, info.types)).name(info.name));
-		} else if (info.projections.length == 0) {
-			sets.put(info.setID, defaultResult.name("DefaultCross"));
-		} else {
-			ProjectCross project = null;
-			for (ProjectionEntry pe : info.projections) {
-				switch (pe.side) {
-					case FIRST:
-						project = project == null ? defaultResult.projectFirst(pe.keys) : project.projectFirst(pe.keys);
-						break;
-					case SECOND:
-						project = project == null ? defaultResult.projectSecond(pe.keys) : project.projectSecond(pe.keys);
-						break;
-				}
-			}
-			sets.put(info.setID, project.name("ProjectCross"));
-		}
-	}
-
-	private void createFilterOperation(PythonOperationInfo info) {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op1.mapPartition(new PythonMapPartition(info.setID, info.types)).name(info.name));
-	}
-
-	private void createFlatMapOperation(PythonOperationInfo info) {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op1.mapPartition(new PythonMapPartition(info.setID, info.types)).name(info.name));
-	}
-
-	private void createGroupReduceOperation(PythonOperationInfo info) {
-		Object op1 = sets.get(info.parentID);
-		if (op1 instanceof DataSet) {
-			sets.put(info.setID, applyGroupReduceOperation((DataSet) op1, info));
-			return;
-		}
-		if (op1 instanceof UnsortedGrouping) {
-			sets.put(info.setID, applyGroupReduceOperation((UnsortedGrouping) op1, info));
-			return;
-		}
-		if (op1 instanceof SortedGrouping) {
-			sets.put(info.setID, applyGroupReduceOperation((SortedGrouping) op1, info));
-		}
-	}
-
-	private DataSet applyGroupReduceOperation(DataSet op1, PythonOperationInfo info) {
-		if (info.combine) {
-			return op1.reduceGroup(new PythonCombineIdentity(info.setID * -1))
-					.setCombinable(true).name("PythonCombine")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		} else {
-			return op1.reduceGroup(new PythonCombineIdentity())
-					.setCombinable(false).name("PythonGroupReducePreStep")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		}
-	}
-
-	private DataSet applyGroupReduceOperation(UnsortedGrouping op1, PythonOperationInfo info) {
-		if (info.combine) {
-			return op1.reduceGroup(new PythonCombineIdentity(info.setID * -1))
-					.setCombinable(true).name("PythonCombine")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		} else {
-			return op1.reduceGroup(new PythonCombineIdentity())
-					.setCombinable(false).name("PythonGroupReducePreStep")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		}
-	}
-
-	private DataSet applyGroupReduceOperation(SortedGrouping op1, PythonOperationInfo info) {
-		if (info.combine) {
-			return op1.reduceGroup(new PythonCombineIdentity(info.setID * -1))
-					.setCombinable(true).name("PythonCombine")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		} else {
-			return op1.reduceGroup(new PythonCombineIdentity())
-					.setCombinable(false).name("PythonGroupReducePreStep")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		}
-	}
-
-	private void createJoinOperation(DatasizeHint mode, PythonOperationInfo info) {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		DataSet op2 = (DataSet) sets.get(info.otherID);
-
-		if (info.types != null && (info.projections == null || info.projections.length == 0)) {
-			sets.put(info.setID, createDefaultJoin(op1, op2, info.keys1, info.keys2, mode).name("PythonJoinPreStep")
-					.mapPartition(new PythonMapPartition(info.setID, info.types)).name(info.name));
-		} else {
-			DefaultJoin defaultResult = createDefaultJoin(op1, op2, info.keys1, info.keys2, mode);
-			if (info.projections.length == 0) {
-				sets.put(info.setID, defaultResult.name("DefaultJoin"));
-			} else {
-				ProjectJoin project = null;
-				for (ProjectionEntry pe : info.projections) {
-					switch (pe.side) {
-						case FIRST:
-							project = project == null ? defaultResult.projectFirst(pe.keys) : project.projectFirst(pe.keys);
-							break;
-						case SECOND:
-							project = project == null ? defaultResult.projectSecond(pe.keys) : project.projectSecond(pe.keys);
-							break;
-					}
-				}
-				sets.put(info.setID, project.name("ProjectJoin"));
-			}
-		}
-	}
-
-	private DefaultJoin createDefaultJoin(DataSet op1, DataSet op2, String[] firstKeys, String[] secondKeys, DatasizeHint mode) {
-		switch (mode) {
-			case NONE:
-				return op1.join(op2).where(firstKeys).equalTo(secondKeys);
-			case HUGE:
-				return op1.joinWithHuge(op2).where(firstKeys).equalTo(secondKeys);
-			case TINY:
-				return op1.joinWithTiny(op2).where(firstKeys).equalTo(secondKeys);
-			default:
-				throw new IllegalArgumentException("Invalid join mode specified.");
-		}
-	}
-
-	private void createMapOperation(PythonOperationInfo info) {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op1.mapPartition(new PythonMapPartition(info.setID, info.types)).name(info.name));
-	}
-
-	private void createMapPartitionOperation(PythonOperationInfo info) {
-		DataSet op1 = (DataSet) sets.get(info.parentID);
-		sets.put(info.setID, op1.mapPartition(new PythonMapPartition(info.setID, info.types)).name(info.name));
-	}
-
-	private void createReduceOperation(PythonOperationInfo info) {
-		Object op1 = sets.get(info.parentID);
-		if (op1 instanceof DataSet) {
-			sets.put(info.setID, applyReduceOperation((DataSet) op1, info));
-			return;
-		}
-		if (op1 instanceof UnsortedGrouping) {
-			sets.put(info.setID, applyReduceOperation((UnsortedGrouping) op1, info));
-		}
-	}
-
-	private DataSet applyReduceOperation(DataSet op1, PythonOperationInfo info) {
-		return op1.reduceGroup(new PythonCombineIdentity())
-				.setCombinable(false).name("PythonReducePreStep")
-				.mapPartition(new PythonMapPartition(info.setID, info.types))
-				.name(info.name);
-	}
-
-	private DataSet applyReduceOperation(UnsortedGrouping op1, PythonOperationInfo info) {
-		if (info.combine) {
-			return op1.reduceGroup(new PythonCombineIdentity(info.setID * -1))
-					.setCombinable(true).name("PythonCombine")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		} else {
-			return op1.reduceGroup(new PythonCombineIdentity())
-					.setCombinable(false).name("PythonReducePreStep")
-					.mapPartition(new PythonMapPartition(info.setID, info.types))
-					.name(info.name);
-		}
-	}
+public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
+
+    /** My delegate. **/
+    private ResultSet _res;
+
+    /** The Statement that created me, if any. **/
+    private Statement _stmt;
+
+    /** The Connection that created me, if any. **/
+    private Connection _conn;
+
+    /**
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Statement which created it and the
+     * code which created it.
+     *
+     * @param stmt Statement which created this ResultSet
+     * @param res ResultSet to wrap
+     */
+    public DelegatingResultSet(Statement stmt, ResultSet res) {
+        super((AbandonedTrace)stmt);
+        this._stmt = stmt;
+        this._res = res;
+    }
+    
+    /**
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Connection which created it (via, for
+     * example DatabaseMetadata, and the code which created it.
+     *
+     * @param conn Connection which created this ResultSet
+     * @param res ResultSet to wrap
+     */
+    public DelegatingResultSet(Connection conn, ResultSet res) {
+        super((AbandonedTrace)conn);
+        this._conn = conn;
+        this._res = res;
+    }
+    
+    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
+        if(null == rset) {
+            return null;
+        } else {
+            return new DelegatingResultSet(stmt,rset);
+        }
+    }
+
+    public static ResultSet wrapResultSet(Connection conn, ResultSet rset) {
+        if(null == rset) {
+            return null;
+        } else {
+            return new DelegatingResultSet(conn,rset);
+        }
+    }
+
+    public ResultSet getDelegate() {
+        return _res;
+    }
+
+    public boolean equals(Object obj) {
+    	if (this == obj) return true;
+        ResultSet delegate = getInnermostDelegate();
+        if (delegate == null) {
+            return false;
+        }
+        if (obj instanceof DelegatingResultSet) {
+            DelegatingResultSet s = (DelegatingResultSet) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
+    }
+
+    public int hashCode() {
+        Object obj = getInnermostDelegate();
+        if (obj == null) {
+            return 0;
+        }
+        return obj.hashCode();
+    }
+
+    /**
+     * If my underlying {@link ResultSet} is not a
+     * <tt>DelegatingResultSet</tt>, returns it,
+     * otherwise recursively invokes this method on
+     * my delegate.
+     * <p>
+     * Hence this method will return the first
+     * delegate that is not a <tt>DelegatingResultSet</tt>,
+     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
+     * delegate can be found by transversing this chain.
+     * <p>
+     * This method is useful when you may have nested
+     * <tt>DelegatingResultSet</tt>s, and you want to make
+     * sure to obtain a "genuine" {@link ResultSet}.
+     */
+    public ResultSet getInnermostDelegate() {
+        ResultSet r = _res;
+        while(r != null && r instanceof DelegatingResultSet) {
+            r = ((DelegatingResultSet)r).getDelegate();
+            if(this == r) {
+                return null;
+            }
+        }
+        return r;
+    }
+    
+    public Statement getStatement() throws SQLException {
+        return _stmt;
+    }
+
+    /**
+     * Wrapper for close of ResultSet which removes this
+     * result set from being traced then calls close on
+     * the original ResultSet.
+     */
+    public void close() throws SQLException {
+        try {
+            if(_stmt != null) {
+                ((AbandonedTrace)_stmt).removeTrace(this);
+                _stmt = null;
+            }
+            if(_conn != null) {
+                ((AbandonedTrace)_conn).removeTrace(this);
+                _conn = null;
+            }
+            _res.close();
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    protected void handleException(SQLException e) throws SQLException {
+        if ((_stmt != null) && (_stmt instanceof DelegatingStatement)) {
+            ((DelegatingStatement)_stmt).handleException(e);
+        }
+        else if ((_conn != null) && (_conn instanceof DelegatingConnection)) {
+            ((DelegatingConnection)_conn).handleException(e);
+        }
+        else {
+            throw e;
+        }
+    }
+
+    public boolean next() throws SQLException 
+    { try { return _res.next(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean wasNull() throws SQLException
+    { try { return _res.wasNull(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public String getString(int columnIndex) throws SQLException
+    { try { return _res.getString(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(int columnIndex) throws SQLException
+    { try { return _res.getBoolean(columnIndex); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(int columnIndex) throws SQLException
+    { try { return _res.getByte(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(int columnIndex) throws SQLException
+    { try { return _res.getShort(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(int columnIndex) throws SQLException
+    { try { return _res.getInt(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(int columnIndex) throws SQLException
+    { try { return _res.getLong(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(int columnIndex) throws SQLException
+    { try { return _res.getFloat(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(int columnIndex) throws SQLException
+    { try { return _res.getDouble(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException
+    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(int columnIndex) throws SQLException
+    { try { return _res.getBytes(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int columnIndex) throws SQLException
+    { try { return _res.getDate(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int columnIndex) throws SQLException
+    { try { return _res.getTime(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int columnIndex) throws SQLException
+    { try { return _res.getTimestamp(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getAsciiStream(int columnIndex) throws SQLException
+    { try { return _res.getAsciiStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    /** @deprecated */
+    public InputStream getUnicodeStream(int columnIndex) throws SQLException
+    { try { return _res.getUnicodeStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getBinaryStream(int columnIndex) throws SQLException
+    { try { return _res.getBinaryStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public String getString(String columnName) throws SQLException
+    { try { return _res.getString(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean getBoolean(String columnName) throws SQLException
+    { try { return _res.getBoolean(columnName); } catch (SQLException e) { handleException(e); return false; } }
+
+    public byte getByte(String columnName) throws SQLException
+    { try { return _res.getByte(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public short getShort(String columnName) throws SQLException
+    { try { return _res.getShort(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getInt(String columnName) throws SQLException
+    { try { return _res.getInt(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public long getLong(String columnName) throws SQLException
+    { try { return _res.getLong(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public float getFloat(String columnName) throws SQLException
+    { try { return _res.getFloat(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public double getDouble(String columnName) throws SQLException
+    { try { return _res.getDouble(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    /** @deprecated */
+    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException
+    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public byte[] getBytes(String columnName) throws SQLException
+    { try { return _res.getBytes(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String columnName) throws SQLException
+    { try { return _res.getDate(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String columnName) throws SQLException
+    { try { return _res.getTime(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String columnName) throws SQLException
+    { try { return _res.getTimestamp(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getAsciiStream(String columnName) throws SQLException
+    { try { return _res.getAsciiStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    /** @deprecated */
+    public InputStream getUnicodeStream(String columnName) throws SQLException
+    { try { return _res.getUnicodeStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public InputStream getBinaryStream(String columnName) throws SQLException
+    { try { return _res.getBinaryStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public SQLWarning getWarnings() throws SQLException
+    { try { return _res.getWarnings(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void clearWarnings() throws SQLException
+    { try { _res.clearWarnings(); } catch (SQLException e) { handleException(e); } }
+
+    public String getCursorName() throws SQLException
+    { try { return _res.getCursorName(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public ResultSetMetaData getMetaData() throws SQLException
+    { try { return _res.getMetaData(); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(int columnIndex) throws SQLException
+    { try { return _res.getObject(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String columnName) throws SQLException
+    { try { return _res.getObject(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public int findColumn(String columnName) throws SQLException
+    { try { return _res.findColumn(columnName); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public Reader getCharacterStream(int columnIndex) throws SQLException
+    { try { return _res.getCharacterStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Reader getCharacterStream(String columnName) throws SQLException
+    { try { return _res.getCharacterStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(int columnIndex) throws SQLException
+    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public BigDecimal getBigDecimal(String columnName) throws SQLException
+    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public boolean isBeforeFirst() throws SQLException
+    { try { return _res.isBeforeFirst(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isAfterLast() throws SQLException
+    { try { return _res.isAfterLast(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isFirst() throws SQLException
+    { try { return _res.isFirst(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean isLast() throws SQLException
+    { try { return _res.isLast(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void beforeFirst() throws SQLException
+    { try { _res.beforeFirst(); } catch (SQLException e) { handleException(e); } }
+
+    public void afterLast() throws SQLException
+    { try { _res.afterLast(); } catch (SQLException e) { handleException(e); } }
+
+    public boolean first() throws SQLException
+    { try { return _res.first(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean last() throws SQLException
+    { try { return _res.last(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public int getRow() throws SQLException
+    { try { return _res.getRow(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public boolean absolute(int row) throws SQLException
+    { try { return _res.absolute(row); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean relative(int rows) throws SQLException
+    { try { return _res.relative(rows); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean previous() throws SQLException
+    { try { return _res.previous(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void setFetchDirection(int direction) throws SQLException
+    { try { _res.setFetchDirection(direction); } catch (SQLException e) { handleException(e); } }
+
+    public int getFetchDirection() throws SQLException
+    { try { return _res.getFetchDirection(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public void setFetchSize(int rows) throws SQLException
+    { try { _res.setFetchSize(rows); } catch (SQLException e) { handleException(e); } }
+
+    public int getFetchSize() throws SQLException
+    { try { return _res.getFetchSize(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getType() throws SQLException
+    { try { return _res.getType(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public int getConcurrency() throws SQLException
+    { try { return _res.getConcurrency(); } catch (SQLException e) { handleException(e); return 0; } }
+
+    public boolean rowUpdated() throws SQLException
+    { try { return _res.rowUpdated(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean rowInserted() throws SQLException
+    { try { return _res.rowInserted(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public boolean rowDeleted() throws SQLException
+    { try { return _res.rowDeleted(); } catch (SQLException e) { handleException(e); return false; } }
+
+    public void updateNull(int columnIndex) throws SQLException
+    { try { _res.updateNull(columnIndex); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBoolean(int columnIndex, boolean x) throws SQLException
+    { try { _res.updateBoolean(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateByte(int columnIndex, byte x) throws SQLException
+    { try { _res.updateByte(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateShort(int columnIndex, short x) throws SQLException
+    { try { _res.updateShort(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateInt(int columnIndex, int x) throws SQLException
+    { try { _res.updateInt(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateLong(int columnIndex, long x) throws SQLException
+    { try { _res.updateLong(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateFloat(int columnIndex, float x) throws SQLException
+    { try { _res.updateFloat(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDouble(int columnIndex, double x) throws SQLException
+    { try { _res.updateDouble(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException
+    { try { _res.updateBigDecimal(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateString(int columnIndex, String x) throws SQLException
+    { try { _res.updateString(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBytes(int columnIndex, byte[] x) throws SQLException
+    { try { _res.updateBytes(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDate(int columnIndex, Date x) throws SQLException
+    { try { _res.updateDate(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTime(int columnIndex, Time x) throws SQLException
+    { try { _res.updateTime(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException
+    { try { _res.updateTimestamp(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException
+    { try { _res.updateAsciiStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException
+    { try { _res.updateBinaryStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException
+    { try { _res.updateCharacterStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(int columnIndex, Object x, int scale) throws SQLException
+    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(int columnIndex, Object x) throws SQLException
+    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateNull(String columnName) throws SQLException
+    { try { _res.updateNull(columnName); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBoolean(String columnName, boolean x) throws SQLException
+    { try { _res.updateBoolean(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateByte(String columnName, byte x) throws SQLException
+    { try { _res.updateByte(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateShort(String columnName, short x) throws SQLException
+    { try { _res.updateShort(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateInt(String columnName, int x) throws SQLException
+    { try { _res.updateInt(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateLong(String columnName, long x) throws SQLException
+    { try { _res.updateLong(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateFloat(String columnName, float x) throws SQLException
+    { try { _res.updateFloat(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDouble(String columnName, double x) throws SQLException
+    { try { _res.updateDouble(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException
+    { try { _res.updateBigDecimal(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateString(String columnName, String x) throws SQLException
+    { try { _res.updateString(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBytes(String columnName, byte[] x) throws SQLException
+    { try { _res.updateBytes(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateDate(String columnName, Date x) throws SQLException
+    { try { _res.updateDate(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTime(String columnName, Time x) throws SQLException
+    { try { _res.updateTime(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateTimestamp(String columnName, Timestamp x) throws SQLException
+    { try { _res.updateTimestamp(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException
+    { try { _res.updateAsciiStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException
+    { try { _res.updateBinaryStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException
+    { try { _res.updateCharacterStream(columnName, reader, length); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(String columnName, Object x, int scale) throws SQLException
+    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateObject(String columnName, Object x) throws SQLException
+    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void insertRow() throws SQLException
+    { try { _res.insertRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void updateRow() throws SQLException
+    { try { _res.updateRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void deleteRow() throws SQLException
+    { try { _res.deleteRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void refreshRow() throws SQLException
+    { try { _res.refreshRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void cancelRowUpdates() throws SQLException
+    { try { _res.cancelRowUpdates(); } catch (SQLException e) { handleException(e); } }
+
+    public void moveToInsertRow() throws SQLException
+    { try { _res.moveToInsertRow(); } catch (SQLException e) { handleException(e); } }
+
+    public void moveToCurrentRow() throws SQLException
+    { try { _res.moveToCurrentRow(); } catch (SQLException e) { handleException(e); } }
+
+    public Object getObject(int i, Map map) throws SQLException
+    { try { return _res.getObject(i, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(int i) throws SQLException
+    { try { return _res.getRef(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(int i) throws SQLException
+    { try { return _res.getBlob(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(int i) throws SQLException
+    { try { return _res.getClob(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(int i) throws SQLException
+    { try { return _res.getArray(i); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Object getObject(String colName, Map map) throws SQLException
+    { try { return _res.getObject(colName, map); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Ref getRef(String colName) throws SQLException
+    { try { return _res.getRef(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Blob getBlob(String colName) throws SQLException
+    { try { return _res.getBlob(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Clob getClob(String colName) throws SQLException
+    { try { return _res.getClob(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Array getArray(String colName) throws SQLException
+    { try { return _res.getArray(colName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getDate(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Date getDate(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getDate(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getTime(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Time getTime(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getTime(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException
+    { try { return _res.getTimestamp(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException
+    { try { return _res.getTimestamp(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
+
+
+    public java.net.URL getURL(int columnIndex) throws SQLException
+    { try { return _res.getURL(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
+
+    public java.net.URL getURL(String columnName) throws SQLException
+    { try { return _res.getURL(columnName); } catch (SQLException e) { handleException(e); return null; } }
+
+    public void updateRef(int columnIndex, java.sql.Ref x) throws SQLException
+    { try { _res.updateRef(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateRef(String columnName, java.sql.Ref x) throws SQLException
+    { try { _res.updateRef(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBlob(int columnIndex, java.sql.Blob x) throws SQLException
+    { try { _res.updateBlob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateBlob(String columnName, java.sql.Blob x) throws SQLException
+    { try { _res.updateBlob(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateClob(int columnIndex, java.sql.Clob x) throws SQLException
+    { try { _res.updateClob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateClob(String columnName, java.sql.Clob x) throws SQLException
+    { try { _res.updateClob(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateArray(int columnIndex, java.sql.Array x) throws SQLException
+    { try { _res.updateArray(columnIndex, x); } catch (SQLException e) { handleException(e); } }
+
+    public void updateArray(String columnName, java.sql.Array x) throws SQLException
+    { try { _res.updateArray(columnName, x); } catch (SQLException e) { handleException(e); } }
+
+/* JDBC_4_ANT_KEY_BEGIN */
+
+    public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        return iface.isAssignableFrom(getClass()) || _res.isWrapperFor(iface);
+    }
+
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+        if (iface.isAssignableFrom(getClass())) {
+            return iface.cast(this);
+        } else if (iface.isAssignableFrom(_res.getClass())) {
+            return iface.cast(_res);
+        } else {
+            return _res.unwrap(iface);
+        }
+    }
+
+    public RowId getRowId(int columnIndex) throws SQLException {
+        try {
+            return _res.getRowId(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public RowId getRowId(String columnLabel) throws SQLException {
+        try {
+            return _res.getRowId(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateRowId(int columnIndex, RowId value) throws SQLException {
+        try {
+            _res.updateRowId(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateRowId(String columnLabel, RowId value) throws SQLException {
+        try {
+            _res.updateRowId(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public int getHoldability() throws SQLException {
+        try {
+            return _res.getHoldability();
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return 0;
+        }
+    }
+
+    public boolean isClosed() throws SQLException {
+        try {
+            return _res.isClosed();
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return false;
+        }
+    }
+
+    public void updateNString(int columnIndex, String value) throws SQLException {
+        try {
+            _res.updateNString(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNString(String columnLabel, String value) throws SQLException {
+        try {
+            _res.updateNString(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, NClob value) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, NClob value) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public NClob getNClob(int columnIndex) throws SQLException {
+        try {
+            return _res.getNClob(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public NClob getNClob(String columnLabel) throws SQLException {
+        try {
+            return _res.getNClob(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(int columnIndex) throws SQLException {
+        try {
+            return _res.getSQLXML(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public SQLXML getSQLXML(String columnLabel) throws SQLException {
+        try {
+            return _res.getSQLXML(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateSQLXML(int columnIndex, SQLXML value) throws SQLException {
+        try {
+            _res.updateSQLXML(columnIndex, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateSQLXML(String columnLabel, SQLXML value) throws SQLException {
+        try {
+            _res.updateSQLXML(columnLabel, value);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public String getNString(int columnIndex) throws SQLException {
+        try {
+            return _res.getNString(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public String getNString(String columnLabel) throws SQLException {
+        try {
+            return _res.getNString(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(int columnIndex) throws SQLException {
+        try {
+            return _res.getNCharacterStream(columnIndex);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public Reader getNCharacterStream(String columnLabel) throws SQLException {
+        try {
+            return _res.getNCharacterStream(columnLabel);
+        }
+        catch (SQLException e) {
+            handleException(e);
+            return null;
+        }
+    }
+
+    public void updateNCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBlob(columnIndex, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {
+        try {
+            _res.updateBlob(columnLabel, inputStream, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateClob(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateClob(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, reader, length);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateNCharacterStream(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateAsciiStream(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateAsciiStream(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBinaryStream(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBinaryStream(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateCharacterStream(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(int columnIndex, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBlob(columnIndex, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {
+        try {
+            _res.updateBlob(columnLabel, inputStream);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateClob(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateClob(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateClob(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(int columnIndex, Reader reader) throws SQLException {
+        try {
+            _res.updateNClob(columnIndex, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+
+    public void updateNClob(String columnLabel, Reader reader) throws SQLException {
+        try {
+            _res.updateNClob(columnLabel, reader);
+        }
+        catch (SQLException e) {
+            handleException(e);
+        }
+    }
+/* JDBC_4_ANT_KEY_END */
 }

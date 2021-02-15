@@ -1,393 +1,184 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+package org.jsoup.nodes;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.CharsetEncoder;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * HTML entities, and escape routines.
+ * Source: <a href="http://www.w3.org/TR/html5/named-character-references.html#named-character-references">W3C HTML
+ * named character references</a>.
  */
+public class Entities {
+    public enum EscapeMode {
+        /** Restricted entities suitable for XHTML output: lt, gt, amp, apos, and quot only. */
+        xhtml(xhtmlByVal),
+        /** Default HTML output entities. */
+        base(baseByVal),
+        /** Complete HTML entities. */
+        extended(fullByVal);
 
-/* $Id$ */
+        private Map<Character, String> map;
 
-package org.apache.fop.render.pdf;
+        EscapeMode(Map<Character, String> map) {
+            this.map = map;
+        }
 
-import java.util.LinkedList;
-import java.util.Locale;
-import java.util.Map;
+        public Map<Character, String> getMap() {
+            return map;
+        }
+    }
 
-import javax.xml.XMLConstants;
+    private static final Map<String, Character> full;
+    private static final Map<Character, String> xhtmlByVal;
+    private static final Map<Character, String> baseByVal;
+    private static final Map<Character, String> fullByVal;
+    private static final Pattern unescapePattern = Pattern.compile("&(#(x|X)?([0-9a-fA-F]+)|[a-zA-Z]+\\d*);?");
+    private static final Pattern strictUnescapePattern = Pattern.compile("&(#(x|X)?([0-9a-fA-F]+)|[a-zA-Z]+\\d*);");
 
-import org.xml.sax.Attributes;
-import org.xml.sax.helpers.AttributesImpl;
+    private Entities() {}
 
-import org.apache.fop.accessibility.StructureTreeElement;
-import org.apache.fop.accessibility.StructureTreeEventHandler;
-import org.apache.fop.events.EventBroadcaster;
-import org.apache.fop.fo.extensions.ExtensionElementMapping;
-import org.apache.fop.fo.extensions.InternalElementMapping;
-import org.apache.fop.fo.pagination.Flow;
-import org.apache.fop.pdf.PDFFactory;
-import org.apache.fop.pdf.PDFParentTree;
-import org.apache.fop.pdf.PDFStructElem;
-import org.apache.fop.pdf.PDFStructTreeRoot;
-import org.apache.fop.pdf.StandardStructureAttributes.Table.Scope;
-import org.apache.fop.pdf.StandardStructureTypes;
-import org.apache.fop.pdf.StandardStructureTypes.Grouping;
-import org.apache.fop.pdf.StandardStructureTypes.Table;
-import org.apache.fop.pdf.StructureHierarchyMember;
-import org.apache.fop.pdf.StructureType;
-import org.apache.fop.util.LanguageTags;
-import org.apache.fop.util.XMLUtil;
+    /**
+     * Check if the input is a known named entity
+     * @param name the possible entity name (e.g. "lt" or "amp"
+     * @return true if a known named entity
+     */
+    public static boolean isNamedEntity(String name) {
+        return full.containsKey(name);
+    }
 
-class PDFStructureTreeBuilder implements StructureTreeEventHandler {
+    /**
+     * Get the Character value of the named entity
+     * @param name named entity (e.g. "lt" or "amp")
+     * @return the Character value of the named entity (e.g. '<' or '&')
+     */
+    public static Character getCharacterByName(String name) {
+        return full.get(name);
+    }
+    
+    static String escape(String string, Document.OutputSettings out) {
+        return escape(string, out.encoder(), out.escapeMode());
+    }
 
-    private static final String ROLE = "role";
+    static String escape(String string, CharsetEncoder encoder, EscapeMode escapeMode) {
+        StringBuilder accum = new StringBuilder(string.length() * 2);
+        Map<Character, String> map = escapeMode.getMap();
 
-    private static final Map<String, StructureElementBuilder> BUILDERS
-            = new java.util.HashMap<String, StructureElementBuilder>();
+        for (int pos = 0; pos < string.length(); pos++) {
+            Character c = string.charAt(pos);
+            if (map.containsKey(c))
+                accum.append('&').append(map.get(c)).append(';');
+            else if (encoder.canEncode(c))
+                accum.append(c.charValue());
+            else
+                accum.append("&#").append((int) c).append(';');
+        }
 
-    private static final StructureElementBuilder DEFAULT_BUILDER
-            = new DefaultStructureElementBuilder(Grouping.NON_STRUCT);
+        return accum.toString();
+    }
+
+    static String unescape(String string) {
+        return unescape(string, false);
+    }
+
+    /**
+     * Unescape the input string.
+     * @param string
+     * @param strict if "strict" (that is, requires trailing ';' char, otherwise that's optional)
+     * @return
+     */
+    static String unescape(String string, boolean strict) {
+        // todo: change this method to use Tokeniser.consumeCharacterReference
+        if (!string.contains("&"))
+            return string;
+
+        Matcher m = strict? strictUnescapePattern.matcher(string) : unescapePattern.matcher(string); // &(#(x|X)?([0-9a-fA-F]+)|[a-zA-Z]\\d*);?
+        StringBuffer accum = new StringBuffer(string.length()); // pity matcher can't use stringbuilder, avoid syncs
+        // todo: replace m.appendReplacement with own impl, so StringBuilder and quoteReplacement not required
+
+        while (m.find()) {
+            int charval = -1;
+            String num = m.group(3);
+            if (num != null) {
+                try {
+                    int base = m.group(2) != null ? 16 : 10; // 2 is hex indicator
+                    charval = Integer.valueOf(num, base);
+                } catch (NumberFormatException e) {
+                } // skip
+            } else {
+                String name = m.group(1);
+                if (full.containsKey(name))
+                    charval = full.get(name);
+            }
+
+            if (charval != -1 || charval > 0xFFFF) { // out of range
+                String c = Character.toString((char) charval);
+                m.appendReplacement(accum, Matcher.quoteReplacement(c));
+            } else {
+                m.appendReplacement(accum, Matcher.quoteReplacement(m.group(0))); // replace with original string
+            }
+        }
+        m.appendTail(accum);
+        return accum.toString();
+    }
+
+    // xhtml has restricted entities
+    private static final Object[][] xhtmlArray = {
+            {"quot", 0x00022},
+            {"amp", 0x00026},
+            {"apos", 0x00027},
+            {"lt", 0x0003C},
+            {"gt", 0x0003E}
+    };
 
     static {
-        // Declarations and Pagination and Layout Formatting Objects
-        StructureElementBuilder regionBuilder = new RegionBuilder();
-        addBuilder("root",                      StandardStructureTypes.Grouping.DOCUMENT);
-        addBuilder("page-sequence",             new PageSequenceBuilder());
-        addBuilder("static-content",            regionBuilder);
-        addBuilder("flow",                      regionBuilder);
-        // Block-level Formatting Objects
-        addBuilder("block", new LanguageHolderBuilder(StandardStructureTypes.Paragraphlike.P));
-        addBuilder("block-container",           StandardStructureTypes.Grouping.DIV);
-        // Inline-level Formatting Objects
-        addBuilder("character", new LanguageHolderBuilder(StandardStructureTypes.InlineLevelStructure.SPAN));
-        addBuilder("external-graphic",          new ImageBuilder());
-        addBuilder("instream-foreign-object",   new ImageBuilder());
-        addBuilder("inline",                    StandardStructureTypes.InlineLevelStructure.SPAN);
-        addBuilder("inline-container",          StandardStructureTypes.Grouping.DIV);
-        addBuilder("page-number",               StandardStructureTypes.InlineLevelStructure.QUOTE);
-        addBuilder("page-number-citation",      StandardStructureTypes.InlineLevelStructure.QUOTE);
-        addBuilder("page-number-citation-last", StandardStructureTypes.InlineLevelStructure.QUOTE);
-        // Formatting Objects for Tables
-        addBuilder("table-and-caption",         StandardStructureTypes.Grouping.DIV);
-        addBuilder("table",                     new TableBuilder());
-        addBuilder("table-caption",             StandardStructureTypes.Grouping.CAPTION);
-        addBuilder("table-header",              StandardStructureTypes.Table.THEAD);
-        addBuilder("table-footer",              new TableFooterBuilder());
-        addBuilder("table-body",                StandardStructureTypes.Table.TBODY);
-        addBuilder("table-row",                 StandardStructureTypes.Table.TR);
-        addBuilder("table-cell",                new TableCellBuilder());
-        // Formatting Objects for Lists
-        addBuilder("list-block",                StandardStructureTypes.List.L);
-        addBuilder("list-item",                 StandardStructureTypes.List.LI);
-        addBuilder("list-item-body",            StandardStructureTypes.List.LBODY);
-        addBuilder("list-item-label",           StandardStructureTypes.List.LBL);
-        // Dynamic Effects: Link and Multi Formatting Objects
-        addBuilder("basic-link",                StandardStructureTypes.InlineLevelStructure.LINK);
-        // Out-of-Line Formatting Objects
-        addBuilder("float",                     StandardStructureTypes.Grouping.DIV);
-        addBuilder("footnote",                  StandardStructureTypes.InlineLevelStructure.NOTE);
-        addBuilder("footnote-body",             StandardStructureTypes.Grouping.SECT);
-        // Other Formatting Objects
-        addBuilder("wrapper",                   StandardStructureTypes.InlineLevelStructure.SPAN);
-        addBuilder("marker",                    StandardStructureTypes.Grouping.PRIVATE);
-        addBuilder("retrieve-marker",           new PlaceholderBuilder());
-        addBuilder("retrieve-table-marker",     new PlaceholderBuilder());
+        xhtmlByVal = new HashMap<Character, String>();
+        baseByVal = toCharacterKey(loadEntities("entities-base.properties")); // most common / default
+        full = loadEntities("entities-full.properties"); // extended and overblown.
+        fullByVal = toCharacterKey(full);
 
-        addBuilder("#PCDATA", new PlaceholderBuilder());
+        for (Object[] entity : xhtmlArray) {
+            Character c = Character.valueOf((char) ((Integer) entity[1]).intValue());
+            xhtmlByVal.put(c, ((String) entity[0]));
+        }
     }
 
-    private static void addBuilder(String fo, StructureType structureType) {
-        addBuilder(fo, new DefaultStructureElementBuilder(structureType));
-    }
-
-    private static void addBuilder(String fo, StructureElementBuilder mapper) {
-        BUILDERS.put(fo, mapper);
-    }
-
-    private interface StructureElementBuilder {
-
-        PDFStructElem build(StructureHierarchyMember parent, Attributes attributes, PDFFactory pdfFactory,
-                EventBroadcaster eventBroadcaster);
-
-    }
-
-    private static class DefaultStructureElementBuilder implements StructureElementBuilder {
-
-        private final StructureType defaultStructureType;
-
-        DefaultStructureElementBuilder(StructureType structureType) {
-            this.defaultStructureType = structureType;
+    private static Map<String, Character> loadEntities(String filename) {
+        Properties properties = new Properties();
+        Map<String, Character> entities = new HashMap<String, Character>();
+        try {
+            InputStream in = Entities.class.getResourceAsStream(filename);
+            properties.load(in);
+            in.close();
+        } catch (IOException e) {
+            throw new MissingResourceException("Error loading entities resource: " + e.getMessage(), "Entities", filename);
         }
 
-        public final PDFStructElem build(StructureHierarchyMember parent, Attributes attributes,
-                PDFFactory pdfFactory, EventBroadcaster eventBroadcaster) {
-            String role = attributes.getValue(ROLE);
-            StructureType structureType;
-            if (role == null) {
-                structureType = defaultStructureType;
+        for (Map.Entry entry: properties.entrySet()) {
+            Character val = Character.valueOf((char) Integer.parseInt((String) entry.getValue(), 16));
+            String name = (String) entry.getKey();
+            entities.put(name, val);
+        }
+        return entities;
+    }
+
+    private static Map<Character, String> toCharacterKey(Map<String, Character> inMap) {
+        Map<Character, String> outMap = new HashMap<Character, String>();
+        for (Map.Entry<String, Character> entry: inMap.entrySet()) {
+            Character character = entry.getValue();
+            String name = entry.getKey();
+
+            if (outMap.containsKey(character)) {
+                // dupe, prefer the lower case version
+                if (name.toLowerCase().equals(name))
+                    outMap.put(character, name);
             } else {
-                structureType = StandardStructureTypes.get(role);
-                if (structureType == null) {
-                    structureType = defaultStructureType;
-                    PDFEventProducer.Provider.get(eventBroadcaster).nonStandardStructureType(role, role,
-                            structureType.toString());
-                }
-            }
-            PDFStructElem structElem = createStructureElement(parent, structureType);
-            setAttributes(structElem, attributes);
-            addKidToParent(structElem, parent, attributes);
-            registerStructureElement(structElem, pdfFactory, attributes);
-            return structElem;
-        }
-
-        protected PDFStructElem createStructureElement(StructureHierarchyMember parent,
-                StructureType structureType) {
-            return new PDFStructElem(parent, structureType);
-        }
-
-        protected void setAttributes(PDFStructElem structElem, Attributes attributes) {
-        }
-
-        protected void addKidToParent(PDFStructElem kid, StructureHierarchyMember parent,
-                Attributes attributes) {
-            parent.addKid(kid);
-        }
-
-        protected void registerStructureElement(PDFStructElem structureElement, PDFFactory pdfFactory,
-                Attributes attributes) {
-            pdfFactory.getDocument().registerStructureElement(structureElement);
-        }
-
-    }
-
-    private static class PageSequenceBuilder extends DefaultStructureElementBuilder {
-
-        PageSequenceBuilder() {
-            super(StandardStructureTypes.Grouping.PART);
-        }
-
-        @Override
-        protected PDFStructElem createStructureElement(StructureHierarchyMember parent,
-                StructureType structureType) {
-            return new PageSequenceStructElem(parent, structureType);
-        }
-
-    }
-
-    private static class RegionBuilder extends DefaultStructureElementBuilder {
-
-        RegionBuilder() {
-            super(StandardStructureTypes.Grouping.SECT);
-        }
-
-        @Override
-        protected void addKidToParent(PDFStructElem kid, StructureHierarchyMember parent,
-                Attributes attributes) {
-            String flowName = attributes.getValue(Flow.FLOW_NAME);
-            ((PageSequenceStructElem) parent).addContent(flowName, kid);
-        }
-
-    }
-
-    private static class LanguageHolderBuilder extends DefaultStructureElementBuilder {
-
-        LanguageHolderBuilder(StructureType structureType) {
-            super(structureType);
-        }
-
-        @Override
-        protected void setAttributes(PDFStructElem structElem, Attributes attributes) {
-            String xmlLang = attributes.getValue(XMLConstants.XML_NS_URI, "lang");
-            if (xmlLang != null) {
-                Locale locale = LanguageTags.toLocale(xmlLang);
-                structElem.setLanguage(locale);
+                outMap.put(character, name);
             }
         }
-
+        return outMap;
     }
-
-    private static class ImageBuilder extends DefaultStructureElementBuilder {
-
-        ImageBuilder() {
-            super(StandardStructureTypes.Illustration.FIGURE);
-        }
-
-        @Override
-        protected void setAttributes(PDFStructElem structElem, Attributes attributes) {
-            String altTextNode = attributes.getValue(ExtensionElementMapping.URI, "alt-text");
-            if (altTextNode == null) {
-                altTextNode = "No alternate text specified";
-            }
-            structElem.put("Alt", altTextNode);
-        }
-
-    }
-
-    private static class TableBuilder extends DefaultStructureElementBuilder {
-
-        TableBuilder() {
-            super(StandardStructureTypes.Table.TABLE);
-        }
-
-        @Override
-        protected PDFStructElem createStructureElement(StructureHierarchyMember parent,
-                StructureType structureType) {
-            return new TableStructElem(parent, structureType);
-        }
-    }
-
-    private static class TableFooterBuilder extends DefaultStructureElementBuilder {
-
-        public TableFooterBuilder() {
-            super(StandardStructureTypes.Table.TFOOT);
-        }
-
-        @Override
-        protected void addKidToParent(PDFStructElem kid, StructureHierarchyMember parent,
-                Attributes attributes) {
-            ((TableStructElem) parent).addTableFooter(kid);
-        }
-    }
-
-    private static class TableCellBuilder extends DefaultStructureElementBuilder {
-
-        TableCellBuilder() {
-            super(StandardStructureTypes.Table.TD);
-        }
-
-        @Override
-        protected void registerStructureElement(PDFStructElem structureElement, PDFFactory pdfFactory,
-                Attributes attributes) {
-            if (structureElement.getStructureType() == Table.TH) {
-                String scopeAttribute = attributes.getValue(InternalElementMapping.URI,
-                        InternalElementMapping.SCOPE);
-                Scope scope = (scopeAttribute == null)
-                        ? Scope.COLUMN
-                        : Scope.valueOf(scopeAttribute.toUpperCase(Locale.ENGLISH));
-                pdfFactory.getDocument().registerStructureElement(structureElement, scope);
-            } else {
-                pdfFactory.getDocument().registerStructureElement(structureElement);
-            }
-        }
-
-        @Override
-        protected void setAttributes(PDFStructElem structElem, Attributes attributes) {
-            String columnSpan = attributes.getValue("number-columns-spanned");
-            if (columnSpan != null) {
-                structElem.setTableAttributeColSpan(Integer.parseInt(columnSpan));
-            }
-            String rowSpan = attributes.getValue("number-rows-spanned");
-            if (rowSpan != null) {
-                structElem.setTableAttributeRowSpan(Integer.parseInt(rowSpan));
-            }
-        }
-
-    }
-
-    private static class PlaceholderBuilder implements StructureElementBuilder {
-
-        public PDFStructElem build(StructureHierarchyMember parent, Attributes attributes,
-                PDFFactory pdfFactory, EventBroadcaster eventBroadcaster) {
-            PDFStructElem elem = new PDFStructElem.Placeholder(parent);
-            parent.addKid(elem);
-            return elem;
-        }
-
-    }
-
-    private PDFFactory pdfFactory;
-
-    private EventBroadcaster eventBroadcaster;
-
-    private LinkedList<PDFStructElem> ancestors = new LinkedList<PDFStructElem>();
-
-    private PDFStructElem rootStructureElement;
-
-    void setPdfFactory(PDFFactory pdfFactory) {
-        this.pdfFactory = pdfFactory;
-    }
-
-    void setEventBroadcaster(EventBroadcaster eventBroadcaster) {
-        this.eventBroadcaster = eventBroadcaster;
-    }
-
-    void setLogicalStructureHandler(PDFLogicalStructureHandler logicalStructureHandler) {
-        createRootStructureElement(logicalStructureHandler);
-    }
-
-    private void createRootStructureElement(PDFLogicalStructureHandler logicalStructureHandler) {
-        assert rootStructureElement == null;
-        PDFParentTree parentTree = logicalStructureHandler.getParentTree();
-        PDFStructTreeRoot structTreeRoot = pdfFactory.getDocument().makeStructTreeRoot(parentTree);
-        rootStructureElement = createStructureElement("root", structTreeRoot,
-                new AttributesImpl(), pdfFactory, eventBroadcaster);
-    }
-
-    private static PDFStructElem createStructureElement(String name, StructureHierarchyMember parent,
-                Attributes attributes, PDFFactory pdfFactory, EventBroadcaster eventBroadcaster) {
-            StructureElementBuilder builder = BUILDERS.get(name);
-            if (builder == null) {
-                // TODO is a fallback really necessary?
-                builder = DEFAULT_BUILDER;
-            }
-            return builder.build(parent, attributes, pdfFactory, eventBroadcaster);
-        }
-
-    public void startPageSequence(Locale language, String role) {
-        ancestors = new LinkedList<PDFStructElem>();
-        AttributesImpl attributes = new AttributesImpl();
-        attributes.addAttribute("", ROLE, ROLE, XMLUtil.CDATA, role);
-        PDFStructElem structElem = createStructureElement("page-sequence",
-                rootStructureElement, attributes, pdfFactory, eventBroadcaster);
-        if (language != null) {
-            structElem.setLanguage(language);
-        }
-        ancestors.add(structElem);
-    }
-
-    public void endPageSequence() {
-    }
-
-    public StructureTreeElement startNode(String name, Attributes attributes, StructureTreeElement parent) {
-        if (!isPDFA1Safe(name)) {
-            return null;
-        }
-        assert parent == null || parent instanceof PDFStructElem;
-        PDFStructElem parentElem = parent == null ? ancestors.getFirst() : (PDFStructElem) parent;
-        PDFStructElem structElem = createStructureElement(name, parentElem, attributes,
-                pdfFactory, eventBroadcaster);
-        ancestors.addFirst(structElem);
-        return structElem;
-    }
-
-    public void endNode(String name) {
-        if (isPDFA1Safe(name)) {
-            ancestors.removeFirst();
-        }
-    }
-
-    private boolean isPDFA1Safe(String name) {
-        return !(pdfFactory.getDocument().getProfile().getPDFAMode().isPart1()
-                && (name.equals("table-body")
-                || name.equals("table-header")
-                || name.equals("table-footer")));
-    }
-
-    public StructureTreeElement startImageNode(String name, Attributes attributes, StructureTreeElement parent) {
-        return startNode(name, attributes, parent);
-    }
-
-    public StructureTreeElement startReferencedNode(String name, Attributes attributes, StructureTreeElement parent) {
-        return startNode(name, attributes, parent);
-    }
-
 }

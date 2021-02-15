@@ -1,391 +1,159 @@
 /*
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- *  under the License.
+ * Copyright (c) 2007 Mockito contributors
+ * This program is made available under the terms of the MIT License.
  */
-package org.syncope.core.rest.data;
+package org.mockito.internal.stubbing.defaultanswers;
 
-import org.syncope.core.util.AttributableUtil;
-import com.opensymphony.workflow.Workflow;
-import com.opensymphony.workflow.spi.Step;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import javassist.NotFoundException;
-import javax.persistence.EntityNotFoundException;
-import org.apache.commons.lang.builder.ReflectionToStringBuilder;
-import org.apache.commons.lang.builder.ToStringStyle;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
-import org.syncope.client.mod.MembershipMod;
-import org.syncope.client.mod.UserMod;
-import org.syncope.client.to.MembershipTO;
-import org.syncope.client.to.UserTO;
-import org.syncope.client.validation.SyncopeClientCompositeErrorException;
-import org.syncope.client.validation.SyncopeClientException;
-import org.syncope.core.persistence.beans.AbstractAttr;
-import org.syncope.core.persistence.beans.AbstractDerAttr;
-import org.syncope.core.persistence.beans.AbstractVirAttr;
-import org.syncope.core.persistence.beans.Policy;
-import org.syncope.core.persistence.beans.TargetResource;
-import org.syncope.core.persistence.beans.membership.Membership;
-import org.syncope.core.persistence.beans.membership.MAttr;
-import org.syncope.core.persistence.beans.membership.MDerAttr;
-import org.syncope.core.persistence.beans.membership.MVirAttr;
-import org.syncope.core.persistence.beans.role.SyncopeRole;
-import org.syncope.core.persistence.beans.user.SyncopeUser;
-import org.syncope.core.persistence.propagation.ResourceOperations;
-import org.syncope.types.CipherAlgorithm;
-import org.syncope.types.PasswordPolicy;
-import org.syncope.types.ResourceOperationType;
-import org.syncope.types.SyncopeClientExceptionType;
+import static org.mockito.Mockito.withSettings;
 
-@Component
-public class UserDataBinder extends AbstractAttributableDataBinder {
+import java.io.IOException;
+import java.io.Serializable;
+import org.mockito.MockSettings;
+import org.mockito.Mockito;
+import org.mockito.internal.InternalMockHandler;
+import org.mockito.internal.MockitoCore;
+import org.mockito.internal.creation.settings.CreationSettings;
+import org.mockito.internal.stubbing.InvocationContainerImpl;
+import org.mockito.internal.stubbing.StubbedInvocationMatcher;
+import org.mockito.internal.util.MockUtil;
+import org.mockito.internal.util.reflection.GenericMetadataSupport;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
-    public enum CheckinResultAction {
+/**
+ * Returning deep stub implementation.
+ *
+ * Will return previously created mock if the invocation matches.
+ *
+ * <p>Supports nested generic information, with this answer you can write code like this :
+ *
+ * <pre class="code"><code class="java">
+ *     interface GenericsNest&lt;K extends Comparable&lt;K&gt; & Cloneable&gt; extends Map&lt;K, Set&lt;Number&gt;&gt; {}
+ *
+ *     GenericsNest&lt;?&gt; mock = mock(GenericsNest.class, new ReturnsGenericDeepStubs());
+ *     Number number = mock.entrySet().iterator().next().getValue().iterator().next();
+ * </code></pre>
+ * </p>
+ *
+ * @see org.mockito.Mockito#RETURNS_DEEP_STUBS
+ * @see org.mockito.Answers#RETURNS_DEEP_STUBS
+ */
+public class ReturnsDeepStubs implements Answer<Object>, Serializable {
+    
+    private static final long serialVersionUID = -7105341425736035847L;
 
-        CREATE, OVERWRITE, REJECT
+    public Object answer(InvocationOnMock invocation) throws Throwable {
+        GenericMetadataSupport returnTypeGenericMetadata =
+                actualParameterizedType(invocation.getMock()).resolveGenericReturnType(invocation.getMethod());
+
+        Class<?> rawType = returnTypeGenericMetadata.rawType();
+        if (!mockitoCore().isTypeMockable(rawType)) {
+            return delegate().returnValueFor(rawType);
+        }
+
+        return makeDeepMock(invocation, returnTypeGenericMetadata);
     }
 
-    public class CheckInResult {
+	private void instantiateFieldsIfNeeded() {
+		if (mockitoCore == null) {
+			mockitoCore = new MockitoCore();
+		}
+		if (delegate == null) {
+			delegate = new ReturnsEmptyValues();
+		}
+	}
 
-        private CheckinResultAction action;
+	private Object getMock(InvocationOnMock invocation, GenericMetadataSupport returnTypeGenericMetadata) throws Throwable {
+    	InternalMockHandler<Object> handler = new MockUtil().getMockHandler(invocation.getMock());
+    	InvocationContainerImpl container = (InvocationContainerImpl) handler.getInvocationContainer();
 
-        private Long syncopeUserId;
+        // matches invocation for verification
+        for (StubbedInvocationMatcher stubbedInvocationMatcher : container.getStubbedInvocations()) {
+    		if(container.getInvocationForStubbing().matches(stubbedInvocationMatcher.getInvocation())) {
+    			return stubbedInvocationMatcher.answer(invocation);
+    		}
+		}
 
-        private Long workflowId;
+        // deep stub
+        return recordDeepStubMock(createNewDeepStubMock(returnTypeGenericMetadata), container);
+    }
 
-        public CheckinResultAction getAction() {
-            return action;
-        }
+    /**
+     * Creates a mock using the Generics Metadata.
+     *
+     * <li>Finally as we want to mock the actual type, but we want to pass along the contextual generics meta-data
+     * that was resolved for the current return type, for this to happen we associate to the mock an new instance of
+     * {@link ReturnsDeepStubs} answer in which we will store the returned type generic metadata.
+     *
+     * @param returnTypeGenericMetadata The metadata to use to create the new mock.
+     * @return The mock
+     */
+    private Object createNewDeepStubMock(GenericMetadataSupport returnTypeGenericMetadata) {
+        return mockitoCore().mock(
+                returnTypeGenericMetadata.rawType(),
+                withSettingsUsing(returnTypeGenericMetadata)
+        );
+    }
 
-        public void setAction(CheckinResultAction action) {
-            this.action = action;
-        }
+    private MockSettings withSettingsUsing(GenericMetadataSupport returnTypeGenericMetadata) {
+        MockSettings mockSettings =
+                returnTypeGenericMetadata.rawExtraInterfaces().length > 0 ?
+                withSettings().extraInterfaces(returnTypeGenericMetadata.rawExtraInterfaces())
+                : withSettings();
 
-        public Long getSyncopeUserId() {
-            return syncopeUserId;
-        }
+        return mockSettings
+		        .serializable()
+                .defaultAnswer(returnsDeepStubsAnswerUsing(returnTypeGenericMetadata));
+    }
 
-        public void setSyncopeUserId(Long syncopeUserId) {
-            this.syncopeUserId = syncopeUserId;
-        }
+    private ReturnsDeepStubs returnsDeepStubsAnswerUsing(final GenericMetadataSupport returnTypeGenericMetadata) {
+        return new NotSerializableGenericsAwareReturnsDeepStubs(returnTypeGenericMetadata);
+    }
 
-        public Long getWorkflowId() {
-            return workflowId;
-        }
+    private Object recordDeepStubMock(final Object mock, InvocationContainerImpl container) throws Throwable {
+        container.addAnswer(new SerializableAnswer() {
+            public Object answer(InvocationOnMock invocation) throws Throwable {
+                return mock;
+            }
+        }, false);
+        return mock;
+    }
 
-        public void setWorkflowId(Long workflowId) {
-            this.workflowId = workflowId;
+    private static class NotSerializableGenericsAwareReturnsDeepStubs extends ReturnsDeepStubs implements Serializable {
+        private final GenericMetadataSupport returnTypeGenericMetadata;
+
+        public NotSerializableGenericsAwareReturnsDeepStubs(GenericMetadataSupport returnTypeGenericMetadata) {
+            this.returnTypeGenericMetadata = returnTypeGenericMetadata;
         }
 
         @Override
-        public String toString() {
-            return ReflectionToStringBuilder.toString(this,
-                    ToStringStyle.MULTI_LINE_STYLE);
+        protected GenericMetadataSupport actualParameterizedType(Object mock) {
+            return returnTypeGenericMetadata;
+        }
+
+        private Object writeReplace() throws IOException {
+            return Mockito.RETURNS_DEEP_STUBS;
         }
     }
 
-    public CheckInResult checkIn(final UserTO userTO) {
-        CheckInResult result = new CheckInResult();
-        result.setAction(CheckinResultAction.CREATE);
-        return result;
+    abstract class SerializableAnswer implements Answer<Object>, Serializable {
+	}
+	
+
+    protected GenericMetadataSupport actualParameterizedType(Object mock) {
+        CreationSettings mockSettings = (CreationSettings) new MockUtil().getMockHandler(mock).getMockSettings();
+        return GenericMetadataSupport.inferFrom(mockSettings.getTypeToMock());
     }
 
-    public void create(final SyncopeUser user, final UserTO userTO)
-            throws SyncopeClientCompositeErrorException, NotFoundException {
 
-        SyncopeClientCompositeErrorException scce =
-                new SyncopeClientCompositeErrorException(
-                HttpStatus.BAD_REQUEST);
-
-        // password
-        int passwordHistorySize = 0;
-
-        try {
-            Policy policy = policyDAO.getGlobalPasswordPolicy();
-            PasswordPolicy passwordPolicy = policy.getSpecification();
-            passwordHistorySize = passwordPolicy.getHistoryLength();
-        } catch (Throwable ignore) {
-            // ignore exceptions
-        }
-
-        SyncopeClientException invalidPassword = new SyncopeClientException(
-                SyncopeClientExceptionType.InvalidPassword);
-
-        if (userTO.getPassword() == null || userTO.getPassword().isEmpty()) {
-            LOG.error("No password provided");
-
-            invalidPassword.addElement("Null password");
-        } else {
-            user.setPassword(userTO.getPassword(), getCipherAlgoritm(),
-                    passwordHistorySize);
-        }
-
-        if (!invalidPassword.getElements().isEmpty()) {
-            scce.addException(invalidPassword);
-        }
-
-        // memberships
-        SyncopeRole role;
-        for (MembershipTO membershipTO : userTO.getMemberships()) {
-            role = roleDAO.find(membershipTO.getRoleId());
-
-            if (role == null) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Ignoring invalid role "
-                            + membershipTO.getRoleName());
-                }
-            } else {
-                Membership membership = null;
-                if (user.getId() != null) {
-                    membership = user.getMembership(role.getId()) == null
-                            ? membershipDAO.find(user, role)
-                            : user.getMembership(role.getId());
-                }
-                if (membership == null) {
-                    membership = new Membership();
-                    membership.setSyncopeRole(role);
-                    membership.setSyncopeUser(user);
-
-                    user.addMembership(membership);
-                }
-
-                fill(membership, membershipTO, AttributableUtil.MEMBERSHIP,
-                        scce);
-            }
-        }
-
-        // attributes, derived attributes, virtual attributes and resources
-        fill(user, userTO, AttributableUtil.USER, scce);
+    private static MockitoCore mockitoCore() {
+        return LazyHolder.MOCKITO_CORE;
     }
-
-    public ResourceOperations update(SyncopeUser user, UserMod userMod)
-            throws SyncopeClientCompositeErrorException {
-
-        SyncopeClientCompositeErrorException scce =
-                new SyncopeClientCompositeErrorException(
-                HttpStatus.BAD_REQUEST);
-
-        // password
-
-        if (userMod.getPassword() != null) {
-
-            int passwordHistorySize = 0;
-
-            try {
-                Policy policy = policyDAO.getGlobalPasswordPolicy();
-                PasswordPolicy passwordPolicy = policy.getSpecification();
-                passwordHistorySize = passwordPolicy.getHistoryLength();
-            } catch (Throwable ignore) {
-                // ignore exceptions
-            }
-
-            user.setPassword(userMod.getPassword(), getCipherAlgoritm(),
-                    passwordHistorySize);
-        }
-
-        // attributes, derived attributes, virtual attributes and resources
-        ResourceOperations resourceOperations =
-                fill(user, userMod, AttributableUtil.USER, scce);
-
-        // store the role ids of membership required to be added
-        Set<Long> membershipToBeAddedRoleIds = new HashSet<Long>();
-        for (MembershipMod membershipToBeAdded :
-                userMod.getMembershipsToBeAdded()) {
-
-            membershipToBeAddedRoleIds.add(membershipToBeAdded.getRole());
-        }
-
-        // memberships to be removed
-        Membership membership = null;
-        for (Long membershipToBeRemovedId :
-                userMod.getMembershipsToBeRemoved()) {
-
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Membership to be removed: "
-                        + membershipToBeRemovedId);
-            }
-
-            membership = membershipDAO.find(membershipToBeRemovedId);
-            if (membership == null) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug(
-                            "Invalid membership id specified to be removed: "
-                            + membershipToBeRemovedId);
-                }
-            } else {
-                for (TargetResource resource :
-                        membership.getSyncopeRole().getTargetResources()) {
-
-                    if (!membershipToBeAddedRoleIds.contains(
-                            membership.getSyncopeRole().getId())) {
-
-                        resourceOperations.add(ResourceOperationType.DELETE,
-                                resource);
-                    }
-                }
-
-                // In order to make the removeMembership() below to work,
-                // we need to be sure to take exactly the same membership
-                // of the user object currently in memory (which has potentially
-                // some modifications compared to the one stored in the DB
-                membership = user.getMembership(
-                        membership.getSyncopeRole().getId());
-                if (membershipToBeAddedRoleIds.contains(
-                        membership.getSyncopeRole().getId())) {
-
-                    Set<Long> attributeIds = new HashSet<Long>(
-                            membership.getAttributes().size());
-                    for (AbstractAttr attribute :
-                            membership.getAttributes()) {
-
-                        attributeIds.add(attribute.getId());
-                    }
-                    for (Long attributeId : attributeIds) {
-                        attributeDAO.delete(attributeId,
-                                MAttr.class);
-                    }
-
-                    attributeIds.clear();
-                    // remove derived attributes
-
-                    for (AbstractDerAttr derivedAttribute :
-                            membership.getDerivedAttributes()) {
-
-                        attributeIds.add(derivedAttribute.getId());
-                    }
-
-                    for (Long derivedAttributeId : attributeIds) {
-                        derivedAttributeDAO.delete(derivedAttributeId,
-                                MDerAttr.class);
-                    }
-
-                    attributeIds.clear();
-                    // remove virtual attributes
-
-                    for (AbstractVirAttr virtulaAttribute :
-                            membership.getVirtualAttributes()) {
-
-                        attributeIds.add(virtulaAttribute.getId());
-                    }
-
-                    for (Long virtualAttributeId : attributeIds) {
-                        virtualAttributeDAO.delete(
-                                virtualAttributeId, MVirAttr.class);
-                    }
-                } else {
-                    user.removeMembership(membership);
-
-                    membershipDAO.delete(membershipToBeRemovedId);
-                }
-            }
-        }
-
-        // memberships to be added
-        SyncopeRole role = null;
-        for (MembershipMod membershipMod :
-                userMod.getMembershipsToBeAdded()) {
-
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Membership to be added: role("
-                        + membershipMod.getRole() + ")");
-            }
-
-            role = roleDAO.find(membershipMod.getRole());
-            if (role == null) {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Ignoring invalid role "
-                            + membershipMod.getRole());
-                }
-            } else {
-                membership = user.getMembership(role.getId());
-                if (membership == null) {
-                    membership = new Membership();
-                    membership.setSyncopeRole(role);
-                    membership.setSyncopeUser(user);
-
-                    user.addMembership(membership);
-
-                    resourceOperations.addAll(ResourceOperationType.UPDATE,
-                            role.getTargetResources());
-                }
-
-                resourceOperations.merge(fill(membership, membershipMod,
-                        AttributableUtil.MEMBERSHIP, scce));
-            }
-        }
-
-        return resourceOperations;
+    private static ReturnsEmptyValues delegate() {
+        return LazyHolder.DELEGATE;
     }
-
-    public UserTO getUserTO(SyncopeUser user, Workflow userWorkflow) {
-        UserTO userTO = new UserTO();
-        userTO.setId(user.getId());
-        userTO.setToken(user.getToken());
-        userTO.setTokenExpireTime(user.getTokenExpireTime());
-        userTO.setPassword(user.getPassword());
-
-        try {
-            List<Step> currentSteps = userWorkflow.getCurrentSteps(
-                    user.getWorkflowId());
-
-            if (currentSteps != null && !currentSteps.isEmpty()) {
-                userTO.setStatus(currentSteps.iterator().next().getStatus());
-            } else {
-                LOG.error("Could not find status information for {}", user);
-            }
-        } catch (EntityNotFoundException e) {
-            LOG.error("Could not find workflow entry with id "
-                    + user.getWorkflowId());
-        }
-
-        fillTO(userTO,
-                user.getAttributes(),
-                user.getDerivedAttributes(),
-                user.getVirtualAttributes(),
-                user.getTargetResources());
-
-        MembershipTO membershipTO;
-        for (Membership membership : user.getMemberships()) {
-            membershipTO = new MembershipTO();
-            membershipTO.setId(membership.getId());
-            membershipTO.setRoleId(membership.getSyncopeRole().getId());
-            membershipTO.setRoleName(membership.getSyncopeRole().getName());
-
-            fillTO(membershipTO,
-                    membership.getAttributes(),
-                    membership.getDerivedAttributes(),
-                    membership.getVirtualAttributes(),
-                    membership.getTargetResources());
-
-            userTO.addMembership(membershipTO);
-        }
-
-        return userTO;
-    }
-
-    private CipherAlgorithm getCipherAlgoritm() {
-        CipherAlgorithm cipherAlgoritm;
-
-        try {
-            cipherAlgoritm = CipherAlgorithm.valueOf(
-                    confDAO.find("password.cipher.algorithm").getValue());
-        } catch (Exception e) {
-            LOG.error("Cipher algorithm nof found. Let's use AES", e);
-            cipherAlgoritm = CipherAlgorithm.AES;
-        }
-
-        return cipherAlgoritm;
+    private static class LazyHolder {
+        private static final MockitoCore MOCKITO_CORE = new MockitoCore();
+        private static final ReturnsEmptyValues DELEGATE = new ReturnsEmptyValues();
     }
 }

@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,1116 +14,1005 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.jackrabbit.core.cluster;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.apache.jackrabbit.core.config.ClusterConfig;
-import org.apache.jackrabbit.core.config.ConfigurationException;
-import org.apache.jackrabbit.core.config.JournalConfig;
-import org.apache.jackrabbit.core.NodeId;
-import org.apache.jackrabbit.core.journal.Journal;
-import org.apache.jackrabbit.core.journal.RecordConsumer;
-import org.apache.jackrabbit.core.journal.Record;
-import org.apache.jackrabbit.core.journal.JournalException;
-import org.apache.jackrabbit.core.journal.FileRevision;
-import org.apache.jackrabbit.core.nodetype.InvalidNodeTypeDefException;
-import org.apache.jackrabbit.core.nodetype.NodeTypeDef;
-import org.apache.jackrabbit.core.observation.EventState;
-import org.apache.jackrabbit.core.observation.EventStateCollection;
-import org.apache.jackrabbit.core.state.ChangeLog;
-import org.apache.jackrabbit.core.state.ItemState;
-import org.apache.jackrabbit.core.state.NodeState;
-import org.apache.jackrabbit.core.state.PropertyState;
-import org.apache.jackrabbit.name.QName;
-import org.apache.jackrabbit.name.Path;
-import EDU.oswego.cs.dl.util.concurrent.Mutex;
+package org.apache.commons.cli;
 
-import javax.jcr.RepositoryException;
-import javax.jcr.Session;
-import javax.jcr.observation.Event;
-import java.util.List;
+import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
-import java.util.Set;
-import java.util.HashSet;
-import java.io.File;
+import java.util.List;
 
-/**
- * Default clustered node implementation.
+/** 
+ * A formatter of help messages for the current command line options
+ *
+ * @author Slawek Zachcial
+ * @author John Keyes (john at integralsource.com)
+ * @version $Revision$, $Date$
  */
-public class ClusterNode implements Runnable,
-        NamespaceEventChannel, NodeTypeEventChannel, RecordConsumer  {
+public class HelpFormatter
+{
+    // --------------------------------------------------------------- Constants
+
+    /** default number of characters per line */
+    public static final int DEFAULT_WIDTH = 74;
+
+    /** default padding to the left of each line */
+    public static final int DEFAULT_LEFT_PAD = 1;
 
     /**
-     * System property specifying a node id to use.
+     * the number of characters of padding to be prefixed
+     * to each description line
      */
-    public static final String SYSTEM_PROPERTY_NODE_ID = "org.apache.jackrabbit.core.cluster.node_id";
+    public static final int DEFAULT_DESC_PAD = 3;
+
+    /** the string to display at the beginning of the usage statement */
+    public static final String DEFAULT_SYNTAX_PREFIX = "usage: ";
+
+    /** default prefix for shortOpts */
+    public static final String DEFAULT_OPT_PREFIX = "-";
+
+    /** default prefix for long Option */
+    public static final String DEFAULT_LONG_OPT_PREFIX = "--";
+
+    /** default separator displayed between a long Option and its value */
+    public static final String DEFAULT_LONG_OPT_SEPARATOR = " ";
+
+    /** default name for an argument */
+    public static final String DEFAULT_ARG_NAME = "arg";
+
+    // -------------------------------------------------------------- Attributes
 
     /**
-     * Revision counter parameter name.
-     */
-    private static final String REVISION_NAME = "revision";
-
-    /**
-     * Used for padding short string representations.
-     */
-    private static final String SHORT_PADDING = "0000";
-
-    /**
-     * Producer identifier.
-     */
-    private static final String PRODUCER_ID = "JR";
-
-    /**
-     * Status constant.
-     */
-    private static final int NONE = 0;
-
-    /**
-     * Status constant.
-     */
-    private static final int STARTED = 1;
-
-    /**
-     * Status constant.
-     */
-    private static final int STOPPED = 2;
-
-    /**
-     * Logger.
-     */
-    private static Logger log = LoggerFactory.getLogger(ClusterNode.class);
-
-    /**
-     * Cluster context.
-     */
-    private ClusterContext clusterContext;
-
-    /**
-     * Cluster node id.
-     */
-    private String clusterNodeId;
-
-    /**
-     * Synchronization delay, in milliseconds.
-     */
-    private long syncDelay;
-
-    /**
-     * Journal used.
-     */
-    private Journal journal;
-
-    /**
-     * Mutex used when syncing.
-     */
-    private final Mutex syncLock = new Mutex();
-
-    /**
-     * Status flag, one of {@link #NONE}, {@link #STARTED} or {@link #STOPPED}.
-     */
-    private int status;
-
-    /**
-     * Map of available lock listeners, indexed by workspace name.
-     */
-    private final Map wspLockListeners = new HashMap();
-
-    /**
-     * Map of available update listeners, indexed by workspace name.
-     */
-    private final Map wspUpdateListeners = new HashMap();
-
-    /**
-     * Versioning update listener.
-     */
-    private UpdateEventListener versionUpdateListener;
-
-    /**
-     * Namespace listener.
-     */
-    private NamespaceEventListener namespaceListener;
-
-    /**
-     * Node type listener.
-     */
-    private NodeTypeEventListener nodeTypeListener;
-
-    /**
-     * Instance revision file.
-     */
-    private FileRevision instanceRevision;
-
-    /**
-     * Workspace name used when consuming records.
-     */
-    private String workspace;
-
-    /**
-     * Change log used when consuming records.
-     */
-    private ChangeLog changeLog;
-
-    /**
-     * List of recorded events; used when consuming records.
-     */
-    private List events;
-
-    /**
-     * Last used session for event sources.
-     */
-    private Session lastSession;
-
-    /**
-     * Initialize this cluster node.
+     * number of characters per line
      *
-     * @throws ClusterException if an error occurs
+     * @deprecated Scope will be made private for next major version
+     * - use get/setWidth methods instead.
      */
-    public void init(ClusterContext clusterContext) throws ClusterException {
-        this.clusterContext = clusterContext;
+    public int defaultWidth = DEFAULT_WIDTH;
 
-        init();
+    /**
+     * amount of padding to the left of each line
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setLeftPadding methods instead.
+     */
+    public int defaultLeftPad = DEFAULT_LEFT_PAD;
+
+    /**
+     * the number of characters of padding to be prefixed
+     * to each description line
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setDescPadding methods instead.
+     */
+    public int defaultDescPad = DEFAULT_DESC_PAD;
+
+    /**
+     * the string to display at the begining of the usage statement
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setSyntaxPrefix methods instead.
+     */
+    public String defaultSyntaxPrefix = DEFAULT_SYNTAX_PREFIX;
+
+    /**
+     * the new line string
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setNewLine methods instead.
+     */
+    public String defaultNewLine = System.getProperty("line.separator");
+
+    /**
+     * the shortOpt prefix
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setOptPrefix methods instead.
+     */
+    public String defaultOptPrefix = DEFAULT_OPT_PREFIX;
+
+    /**
+     * the long Opt prefix
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setLongOptPrefix methods instead.
+     */
+    public String defaultLongOptPrefix = DEFAULT_LONG_OPT_PREFIX;
+
+    /** The separator displayed between the long option and its value. */
+    private String longOptSeparator = DEFAULT_LONG_OPT_SEPARATOR;
+
+    /**
+     * the name of the argument
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setArgName methods instead.
+     */
+    public String defaultArgName = DEFAULT_ARG_NAME;
+
+    /**
+     * Comparator used to sort the options when they output in help text
+     * 
+     * Defaults to case-insensitive alphabetical sorting by option key
+     */
+    protected Comparator optionComparator = new OptionComparator();
+    
+    /**
+     * Sets the 'width'.
+     *
+     * @param width the new value of 'width'
+     */
+    public void setWidth(int width)
+    {
+        this.defaultWidth = width;
     }
 
     /**
-     * Initialize this cluster node (overridable).
+     * Returns the 'width'.
      *
-     * @throws ClusterException if an error occurs
+     * @return the 'width'
      */
-    protected void init() throws ClusterException {
-        ClusterConfig cc = clusterContext.getClusterConfig();
-        clusterNodeId = getClusterNodeId(cc.getId());
-        syncDelay = cc.getSyncDelay();
+    public int getWidth()
+    {
+        return defaultWidth;
+    }
 
-        JournalConfig jc = cc.getJournalConfig();
+    /**
+     * Sets the 'leftPadding'.
+     *
+     * @param padding the new value of 'leftPadding'
+     */
+    public void setLeftPadding(int padding)
+    {
+        this.defaultLeftPad = padding;
+    }
 
-        String revisionName = jc.getParameters().getProperty(REVISION_NAME);
-        if (revisionName == null) {
-            String msg = "Revision not specified.";
-            throw new ClusterException(msg);
+    /**
+     * Returns the 'leftPadding'.
+     *
+     * @return the 'leftPadding'
+     */
+    public int getLeftPadding()
+    {
+        return defaultLeftPad;
+    }
+
+    /**
+     * Sets the 'descPadding'.
+     *
+     * @param padding the new value of 'descPadding'
+     */
+    public void setDescPadding(int padding)
+    {
+        this.defaultDescPad = padding;
+    }
+
+    /**
+     * Returns the 'descPadding'.
+     *
+     * @return the 'descPadding'
+     */
+    public int getDescPadding()
+    {
+        return defaultDescPad;
+    }
+
+    /**
+     * Sets the 'syntaxPrefix'.
+     *
+     * @param prefix the new value of 'syntaxPrefix'
+     */
+    public void setSyntaxPrefix(String prefix)
+    {
+        this.defaultSyntaxPrefix = prefix;
+    }
+
+    /**
+     * Returns the 'syntaxPrefix'.
+     *
+     * @return the 'syntaxPrefix'
+     */
+    public String getSyntaxPrefix()
+    {
+        return defaultSyntaxPrefix;
+    }
+
+    /**
+     * Sets the 'newLine'.
+     *
+     * @param newline the new value of 'newLine'
+     */
+    public void setNewLine(String newline)
+    {
+        this.defaultNewLine = newline;
+    }
+
+    /**
+     * Returns the 'newLine'.
+     *
+     * @return the 'newLine'
+     */
+    public String getNewLine()
+    {
+        return defaultNewLine;
+    }
+
+    /**
+     * Sets the 'optPrefix'.
+     *
+     * @param prefix the new value of 'optPrefix'
+     */
+    public void setOptPrefix(String prefix)
+    {
+        this.defaultOptPrefix = prefix;
+    }
+
+    /**
+     * Returns the 'optPrefix'.
+     *
+     * @return the 'optPrefix'
+     */
+    public String getOptPrefix()
+    {
+        return defaultOptPrefix;
+    }
+
+    /**
+     * Sets the 'longOptPrefix'.
+     *
+     * @param prefix the new value of 'longOptPrefix'
+     */
+    public void setLongOptPrefix(String prefix)
+    {
+        this.defaultLongOptPrefix = prefix;
+    }
+
+    /**
+     * Returns the 'longOptPrefix'.
+     *
+     * @return the 'longOptPrefix'
+     */
+    public String getLongOptPrefix()
+    {
+        return defaultLongOptPrefix;
+    }
+
+    /**
+     * Set the separator displayed between a long option and its value.
+     * Ensure that the separator specified is supported by the parser used,
+     * typically ' ' or '='.
+     * 
+     * @param longOptSeparator the separator, typically ' ' or '='.
+     * @since 1.3
+     */
+    public void setLongOptSeparator(String longOptSeparator)
+    {
+        this.longOptSeparator = longOptSeparator;
+    }
+
+    /**
+     * Returns the separator displayed between a long option and its value.
+     * 
+     * @return the separator
+     * @since 1.3
+     */
+    public String getLongOptSeparator()
+    {
+        return longOptSeparator;
+    }
+
+    /**
+     * Sets the 'argName'.
+     *
+     * @param name the new value of 'argName'
+     */
+    public void setArgName(String name)
+    {
+        this.defaultArgName = name;
+    }
+
+    /**
+     * Returns the 'argName'.
+     *
+     * @return the 'argName'
+     */
+    public String getArgName()
+    {
+        return defaultArgName;
+    }
+
+    /**
+     * Comparator used to sort the options when they output in help text.
+     * Defaults to case-insensitive alphabetical sorting by option key.
+     * 
+     * @since 1.2
+     */
+    public Comparator getOptionComparator()
+    {
+        return optionComparator;
+    }
+
+    /**
+     * Set the comparator used to sort the options when they output in help text.
+     * Passing in a null parameter will set the ordering to the default mode.
+     * 
+     * @since 1.2
+     */
+    public void setOptionComparator(Comparator comparator)
+    {
+        if (comparator == null)
+        {
+            this.optionComparator = new OptionComparator();
         }
-        try {
-            instanceRevision = new FileRevision(new File(revisionName));
-
-            journal = (Journal) jc.newInstance();
-            journal.init(clusterNodeId, clusterContext.getNamespaceResovler());
-            journal.register(this);
-        } catch (ConfigurationException e) {
-            throw new ClusterException(e.getMessage(), e.getCause());
-        } catch (JournalException e) {
-            throw new ClusterException(e.getMessage(), e.getCause());
+        else
+        {
+            this.optionComparator = comparator;
         }
     }
 
     /**
-     * Starts this cluster node.
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
      *
-     * @throws ClusterException if an error occurs
+     * @param cmdLineSyntax the syntax for this application
+     * @param options the Options instance
      */
-    public synchronized void start() throws ClusterException {
-        if (status == NONE) {
-            sync();
+    public void printHelp(String cmdLineSyntax, Options options)
+    {
+        printHelp(defaultWidth, cmdLineSyntax, null, options, null, false);
+    }
 
-            Thread t = new Thread(this, "ClusterNode-" + clusterNodeId);
-            t.setDaemon(true);
-            t.start();
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to 
+     * System.out.
+     *
+     * @param cmdLineSyntax the syntax for this application
+     * @param options the Options instance
+     * @param autoUsage whether to print an automatically generated
+     * usage statement
+     */
+    public void printHelp(String cmdLineSyntax, Options options, boolean autoUsage)
+    {
+        printHelp(defaultWidth, cmdLineSyntax, null, options, null, autoUsage);
+    }
 
-            status = STARTED;
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
+     *
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     */
+    public void printHelp(String cmdLineSyntax, String header, Options options, String footer)
+    {
+        printHelp(cmdLineSyntax, header, options, footer, false);
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to 
+     * System.out.
+     *
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     * @param autoUsage whether to print an automatically generated
+     * usage statement
+     */
+    public void printHelp(String cmdLineSyntax, String header, Options options, String footer, boolean autoUsage)
+    {
+        printHelp(defaultWidth, cmdLineSyntax, header, options, footer, autoUsage);
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
+     *
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the beginning of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     */
+    public void printHelp(int width, String cmdLineSyntax, String header, Options options, String footer)
+    {
+        printHelp(width, cmdLineSyntax, header, options, footer, false);
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
+     *
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     * @param autoUsage whether to print an automatically generated 
+     * usage statement
+     */
+    public void printHelp(int width, String cmdLineSyntax, String header,
+                          Options options, String footer, boolean autoUsage)
+    {
+        PrintWriter pw = new PrintWriter(System.out);
+
+        printHelp(pw, width, cmdLineSyntax, header, options, defaultLeftPad, defaultDescPad, footer, autoUsage);
+        pw.flush();
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.
+     *
+     * @param pw the writer to which the help will be written
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     * @param footer the banner to display at the end of the help
+     *
+     * @throws IllegalStateException if there is no room to print a line
+     */
+    public void printHelp(PrintWriter pw, int width, String cmdLineSyntax, 
+                          String header, Options options, int leftPad, 
+                          int descPad, String footer)
+    {
+        printHelp(pw, width, cmdLineSyntax, header, options, leftPad, descPad, footer, false);
+    }
+
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.
+     *
+     * @param pw the writer to which the help will be written
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     * @param footer the banner to display at the end of the help
+     * @param autoUsage whether to print an automatically generated
+     * usage statement
+     *
+     * @throws IllegalStateException if there is no room to print a line
+     */
+    public void printHelp(PrintWriter pw, int width, String cmdLineSyntax,
+                          String header, Options options, int leftPad,
+                          int descPad, String footer, boolean autoUsage)
+    {
+        if ((cmdLineSyntax == null) || (cmdLineSyntax.length() == 0))
+        {
+            throw new IllegalArgumentException("cmdLineSyntax not provided");
+        }
+
+        if (autoUsage)
+        {
+            printUsage(pw, width, cmdLineSyntax, options);
+        }
+        else
+        {
+            printUsage(pw, width, cmdLineSyntax);
+        }
+
+        if ((header != null) && (header.trim().length() > 0))
+        {
+            printWrapped(pw, width, header);
+        }
+
+        printOptions(pw, width, options, leftPad, descPad);
+
+        if ((footer != null) && (footer.trim().length() > 0))
+        {
+            printWrapped(pw, width, footer);
         }
     }
 
     /**
-     * Run loop that will sync this node after some delay.
+     * Prints the usage statement for the specified application.
+     *
+     * @param pw The PrintWriter to print the usage statement 
+     * @param width The number of characters to display per line
+     * @param app The application name
+     * @param options The command line Options
      */
-    public void run() {
-        for (;;) {
-            synchronized (this) {
-                try {
-                    wait(syncDelay);
-                } catch (InterruptedException e) {}
+    public void printUsage(PrintWriter pw, int width, String app, Options options)
+    {
+        // initialise the string buffer
+        StringBuffer buff = new StringBuffer(defaultSyntaxPrefix).append(app).append(" ");
 
-                if (status == STOPPED) {
-                    return;
+        // create a list for processed option groups
+        final Collection processedGroups = new ArrayList();
+
+        // temp variable
+        Option option;
+
+        List optList = new ArrayList(options.getOptions());
+        Collections.sort(optList, getOptionComparator());
+        // iterate over the options
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            // get the next Option
+            option = (Option) i.next();
+
+            // check if the option is part of an OptionGroup
+            OptionGroup group = options.getOptionGroup(option);
+
+            // if the option is part of a group 
+            if (group != null)
+            {
+                // and if the group has not already been processed
+                if (!processedGroups.contains(group))
+                {
+                    // add the group to the processed list
+                    processedGroups.add(group);
+
+
+                    // add the usage clause
+                    appendOptionGroup(buff, group);
+                }
+
+                // otherwise the option was displayed in the group
+                // previously so ignore it.
+            }
+
+            // if the Option is not part of an OptionGroup
+            else
+            {
+                appendOption(buff, option, option.isRequired());
+            }
+
+            if (i.hasNext())
+            {
+                buff.append(" ");
+            }
+        }
+
+
+        // call printWrapped
+        printWrapped(pw, width, buff.toString().indexOf(' ') + 1, buff.toString());
+    }
+
+    /**
+     * Appends the usage clause for an OptionGroup to a StringBuffer.  
+     * The clause is wrapped in square brackets if the group is required.
+     * The display of the options is handled by appendOption
+     * @param buff the StringBuffer to append to
+     * @param group the group to append
+     * @see #appendOption(StringBuffer,Option,boolean)
+     */
+    private void appendOptionGroup(final StringBuffer buff, final OptionGroup group)
+    {
+        if (!group.isRequired())
+        {
+            buff.append("[");
+        }
+
+        List optList = new ArrayList(group.getOptions());
+        Collections.sort(optList, getOptionComparator());
+        // for each option in the OptionGroup
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            // whether the option is required or not is handled at group level
+            appendOption(buff, (Option) i.next(), true);
+
+            if (i.hasNext())
+            {
+                buff.append(" | ");
+            }
+        }
+
+        if (!group.isRequired())
+        {
+            buff.append("]");
+        }
+    }
+
+    /**
+     * Appends the usage clause for an Option to a StringBuffer.  
+     *
+     * @param buff the StringBuffer to append to
+     * @param option the Option to append
+     * @param required whether the Option is required or not
+     */
+    private void appendOption(final StringBuffer buff, final Option option, final boolean required)
+    {
+        if (!required)
+        {
+            buff.append("[");
+        }
+
+        if (option.getOpt() != null)
+        {
+            buff.append("-").append(option.getOpt());
+        }
+        else
+        {
+            buff.append("--").append(option.getLongOpt());
+        }
+
+        // if the Option has a value
+        if (option.hasArg() && option.hasArgName())
+        {
+            buff.append(option.getOpt() == null ? longOptSeparator : " ");
+            buff.append("<").append(option.getArgName()).append(">");
+        }
+
+        // if the Option is not a required option
+        if (!required)
+        {
+            buff.append("]");
+        }
+    }
+    
+    /**
+     * Print the cmdLineSyntax to the specified writer, using the
+     * specified width.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters per line for the usage statement.
+     * @param cmdLineSyntax The usage statement.
+     */
+    public void printUsage(PrintWriter pw, int width, String cmdLineSyntax)
+    {
+        int argPos = cmdLineSyntax.indexOf(' ') + 1;
+
+        printWrapped(pw, width, defaultSyntaxPrefix.length() + argPos, defaultSyntaxPrefix + cmdLineSyntax);
+    }
+
+    /**
+     * Print the help for the specified Options to the specified writer, 
+     * using the specified width, left padding and description padding.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters to display per line
+     * @param options The command line Options
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     */
+    public void printOptions(PrintWriter pw, int width, Options options, 
+                             int leftPad, int descPad)
+    {
+        StringBuffer sb = new StringBuffer();
+
+        renderOptions(sb, width, options, leftPad, descPad);
+        pw.println(sb.toString());
+    }
+
+    /**
+     * Print the specified text to the specified PrintWriter.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters to display per line
+     * @param text The text to be written to the PrintWriter
+     */
+    public void printWrapped(PrintWriter pw, int width, String text)
+    {
+        printWrapped(pw, width, 0, text);
+    }
+
+    /**
+     * Print the specified text to the specified PrintWriter.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters to display per line
+     * @param nextLineTabStop The position on the next line for the first tab.
+     * @param text The text to be written to the PrintWriter
+     */
+    public void printWrapped(PrintWriter pw, int width, int nextLineTabStop, String text)
+    {
+        StringBuffer sb = new StringBuffer(text.length());
+
+        renderWrappedText(sb, width, nextLineTabStop, text);
+        pw.println(sb.toString());
+    }
+
+    // --------------------------------------------------------------- Protected
+
+    /**
+     * Render the specified Options and return the rendered Options
+     * in a StringBuffer.
+     *
+     * @param sb The StringBuffer to place the rendered Options into.
+     * @param width The number of characters to display per line
+     * @param options The command line Options
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     *
+     * @return the StringBuffer with the rendered Options contents.
+     */
+    protected StringBuffer renderOptions(StringBuffer sb, int width, Options options, int leftPad, int descPad)
+    {
+        final String lpad = createPadding(leftPad);
+        final String dpad = createPadding(descPad);
+
+        // first create list containing only <lpad>-a,--aaa where 
+        // -a is opt and --aaa is long opt; in parallel look for 
+        // the longest opt string this list will be then used to 
+        // sort options ascending
+        int max = 0;
+        StringBuffer optBuf;
+        List prefixList = new ArrayList();
+
+        List optList = options.helpOptions();
+
+        Collections.sort(optList, getOptionComparator());
+
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            Option option = (Option) i.next();
+            optBuf = new StringBuffer();
+            
+            if (option.getOpt() == null)
+            {
+                optBuf.append(lpad).append("   " + defaultLongOptPrefix).append(option.getLongOpt());
+            }
+            else
+            {
+                optBuf.append(lpad).append(defaultOptPrefix).append(option.getOpt());
+
+                if (option.hasLongOpt())
+                {
+                    optBuf.append(',').append(defaultLongOptPrefix).append(option.getLongOpt());
                 }
             }
-            try {
-                sync();
-            } catch (ClusterException e) {
-                String msg = "Periodic sync of journal failed: " + e.getMessage();
-                log.error(msg);
-            } catch (Exception e) {
-                String msg = "Unexpected error while syncing of journal: " + e.getMessage();
-                log.error(msg, e);
-            } catch (Error e) {
-                String msg = "Unexpected error while syncing of journal: " + e.getMessage();
-                log.error(msg, e);
-                throw e;
+
+            if (option.hasArg())
+            {
+                if (option.hasArgName())
+                {
+                    optBuf.append(option.hasLongOpt() ? longOptSeparator : " ");
+                    optBuf.append("<").append(option.getArgName()).append(">");
+                }
+                else
+                {
+                    optBuf.append(' ');
+                }
+            }
+
+            prefixList.add(optBuf);
+            max = (optBuf.length() > max) ? optBuf.length() : max;
+        }
+
+        int x = 0;
+
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            Option option = (Option) i.next();
+            optBuf = new StringBuffer(prefixList.get(x++).toString());
+
+            if (optBuf.length() < max)
+            {
+                optBuf.append(createPadding(max - optBuf.length()));
+            }
+
+            optBuf.append(dpad);
+
+            int nextLineTabStop = max + descPad;
+
+            if (option.getDescription() != null)
+            {
+                optBuf.append(option.getDescription());
+            }
+
+            renderWrappedText(sb, width, nextLineTabStop, optBuf.toString());
+
+            if (i.hasNext())
+            {
+                sb.append(defaultNewLine);
             }
         }
+
+        return sb;
     }
 
     /**
-     * Synchronize contents from journal.
+     * Render the specified text and return the rendered Options
+     * in a StringBuffer.
      *
-     * @throws ClusterException if an error occurs
+     * @param sb The StringBuffer to place the rendered text into.
+     * @param width The number of characters to display per line
+     * @param nextLineTabStop The position on the next line for the first tab.
+     * @param text The text to be rendered.
+     *
+     * @return the StringBuffer with the rendered Options contents.
      */
-    public void sync() throws ClusterException {
-        try {
-            syncLock.acquire();
-        } catch (InterruptedException e) {
-            String msg = "Interrupted while waiting for mutex.";
-            throw new ClusterException(msg);
+    protected StringBuffer renderWrappedText(StringBuffer sb, int width, 
+                                             int nextLineTabStop, String text)
+    {
+        int pos = findWrapPos(text, width, 0);
+
+        if (pos == -1)
+        {
+            sb.append(rtrim(text));
+
+            return sb;
+        }
+        sb.append(rtrim(text.substring(0, pos))).append(defaultNewLine);
+
+        if (nextLineTabStop >= width)
+        {
+            // stops infinite loop happening
+            nextLineTabStop = 1;
         }
 
-        try {
-            journal.sync();
-        } catch (JournalException e) {
-            throw new ClusterException(e.getMessage(), e.getCause());
-        } finally {
-            syncLock.release();
-        }
-    }
+        // all following lines must be padded with nextLineTabStop space 
+        // characters
+        final String padding = createPadding(nextLineTabStop);
 
-    /**
-     * Stops this cluster node.
-     */
-    public synchronized void stop() {
-        if (status == STARTED) {
-            status = STOPPED;
+        while (true)
+        {
+            text = padding + text.substring(pos).trim();
+            pos = findWrapPos(text, width, 0);
 
-            journal.close();
-            notifyAll();
-        }
-    }
+            if (pos == -1)
+            {
+                sb.append(text);
 
-    /**
-     * Create an {@link UpdateEventChannel} for some workspace.
-     *
-     * @param workspace workspace name
-     * @return lock event channel
-     */
-    public UpdateEventChannel createUpdateChannel(String workspace) {
-        return new WorkspaceUpdateChannel(workspace);
-    }
-
-    /**
-     * Create a {@link LockEventChannel} for some workspace.
-     *
-     * @param workspace workspace name
-     * @return lock event channel
-     */
-    public LockEventChannel createLockChannel(String workspace) {
-        return new WorkspaceLockChannel(workspace);
-    }
-
-    /**
-     * Return the instance id to be used for this node in the cluster.
-     * @param id configured id, <code>null</code> to take random id
-     */
-    private String getClusterNodeId(String id) {
-        if (id == null) {
-            id = System.getProperty(SYSTEM_PROPERTY_NODE_ID);
-            if (id == null) {
-                id = toHexString((short) (Math.random() * (Short.MAX_VALUE - Short.MIN_VALUE)));
+                return sb;
             }
+            
+            if ((text.length() > width) && (pos == nextLineTabStop - 1))
+            {
+                pos = width;
+            }
+
+            sb.append(rtrim(text.substring(0, pos))).append(defaultNewLine);
         }
-        return id;
     }
 
     /**
-     * Return a zero-padded short string representation.
+     * Finds the next text wrap position after <code>startPos</code> for the
+     * text in <code>text</code> with the column width <code>width</code>.
+     * The wrap point is the last postion before startPos+width having a 
+     * whitespace character (space, \n, \r).
      *
-     * @param n short
-     * @return string representation
+     * @param text The text being searched for the wrap position
+     * @param width width of the wrapped text
+     * @param startPos position from which to start the lookup whitespace
+     * character
+     * @return postion on which the text must be wrapped or -1 if the wrap
+     * position is at the end of the text
      */
-    private static String toHexString(short n) {
-        String s = Integer.toHexString(n);
-        int padlen = SHORT_PADDING.length() - s.length();
-        if (padlen < 0) {
-            s = s.substring(-padlen);
-        } else if (padlen > 0) {
-            s = SHORT_PADDING.substring(0, padlen) + s;
+    protected int findWrapPos(String text, int width, int startPos)
+    {
+        int pos = -1;
+
+        // the line ends before the max wrap pos or a new line char found
+        if (((pos = text.indexOf('\n', startPos)) != -1 && pos <= width)
+                || ((pos = text.indexOf('\t', startPos)) != -1 && pos <= width))
+        {
+            return pos + 1;
         }
-        return s;
-    }
-
-    //-----------------------------------------------< NamespaceEventListener >
-
-    /**
-     * {@inheritDoc}
-     */
-    public void remapped(String oldPrefix, String newPrefix, String uri) {
-        if (status != STARTED) {
-            log.info("not started: namespace operation ignored.");
-            return;
+        else if (startPos + width >= text.length())
+        {
+            return -1;
         }
-        Record record = null;
-        boolean succeeded = false;
 
-        try {
-            record = journal.getProducer(PRODUCER_ID).append();
-            record.writeString(null);
-            write(record, oldPrefix, newPrefix, uri);
-            record.writeChar('\0');
-            record.update();
-            setRevision(record.getRevision());
-            succeeded = true;
-        } catch (JournalException e) {
-            String msg = "Unable to create log entry: " + e.getMessage();
-            log.error(msg);
-        } catch (Throwable e) {
-            String msg = "Unexpected error while creating log entry.";
-            log.error(msg, e);
-        } finally {
-            if (!succeeded && record != null) {
-                record.cancelUpdate();
-            }
+
+        // look for the last whitespace character before startPos+width
+        pos = startPos + width;
+
+        char c;
+
+        while ((pos >= startPos) && ((c = text.charAt(pos)) != ' ')
+                && (c != '\n') && (c != '\r'))
+        {
+            --pos;
         }
-    }
 
-    public void setListener(NamespaceEventListener listener) {
-        namespaceListener = listener;
-    }
-
-    //------------------------------------------------< NodeTypeEventListener >
-
-    /**
-     * {@inheritDoc}
-     */
-    public void registered(Collection ntDefs) {
-        if (status != STARTED) {
-            log.info("not started: nodetype operation ignored.");
-            return;
+        // if we found it - just return
+        if (pos > startPos)
+        {
+            return pos;
         }
-        Record record = null;
-        boolean succeeded = false;
+        
+        // must look for the first whitespace chearacter after startPos 
+        // + width
+        pos = startPos + width;
 
-        try {
-            record = journal.getProducer(PRODUCER_ID).append();
-            record.writeString(null);
-            write(record, ntDefs);
-            record.writeChar('\0');
-            record.update();
-            setRevision(record.getRevision());
-            succeeded = true;
-        } catch (JournalException e) {
-            String msg = "Unable to create log entry: " + e.getMessage();
-            log.error(msg);
-        } catch (Throwable e) {
-            String msg = "Unexpected error while creating log entry.";
-            log.error(msg, e);
-        } finally {
-            if (!succeeded && record != null) {
-                record.cancelUpdate();
-            }
+        while ((pos <= text.length()) && ((c = text.charAt(pos)) != ' ')
+               && (c != '\n') && (c != '\r'))
+        {
+            ++pos;
         }
+
+        return (pos == text.length()) ? (-1) : pos;
     }
 
     /**
-     * {@inheritDoc}
+     * Return a String of padding of length <code>len</code>.
+     *
+     * @param len The length of the String of padding to create.
+     *
+     * @return The String of padding
      */
-    public void setListener(NodeTypeEventListener listener) {
-        nodeTypeListener = listener;
+    protected String createPadding(int len)
+    {
+        StringBuffer sb = new StringBuffer(len);
+
+        for (int i = 0; i < len; ++i)
+        {
+            sb.append(' ');
+        }
+
+        return sb.toString();
     }
 
     /**
-     * Workspace update channel.
+     * Remove the trailing whitespace from the specified String.
+     *
+     * @param s The String to remove the trailing padding from.
+     *
+     * @return The String of without the trailing padding
      */
-    class WorkspaceUpdateChannel implements UpdateEventChannel {
+    protected String rtrim(String s)
+    {
+        if ((s == null) || (s.length() == 0))
+        {
+            return s;
+        }
+
+        int pos = s.length();
+
+        while ((pos > 0) && Character.isWhitespace(s.charAt(pos - 1)))
+        {
+            --pos;
+        }
+
+        return s.substring(0, pos);
+    }
+
+    // ------------------------------------------------------ Package protected
+    // ---------------------------------------------------------------- Private
+    // ---------------------------------------------------------- Inner classes
+    /**
+     * This class implements the <code>Comparator</code> interface
+     * for comparing Options.
+     */
+    private static class OptionComparator implements Comparator
+    {
 
         /**
-         * Workspace name.
-         */
-        private final String workspace;
-
-        /**
-         * Record being appended.
-         */
-        private Record record;
-
-        /**
-         * Create a new instance of this class.
+         * Compares its two arguments for order. Returns a negative
+         * integer, zero, or a positive integer as the first argument
+         * is less than, equal to, or greater than the second.
          *
-         * @param workspace workspace name
+         * @param o1 The first Option to be compared.
+         * @param o2 The second Option to be compared.
+         * @return a negative integer, zero, or a positive integer as
+         *         the first argument is less than, equal to, or greater than the
+         *         second.
          */
-        public WorkspaceUpdateChannel(String workspace) {
-            this.workspace = workspace;
-        }
+        public int compare(Object o1, Object o2)
+        {
+            Option opt1 = (Option) o1;
+            Option opt2 = (Option) o2;
 
-        /**
-         * {@inheritDoc}
-         */
-        public void updateCreated() {
-            if (status != STARTED) {
-                log.info("not started: update create ignored.");
-                return;
-            }
-            if (record != null) {
-                String msg = "Record already created.";
-                log.warn(msg);
-                return;
-            }
-            try {
-                sync();
-                record = journal.getProducer(PRODUCER_ID).append();
-                //sync();
-            } catch (JournalException e) {
-                String msg = "Unable to create log entry.";
-                log.error(msg, e);
-            } catch (Throwable e) {
-                String msg = "Unexpected error while creating log entry.";
-                log.error(msg, e);
-            }
-        }
-
-        /**
-         * {@inheritDoc}
-         */
-        public void updatePrepared(ChangeLog changes, EventStateCollection esc) {
-            if (status != STARTED) {
-                log.info("not started: update prepare ignored.");
-                return;
-            }
-            if (record == null) {
-                String msg = "No record created.";
-                log.warn(msg);
-                return;
-            }
-
-            boolean succeeded = false;
-
-            try {
-                record.writeString(workspace);
-                write(record, changes, esc);
-                record.writeChar('\0');
-                succeeded = true;
-            } catch (JournalException e) {
-                String msg = "Unable to create log entry: " + e.getMessage();
-                log.error(msg);
-            } catch (Throwable e) {
-                String msg = "Unexpected error while preparing log entry.";
-                log.error(msg, e);
-            } finally {
-                if (!succeeded && record != null) {
-                    record.cancelUpdate();
-                    record = null;
-                }
-            }
-        }
-
-        /**
-         * {@inheritDoc}
-         */
-        public void updateCommitted() {
-            if (status != STARTED) {
-                log.info("not started: update commit ignored.");
-                return;
-            }
-            if (record == null) {
-                String msg = "No record prepared.";
-                log.warn(msg);
-                return;
-            }
-            try {
-                record.update();
-                setRevision(record.getRevision());
-                log.info("Appended revision: " + record.getRevision());
-            } catch (JournalException e) {
-                String msg = "Unable to commit log entry.";
-                log.error(msg, e);
-            } catch (Throwable e) {
-                String msg = "Unexpected error while committing log entry.";
-                log.error(msg, e);
-            } finally {
-                record = null;
-            }
-        }
-
-        /**
-         * {@inheritDoc}
-         */
-        public void updateCancelled() {
-            if (status != STARTED) {
-                log.info("not started: update cancel ignored.");
-                return;
-            }
-            if (record != null) {
-                record.cancelUpdate();
-                record = null;
-            }
-        }
-
-        /**
-         * {@inheritDoc}
-         */
-        public void setListener(UpdateEventListener listener) {
-            if (workspace == null) {
-                versionUpdateListener = listener;
-            } else {
-                wspUpdateListeners.remove(workspace);
-                if (listener != null) {
-                    wspUpdateListeners.put(workspace, listener);
-                }
-            }
+            return opt1.getKey().compareToIgnoreCase(opt2.getKey());
         }
     }
 
-    /**
-     * Workspace lock channel.
-     */
-    class WorkspaceLockChannel implements LockEventChannel {
-
-        /**
-         * Workspace name.
-         */
-        private final String workspace;
-
-        /**
-         * Create a new instance of this class.
-         *
-         * @param workspace workspace name
-         */
-        public WorkspaceLockChannel(String workspace) {
-            this.workspace = workspace;
-        }
-
-        /**
-         * {@inheritDoc}
-         */
-        public void locked(NodeId nodeId, boolean deep, String owner) {
-            if (status != STARTED) {
-                log.info("not started: lock operation ignored.");
-                return;
-            }
-            Record record = null;
-            boolean succeeded = false;
-
-            try {
-                record = journal.getProducer(PRODUCER_ID).append();
-                record.writeString(workspace);
-                write(record, nodeId, deep, owner);
-                record.writeChar('\0');
-                record.update();
-                setRevision(record.getRevision());
-                succeeded = true;
-            } catch (JournalException e) {
-                String msg = "Unable to create log entry: " + e.getMessage();
-                log.error(msg);
-            } catch (Throwable e) {
-                String msg = "Unexpected error while creating log entry.";
-                log.error(msg, e);
-            } finally {
-                if (!succeeded && record != null) {
-                    record.cancelUpdate();
-                }
-            }
-        }
-
-        /**
-         * {@inheritDoc}
-         */
-        public void unlocked(NodeId nodeId) {
-            if (status != STARTED) {
-                log.info("not started: unlock operation ignored.");
-                return;
-            }
-            Record record = null;
-            boolean succeeded = false;
-
-            try {
-                record = journal.getProducer(PRODUCER_ID).append();
-                record.writeString(workspace);
-                write(record, nodeId);
-                record.update();
-                setRevision(record.getRevision());
-                succeeded = true;
-            } catch (JournalException e) {
-                String msg = "Unable to create log entry: " + e.getMessage();
-                log.error(msg);
-            } catch (Throwable e) {
-                String msg = "Unexpected error while creating log entry.";
-                log.error(msg, e);
-            } finally {
-                if (!succeeded && record != null) {
-                    record.cancelUpdate();
-                }
-            }
-        }
-
-        /**
-         * {@inheritDoc}
-         */
-        public void setListener(LockEventListener listener) {
-            wspLockListeners.remove(workspace);
-            if (listener != null) {
-                wspLockListeners.put(workspace, listener);
-            }
-        }
-    }
-
-    /**
-     * Invoked when a record starts.
-     *
-     * @param workspace workspace, may be <code>null</code>
-     */
-    private void start(String workspace) {
-        this.workspace = workspace;
-
-        changeLog = new ChangeLog();
-        events = new ArrayList();
-    }
-
-    /**
-     * Process an update operation.
-     *
-     * @param operation operation to process
-     */
-    private void process(ItemOperation operation) {
-        operation.apply(changeLog);
-    }
-
-    /**
-     * Process an event.
-     *
-     * @param event event
-     */
-    private void process(EventState event) {
-        events.add(event);
-    }
-
-    /**
-     * Process a lock operation.
-     *
-     * @param nodeId node id
-     * @param isDeep flag indicating whether lock is deep
-     * @param owner lock owner
-     */
-    private void process(NodeId nodeId, boolean isDeep, String owner) {
-        LockEventListener listener = (LockEventListener) wspLockListeners.get(workspace);
-        if (listener == null) {
-            try {
-                clusterContext.lockEventsReady(workspace);
-            } catch (RepositoryException e) {
-                String msg = "Unable to make lock listener for workspace " +
-                        workspace + " online: " + e.getMessage();
-                log.warn(msg);
-            }
-            listener = (LockEventListener) wspLockListeners.get(workspace);
-            if (listener ==  null) {
-                String msg = "Lock channel unavailable for workspace: " + workspace;
-                log.error(msg);
-                return;
-            }
-        }
-        try {
-            listener.externalLock(nodeId, isDeep, owner);
-        } catch (RepositoryException e) {
-            String msg = "Unable to deliver lock event: " + e.getMessage();
-            log.error(msg);
-        }
-    }
-
-    /**
-     * Process an unlock operation.
-     *
-     * @param nodeId node id
-     */
-    private void process(NodeId nodeId) {
-        LockEventListener listener = (LockEventListener) wspLockListeners.get(workspace);
-        if (listener == null) {
-            try {
-                clusterContext.lockEventsReady(workspace);
-            } catch (RepositoryException e) {
-                String msg = "Unable to make lock listener for workspace " +
-                        workspace + " online: " + e.getMessage();
-                log.warn(msg);
-            }
-            listener = (LockEventListener) wspLockListeners.get(workspace);
-            if (listener ==  null) {
-                String msg = "Lock channel unavailable for workspace: " + workspace;
-                log.error(msg);
-                return;
-            }
-        }
-        try {
-            listener.externalUnlock(nodeId);
-        } catch (RepositoryException e) {
-            String msg = "Unable to deliver lock event: " + e.getMessage();
-            log.error(msg);
-        }
-    }
-
-    /**
-     * Process a namespace operation.
-     *
-     * @param oldPrefix old prefix. if <code>null</code> this is a fresh mapping
-     * @param newPrefix new prefix. if <code>null</code> this is an unmap operation
-     * @param uri uri to map prefix to
-     */
-    private void process(String oldPrefix, String newPrefix, String uri) {
-        if (namespaceListener == null) {
-            String msg = "Namespace listener unavailable.";
-            log.error(msg);
-            return;
-        }
-        try {
-            namespaceListener.externalRemap(oldPrefix, newPrefix, uri);
-        } catch (RepositoryException e) {
-            String msg = "Unable to deliver namespace operation: " + e.getMessage();
-            log.error(msg);
-        }
-    }
-
-    /**
-     * Process one or more node type registrations.
-     *
-     * @param ntDefs node type definition
-     */
-    private void process(Collection ntDefs) {
-        if (nodeTypeListener == null) {
-            String msg = "NodeType listener unavailable.";
-            log.error(msg);
-            return;
-        }
-        try {
-            nodeTypeListener.externalRegistered(ntDefs);
-        } catch (InvalidNodeTypeDefException e) {
-            String msg = "Unable to deliver node type operation: " + e.getMessage();
-            log.error(msg);
-        } catch (RepositoryException e) {
-            String msg = "Unable to deliver node type operation: " + e.getMessage();
-            log.error(msg);
-        }
-    }
-
-    /**
-     * Invoked when a record ends.
-     */
-    private void end() {
-        UpdateEventListener listener = null;
-        if (workspace != null) {
-            listener = (UpdateEventListener) wspUpdateListeners.get(workspace);
-            if (listener == null) {
-                try {
-                    clusterContext.updateEventsReady(workspace);
-                } catch (RepositoryException e) {
-                    String msg = "Error making update listener for workspace " +
-                            workspace + " online: " + e.getMessage();
-                    log.warn(msg);
-                }
-                listener = (UpdateEventListener) wspUpdateListeners.get(workspace);
-                if (listener ==  null) {
-                    String msg = "Update listener unavailable for workspace: " + workspace;
-                    log.error(msg);
-                    return;
-                }
-            }
-        } else {
-            if (versionUpdateListener != null) {
-                listener = versionUpdateListener;
-            } else {
-                String msg = "Version update listener unavailable.";
-                log.error(msg);
-                return;
-            }
-        }
-        try {
-            listener.externalUpdate(changeLog, events);
-        } catch (RepositoryException e) {
-            String msg = "Unable to deliver update events: " + e.getMessage();
-            log.error(msg);
-        }
-    }
-
-    //-------------------------------------------------------< RecordConsumer >
-
-    /**
-     * {@inheritDoc}
-     */
-    public String getId() {
-        return PRODUCER_ID;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public long getRevision() {
-        try {
-            return instanceRevision.get();
-        } catch (JournalException e) {
-            log.warn("Unable to return current revision.", e);
-            return Long.MAX_VALUE;
-        }
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public void consume(Record record) {
-        log.info("Processing revision: " + record.getRevision());
-
-        String workspace = null;
-
-        try {
-            workspace = record.readString();
-            start(workspace);
-
-            for (;;) {
-                char c = record.readChar();
-                if (c == '\0') {
-                    break;
-                }
-                if (c == 'N') {
-                    NodeOperation operation = NodeOperation.create(record.readByte());
-                    operation.setId(record.readNodeId());
-                    process(operation);
-                } else if (c == 'P') {
-                    PropertyOperation operation = PropertyOperation.create(record.readByte());
-                    operation.setId(record.readPropertyId());
-                    process(operation);
-                } else if (c == 'E') {
-                    int type = record.readByte();
-                    NodeId parentId = record.readNodeId();
-                    Path parentPath = record.readPath();
-                    NodeId childId = record.readNodeId();
-                    Path.PathElement childRelPath = record.readPathElement();
-                    QName ntName = record.readQName();
-
-                    Set mixins = new HashSet();
-                    int mixinCount = record.readInt();
-                    for (int i = 0; i < mixinCount; i++) {
-                        mixins.add(record.readQName());
-                    }
-                    String userId = record.readString();
-                    process(createEventState(type, parentId, parentPath, childId,
-                            childRelPath, ntName, mixins, userId));
-                } else if (c == 'L') {
-                    NodeId nodeId = record.readNodeId();
-                    boolean isLock = record.readBoolean();
-                    if (isLock) {
-                        boolean isDeep = record.readBoolean();
-                        String owner = record.readString();
-                        process(nodeId, isDeep, owner);
-                    } else {
-                        process(nodeId);
-                    }
-                } else if (c == 'S') {
-                    String oldPrefix = record.readString();
-                    String newPrefix = record.readString();
-                    String uri = record.readString();
-                    process(oldPrefix, newPrefix, uri);
-                } else if (c == 'T') {
-                    int size = record.readInt();
-                    HashSet ntDefs = new HashSet();
-                    for (int i = 0; i < size; i++) {
-                        ntDefs.add(record.readNodeTypeDef());
-                    }
-                    process(ntDefs);
-                } else {
-                    throw new IllegalArgumentException("Unknown entry type: " + c);
-                }
-            }
-            end();
-
-        } catch (JournalException e) {
-            String msg = "Unable to read revision '" + record.getRevision() + "'.";
-            log.error(msg, e);
-        } catch (IllegalArgumentException e) {
-            String msg = "Error while processing revision " +
-                    record.getRevision() + ": " + e.getMessage();
-            log.error(msg);
-        }
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    public void setRevision(long revision) {
-        try {
-            instanceRevision.set(revision);
-        } catch (JournalException e) {
-            log.warn("Unable to set current revision to " + revision + ".", e);
-        }
-    }
-
-    /**
-     * Create an event state.
-     *
-     * @param type event type
-     * @param parentId parent id
-     * @param parentPath parent path
-     * @param childId child id
-     * @param childRelPath child relative path
-     * @param ntName ndoe type name
-     * @param userId user id
-     * @return event
-     */
-    private EventState createEventState(int type, NodeId parentId, Path parentPath,
-                                        NodeId childId, Path.PathElement childRelPath,
-                                        QName ntName, Set mixins, String userId) {
-        switch (type) {
-            case Event.NODE_ADDED:
-                return EventState.childNodeAdded(parentId, parentPath, childId, childRelPath,
-                        ntName, mixins, getOrCreateSession(userId), true);
-            case Event.NODE_REMOVED:
-                return EventState.childNodeRemoved(parentId, parentPath, childId, childRelPath,
-                        ntName, mixins, getOrCreateSession(userId), true);
-            case Event.PROPERTY_ADDED:
-                return EventState.propertyAdded(parentId, parentPath, childRelPath,
-                        ntName, mixins, getOrCreateSession(userId), true);
-            case Event.PROPERTY_CHANGED:
-                return EventState.propertyChanged(parentId, parentPath, childRelPath,
-                        ntName, mixins, getOrCreateSession(userId), true);
-            case Event.PROPERTY_REMOVED:
-                return EventState.propertyRemoved(parentId, parentPath, childRelPath,
-                        ntName, mixins, getOrCreateSession(userId), true);
-            default:
-                String msg = "Unexpected event type: " + type;
-                throw new IllegalArgumentException(msg);
-        }
-    }
-
-    /**
-     * Return a session matching a certain user id.
-     *
-     * @param userId user id
-     * @return session
-     */
-    private Session getOrCreateSession(String userId) {
-        if (lastSession == null || !lastSession.getUserID().equals(userId)) {
-            lastSession = new ClusterSession(userId);
-        }
-        return lastSession;
-    }
-
-    //-----------------------------------------------< Record writing methods >
-
-    private static void write(Record record, ChangeLog changeLog, EventStateCollection esc)
-            throws JournalException {
-
-        Iterator addedStates = changeLog.addedStates();
-        while (addedStates.hasNext()) {
-            ItemState state = (ItemState) addedStates.next();
-            if (state.isNode()) {
-                write(record, NodeAddedOperation.create((NodeState) state));
-            } else {
-                write(record, PropertyAddedOperation.create((PropertyState) state));
-            }
-        }
-        Iterator modifiedStates = changeLog.modifiedStates();
-        while (modifiedStates.hasNext()) {
-            ItemState state = (ItemState) modifiedStates.next();
-            if (state.isNode()) {
-                write(record, NodeModifiedOperation.create((NodeState) state));
-            } else {
-                write(record, PropertyModifiedOperation.create((PropertyState) state));
-            }
-        }
-        Iterator deletedStates = changeLog.deletedStates();
-        while (deletedStates.hasNext()) {
-            ItemState state = (ItemState) deletedStates.next();
-            if (state.isNode()) {
-                write(record, NodeDeletedOperation.create((NodeState) state));
-            } else {
-                write(record, PropertyDeletedOperation.create((PropertyState) state));
-            }
-        }
-
-        Iterator events = esc.getEvents().iterator();
-        while (events.hasNext()) {
-            EventState event = (EventState) events.next();
-            write(record, event);
-        }
-    }
-
-    private static void write(Record record, String oldPrefix, String newPrefix, String uri)
-            throws JournalException {
-
-        record.writeChar('S');
-        record.writeString(oldPrefix);
-        record.writeString(newPrefix);
-        record.writeString(uri);
-    }
-
-    private static void write(Record record, NodeId nodeId, boolean isDeep, String owner)
-            throws JournalException {
-
-        write(record, nodeId, true, isDeep, owner);
-    }
-
-    private static void write(Record record, NodeId nodeId)
-            throws JournalException {
-
-        write(record, nodeId, false, false, null);
-    }
-
-    private static void write(Record record, Collection ntDefs)
-            throws JournalException {
-
-        record.writeChar('T');
-        record.writeInt(ntDefs.size());
-
-        Iterator iter = ntDefs.iterator();
-        while (iter.hasNext()) {
-            record.writeNodeTypeDef((NodeTypeDef) iter.next());
-        }
-    }
-
-    private static void write(Record record, PropertyOperation operation)
-            throws JournalException {
-
-        record.writeChar('P');
-        record.writeByte(operation.getOperationType());
-        record.writePropertyId(operation.getId());
-    }
-
-    private static void write(Record record, NodeOperation operation)
-            throws JournalException {
-
-        record.writeChar('N');
-        record.writeByte(operation.getOperationType());
-        record.writeNodeId(operation.getId());
-    }
-
-    /**
-     * Log an event. Subclass responsibility.
-     *
-     * @param event event to log
-     */
-    private static void write(Record record, EventState event)
-            throws JournalException {
-
-        record.writeChar('E');
-        record.writeByte(event.getType());
-        record.writeNodeId(event.getParentId());
-        record.writePath(event.getParentPath());
-        record.writeNodeId(event.getChildId());
-        record.writePathElement(event.getChildRelPath());
-        record.writeQName(event.getNodeType());
-
-        Set mixins = event.getMixinNames();
-        record.writeInt(mixins.size());
-        Iterator iter = mixins.iterator();
-        while (iter.hasNext()) {
-            record.writeQName((QName) iter.next());
-        }
-        record.writeString(event.getUserId());
-    }
-
-    private static void write(Record record, NodeId nodeId, boolean isLock,
-                              boolean isDeep, String owner)
-            throws JournalException {
-
-        record.writeChar('L');
-        record.writeNodeId(nodeId);
-        record.writeBoolean(isLock);
-        if (isLock) {
-            record.writeBoolean(isDeep);
-            record.writeString(owner);
-        }
-    }
 }

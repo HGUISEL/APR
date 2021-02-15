@@ -1,1073 +1,989 @@
-/*
- *
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- *
+/*=========================================================================
+ * Copyright (c) 2010-2014 Pivotal Software, Inc. All Rights Reserved.
+ * This product is protected by U.S. and international copyright
+ * and intellectual property laws. Pivotal products are covered by
+ * one or more patents listed at http://www.pivotal.io/patents.
+ *=========================================================================
  */
-package org.apache.qpid.server.protocol;
+/**
+ * File comment
+ */
+package com.gemstone.gemfire.internal.cache;
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.nio.ByteBuffer;
-import java.security.Principal;
-import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicMarkableReference;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 
-import javax.management.JMException;
-import javax.security.sasl.SaslServer;
+import org.apache.logging.log4j.Logger;
 
-import org.apache.log4j.Logger;
-import org.apache.mina.transport.vmpipe.VmPipeAddress;
-import org.apache.qpid.AMQChannelException;
-import org.apache.qpid.AMQConnectionException;
-import org.apache.qpid.AMQException;
-import org.apache.qpid.codec.AMQCodecFactory;
-import org.apache.qpid.codec.AMQDecoder;
-import org.apache.qpid.common.ClientProperties;
-import org.apache.qpid.framing.AMQBody;
-import org.apache.qpid.framing.AMQDataBlock;
-import org.apache.qpid.framing.AMQFrame;
-import org.apache.qpid.framing.AMQMethodBody;
-import org.apache.qpid.framing.AMQProtocolHeaderException;
-import org.apache.qpid.framing.AMQShortString;
-import org.apache.qpid.framing.ChannelCloseOkBody;
-import org.apache.qpid.framing.ConnectionCloseBody;
-import org.apache.qpid.framing.ContentBody;
-import org.apache.qpid.framing.ContentHeaderBody;
-import org.apache.qpid.framing.FieldTable;
-import org.apache.qpid.framing.HeartbeatBody;
-import org.apache.qpid.framing.MethodDispatcher;
-import org.apache.qpid.framing.MethodRegistry;
-import org.apache.qpid.framing.ProtocolInitiation;
-import org.apache.qpid.framing.ProtocolVersion;
-import org.apache.qpid.pool.Job;
-import org.apache.qpid.pool.ReferenceCountingExecutorService;
-import org.apache.qpid.protocol.AMQConstant;
-import org.apache.qpid.protocol.AMQMethodEvent;
-import org.apache.qpid.protocol.AMQMethodListener;
-import org.apache.qpid.protocol.ProtocolEngine;
-import org.apache.qpid.server.AMQChannel;
-import org.apache.qpid.server.handler.ServerMethodDispatcherImpl;
-import org.apache.qpid.server.logging.LogActor;
-import org.apache.qpid.server.logging.LogSubject;
-import org.apache.qpid.server.logging.actors.AMQPConnectionActor;
-import org.apache.qpid.server.logging.actors.CurrentActor;
-import org.apache.qpid.server.logging.messages.ConnectionMessages;
-import org.apache.qpid.server.logging.subjects.ConnectionLogSubject;
-import org.apache.qpid.server.management.Managable;
-import org.apache.qpid.server.management.ManagedObject;
-import org.apache.qpid.server.output.ProtocolOutputConverter;
-import org.apache.qpid.server.output.ProtocolOutputConverterRegistry;
-import org.apache.qpid.server.registry.ApplicationRegistry;
-import org.apache.qpid.server.state.AMQState;
-import org.apache.qpid.server.state.AMQStateManager;
-import org.apache.qpid.server.virtualhost.VirtualHostRegistry;
-import org.apache.qpid.server.virtualhost.VirtualHost;
-import org.apache.qpid.transport.NetworkDriver;
-import org.apache.qpid.transport.Sender;
+import com.gemstone.gemfire.GemFireException;
+import com.gemstone.gemfire.cache.Cache;
+import com.gemstone.gemfire.cache.CommitConflictException;
+import com.gemstone.gemfire.cache.EntryNotFoundException;
+import com.gemstone.gemfire.cache.Region.Entry;
+import com.gemstone.gemfire.cache.TransactionDataNotColocatedException;
+import com.gemstone.gemfire.cache.TransactionDataRebalancedException;
+import com.gemstone.gemfire.cache.TransactionException;
+import com.gemstone.gemfire.cache.TransactionId;
+import com.gemstone.gemfire.cache.UnsupportedOperationInTransactionException;
+import com.gemstone.gemfire.cache.client.internal.ServerRegionDataAccess;
+import com.gemstone.gemfire.distributed.DistributedMember;
+import com.gemstone.gemfire.distributed.internal.membership.InternalDistributedMember;
+import com.gemstone.gemfire.internal.cache.tier.sockets.ClientProxyMembershipID;
+import com.gemstone.gemfire.internal.cache.tier.sockets.VersionedObjectList;
+import com.gemstone.gemfire.internal.cache.tx.ClientTXStateStub;
+import com.gemstone.gemfire.internal.cache.tx.TransactionalOperation.ServerRegionOperation;
+import com.gemstone.gemfire.internal.i18n.LocalizedStrings;
+import com.gemstone.gemfire.internal.logging.LogService;
+import com.gemstone.gemfire.internal.logging.log4j.LocalizedMessage;
 
-public class AMQProtocolEngine implements ProtocolEngine, Managable, AMQProtocolSession
-{
-    private static final Logger _logger = Logger.getLogger(AMQProtocolEngine.class);
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
-    private static final String CLIENT_PROPERTIES_INSTANCE = ClientProperties.instance.toString();
+/**
+ * @author mthomas
+ *
+ */
+public class TXStateProxyImpl implements TXStateProxy {
 
-    private static final AtomicLong idGenerator = new AtomicLong(0);
+  private static final Logger logger = LogService.getLogger();
+  
+  private static final AtomicBoolean txDistributedClientWarningIssued = new AtomicBoolean();
+  
+  private boolean isJTA;
+  private TXId txId;
+  final private TXManagerImpl txMgr;
+  private DistributedMember target;
+  private boolean commitRequestedByOwner;
+  private boolean isJCATransaction;
+  /**
+   * for client/server JTA transactions we need to have a single thread handle
+   * both beforeCompletion and afterCompletion so that beforeC can obtain
+   * locks for the afterC step.  This is that thread
+   */
+  private volatile TXSynchronizationRunnable synchRunnable;
 
-    // to save boxing the channelId and looking up in a map... cache in an array the low numbered
-    // channels.  This value must be of the form 2^x - 1.
-    private static final int CHANNEL_CACHE_SIZE = 0xff;
+  private final ReentrantLock lock = new ReentrantLock();
 
-    private AMQShortString _contextKey;
+  /** number of operations in this transaction */
+  private int operationCount = 0;
+  
+  /**
+   * tracks bucketIds of transactional operations so as to distinguish between
+   * TransactionDataNotColocated and TransactionDataRebalanced exceptions.
+   */
+  private Map<Integer, Boolean> buckets = new HashMap<Integer, Boolean>();
+  
+  public void setSynchronizationRunnable(TXSynchronizationRunnable synch) {
+    this.synchRunnable = synch;
+  }
+  
+  public TXSynchronizationRunnable getSynchronizationRunnable() {
+    return this.synchRunnable;
+  }
+  
+  /*
+   * (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getSemaphore()
+   */
+  public ReentrantLock getLock() {
+    return this.lock;
+  }
+  
+  
+  /**
+   * @return the isJTA
+   */
+  final boolean isJTA() {
+    return isJTA;
+  }
 
-    private AMQShortString _clientVersion = null;
+  /**
+   * @return the txId
+   */
+  final public TXId getTxId() {
+    return txId;
+  }
 
-    private VirtualHost _virtualHost;
+  /**
+   * @return the txMgr
+   */
+  public final TXManagerImpl getTxMgr() {
+    return txMgr;
+  }
 
-    private final Map<Integer, AMQChannel> _channelMap = new HashMap<Integer, AMQChannel>();
+  private volatile TXStateInterface realDeal;
+  private boolean inProgress = true;
+  private InternalDistributedMember onBehalfOfClientMember = null;
 
-    private final AMQChannel[] _cachedChannels = new AMQChannel[CHANNEL_CACHE_SIZE + 1];
-
-    private final CopyOnWriteArraySet<AMQMethodListener> _frameListeners = new CopyOnWriteArraySet<AMQMethodListener>();
-
-    private final AMQStateManager _stateManager;
-
-    private AMQCodecFactory _codecFactory;
-
-    private AMQProtocolSessionMBean _managedObject;
-
-    private SaslServer _saslServer;
-
-    private Object _lastReceived;
-
-    private Object _lastSent;
-
-    protected volatile boolean _closed;
-    // maximum number of channels this session should have
-    private long _maxNoOfChannels = 1000;
-
-    /* AMQP Version for this session */
-    private ProtocolVersion _protocolVersion = ProtocolVersion.getLatestSupportedVersion();
-
-    private FieldTable _clientProperties;
-    private final List<Task> _taskList = new CopyOnWriteArrayList<Task>();
-
-    private Map<Integer, Long> _closingChannelsList = new ConcurrentHashMap<Integer, Long>();
-    private ProtocolOutputConverter _protocolOutputConverter;
-    private Principal _authorizedID;
-    private MethodDispatcher _dispatcher;
-    private ProtocolSessionIdentifier _sessionIdentifier;
-
-    // Create a simple ID that increments for ever new Session
-    private final long _sessionID = idGenerator.getAndIncrement();
-
-    private AMQPConnectionActor _actor;
-    private LogSubject _logSubject;
-
-    private NetworkDriver _networkDriver;
-
-    private long _lastIoTime;
-
-    private long _writtenBytes;
-    private long _readBytes;
-
-    private Job _readJob;
-    private Job _writeJob;
-
-    private ReferenceCountingExecutorService _poolReference = ReferenceCountingExecutorService.getInstance();
-    private long _maxFrameSize;
-    private final AtomicBoolean _closing = new AtomicBoolean(false);
-
-    public ManagedObject getManagedObject()
-    {
-        return _managedObject;
-    }
-
-    public AMQProtocolEngine(VirtualHostRegistry virtualHostRegistry, NetworkDriver driver)
-    {
-        _stateManager = new AMQStateManager(virtualHostRegistry, this);
-        _networkDriver = driver;
-
-        _codecFactory = new AMQCodecFactory(true, this);
-        _poolReference.acquireExecutorService();
-        _readJob = new Job(_poolReference, Job.MAX_JOB_EVENTS, true);
-        _writeJob = new Job(_poolReference, Job.MAX_JOB_EVENTS, false);
-
-        _actor = new AMQPConnectionActor(this, virtualHostRegistry.getApplicationRegistry().getRootMessageLogger());
-        _actor.message(ConnectionMessages.CON_1001(null, null, false, false));
-
-    }
-
-    private AMQProtocolSessionMBean createMBean() throws JMException
-    {
-        return new AMQProtocolSessionMBean(this);
-    }
-
-    public long getSessionID()
-    {
-        return _sessionID;
-    }
-
-    public LogActor getLogActor()
-    {
-        return _actor;
-    }
-
-    public void setMaxFrameSize(long frameMax)
-    {
-        _maxFrameSize = frameMax;
-    }
-
-    public long getMaxFrameSize()
-    {
-        return _maxFrameSize;
-    }
-
-    public boolean isClosing()
-    {
-        return _closing.get();
-    }
-
-    public void received(final ByteBuffer msg)
-    {
-        _lastIoTime = System.currentTimeMillis();
-        try
-        {
-            final ArrayList<AMQDataBlock> dataBlocks = _codecFactory.getDecoder().decodeBuffer(msg);
-            Job.fireAsynchEvent(_poolReference.getPool(), _readJob, new Runnable()
-            {
-                public void run()
-                {
-                    // Decode buffer
-
-                    for (AMQDataBlock dataBlock : dataBlocks)
-                    {
-                        try
-                        {
-                            dataBlockReceived(dataBlock);
-                        }
-                        catch (Exception e)
-                        {
-                            _logger.error("Unexpected exception when processing datablock", e);
-                            closeProtocolSession();
-                        }
-                    }
-                }
-            });
-        }
-        catch (Exception e)
-        {
-            _logger.error("Unexpected exception when processing datablock", e);
-            closeProtocolSession();
-        }
-    }
-
-    public void dataBlockReceived(AMQDataBlock message) throws Exception
-    {
-        _lastReceived = message;
-        if (message instanceof ProtocolInitiation)
-        {
-            protocolInitiationReceived((ProtocolInitiation) message);
-
-        }
-        else if (message instanceof AMQFrame)
-        {
-            AMQFrame frame = (AMQFrame) message;
-            frameReceived(frame);
-
-        }
-        else
-        {
-            throw new UnknnownMessageTypeException(message);
-        }
-    }
-
-    private void frameReceived(AMQFrame frame) throws AMQException
-    {
-        int channelId = frame.getChannel();
-        AMQBody body = frame.getBodyFrame();
-
-        //Look up the Channel's Actor and set that as the current actor
-        // If that is not available then we can use the ConnectionActor
-        // that is associated with this AMQMPSession.
-        LogActor channelActor = null;
-        if (_channelMap.get(channelId) != null)
-        {
-            channelActor = _channelMap.get(channelId).getLogActor();
-        }
-        CurrentActor.set(channelActor == null ? _actor : channelActor);
-
-        try
-        {
-            if (_logger.isDebugEnabled())
-            {
-                _logger.debug("Frame Received: " + frame);
+  /**
+   * This returns either the TXState for the current transaction or
+   * a proxy for the state if it is held in another member.  If no
+   * state currently exists, one is created
+   * @param key the key of the entry that is currently being modified
+   * @param r the region that is currently being modified
+   * @return the state or a proxy for the state
+   */
+  public TXStateInterface getRealDeal(KeyInfo key, LocalRegion r) {
+    if (this.realDeal == null) {
+      if (r == null) {  // TODO: stop gap to get tests working
+        this.realDeal = new TXState(this,false);
+      } else {
+        // Code to keep going forward
+        if(r.hasServerProxy()) {
+          this.realDeal = new ClientTXStateStub(this, target, r);
+          if (r.scope.isDistributed()) {
+            if (txDistributedClientWarningIssued.compareAndSet(false, true)) {
+              logger.warn(LocalizedMessage.create(LocalizedStrings.TXStateProxyImpl_Distributed_Region_In_Client_TX, r.getFullPath()));
             }
-
-            // Check that this channel is not closing
-            if (channelAwaitingClosure(channelId))
-            {
-                if ((frame.getBodyFrame() instanceof ChannelCloseOkBody))
-                {
-                    if (_logger.isInfoEnabled())
-                    {
-                        _logger.info("Channel[" + channelId + "] awaiting closure - processing close-ok");
-                    }
-                }
-                else
-                {
-                    // The channel has been told to close, we don't process any more frames until
-                    // it's closed.
-                    return;
-                }
-            }
-
-            try
-            {
-                body.handle(channelId, this);
-            }
-            catch (AMQException e)
-            {
-                closeChannel(channelId);
-                throw e;
-            }
+          }
+        } else {
+          target = null;
+          // wait for the region to be initialized fixes bug 44652
+          r.waitOnInitialization(r.initializationLatchBeforeGetInitialImage);
+          target = r.getOwnerForKey(key);
+          if (target==null || target.equals(this.txMgr.getDM().getId())) {
+            this.realDeal = new TXState(this,false);   
+          } else {
+             this.realDeal = new PeerTXStateStub(this, target,onBehalfOfClientMember);
+          }
         }
-        finally
-        {
-            CurrentActor.remove();
-        }
-    }
-
-    private void protocolInitiationReceived(ProtocolInitiation pi)
-    {
-        // this ensures the codec never checks for a PI message again
-        ((AMQDecoder) _codecFactory.getDecoder()).setExpectProtocolInitiation(false);
-        try
-        {
-            // Log incomming protocol negotiation request
-            _actor.message(ConnectionMessages.CON_1001(null, pi._protocolMajor + "-" + pi._protocolMinor, false, true));
-
-            ProtocolVersion pv = pi.checkVersion(); // Fails if not correct
-
-            // This sets the protocol version (and hence framing classes) for this session.
-            setProtocolVersion(pv);
-
-            String mechanisms = ApplicationRegistry.getInstance().getAuthenticationManager().getMechanisms();
-
-            String locales = "en_US";
-
-            AMQMethodBody responseBody = getMethodRegistry().createConnectionStartBody((short) getProtocolMajorVersion(),
-                                                                                       (short) getProtocolMinorVersion(),
-                                                                                       null,
-                                                                                       mechanisms.getBytes(),
-                                                                                       locales.getBytes());
-            _networkDriver.send(responseBody.generateFrame(0).toNioByteBuffer());
-
-        }
-        catch (AMQException e)
-        {
-            _logger.info("Received unsupported protocol initiation for protocol version: " + getProtocolVersion());
-
-            _networkDriver.send(new ProtocolInitiation(ProtocolVersion.getLatestSupportedVersion()).toNioByteBuffer());
-        }
-    }
-
-    public void methodFrameReceived(int channelId, AMQMethodBody methodBody)
-    {
-
-        final AMQMethodEvent<AMQMethodBody> evt = new AMQMethodEvent<AMQMethodBody>(channelId, methodBody);
-
-        try
-        {
-            try
-            {
-
-                boolean wasAnyoneInterested = _stateManager.methodReceived(evt);
-
-                if (!_frameListeners.isEmpty())
-                {
-                    for (AMQMethodListener listener : _frameListeners)
-                    {
-                        wasAnyoneInterested = listener.methodReceived(evt) || wasAnyoneInterested;
-                    }
-                }
-
-                if (!wasAnyoneInterested)
-                {
-                    throw new AMQNoMethodHandlerException(evt);
-                }
-            }
-            catch (AMQChannelException e)
-            {
-                if (getChannel(channelId) != null)
-                {
-                    if (_logger.isInfoEnabled())
-                    {
-                        _logger.info("Closing channel due to: " + e.getMessage());
-                    }
-
-                    writeFrame(e.getCloseFrame(channelId));
-                    closeChannel(channelId);
-                }
-                else
-                {
-                    if (_logger.isDebugEnabled())
-                    {
-                        _logger.debug("ChannelException occured on non-existent channel:" + e.getMessage());
-                    }
-
-                    if (_logger.isInfoEnabled())
-                    {
-                        _logger.info("Closing connection due to: " + e.getMessage());
-                    }
-
-                    AMQConnectionException ce =
-                            evt.getMethod().getConnectionException(AMQConstant.CHANNEL_ERROR,
-                                                                   AMQConstant.CHANNEL_ERROR.getName().toString());
-
-                    closeConnection(channelId, ce, false);
-                }
-            }
-            catch (AMQConnectionException e)
-            {
-                closeConnection(channelId, e, false);
-            }
-        }
-        catch (Exception e)
-        {
-
-            for (AMQMethodListener listener : _frameListeners)
-            {
-                listener.error(e);
-            }
-
-            _logger.error("Unexpected exception while processing frame.  Closing connection.", e);
-
-            closeProtocolSession();
-        }
-    }
-
-    public void contentHeaderReceived(int channelId, ContentHeaderBody body) throws AMQException
-    {
-
-        AMQChannel channel = getAndAssertChannel(channelId);
-
-        channel.publishContentHeader(body);
-
-    }
-
-    public void contentBodyReceived(int channelId, ContentBody body) throws AMQException
-    {
-        AMQChannel channel = getAndAssertChannel(channelId);
-
-        channel.publishContentBody(body);
-    }
-
-    public void heartbeatBodyReceived(int channelId, HeartbeatBody body)
-    {
-        // NO - OP
-    }
-
-    /**
-     * Convenience method that writes a frame to the protocol session. Equivalent to calling
-     * getProtocolSession().write().
-     *
-     * @param frame the frame to write
-     */
-    public void writeFrame(AMQDataBlock frame)
-    {
-        _lastSent = frame;
-        final ByteBuffer buf = frame.toNioByteBuffer();
-        _lastIoTime = System.currentTimeMillis();
-        _writtenBytes += buf.remaining();
-        Job.fireAsynchEvent(_poolReference.getPool(), _writeJob, new Runnable()
-        {
-            public void run()
-            {
-                _networkDriver.send(buf);
-            }
-        });
-    }
-
-    public AMQShortString getContextKey()
-    {
-        return _contextKey;
-    }
-
-    public void setContextKey(AMQShortString contextKey)
-    {
-        _contextKey = contextKey;
-    }
-
-    public List<AMQChannel> getChannels()
-    {
-        return new ArrayList<AMQChannel>(_channelMap.values());
-    }
-
-    public AMQChannel getAndAssertChannel(int channelId) throws AMQException
-    {
-        AMQChannel channel = getChannel(channelId);
-        if (channel == null)
-        {
-            throw new AMQException(AMQConstant.NOT_FOUND, "Channel not found with id:" + channelId);
-        }
-
-        return channel;
-    }
-
-    public AMQChannel getChannel(int channelId) throws AMQException
-    {
-        final AMQChannel channel =
-                ((channelId & CHANNEL_CACHE_SIZE) == channelId) ? _cachedChannels[channelId] : _channelMap.get(channelId);
-        if ((channel == null) || channel.isClosing())
-        {
-            return null;
-        }
-        else
-        {
-            return channel;
-        }
-    }
-
-    public boolean channelAwaitingClosure(int channelId)
-    {
-        return !_closingChannelsList.isEmpty() && _closingChannelsList.containsKey(channelId);
-    }
-
-    public void addChannel(AMQChannel channel) throws AMQException
-    {
-        if (_closed)
-        {
-            throw new AMQException("Session is closed");
-        }
-
-        final int channelId = channel.getChannelId();
-
-        if (_closingChannelsList.containsKey(channelId))
-        {
-            throw new AMQException("Session is marked awaiting channel close");
-        }
-
-        if (_channelMap.size() == _maxNoOfChannels)
-        {
-            String errorMessage =
-                    toString() + ": maximum number of channels has been reached (" + _maxNoOfChannels
-                    + "); can't create channel";
-            _logger.error(errorMessage);
-            throw new AMQException(AMQConstant.NOT_ALLOWED, errorMessage);
-        }
-        else
-        {
-            _channelMap.put(channel.getChannelId(), channel);
-        }
-
-        if (((channelId & CHANNEL_CACHE_SIZE) == channelId))
-        {
-            _cachedChannels[channelId] = channel;
-        }
-
-        checkForNotification();
-    }
-
-    private void checkForNotification()
-    {
-        int channelsCount = _channelMap.size();
-        if (_managedObject != null && channelsCount >= _maxNoOfChannels)
-        {
-            _managedObject.notifyClients("Channel count (" + channelsCount + ") has reached the threshold value");
-        }
-    }
-
-    public Long getMaximumNumberOfChannels()
-    {
-        return _maxNoOfChannels;
-    }
-
-    public void setMaximumNumberOfChannels(Long value)
-    {
-        _maxNoOfChannels = value;
-    }
-
-    public void commitTransactions(AMQChannel channel) throws AMQException
-    {
-        if ((channel != null) && channel.isTransactional())
-        {
-            channel.commit();
-        }
-    }
-
-    public void rollbackTransactions(AMQChannel channel) throws AMQException
-    {
-        if ((channel != null) && channel.isTransactional())
-        {
-            channel.rollback();
-        }
-    }
-
-    /**
-     * Close a specific channel. This will remove any resources used by the channel, including: <ul><li>any queue
-     * subscriptions (this may in turn remove queues if they are auto delete</li> </ul>
-     *
-     * @param channelId id of the channel to close
-     *
-     * @throws AMQException             if an error occurs closing the channel
-     * @throws IllegalArgumentException if the channel id is not valid
-     */
-    public void closeChannel(int channelId) throws AMQException
-    {
-        final AMQChannel channel = getChannel(channelId);
-        if (channel == null)
-        {
-            throw new IllegalArgumentException("Unknown channel id");
-        }
-        else
-        {
-            try
-            {
-                channel.close();
-                markChannelAwaitingCloseOk(channelId);
-            }
-            finally
-            {
-                removeChannel(channelId);
-            }
-        }
-    }
-
-    public void closeChannelOk(int channelId)
-    {
-        // todo QPID-847 - This is called from two lcoations ChannelCloseHandler and ChannelCloseOkHandler.
-        // When it is the CC_OK_Handler then it makes sence to remove the channel else we will leak memory.
-        // We do it from the Close Handler as we are sending the OK back to the client.
-        // While this is AMQP spec compliant. The Java client in the event of an IllegalArgumentException
-        // will send a close-ok.. Where we should call removeChannel.
-        // However, due to the poor exception handling on the client. The client-user will be notified of the
-        // InvalidArgument and if they then decide to close the session/connection then the there will be time
-        // for that to occur i.e. a new close method be sent before the exeption handling can mark the session closed.
-        //removeChannel(channelId);
-        _closingChannelsList.remove(new Integer(channelId));
-    }
-
-    private void markChannelAwaitingCloseOk(int channelId)
-    {
-        _closingChannelsList.put(channelId, System.currentTimeMillis());
-    }
-
-    /**
-     * In our current implementation this is used by the clustering code.
-     *
-     * @param channelId The channel to remove
-     */
-    public void removeChannel(int channelId)
-    {
-        _channelMap.remove(channelId);
-        if ((channelId & CHANNEL_CACHE_SIZE) == channelId)
-        {
-            _cachedChannels[channelId] = null;
-        }
-    }
-
-    /**
-     * Initialise heartbeats on the session.
-     *
-     * @param delay delay in seconds (not ms)
-     */
-    public void initHeartbeats(int delay)
-    {
-        if (delay > 0)
-        {
-            _networkDriver.setMaxWriteIdle(delay);
-            _networkDriver.setMaxReadIdle((int) (ApplicationRegistry.getInstance().getConfiguration().getHeartBeatTimeout() * delay));
-        }
-    }
-
-    /**
-     * Closes all channels that were opened by this protocol session. This frees up all resources used by the channel.
-     *
-     * @throws AMQException if an error occurs while closing any channel
-     */
-    private void closeAllChannels() throws AMQException
-    {
-        for (AMQChannel channel : _channelMap.values())
-        {
-            channel.close();
-        }
-
-        _channelMap.clear();
-        for (int i = 0; i <= CHANNEL_CACHE_SIZE; i++)
-        {
-            _cachedChannels[i] = null;
-        }
-    }
-
-    /** This must be called when the session is _closed in order to free up any resources managed by the session. */
-    public void closeSession() throws AMQException
-    {
-        if(_closing.compareAndSet(false,true))
-        {
-            // REMOVE THIS SHOULD NOT BE HERE.
-            if (CurrentActor.get() == null)
-            {
-                CurrentActor.set(_actor);
-            }
-            if (!_closed)
-            {
-                if (_virtualHost != null)
-                {
-                    _virtualHost.getConnectionRegistry().deregisterConnection(this);
-                }
-
-                closeAllChannels();
-                if (_managedObject != null)
-                {
-                    _managedObject.unregister();
-                    // Ensure we only do this once.
-                    _managedObject = null;
-                }
-
-                for (Task task : _taskList)
-                {
-                    task.doTask(this);
-                }
-
-                synchronized(this)
-                {
-                    _closed = true;
-                    notifyAll();
-                }
-                _poolReference.releaseExecutorService();
-                CurrentActor.get().message(_logSubject, ConnectionMessages.CON_1002());
-            }
-        }
-        else
-        {
-            synchronized(this)
-            {
-                while(!_closed)
-                {
-                    try
-                    {
-                        wait(1000);
-                    }
-                    catch (InterruptedException e)
-                    {
-
-                    }
-                }
-            }
-        }
-    }
-
-    public void closeConnection(int channelId, AMQConnectionException e, boolean closeProtocolSession) throws AMQException
-    {
-        if (_logger.isInfoEnabled())
-        {
-            _logger.info("Closing connection due to: " + e.getMessage());
-        }
-
-        markChannelAwaitingCloseOk(channelId);
-        closeSession();
-        _stateManager.changeState(AMQState.CONNECTION_CLOSING);
-        writeFrame(e.getCloseFrame(channelId));
-
-        if (closeProtocolSession)
-        {
-            closeProtocolSession();
-        }
-    }
-
-    public void closeProtocolSession()
-    {
-        _networkDriver.close();
-        try
-        {
-            _stateManager.changeState(AMQState.CONNECTION_CLOSED);
-        }
-        catch (AMQException e)
-        {
-            _logger.info(e.getMessage());
-        }
-    }
-
-    public String toString()
-    {
-        return getRemoteAddress() + "(" + (getAuthorizedID() == null ? "?" : getAuthorizedID().getName() + ")");
-    }
-
-    public String dump()
-    {
-        return this + " last_sent=" + _lastSent + " last_received=" + _lastReceived;
-    }
-
-    /** @return an object that can be used to identity */
-    public Object getKey()
-    {
-        return getRemoteAddress();
-    }
-
-    /**
-     * Get the fully qualified domain name of the local address to which this session is bound. Since some servers may
-     * be bound to multiple addresses this could vary depending on the acceptor this session was created from.
-     *
-     * @return a String FQDN
-     */
-    public String getLocalFQDN()
-    {
-        SocketAddress address = _networkDriver.getLocalAddress();
-        // we use the vmpipe address in some tests hence the need for this rather ugly test. The host
-        // information is used by SASL primary.
-        if (address instanceof InetSocketAddress)
-        {
-            return ((InetSocketAddress) address).getHostName();
-        }
-        else if (address instanceof VmPipeAddress)
-        {
-            return "vmpipe:" + ((VmPipeAddress) address).getPort();
-        }
-        else
-        {
-            throw new IllegalArgumentException("Unsupported socket address class: " + address);
-        }
-    }
-
-    public SaslServer getSaslServer()
-    {
-        return _saslServer;
-    }
-
-    public void setSaslServer(SaslServer saslServer)
-    {
-        _saslServer = saslServer;
-    }
-
-    public FieldTable getClientProperties()
-    {
-        return _clientProperties;
-    }
-
-    public void setClientProperties(FieldTable clientProperties)
-    {
-        _clientProperties = clientProperties;
-        if (_clientProperties != null)
-        {
-            if (_clientProperties.getString(CLIENT_PROPERTIES_INSTANCE) != null)
-            {
-                String clientID = _clientProperties.getString(CLIENT_PROPERTIES_INSTANCE);
-                setContextKey(new AMQShortString(clientID));
-
-                // Log the Opening of the connection for this client
-                _actor.message(ConnectionMessages.CON_1001(clientID, _protocolVersion.toString(), true, true));
-            }
-
-            if (_clientProperties.getString(ClientProperties.version.toString()) != null)
-            {
-                _clientVersion = new AMQShortString(_clientProperties.getString(ClientProperties.version.toString()));
-            }
-        }
-        _sessionIdentifier = new ProtocolSessionIdentifier(this);
-    }
-
-    private void setProtocolVersion(ProtocolVersion pv)
-    {
-        _protocolVersion = pv;
-
-        _protocolOutputConverter = ProtocolOutputConverterRegistry.getConverter(this);
-        _dispatcher = ServerMethodDispatcherImpl.createMethodDispatcher(_stateManager, _protocolVersion);
-    }
-
-    public byte getProtocolMajorVersion()
-    {
-        return _protocolVersion.getMajorVersion();
-    }
-
-    public ProtocolVersion getProtocolVersion()
-    {
-        return _protocolVersion;
-    }
-
-    public byte getProtocolMinorVersion()
-    {
-        return _protocolVersion.getMinorVersion();
-    }
-
-    public boolean isProtocolVersion(byte major, byte minor)
-    {
-        return (getProtocolMajorVersion() == major) && (getProtocolMinorVersion() == minor);
-    }
-
-    public MethodRegistry getRegistry()
-    {
-        return getMethodRegistry();
-    }
-
-    public Object getClientIdentifier()
-    {
-        return (_networkDriver != null) ? _networkDriver.getRemoteAddress() : null;
-    }
-
-    public VirtualHost getVirtualHost()
-    {
-        return _virtualHost;
-    }
-
-    public void setVirtualHost(VirtualHost virtualHost) throws AMQException
-    {
-        _virtualHost = virtualHost;
-
-        _actor.virtualHostSelected(this);
-        _logSubject = new ConnectionLogSubject(this);
-
-        _virtualHost.getConnectionRegistry().registerConnection(this);
-
-        try
-        {
-            _managedObject = createMBean();
-            _managedObject.register();
-        }
-        catch (JMException e)
-        {
-            _logger.error(e);
-        }
-    }
-
-    public void addSessionCloseTask(Task task)
-    {
-        _taskList.add(task);
-    }
-
-    public void removeSessionCloseTask(Task task)
-    {
-        _taskList.remove(task);
-    }
-
-    public ProtocolOutputConverter getProtocolOutputConverter()
-    {
-        return _protocolOutputConverter;
-    }
-
-    public void setAuthorizedID(Principal authorizedID)
-    {
-        _authorizedID = authorizedID;
-
-        // Let the actor know that this connection is now Authorized
-        _actor.connectionAuthorized(this);
-    }
-
-    public Principal getAuthorizedID()
-    {
-        return _authorizedID;
-    }
-
-    public Principal getPrincipal()
-    {
-        return _authorizedID;
-    }
-
-    public SocketAddress getRemoteAddress()
-    {
-        return _networkDriver.getRemoteAddress();
-    }
-
-    public SocketAddress getLocalAddress()
-    {
-        return _networkDriver.getLocalAddress();
-    }
-
-    public MethodRegistry getMethodRegistry()
-    {
-        return MethodRegistry.getMethodRegistry(getProtocolVersion());
-    }
-
-    public MethodDispatcher getMethodDispatcher()
-    {
-        return _dispatcher;
-    }
-
-    public void closed()
-    {
-        try
-        {
-            closeSession();
-        }
-        catch (AMQException e)
-        {
-           _logger.error("Could not close protocol engine", e);
-        }
-    }
-
-    public void readerIdle()
-    {
-        // Nothing
-    }
-
-    public void setNetworkDriver(NetworkDriver driver)
-    {
-        _networkDriver = driver;
-    }
-
-    public void writerIdle()
-    {
-        _networkDriver.send(HeartbeatBody.FRAME.toNioByteBuffer());
-    }
-
-    public void exception(Throwable throwable)
-    {
-        if (throwable instanceof AMQProtocolHeaderException)
-        {
-
-            writeFrame(new ProtocolInitiation(ProtocolVersion.getLatestSupportedVersion()));
-            _networkDriver.close();
-
-            _logger.error("Error in protocol initiation " + this + ":" + getRemoteAddress() + " :" + throwable.getMessage(), throwable);
-        }
-        else if (throwable instanceof IOException)
-        {
-            _logger.error("IOException caught in" + this + ", session closed implictly: " + throwable);
-        }
-        else
-        {
-            _logger.error("Exception caught in" + this + ", closing session explictly: " + throwable, throwable);
-
-
-            MethodRegistry methodRegistry = MethodRegistry.getMethodRegistry(getProtocolVersion());
-            ConnectionCloseBody closeBody = methodRegistry.createConnectionCloseBody(200,new AMQShortString(throwable.getMessage()),0,0);
-
-            writeFrame(closeBody.generateFrame(0));
-
-            _networkDriver.close();
-        }
-    }
-
-    public void init()
-    {
-        // Do nothing
-    }
-
-    public void setSender(Sender<ByteBuffer> sender)
-    {
-        // Do nothing
-    }
-
-    public long getReadBytes()
-    {
-        return _readBytes;
-    }
-
-    public long getWrittenBytes()
-    {
-        return _writtenBytes;
-    }
-
-    public long getLastIoTime()
-    {
-        return _lastIoTime;
-    }
-
-    public ProtocolSessionIdentifier getSessionIdentifier()
-    {
-        return _sessionIdentifier;
-    }
-
-    public String getClientVersion()
-    {
-        return (_clientVersion == null) ? null : _clientVersion.toString();
-    }
-
-    public void closeIfLingeringClosedChannels()
-    {
-        for (Entry<Integer, Long>id : _closingChannelsList.entrySet())
-        {
-            if (id.getValue() + 30000 > System.currentTimeMillis())
-            {
-                // We have a channel that we closed 30 seconds ago. Client's dead, kill the connection
-                _logger.error("Closing connection as channel was closed more than 30 seconds ago and no ChannelCloseOk has been processed");
-                closeProtocolSession();
-            }
-        }
-    }
-
+      }
+      if (logger.isDebugEnabled()) {
+        logger.debug("Built a new TXState: {} me:{}", this.realDeal, this.txMgr.getDM().getId());
+      }
+    }
+    return this.realDeal;   
+  }
+  
+  public TXStateInterface getRealDeal(DistributedMember t) {
+    assert t != null;
+    if (this.realDeal == null) {
+      this.target = t;
+      if (target.equals(getCache().getDistributedSystem().getDistributedMember())) {
+        this.realDeal = new TXState(this, false);
+      } else {
+        /*
+         * txtodo: // what to do!!
+         * We don't know if this is client or server!!!
+         */
+        this.realDeal = new PeerTXStateStub(this, target,onBehalfOfClientMember);
+      }
+      if (logger.isDebugEnabled()) {
+        logger.debug("Built a new TXState: {} me:{}", this.realDeal, this.txMgr.getDM().getId());
+      }
+    }
+    return this.realDeal;
+  }
+
+  /**
+   * @param managerImpl
+   * @param id
+   */
+  public TXStateProxyImpl(TXManagerImpl managerImpl, TXId id,InternalDistributedMember clientMember) {
+    this.txMgr = managerImpl;
+    this.txId = id;
+    this.isJTA = false;
+    this.onBehalfOfClientMember = clientMember;
+  }
+
+  /**
+   * @param managerImpl
+   * @param id
+   * @param isjta
+   */
+  public TXStateProxyImpl(TXManagerImpl managerImpl, TXId id, boolean isjta) {
+    this.txMgr = managerImpl;
+    this.txId = id;
+    this.isJTA = isjta;
+  }
+  
+  protected void setTXIDForReplay(TXId id) {
+    this.txId = id;
+  }
+
+  public boolean isOnBehalfOfClient() {
+    return this.onBehalfOfClientMember != null;
+  }
+  
+  public void setIsJTA(boolean isJTA) {
+    this.isJTA = isJTA;
+  }
+  
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#checkJTA(java.lang.String)
+   */
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateProxyInterface#checkJTA(java.lang.String)
+   */
+  public void checkJTA(String errmsg) throws IllegalStateException {
+    if (isJTA()) {
+      throw new IllegalStateException(errmsg);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#commit()
+   */
+  public void commit() throws CommitConflictException {
+    boolean preserveTx = false;
+    try {
+      getRealDeal(null, null).commit();
+    } catch (UnsupportedOperationInTransactionException e) {
+      // fix for #42490
+      preserveTx = true;
+      throw e;
+    } finally {
+      inProgress = preserveTx;
+      if (this.synchRunnable != null) {
+        this.synchRunnable.abort();
+      }
+    }
+  }
+
+  private TransactionException getTransactionException(KeyInfo keyInfo, GemFireException e) {
+    if (isRealDealLocal() && !buckets.isEmpty() && !buckets.containsKey(keyInfo.getBucketId())) {
+      TransactionException ex = new TransactionDataNotColocatedException(LocalizedStrings.
+          PartitionedRegion_KEY_0_NOT_COLOCATED_WITH_TRANSACTION.toLocalizedString(keyInfo.getKey()));
+      ex.initCause(e.getCause());
+      return ex;
+    }
+    Throwable ex = e;
+    while (ex != null) {
+      if (ex instanceof PrimaryBucketException) {
+        return new TransactionDataRebalancedException(LocalizedStrings.PartitionedRegion_TRANSACTIONAL_DATA_MOVED_DUE_TO_REBALANCING
+            .toLocalizedString());
+      }
+      ex = ex.getCause();
+    }
+    return (TransactionException) e;
+  }
+  
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#containsValueForKey(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public boolean containsValueForKey(KeyInfo keyInfo, LocalRegion region) {
+    try {
+      this.operationCount++;
+      boolean retVal = getRealDeal(keyInfo, region).containsValueForKey(keyInfo, region);
+      trackBucketForTx(keyInfo);
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(keyInfo, re);
+    }
+  }
+
+  private void trackBucketForTx(KeyInfo keyInfo) {
+    GemFireCacheImpl cache = (GemFireCacheImpl) txMgr.getCache();
+    if (keyInfo.getBucketId() >= 0) {
+      if (logger.isDebugEnabled()) {
+        logger.debug("adding bucket:{} for tx:{}", keyInfo.getBucketId(), getTransactionId());
+      }
+    }
+    if (keyInfo.getBucketId() >= 0) {
+      buckets.put(keyInfo.getBucketId(), Boolean.TRUE);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#destroyExistingEntry(com.gemstone.gemfire.internal.cache.EntryEventImpl, boolean, java.lang.Object)
+   */
+  public void destroyExistingEntry(EntryEventImpl event, boolean cacheWrite,
+      Object expectedOldValue) throws EntryNotFoundException {
+    try {
+      this.operationCount++;
+      getRealDeal(event.getKeyInfo(), event.getLocalRegion()).destroyExistingEntry(event, cacheWrite, expectedOldValue);
+      trackBucketForTx(event.getKeyInfo());
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(event.getKeyInfo(), re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getBeginTime()
+   */
+  public long getBeginTime() {
+    return getRealDeal(null, null).getBeginTime();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getCache()
+   */
+  public Cache getCache() {
+    return txMgr.getCache();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getChanges()
+   */
+  public int getChanges() {
+    assertBootstrapped();
+    return getRealDeal(null, null).getChanges();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getDeserializedValue(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion, boolean)
+   */
+  public Object getDeserializedValue(KeyInfo keyInfo, LocalRegion localRegion,
+      boolean updateStats, boolean disableCopyOnRead, boolean preferCD, EntryEventImpl clientEvent, boolean returnTombstones) {
+    Object val = getRealDeal(keyInfo, localRegion).getDeserializedValue(keyInfo, localRegion, updateStats, disableCopyOnRead, preferCD, null, false);
+    if (val != null) {
+      // fixes bug 51057: TXStateStub  on client always returns null, so do not increment
+      // the operation count it will be incremented in findObject()
+      this.operationCount++;
+    }
+    return val;
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getEntry(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public Entry getEntry(KeyInfo keyInfo, LocalRegion region, boolean allowTombstones) {
+    try {
+      this.operationCount++;
+      Entry retVal = getRealDeal(keyInfo, region).getEntry(keyInfo, region, allowTombstones);
+      trackBucketForTx(keyInfo);
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(keyInfo, re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getEvent()
+   */
+  public TXEvent getEvent() {
+    assertBootstrapped();
+    return getRealDeal(null, null).getEvent();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getEvents()
+   */
+  public List getEvents() {
+    assertBootstrapped();
+    return getRealDeal(null, null).getEvents();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getRegions()
+   */
+  public Collection<LocalRegion> getRegions() {
+    assertBootstrapped();
+    return getRealDeal(null, null).getRegions();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#getTransactionId()
+   */
+  public TransactionId getTransactionId() {
+    return txId;
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#invalidateExistingEntry(com.gemstone.gemfire.internal.cache.EntryEventImpl, boolean, boolean)
+   */
+  public void invalidateExistingEntry(EntryEventImpl event,
+      boolean invokeCallbacks, boolean forceNewEntry) {
+    try {
+      this.operationCount++;
+      getRealDeal(event.getKeyInfo(), event.getLocalRegion()).invalidateExistingEntry(event, invokeCallbacks, forceNewEntry);
+      trackBucketForTx(event.getKeyInfo());
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(event.getKeyInfo(), re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#isInProgress()
+   */
+  public boolean isInProgress() {
+    return inProgress;
+  }
+
+  @Override
+  public void setInProgress(boolean progress) {
+    this.inProgress = progress;
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#needsLargeModCount()
+   */
+  public boolean needsLargeModCount() {
+    assertBootstrapped();
+    return getRealDeal(null, null).needsLargeModCount();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#nextModSerialNum()
+   */
+  public int nextModSerialNum() {
+    assertBootstrapped();
+    return getRealDeal(null, null).nextModSerialNum();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#readRegion(com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public TXRegionState readRegion(LocalRegion r) {
+    assertBootstrapped();
+    return getRealDeal(null, r).readRegion(r);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#rmRegion(com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public void rmRegion(LocalRegion r) {
+    assertBootstrapped();
+    getRealDeal(null, r).rmRegion(r);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#rollback()
+   */
+  public void rollback() {
+    try {
+      getRealDeal(null, null).rollback();
+    } finally {
+      inProgress = false;
+      if (this.synchRunnable != null) {
+        this.synchRunnable.abort();
+      }
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#txPutEntry(com.gemstone.gemfire.internal.cache.EntryEventImpl, boolean, boolean, boolean)
+   */
+  public boolean txPutEntry(EntryEventImpl event, boolean ifNew,
+      boolean requireOldValue, boolean checkResources, Object expectedOldValue) {
+    try {
+      this.operationCount++;
+      boolean retVal = getRealDeal(event.getKeyInfo(), (LocalRegion)event.getRegion()).txPutEntry(event, ifNew, requireOldValue, checkResources, expectedOldValue);
+      trackBucketForTx(event.getKeyInfo());
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(event.getKeyInfo(), re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#txReadEntry(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion, boolean)
+   */
+  public TXEntryState txReadEntry(KeyInfo keyInfo, LocalRegion localRegion,
+      boolean rememberRead,boolean createTxEntryIfAbsent) {
+    try {
+      this.operationCount++;
+      TXEntryState retVal = getRealDeal(keyInfo, localRegion).txReadEntry(keyInfo, localRegion, 
+          rememberRead,createTxEntryIfAbsent);
+      trackBucketForTx(keyInfo);
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(keyInfo, re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#txReadRegion(com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public TXRegionState txReadRegion(LocalRegion localRegion) {
+    assertBootstrapped();
+    return getRealDeal(null, localRegion).txReadRegion(localRegion);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#txWriteRegion(com.gemstone.gemfire.internal.cache.LocalRegion, java.lang.Object)
+   */
+  public TXRegionState txWriteRegion(LocalRegion localRegion, KeyInfo entryKey) {
+    return getRealDeal(entryKey, localRegion).txWriteRegion(localRegion, entryKey);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#writeRegion(com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public TXRegionState writeRegion(LocalRegion r) {
+    assertBootstrapped();
+    return getRealDeal(null, r).writeRegion(r);
+  }
+
+  private void assertBootstrapped() {
+    assert realDeal!=null;
+  }
+  
+  /* (non-Javadoc)
+   * @see javax.transaction.Synchronization#afterCompletion(int)
+   */
+  public void afterCompletion(int status) {
+    assertBootstrapped();
+    try {
+      getRealDeal(null, null).afterCompletion(status);
+    } finally {
+      this.inProgress = false;
+      if (this.synchRunnable != null) {
+        this.synchRunnable.abort();
+      }
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see javax.transaction.Synchronization#beforeCompletion()
+   */
+  public void beforeCompletion() {
+    assertBootstrapped();
+    getRealDeal(null, null).beforeCompletion();    
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#containsKey(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public boolean containsKey(KeyInfo keyInfo, LocalRegion localRegion) {
+    try {
+      this.operationCount++;
+      boolean retVal = getRealDeal(keyInfo, localRegion).containsKey(keyInfo, localRegion);
+      trackBucketForTx(keyInfo);
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(keyInfo, re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#entryCount(com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  @SuppressFBWarnings(value="UL_UNRELEASED_LOCK", justification="This method unlocks and then conditionally undoes the unlock in the finally-block. Review again at later time.") 
+  public int entryCount(LocalRegion localRegion) {
+    // if size is the first operation in the transaction, then reset the txState
+    boolean resetTXState = this.realDeal == null;
+    TXStateProxy txp = null;
+    boolean txUnlocked = false;
+    if (resetTXState) {
+    	txp = getTxMgr().internalSuspend();
+    } else {
+      if (getLock().isHeldByCurrentThread()) {
+        txUnlocked = true; // bug #42945 - hang trying to compute size for PR
+        getLock().unlock();
+      }
+    }
+    try {
+      if(resetTXState) {
+    	return localRegion.getSharedDataView().entryCount(localRegion);
+      }
+      return getRealDeal(null, localRegion).entryCount(localRegion);
+    } finally {
+      if (resetTXState) {
+        getTxMgr().resume(txp);
+      } else if (txUnlocked) {
+        getLock().lock();
+      }
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#findObject(com.gemstone.gemfire.internal.cache.LocalRegion, java.lang.Object, java.lang.Object, boolean, boolean, java.lang.Object)
+   */
+  public Object findObject(KeyInfo key, LocalRegion r, boolean isCreate,
+      boolean generateCallbacks, Object value, boolean disableCopyOnRead,
+      boolean preferCD, ClientProxyMembershipID requestingClient,
+      EntryEventImpl clientEvent, boolean returnTombstones) {
+    try {
+      this.operationCount++;
+      Object retVal = getRealDeal(key, r).findObject(key, r, isCreate, generateCallbacks,
+          value, disableCopyOnRead, preferCD, requestingClient, clientEvent, false);
+      trackBucketForTx(key);
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(key, re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getAdditionalKeysForIterator(com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public Set getAdditionalKeysForIterator(LocalRegion currRgn) {
+    if (this.realDeal == null) {
+      return null;
+    }
+    return getRealDeal(null, currRgn).getAdditionalKeysForIterator(currRgn);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getEntryForIterator(com.gemstone.gemfire.internal.cache.LocalRegion, java.lang.Object, boolean)
+   */
+  public Object getEntryForIterator(KeyInfo key, LocalRegion currRgn,
+      boolean rememberReads, boolean allowTombstones) {
+    boolean resetTxState = this.realDeal == null;
+    TXStateProxy txp = null;
+    if(resetTxState) {
+    	txp = getTxMgr().internalSuspend();
+    }
+    try {
+      if (resetTxState) {
+        return currRgn.getSharedDataView().getEntry(key, currRgn, allowTombstones);
+      }
+      return getRealDeal(key, currRgn).getEntryForIterator(key, currRgn, rememberReads, allowTombstones);
+    } finally {
+      if (resetTxState) {
+        getTxMgr().resume(txp);
+      }
+    }
+    
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getKeyForIterator(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion, boolean)
+   */
+  public Object getKeyForIterator(KeyInfo keyInfo, LocalRegion currRgn,
+      boolean rememberReads, boolean allowTombstones) {
+    boolean resetTxState = this.realDeal == null;
+    TXStateProxy txp = null;
+    if(resetTxState) {
+        txp = getTxMgr().internalSuspend();
+    }
+    try {
+      if (resetTxState) {
+        return currRgn.getSharedDataView().getKeyForIterator(keyInfo, currRgn, rememberReads, allowTombstones);
+      }
+      return getRealDeal(keyInfo, currRgn).getKeyForIterator(keyInfo, currRgn, rememberReads, allowTombstones);
+    } finally {
+      if (resetTxState) {
+        getTxMgr().resume(txp);
+      }
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getValueInVM(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion, boolean)
+   */
+  public Object getValueInVM(KeyInfo keyInfo, LocalRegion localRegion,
+      boolean rememberRead) {
+    this.operationCount++;
+    return getRealDeal(keyInfo, localRegion).getValueInVM(keyInfo, localRegion, rememberRead);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#isDeferredStats()
+   */
+  public boolean isDeferredStats() {
+    assertBootstrapped();
+    return getRealDeal(null, null).isDeferredStats();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#putEntry(com.gemstone.gemfire.internal.cache.EntryEventImpl, boolean, boolean, java.lang.Object, boolean, long, boolean)
+   */
+  public boolean putEntry(EntryEventImpl event, boolean ifNew, boolean ifOld,
+      Object expectedOldValue, boolean requireOldValue, long lastModified,
+      boolean overwriteDestroyed) {
+    try {
+      this.operationCount++;
+      boolean retVal = getRealDeal(event.getKeyInfo(), event.getLocalRegion()).putEntry(event, ifNew,
+            ifOld, expectedOldValue, requireOldValue, lastModified, overwriteDestroyed);
+      trackBucketForTx(event.getKeyInfo());
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(event.getKeyInfo(), re);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateInterface#isInProgressAndSameAs(com.gemstone.gemfire.internal.cache.TXStateInterface)
+   */
+  public boolean isInProgressAndSameAs(TXStateInterface otherState) {
+    return isInProgress() && otherState == this; 
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateProxy#setLocalTXState(com.gemstone.gemfire.internal.cache.TXState)
+   */
+  public void setLocalTXState(TXStateInterface state) {
+    this.realDeal = state;
+  }
+
+  /*
+   * (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getSerializedValue(com.gemstone.gemfire.internal.cache.LocalRegion, java.lang.Object, java.lang.Object)
+   */
+  public Object getSerializedValue(LocalRegion localRegion, KeyInfo key, boolean doNotLockEntry, ClientProxyMembershipID requestingClient, EntryEventImpl clientEvent, boolean returnTombstones) throws DataLocationException {
+    this.operationCount++;
+    return getRealDeal(key, localRegion).getSerializedValue(localRegion, key, doNotLockEntry, requestingClient, clientEvent, returnTombstones);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#putEntryOnRemote(com.gemstone.gemfire.internal.cache.EntryEventImpl, boolean, boolean, java.lang.Object, boolean, long, boolean)
+   */
+  public boolean putEntryOnRemote(EntryEventImpl event, boolean ifNew,
+      boolean ifOld, Object expectedOldValue, boolean requireOldValue,
+      long lastModified, boolean overwriteDestroyed)
+      throws DataLocationException {
+    this.operationCount++;
+    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
+    assert (tx instanceof TXState);
+    return tx.putEntryOnRemote(event, ifNew, ifOld, expectedOldValue, requireOldValue, lastModified, overwriteDestroyed);
+  }
+  
+  public boolean isFireCallbacks() {
+    return getRealDeal(null,null).isFireCallbacks();
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#destroyOnRemote(java.lang.Integer, com.gemstone.gemfire.internal.cache.EntryEventImpl, java.lang.Object)
+   */
+  public void destroyOnRemote(EntryEventImpl event, boolean cacheWrite,
+      Object expectedOldValue) throws DataLocationException {
+    this.operationCount++;
+    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
+    assert (tx instanceof TXState);
+    tx.destroyOnRemote(event, cacheWrite, expectedOldValue);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#invalidateOnRemote(com.gemstone.gemfire.internal.cache.EntryEventImpl, boolean, boolean)
+   */
+  public void invalidateOnRemote(EntryEventImpl event, boolean invokeCallbacks,
+      boolean forceNewEntry) throws DataLocationException {
+    this.operationCount++;
+    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
+    assert (tx instanceof TXState);
+    tx.invalidateOnRemote(event, invokeCallbacks, forceNewEntry);
+  }
+  
+  public void checkSupportsRegionDestroy()
+    throws UnsupportedOperationInTransactionException {
+    throw new UnsupportedOperationInTransactionException(LocalizedStrings.TXState_REGION_DESTROY_NOT_SUPPORTED_IN_A_TRANSACTION.toLocalizedString());
+  }
+  
+  public void checkSupportsRegionInvalidate()
+    throws UnsupportedOperationInTransactionException {
+    throw new UnsupportedOperationInTransactionException(LocalizedStrings.TXState_REGION_INVALIDATE_NOT_SUPPORTED_IN_A_TRANSACTION.toLocalizedString());
+  }
+
+  @Override
+  public void checkSupportsRegionClear()
+      throws UnsupportedOperationInTransactionException {
+    throw new UnsupportedOperationInTransactionException(LocalizedStrings.TXState_REGION_CLEAR_NOT_SUPPORTED_IN_A_TRANSACTION.toLocalizedString());
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getBucketKeys(com.gemstone.gemfire.internal.cache.LocalRegion, int)
+   */
+  public Set getBucketKeys(LocalRegion localRegion, int bucketId, boolean allowTombstones) {
+    //if this the first operation in a transaction, reset txState
+    boolean resetTxState = this.realDeal == null;
+    TXStateProxy txp = null;
+    if(resetTxState) {
+    	txp = getTxMgr().internalSuspend();
+    }
+    try {
+      if(resetTxState) {
+    	return localRegion.getSharedDataView().getBucketKeys(localRegion, bucketId, false);
+      }
+      return getRealDeal(null, localRegion).getBucketKeys(localRegion, bucketId, false);
+    } finally {
+      if (resetTxState) {
+        getTxMgr().resume(txp);
+      }
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getEntryOnRemote(java.lang.Object, com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public Entry getEntryOnRemote(KeyInfo keyInfo, LocalRegion localRegion, boolean allowTombstones)
+      throws DataLocationException {
+    this.operationCount++;
+    TXStateInterface tx = getRealDeal(keyInfo, localRegion);
+    assert (tx instanceof TXState);
+    return tx.getEntryOnRemote(keyInfo, localRegion, allowTombstones);
+  }
+  
+  public void forceLocalBootstrap() {
+    getRealDeal(null,null);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateProxy#getTarget()
+   */
+  public DistributedMember getTarget() {
+    return this.target;
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateProxy#setTarget(com.gemstone.gemfire.distributed.DistributedMember)
+   */
+  public void setTarget(DistributedMember target) {
+    assert this.target == null;
+    getRealDeal(target);
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.InternalDataView#getRegionKeysForIteration(com.gemstone.gemfire.internal.cache.LocalRegion)
+   */
+  public Collection<?> getRegionKeysForIteration(LocalRegion currRegion) {
+    if (currRegion.isUsedForPartitionedRegionBucket()) {
+      return currRegion.getRegionKeysForIteration();
+    } else {
+      return getRealDeal(null, currRegion).getRegionKeysForIteration(currRegion);
+    }
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateProxy#isCommitRequestedByOwner()
+   */
+  public boolean isCommitOnBehalfOfRemoteStub() {
+    return this.commitRequestedByOwner;
+  }
+
+  /* (non-Javadoc)
+   * @see com.gemstone.gemfire.internal.cache.TXStateProxy#setCommitRequestedByOwner()
+   */
+  public boolean setCommitOnBehalfOfRemoteStub(boolean requestedByOwner) {
+    return this.commitRequestedByOwner = requestedByOwner;
+  }
+
+  public boolean isRealDealLocal() {
+    if (this.realDeal != null) {
+      return this.realDeal.isRealDealLocal();
+    }
+    else {
+      // no real deal
+      return false;
+    }
+  }
+  
+  /** if there is local txstate, return it */
+  public TXState getLocalRealDeal() {
+    if (this.realDeal != null) {
+      if (this.realDeal.isRealDealLocal()) {
+        return (TXState)this.realDeal;
+      }
+    }
+    return null;
+  }
+
+  @Override
+  public String toString() {
+    StringBuilder builder = new StringBuilder();
+    builder.append("TXStateProxyImpl@").append(System.identityHashCode(this))
+    .append(" txId:").append(this.txId)
+    .append(" realDeal:"+this.realDeal)
+    .append(" isJTA:").append(isJTA);
+    return builder.toString();
+  }
+
+  public InternalDistributedMember getOriginatingMember() {
+    if(this.realDeal==null) {
+      return null;
+    } else {
+      return this.realDeal.getOriginatingMember();
+    }
+  }
+
+
+  public boolean isMemberIdForwardingRequired() {
+    if(this.realDeal==null) {
+      return false;
+    } else {
+      return this.realDeal.isMemberIdForwardingRequired();
+    }
+  }
+
+
+  public TXCommitMessage getCommitMessage() {
+    if(this.realDeal==null) {
+      return null;
+    } else {
+      return this.realDeal.getCommitMessage();
+    }
+  }
+  
+  
+  public void postPutAll(DistributedPutAllOperation putallOp, VersionedObjectList successfulPuts,LocalRegion region) {
+    if(putallOp.putAllData.length==0) {
+      return;
+    }
+    region.getCancelCriterion().checkCancelInProgress(null); // fix for bug #43651
+    Object key = null;
+    if(putallOp.putAllData[0]!=null) {
+      key = putallOp.putAllData[0].key;
+    }
+    KeyInfo ki = new KeyInfo(key,null,null);
+    TXStateInterface tsi = getRealDeal(ki,region);
+    tsi.postPutAll(putallOp, successfulPuts, region);
+  }
+  @Override
+  public void postRemoveAll(DistributedRemoveAllOperation op, VersionedObjectList successfulOps, LocalRegion region) {
+    if(op.removeAllData.length==0) {
+      return;
+    }
+    region.getCancelCriterion().checkCancelInProgress(null); // fix for bug #43651
+    Object key = null;
+    if(op.removeAllData[0]!=null) {
+      key = op.removeAllData[0].key;
+    }
+    KeyInfo ki = new KeyInfo(key,null,null);
+    TXStateInterface tsi = getRealDeal(ki,region);
+    tsi.postRemoveAll(op, successfulOps, region);
+  }
+
+  public boolean isJCATransaction()
+  {
+    return this.isJCATransaction;
+  }
+    
+ 
+    public void setJCATransaction()
+    {
+      this.isJCATransaction = true;
+    }
+  
+  public Entry accessEntry(KeyInfo keyInfo, LocalRegion region) {
+    try {
+      this.operationCount++;
+      Entry retVal = getRealDeal(keyInfo, region).accessEntry(keyInfo, region);
+      trackBucketForTx(keyInfo);
+      return retVal;
+    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
+      throw getTransactionException(keyInfo, re);
+    }
+  }
+
+  public void suspend() {
+    if (this.realDeal != null) {
+      getRealDeal(null, null).suspend();
+    }
+  }
+
+  public void resume() {
+    if (this.realDeal != null) {
+      getRealDeal(null, null).resume();
+    }
+  }
+  
+  /** test hook - record a list of ops in the transaction */
+  public void recordTXOperation(ServerRegionDataAccess region, ServerRegionOperation op, Object key, Object arguments[]) {
+    if (ClientTXStateStub.transactionRecordingEnabled()) {
+      getRealDeal(null, (LocalRegion)region.getRegion()).recordTXOperation(region, op, key, arguments);
+    }
+  }
+
+  @Override
+  public int operationCount() {
+    return this.operationCount;
+  }
+  
+  /**
+   * increments the operation count by 1
+   */
+  public void incOperationCount() {
+    this.operationCount++;
+  }
+
+  @Override
+  public void updateEntryVersion(EntryEventImpl event)
+      throws EntryNotFoundException {
+    // Do nothing. Not applicable for transactions.    
+  }
 }

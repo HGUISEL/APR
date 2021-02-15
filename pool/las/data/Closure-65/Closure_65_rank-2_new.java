@@ -1,83 +1,110 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- *   or more contributor license agreements.  See the NOTICE file
- *   distributed with this work for additional information
- *   regarding copyright ownership.  The ASF licenses this file
- *   to you under the Apache License, Version 2.0 (the
- *   "License"); you may not use this file except in compliance
- *   with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
+ * Copyright (c) 2007 Mockito contributors
+ * This program is made available under the terms of the MIT License.
  */
 
-package org.apache.phoenix.pherf;
+package org.mockito.internal.util;
 
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import org.mockito.cglib.proxy.Callback;
+import org.mockito.cglib.proxy.Factory;
+import org.mockito.exceptions.misusing.NotAMockException;
+import org.mockito.internal.InvocationNotifierHandler;
+import org.mockito.internal.MockHandler;
+import org.mockito.internal.MockHandlerInterface;
+import org.mockito.internal.creation.MethodInterceptorFilter;
+import org.mockito.internal.creation.MockSettingsImpl;
+import org.mockito.internal.creation.jmock.ClassImposterizer;
+import org.mockito.internal.util.reflection.LenientCopyTool;
 
-import java.net.URL;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.sql.Connection;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.Serializable;
 
-import org.apache.phoenix.end2end.BaseHBaseManagedTimeIT;
-import org.apache.phoenix.pherf.configuration.Column;
-import org.apache.phoenix.pherf.configuration.DataModel;
-import org.apache.phoenix.pherf.configuration.Scenario;
-import org.apache.phoenix.pherf.configuration.XMLConfigParser;
-import org.apache.phoenix.pherf.schema.SchemaReader;
-import org.apache.phoenix.pherf.util.PhoenixUtil;
-import org.junit.Ignore;
-import org.junit.Test;
+import static org.mockito.Mockito.RETURNS_DEFAULTS;
+import static org.mockito.Mockito.withSettings;
 
-public class SchemaReaderIT extends BaseHBaseManagedTimeIT {
-    protected static PhoenixUtil util = PhoenixUtil.create(true);
+@SuppressWarnings("unchecked")
+public class MockUtil {
+    
+    private final MockCreationValidator creationValidator;
 
-    @Test 
-    @Ignore("Until PHOENIX-2573 is fixed")
-    public void testSchemaReader() {
-        // Test for the unit test version of the schema files.
-        assertApplySchemaTest();
+    public MockUtil(MockCreationValidator creationValidator) {
+        this.creationValidator = creationValidator;
+    }
+    
+    public MockUtil() {
+        this(new MockCreationValidator());
     }
 
-    private void assertApplySchemaTest() {
-        try {
-            util.setZookeeper("localhost");
-            SchemaReader reader = new SchemaReader(util, ".*datamodel/.*test.*sql");
+    public <T> T createMock(Class<T> classToMock, MockSettingsImpl settings) {
+        creationValidator.validateType(classToMock);
+        creationValidator.validateExtraInterfaces(classToMock, settings.getExtraInterfaces());
+        creationValidator.validateMockedType(classToMock, settings.getSpiedInstance());
 
-            List<Path> resources = new ArrayList<>(reader.getResourceList());
-            assertTrue("Could not pull list of schema files.", resources.size() > 0);
-            assertNotNull("Could not read schema file.", this.getClass().getResourceAsStream(
-                    PherfConstants.RESOURCE_DATAMODEL + "/" + resources.get(0).getFileName()
-                            .toString()));
-            assertNotNull("Could not read schema file.", reader.resourceToString(resources.get(0)));
-            reader.applySchema();
+        settings.initiateMockName(classToMock);
 
-            Connection connection = null;
-            URL resourceUrl = getClass().getResource("/scenario/test_scenario.xml");
-            assertNotNull("Test data XML file is missing", resourceUrl);
-            connection = util.getConnection();
-            Path resourcePath = Paths.get(resourceUrl.toURI());
-            DataModel data = XMLConfigParser.readDataModel(resourcePath);
-            List<Scenario> scenarioList = data.getScenarios();
-            Scenario scenario = scenarioList.get(0);
-            List<Column>
-                    columnList =
-                    util.getColumnsFromPhoenix(scenario.getSchemaName(),
-                            scenario.getTableNameWithoutSchemaName(), connection);
-            assertTrue("Could not retrieve Metadata from Phoenix", columnList.size() > 0);
-        } catch (Exception e) {
-            fail("Could not initialize SchemaReader");
-            e.printStackTrace();
+        MockHandler<T> mockHandler = new MockHandler<T>(settings);
+        InvocationNotifierHandler<T> invocationNotifierHandler = new InvocationNotifierHandler<T>(mockHandler, settings);
+        MethodInterceptorFilter filter = new MethodInterceptorFilter(invocationNotifierHandler, settings);
+        Class<?>[] interfaces = settings.getExtraInterfaces();
+
+        Class<?>[] ancillaryTypes;
+        if (settings.isSerializable()) {
+            ancillaryTypes = interfaces == null ? new Class<?>[] {Serializable.class} : new ArrayUtils().concat(interfaces, Serializable.class);
+        } else {
+            ancillaryTypes = interfaces == null ? new Class<?>[0] : interfaces;
         }
+
+        Object spiedInstance = settings.getSpiedInstance();
+        
+        T mock = ClassImposterizer.INSTANCE.imposterise(filter, classToMock, ancillaryTypes);
+        
+        if (spiedInstance != null) {
+            new LenientCopyTool().copyToMock(spiedInstance, mock);
+        }
+        
+        return mock;
+    }
+
+    public <T> void resetMock(T mock) {
+        MockHandlerInterface<T> oldMockHandler = getMockHandler(mock);
+        MockHandler<T> newMockHandler = new MockHandler<T>(oldMockHandler);
+        MethodInterceptorFilter newFilter = new MethodInterceptorFilter(newMockHandler, 
+                        (MockSettingsImpl) withSettings().defaultAnswer(RETURNS_DEFAULTS));
+        ((Factory) mock).setCallback(0, newFilter);
+    }
+
+    public <T> MockHandlerInterface<T> getMockHandler(T mock) {
+        if (mock == null) {
+            throw new NotAMockException("Argument should be a mock, but is null!");
+        }
+
+        if (isMockitoMock(mock)) {
+            return (MockHandlerInterface) getInterceptor(mock).getHandler();
+        } else {
+            throw new NotAMockException("Argument should be a mock, but is: " + mock.getClass());
+        }
+    }
+
+    private <T> boolean isMockitoMock(T mock) {
+        return getInterceptor(mock) != null;
+    }
+
+    public boolean isMock(Object mock) {
+        return mock != null && isMockitoMock(mock);
+    }
+
+    private <T> MethodInterceptorFilter getInterceptor(T mock) {
+        if (!(mock instanceof Factory)) {
+            return null;
+        }
+        Factory factory = (Factory) mock;
+        Callback callback = factory.getCallback(0);
+        if (callback instanceof MethodInterceptorFilter) {
+            return (MethodInterceptorFilter) callback;
+        }
+        return null;
+    }
+
+    public MockName getMockName(Object mock) {
+        return getMockHandler(mock).getMockSettings().getMockName();
     }
 }

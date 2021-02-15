@@ -1,11 +1,10 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -15,191 +14,298 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.cassandra.db;
+package org.apache.commons.cli;
 
-import java.io.DataInput;
-import java.io.DataOutput;
-import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.Arrays;
+import java.util.Iterator;
 
-import com.google.common.primitives.Ints;
+/**
+ * The class PosixParser provides an implementation of the 
+ * {@link Parser#flatten(Options,String[],boolean) flatten} method.
+ *
+ * @author John Keyes (john at integralsource.com)
+ * @see Parser
+ * @version $Revision$
+ */
+public class PosixParser extends Parser {
 
-import org.apache.cassandra.cache.IMeasurableMemory;
-import org.apache.cassandra.io.sstable.Descriptor;
-import org.apache.cassandra.io.sstable.IndexHelper;
-import org.apache.cassandra.io.util.FileUtils;
-import org.apache.cassandra.utils.ObjectSizes;
+    /** holder for flattened tokens */
+    private ArrayList tokens = new ArrayList();
 
-public class RowIndexEntry implements IMeasurableMemory
-{
-    public static final Serializer serializer = new Serializer();
+    /** specifies if bursting should continue */
+    private boolean eatTheRest;
 
-    public final long position;
+    /** holder for the current option */
+    private Option currentOption;
 
-    public RowIndexEntry(long position)
+    /** the command line Options */
+    private Options options;
+
+    /**
+     * <p>Resets the members to their original state i.e. remove
+     * all of <code>tokens</code> entries, set <code>eatTheRest</code>
+     * to false and set <code>currentOption</code> to null.</p>
+     */
+    private void init()
     {
-        this.position = position;
-    }
-
-    public int serializedSize()
-    {
-        return TypeSizes.NATIVE.sizeof(position) + promotedSize();
-    }
-
-    protected int promotedSize()
-    {
-        return 0;
-    }
-
-    public static RowIndexEntry create(long position, DeletionTime deletionTime, ColumnIndex index)
-    {
-        assert index != null;
-        assert deletionTime != null;
-
-        // we only consider the columns summary when determining whether to create an IndexedEntry,
-        // since if there are insufficient columns to be worth indexing we're going to seek to
-        // the beginning of the row anyway, so we might as well read the tombstone there as well.
-        if (index.columnsIndex.size() > 1)
-            return new IndexedEntry(position, deletionTime, index.columnsIndex);
-        else
-            return new RowIndexEntry(position);
+        eatTheRest = false;
+        tokens.clear();
+        currentOption = null;
     }
 
     /**
-     * @return true if this index entry contains the row-level tombstone and column summary.  Otherwise,
-     * caller should fetch these from the row header.
+     * <p>An implementation of {@link Parser}'s abstract
+     * {@link Parser#flatten(Options,String[],boolean) flatten} method.</p>
+     *
+     * <p>The following are the rules used by this flatten method.
+     * <ol>
+     *  <li>if <code>stopAtNonOption</code> is <b>true</b> then do not
+     *  burst anymore of <code>arguments</code> entries, just add each
+     *  successive entry without further processing.  Otherwise, ignore
+     *  <code>stopAtNonOption</code>.</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>--</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>-</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is two characters
+     *  in length and the first character is "<b>-</b>" then check if this
+     *  is a valid {@link Option} id.  If it is a valid id, then add the
+     *  entry to the list of processed tokens and set the current {@link Option}
+     *  member.  If it is not a valid id and <code>stopAtNonOption</code>
+     *  is true, then the remaining entries are copied to the list of 
+     *  processed tokens.  Otherwise, the current entry is ignored.</li>
+     *  <li>if the current <code>arguments</code> entry is more than two
+     *  characters in length and the first character is "<b>-</b>" then
+     *  we need to burst the entry to determine its constituents.  For more
+     *  information on the bursting algorithm see 
+     *  {@link PosixParser#burstToken(String, boolean) burstToken}.</li>
+     *  <li>if the current <code>arguments</code> entry is not handled 
+     *  by any of the previous rules, then the entry is added to the list
+     *  of processed tokens.</li>
+     * </ol>
+     * </p>
+     *
+     * @param options The command line {@link Options}
+     * @param arguments The command line arguments to be parsed
+     * @param stopAtNonOption Specifies whether to stop flattening
+     * when an non option is found.
+     * @return The flattened <code>arguments</code> String array.
      */
-    public boolean isIndexed()
+    protected String[] flatten(Options options, String[] arguments, 
+                               boolean stopAtNonOption)
     {
-        return !columnsIndex().isEmpty();
-    }
+        init();
+        this.options = options;
 
-    public DeletionTime deletionTime()
-    {
-        throw new UnsupportedOperationException();
-    }
+        // an iterator for the command line tokens
+        Iterator iter = Arrays.asList(arguments).iterator();
+        String token;
 
-    public List<IndexHelper.IndexInfo> columnsIndex()
-    {
-        return Collections.emptyList();
-    }
-
-    public long memorySize()
-    {
-        return ObjectSizes.getFieldSize(TypeSizes.NATIVE.sizeof(position));
-    }
-
-    public static class Serializer
-    {
-        public void serialize(RowIndexEntry rie, DataOutput out) throws IOException
+        // process each command line token
+        while (iter.hasNext())
         {
-            out.writeLong(rie.position);
-            out.writeInt(rie.promotedSize());
+            // get the next command line token
+            token = (String) iter.next();
 
-            if (rie.isIndexed())
+            // handle SPECIAL TOKEN
+            if (token.startsWith("--"))
             {
-                DeletionTime.serializer.serialize(rie.deletionTime(), out);
-                out.writeInt(rie.columnsIndex().size());
-                for (IndexHelper.IndexInfo info : rie.columnsIndex())
-                    info.serialize(out);
+                if (token.indexOf('=') != -1)
+                {
+                    tokens.add(token.substring(0, token.indexOf('=')));
+                    tokens.add(token.substring(token.indexOf('=') + 1, 
+                                               token.length()));
+                }
+                else
+                {
+                    tokens.add(token);
+                }
             }
-        }
 
-        public RowIndexEntry deserialize(DataInput in, Descriptor.Version version) throws IOException
-        {
-            long position = in.readLong();
-
-            int size = in.readInt();
-            if (size > 0)
+            // single hyphen
+            else if ("-".equals(token))
             {
-                DeletionTime deletionTime = DeletionTime.serializer.deserialize(in);
+                processSingleHyphen(token);
+            }
+            else if (token.startsWith("-"))
+            {
+                int tokenLength = token.length();
 
-                int entries = in.readInt();
-                List<IndexHelper.IndexInfo> columnsIndex = new ArrayList<IndexHelper.IndexInfo>(entries);
-                for (int i = 0; i < entries; i++)
-                    columnsIndex.add(IndexHelper.IndexInfo.deserialize(in));
-
-                return new IndexedEntry(position, deletionTime, columnsIndex);
+                if (tokenLength == 2)
+                {
+                    processOptionToken(token, stopAtNonOption);
+                }
+                else if (options.hasOption(token)) {
+                	tokens.add(token);
+                }
+                // requires bursting
+                else
+                {
+                    burstToken(token, stopAtNonOption);
+                }
             }
             else
             {
-                return new RowIndexEntry(position);
+                if (stopAtNonOption)
+                {
+                    process(token);
+                }
+                else
+                {
+                    tokens.add(token);
+                }
             }
+
+            gobble(iter);
         }
 
-        public void skip(DataInput in) throws IOException
-        {
-            in.readLong();
-            skipPromotedIndex(in);
-        }
+        return (String[]) tokens.toArray(new String[tokens.size()]);
+    }
 
-        public void skipPromotedIndex(DataInput in) throws IOException
+    /**
+     * <p>Adds the remaining tokens to the processed tokens list.</p>
+     *
+     * @param iter An iterator over the remaining tokens
+     */
+    private void gobble(Iterator iter)
+    {
+        if (eatTheRest)
         {
-            int size = in.readInt();
-            if (size <= 0)
-                return;
-
-            FileUtils.skipBytesFully(in, size);
+            while (iter.hasNext())
+            {
+                tokens.add(iter.next());
+            }
         }
     }
 
     /**
-     * An entry in the row index for a row whose columns are indexed.
+     * <p>If there is a current option and it can have an argument
+     * value then add the token to the processed tokens list and 
+     * set the current option to null.</p>
+     * <p>If there is a current option and it can have argument
+     * values then add the token to the processed tokens list.</p>
+     * <p>If there is not a current option add the special token
+     * "<b>--</b>" and the current <code>value</code> to the processed
+     * tokens list.  The add all the remaining <code>argument</code>
+     * values to the processed tokens list.</p>
+     *
+     * @param value The current token
      */
-    private static class IndexedEntry extends RowIndexEntry
+    private void process(String value)
     {
-        private final DeletionTime deletionTime;
-        private final List<IndexHelper.IndexInfo> columnsIndex;
-
-        private IndexedEntry(long position, DeletionTime deletionTime, List<IndexHelper.IndexInfo> columnsIndex)
+        if ((currentOption != null) && currentOption.hasArg())
         {
-            super(position);
-            assert deletionTime != null;
-            assert columnsIndex != null && columnsIndex.size() > 1;
-            this.deletionTime = deletionTime;
-            this.columnsIndex = columnsIndex;
+            if (currentOption.hasArg())
+            {
+                tokens.add(value);
+                currentOption = null;
+            }
+            else if (currentOption.hasArgs())
+            {
+                tokens.add(value);
+            }
         }
-
-        @Override
-        public DeletionTime deletionTime()
+        else
         {
-            return deletionTime;
+            eatTheRest = true;
+            tokens.add("--");
+            tokens.add(value);
         }
+    }
 
-        @Override
-        public List<IndexHelper.IndexInfo> columnsIndex()
+    /**
+     * <p>If it is a hyphen then add the hyphen directly to
+     * the processed tokens list.</p>
+     *
+     * @param hyphen The hyphen token
+     */
+    private void processSingleHyphen(String hyphen)
+    {
+        tokens.add(hyphen);
+    }
+
+    /**
+     * <p>If an {@link Option} exists for <code>token</code> then
+     * set the current option and add the token to the processed 
+     * list.</p>
+     * <p>If an {@link Option} does not exist and <code>stopAtNonOption</code>
+     * is set then ignore the current token and add the remaining tokens
+     * to the processed tokens list directly.</p>
+     *
+     * @param token The current option token
+     * @param stopAtNonOption Specifies whether flattening should halt
+     * at the first non option.
+     */
+    private void processOptionToken(String token, boolean stopAtNonOption)
+    {
+        if (this.options.hasOption(token))
         {
-            return columnsIndex;
+            currentOption = this.options.getOption(token);
+            tokens.add(token);
         }
-
-        @Override
-        public int promotedSize()
+        else if (stopAtNonOption)
         {
-            TypeSizes typeSizes = TypeSizes.NATIVE;
-            long size = DeletionTime.serializer.serializedSize(deletionTime, typeSizes);
-            size += typeSizes.sizeof(columnsIndex.size()); // number of entries
-            for (IndexHelper.IndexInfo info : columnsIndex)
-                size += info.serializedSize(typeSizes);
-
-            return Ints.checkedCast(size);
+            eatTheRest = true;
         }
+    }
 
-        @Override
-        public long memorySize()
+    /**
+     * <p>Breaks <code>token</code> into its constituent parts
+     * using the following algorithm.
+     * <ul>
+     *  <li>ignore the first character ("<b>-</b>")</li>
+     *  <li>foreach remaining character check if an {@link Option}
+     *  exists with that id.</li>
+     *  <li>if an {@link Option} does exist then add that character
+     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
+     *  <li>if the {@link Option} can have an argument value and there 
+     *  are remaining characters in the token then add the remaining 
+     *  characters as a token to the list of processed tokens.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b> 
+     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
+     *  "<b>--</b>" followed by the remaining characters and also 
+     *  the remaining tokens directly to the processed tokens list.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
+     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
+     *  character prepended with "<b>-</b>".</li>
+     * </ul>
+     * </p>
+     *
+     * @param token The current token to be <b>burst</b>
+     * @param stopAtNonOption Specifies whether to stop processing
+     * at the first non-Option encountered.
+     */
+    protected void burstToken(String token, boolean stopAtNonOption)
+    {
+        int tokenLength = token.length();
+
+        for (int i = 1; i < tokenLength; i++)
         {
-            long entrySize = 0;
-            for (IndexHelper.IndexInfo idx : columnsIndex)
-                entrySize += idx.memorySize();
+            String ch = String.valueOf(token.charAt(i));
+            boolean hasOption = options.hasOption(ch);
 
-            return ObjectSizes.getSuperClassFieldSize(TypeSizes.NATIVE.sizeof(position))
-                   + ObjectSizes.getFieldSize(// deletionTime
-                                              ObjectSizes.getReferenceSize() +
-                                              // columnsIndex
-                                              ObjectSizes.getReferenceSize())
-                   + deletionTime.memorySize()
-                   + ObjectSizes.getArraySize(columnsIndex.size(), ObjectSizes.getReferenceSize()) + entrySize + 4;
+            if (hasOption)
+            {
+                tokens.add("-" + ch);
+                currentOption = options.getOption(ch);
+
+                if (currentOption.hasArg() && (token.length() != (i + 1)))
+                {
+                    tokens.add(token.substring(i + 1));
+
+                    break;
+                }
+            }
+            else if (stopAtNonOption)
+            {
+                process(token.substring(i));
+            }
+            else
+            {
+                tokens.add(token);
+                break;
+            }
         }
     }
 }

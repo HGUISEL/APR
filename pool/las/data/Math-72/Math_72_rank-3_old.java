@@ -1,203 +1,136 @@
-/*
- *   @(#) $Id$
- *
- *   Copyright 2004 The Apache Software Foundation
- *
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- *
- */
-package org.apache.mina.transport.socket.nio.support;
+package org.mockitoutil;
 
-import java.net.SocketAddress;
-import java.net.SocketException;
-import java.nio.channels.DatagramChannel;
-import java.nio.channels.SelectionKey;
+import static java.util.Arrays.asList;
+import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import org.apache.mina.common.CloseFuture;
-import org.apache.mina.common.IoFilterChain;
-import org.apache.mina.common.IoHandler;
-import org.apache.mina.common.IoSession;
-import org.apache.mina.common.IoService;
-import org.apache.mina.common.TransportType;
-import org.apache.mina.common.IoFilter.WriteRequest;
-import org.apache.mina.common.support.BaseIoSession;
-import org.apache.mina.transport.socket.nio.DatagramSession;
-import org.apache.mina.util.Queue;
+public abstract class ClassLoaders {
+    protected ClassLoaders() {}
 
-/**
- * An {@link IoSession} for datagram transport (UDP/IP).
- * 
- * @author The Apache Directory Project (dev@directory.apache.org)
- * @version $Rev$, $Date$
- */
-class DatagramSessionImpl extends BaseIoSession implements DatagramSession
-{
-    private final IoService wrapperManager;
-    private final DatagramService managerDelegate;
-    private final DatagramFilterChain filterChain;
-    private final DatagramChannel ch;
-    private final Queue writeRequestQueue;
-    private final IoHandler handler;
-    private final SocketAddress localAddress;
-    private SocketAddress remoteAddress;
-    private SelectionKey key;
-
-    /**
-     * Creates a new instance.
-     */
-    DatagramSessionImpl( IoService wrapperManager,
-                         DatagramService managerDelegate,
-                         DatagramChannel ch, IoHandler defaultHandler )
-    {
-        this.wrapperManager = wrapperManager;
-        this.managerDelegate = managerDelegate;
-        this.filterChain = new DatagramFilterChain( this );
-        this.ch = ch;
-        this.writeRequestQueue = new Queue();
-        this.handler = defaultHandler;
-        this.remoteAddress = ch.socket().getRemoteSocketAddress();
-        this.localAddress = ch.socket().getLocalSocketAddress();
-    }
-    
-    public IoService getService()
-    {
-        return wrapperManager;
-    }
-    
-    DatagramService getManagerDelegate()
-    {
-        return managerDelegate;
+    public static IsolatedURLClassLoaderBuilder isolatedClassLoader() {
+        return new IsolatedURLClassLoaderBuilder();
     }
 
-    public IoFilterChain getFilterChain()
-    {
-        return filterChain;
+    public static InMemoryClassLoaderBuilder inMemoryClassLoader() {
+        return new InMemoryClassLoaderBuilder();
     }
 
-    DatagramChannel getChannel()
-    {
-        return ch;
-    }
 
-    SelectionKey getSelectionKey()
-    {
-        return key;
-    }
+    public static class IsolatedURLClassLoaderBuilder extends ClassLoaders {
+        private final ArrayList<String> privateCopyPrefixes = new ArrayList<String>();
+        private final ArrayList<URL> codeSourceUrls = new ArrayList<URL>();
 
-    void setSelectionKey( SelectionKey key )
-    {
-        this.key = key;
-    }
+        public IsolatedURLClassLoaderBuilder withPrivateCopyOf(String... privatePrefixes) {
+            privateCopyPrefixes.addAll(asList(privatePrefixes));
+            return this;
+        }
 
-    public IoHandler getHandler()
-    {
-        return handler;
-    }
-    
-    protected void close0( CloseFuture closeFuture )
-    {
-        filterChain.filterClose( this, closeFuture );
-    }
+        public IsolatedURLClassLoaderBuilder withCodeSourceUrls(String... urls) {
+            codeSourceUrls.addAll(pathsToURLs(urls));
+            return this;
+        }
 
-    Queue getWriteRequestQueue()
-    {
-        return writeRequestQueue;
-    }
+        public IsolatedURLClassLoaderBuilder withCurrentCodeSourceUrls() {
+            codeSourceUrls.add(obtainClassPathOf(ClassLoaders.class.getName()));
+            return this;
+        }
 
-    protected void write0( WriteRequest writeRequest )
-    {
-        filterChain.filterWrite( this, writeRequest );
-    }
-
-    public int getScheduledWriteRequests()
-    {
-        synchronized( writeRequestQueue )
-        {
-            return writeRequestQueue.size();
+        public ClassLoader build() {
+            return new LocalIsolatedURLClassLoader(
+                    codeSourceUrls.toArray(new URL[codeSourceUrls.size()]),
+                    privateCopyPrefixes
+            );
         }
     }
 
-    public TransportType getTransportType()
-    {
-        return TransportType.DATAGRAM;
+    static class LocalIsolatedURLClassLoader extends URLClassLoader {
+        private final ArrayList<String> privateCopyPrefixes;
+
+        public LocalIsolatedURLClassLoader(URL[] urls, ArrayList<String> privateCopyPrefixes) {
+            super(urls, null);
+            this.privateCopyPrefixes = privateCopyPrefixes;
+        }
+
+        @Override
+        public Class<?> findClass(String name) throws ClassNotFoundException {
+            if(classShouldBePrivate(name)) return super.findClass(name);
+            throw new ClassNotFoundException("Can only load classes with prefix : " + privateCopyPrefixes);
+        }
+
+        private boolean classShouldBePrivate(String name) {
+            for (String prefix : privateCopyPrefixes) {
+                if (name.startsWith(prefix)) return true;
+            }
+            return false;
+        }
     }
 
-    public SocketAddress getRemoteAddress()
-    {
-        return remoteAddress;
+    public static class InMemoryClassLoaderBuilder extends ClassLoaders {
+        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
+
+        public InMemoryClassLoaderBuilder withClassDefinition(String name, byte[] classDefinition) {
+            inMemoryClassObjects.put(name, classDefinition);
+            return this;
+        }
+
+        public ClassLoader build() {
+            return new InMemoryClassLoader(inMemoryClassObjects);
+        }
     }
 
-    void setRemoteAddress( SocketAddress remoteAddress )
-    {
-        this.remoteAddress = remoteAddress;
+    static class InMemoryClassLoader extends ClassLoader {
+        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
+
+        public InMemoryClassLoader(Map<String, byte[]> inMemoryClassObjects) {
+            this.inMemoryClassObjects = inMemoryClassObjects;
+        }
+
+        protected Class findClass(String name) throws ClassNotFoundException {
+            byte[] classDefinition = inMemoryClassObjects.get(name);
+            if (classDefinition != null) {
+                return defineClass(name, classDefinition, 0, classDefinition.length);
+            }
+            throw new ClassNotFoundException(name);
+        }
+
+
     }
 
-    public SocketAddress getLocalAddress()
-    {
-        return localAddress;
+    protected URL obtainClassPathOf(String className) {
+        String path = className.replace('.', '/') + ".class";
+        String url = ClassLoaders.class.getClassLoader().getResource(path).toExternalForm();
+
+        try {
+            return new URL(url.substring(0, url.length() - path.length()));
+        } catch (MalformedURLException e) {
+            throw new RuntimeException("Classloader couldn't obtain a proper classpath URL", e);
+        }
     }
 
-    public boolean getReuseAddress() throws SocketException
-    {
-        return ch.socket().getReuseAddress();
+    protected List<URL> pathsToURLs(String... codeSourceUrls) {
+        return pathsToURLs(Arrays.asList(codeSourceUrls));
+    }
+    private List<URL> pathsToURLs(List<String> codeSourceUrls) {
+        ArrayList<URL> urls = new ArrayList<URL>(codeSourceUrls.size());
+        for (String codeSourceUrl : codeSourceUrls) {
+            URL url = pathToUrl(codeSourceUrl);
+            urls.add(url);
+        }
+        return urls;
     }
 
-    public void setReuseAddress( boolean on ) throws SocketException
-    {
-        ch.socket().setReuseAddress( on );
-    }
-
-    public int getTrafficClass() throws SocketException
-    {
-        return ch.socket().getTrafficClass();
-    }
-
-    public void setTrafficClass( int tc ) throws SocketException
-    {
-        ch.socket().setTrafficClass( tc );
-    }
-
-    protected void updateTrafficMask()
-    {
-        managerDelegate.updateTrafficMask( this );
-    }
-
-    public int getReceiveBufferSize() throws SocketException {
-        return ch.socket().getReceiveBufferSize();
-    }
-
-    public void setReceiveBufferSize( int receiveBufferSize ) throws SocketException
-    {
-        ch.socket().setReceiveBufferSize( receiveBufferSize );
-    }
-
-    public boolean getBroadcast() throws SocketException
-    {
-        return ch.socket().getBroadcast();
-    }
-
-    public void setBroadcast( boolean broadcast ) throws SocketException
-    {
-        ch.socket().setBroadcast( broadcast );
-    }
-
-    public int getSendBufferSize() throws SocketException
-    {
-        return ch.socket().getSendBufferSize();
-    }
-
-    public void setSendBufferSize( int sendBufferSize ) throws SocketException
-    {
-        ch.socket().setSendBufferSize( sendBufferSize );
+    private URL pathToUrl(String path) {
+        try {
+            return new File(path).getAbsoluteFile().toURI().toURL();
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("Path is malformed", e);
+        }
     }
 }

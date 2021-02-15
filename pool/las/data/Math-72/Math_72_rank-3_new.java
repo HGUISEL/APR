@@ -1,325 +1,203 @@
-/*
- *   @(#) $Id$
- *
- *   Copyright 2004 The Apache Software Foundation
- *
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *   limitations under the License.
- *
- */
-package org.apache.mina.transport.socket.nio.support;
+package org.mockitoutil;
 
-import java.net.SocketAddress;
-import java.net.SocketException;
-import java.nio.channels.DatagramChannel;
-import java.nio.channels.SelectionKey;
+import java.io.File;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.util.*;
 
-import org.apache.mina.common.IoFilterChain;
-import org.apache.mina.common.IoHandler;
-import org.apache.mina.common.IoService;
-import org.apache.mina.common.IoSession;
-import org.apache.mina.common.IoSessionConfig;
-import org.apache.mina.common.RuntimeIOException;
-import org.apache.mina.common.TransportType;
-import org.apache.mina.common.IoFilter.WriteRequest;
-import org.apache.mina.common.support.BaseIoSession;
-import org.apache.mina.common.support.BaseIoSessionConfig;
-import org.apache.mina.transport.socket.nio.DatagramSessionConfig;
-import org.apache.mina.util.Queue;
+import static java.util.Arrays.asList;
 
-/**
- * An {@link IoSession} for datagram transport (UDP/IP).
- * 
- * @author The Apache Directory Project (mina-dev@directory.apache.org)
- * @version $Rev$, $Date$
- */
-class DatagramSessionImpl extends BaseIoSession
-{
-    private final IoService wrapperManager;
-    private final DatagramSessionConfig config = new DatagramSessionConfigImpl();
-    private final DatagramService managerDelegate;
-    private final DatagramFilterChain filterChain;
-    private final DatagramChannel ch;
-    private final Queue writeRequestQueue;
-    private final IoHandler handler;
-    private final SocketAddress localAddress;
-    private final SocketAddress serviceAddress;
-    private SocketAddress remoteAddress;
-    private SelectionKey key;
-    private int readBufferSize;
+public abstract class ClassLoaders {
+    protected ClassLoaders() {}
 
-    /**
-     * Creates a new instance.
-     */
-    DatagramSessionImpl( IoService wrapperManager,
-                         DatagramService managerDelegate,
-                         IoSessionConfig config,
-                         DatagramChannel ch, IoHandler defaultHandler,
-                         SocketAddress serviceAddress )
-    {
-        this.wrapperManager = wrapperManager;
-        this.managerDelegate = managerDelegate;
-        this.filterChain = new DatagramFilterChain( this );
-        this.ch = ch;
-        this.writeRequestQueue = new Queue();
-        this.handler = defaultHandler;
-        this.remoteAddress = ch.socket().getRemoteSocketAddress();
-        this.localAddress = ch.socket().getLocalSocketAddress();
-        this.serviceAddress = serviceAddress;
-        
-        // Apply the initial session settings
-        if( config instanceof DatagramSessionConfig )
-        {
-            DatagramSessionConfig cfg = ( DatagramSessionConfig ) config;
-            this.config.setBroadcast( cfg.isBroadcast() );
-            this.config.setReceiveBufferSize( cfg.getReceiveBufferSize() );
-            this.readBufferSize = cfg.getReceiveBufferSize();
-            this.config.setReuseAddress( cfg.isReuseAddress() );
-            this.config.setSendBufferSize( cfg.getSendBufferSize() );
-
-            if( this.config.getTrafficClass() != cfg.getTrafficClass() )
-            {
-                this.config.setTrafficClass( cfg.getTrafficClass() );
-            }
-        }
-    }
-    
-    public IoService getService()
-    {
-        return wrapperManager;
-    }
-    
-    public IoSessionConfig getConfig()
-    {
-        return config;
-    }
-    
-    DatagramService getManagerDelegate()
-    {
-        return managerDelegate;
+    public static IsolatedURLClassLoaderBuilder isolatedClassLoader() {
+        return new IsolatedURLClassLoaderBuilder();
     }
 
-    public IoFilterChain getFilterChain()
-    {
-        return filterChain;
+    public static ExcludingURLClassLoaderBuilder excludingClassLoader() {
+        return new ExcludingURLClassLoaderBuilder();
     }
 
-    DatagramChannel getChannel()
-    {
-        return ch;
+    public static InMemoryClassLoaderBuilder inMemoryClassLoader() {
+        return new InMemoryClassLoaderBuilder();
     }
 
-    SelectionKey getSelectionKey()
-    {
-        return key;
-    }
 
-    void setSelectionKey( SelectionKey key )
-    {
-        this.key = key;
-    }
 
-    public IoHandler getHandler()
-    {
-        return handler;
-    }
-    
-    protected void close0()
-    {
-        filterChain.filterClose( this );
-    }
 
-    Queue getWriteRequestQueue()
-    {
-        return writeRequestQueue;
-    }
 
-    protected void write0( WriteRequest writeRequest )
-    {
-        filterChain.filterWrite( this, writeRequest );
-    }
+    public static class IsolatedURLClassLoaderBuilder extends ClassLoaders {
+        private final ArrayList<String> privateCopyPrefixes = new ArrayList<String>();
+        private final ArrayList<URL> codeSourceUrls = new ArrayList<URL>();
 
-    public int getScheduledWriteRequests()
-    {
-        synchronized( writeRequestQueue )
-        {
-            return writeRequestQueue.size();
-        }
-    }
-    
-    public int getScheduledWriteBytes()
-    {
-        synchronized( writeRequestQueue )
-        {
-            return writeRequestQueue.byteSize();
-        }
-    }
-    
-    public TransportType getTransportType()
-    {
-        return TransportType.DATAGRAM;
-    }
-
-    public SocketAddress getRemoteAddress()
-    {
-        return remoteAddress;
-    }
-
-    void setRemoteAddress( SocketAddress remoteAddress )
-    {
-        this.remoteAddress = remoteAddress;
-    }
-
-    public SocketAddress getLocalAddress()
-    {
-        return localAddress;
-    }
-    
-    public SocketAddress getServiceAddress()
-    {
-        return serviceAddress;
-    }
-
-    protected void updateTrafficMask()
-    {
-        managerDelegate.updateTrafficMask( this );
-    }
-    
-    int getReadBufferSize()
-    {
-        return readBufferSize;
-    }
-    
-    private class DatagramSessionConfigImpl extends BaseIoSessionConfig implements DatagramSessionConfig
-    {
-        public int getReceiveBufferSize()
-        {
-            try
-            {
-                return ch.socket().getReceiveBufferSize();
-            }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+        public IsolatedURLClassLoaderBuilder withPrivateCopyOf(String... privatePrefixes) {
+            privateCopyPrefixes.addAll(asList(privatePrefixes));
+            return this;
         }
 
-        public void setReceiveBufferSize( int receiveBufferSize )
-        {
-            try
-            {
-                ch.socket().setReceiveBufferSize( receiveBufferSize );
-                DatagramSessionImpl.this.readBufferSize = receiveBufferSize;
-            }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+        public IsolatedURLClassLoaderBuilder withCodeSourceUrls(String... urls) {
+            codeSourceUrls.addAll(pathsToURLs(urls));
+            return this;
         }
 
-        public boolean isBroadcast()
-        {
-            try
-            {
-                return ch.socket().getBroadcast();
+        public IsolatedURLClassLoaderBuilder withCodeSourceUrlOf(Class<?>... classes) {
+            for (Class<?> clazz : classes) {
+                codeSourceUrls.add(obtainClassPathOf(clazz.getName()));
             }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+            return this;
         }
 
-        public void setBroadcast( boolean broadcast )
-        {
-            try
-            {
-                ch.socket().setBroadcast( broadcast );
-            }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+        public IsolatedURLClassLoaderBuilder withCurrentCodeSourceUrls() {
+            codeSourceUrls.add(obtainClassPathOf(ClassLoaders.class.getName()));
+            return this;
         }
 
-        public int getSendBufferSize()
-        {
-            try
-            {
-                return ch.socket().getSendBufferSize();
-            }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+        public ClassLoader build() {
+            return new LocalIsolatedURLClassLoader(
+                    codeSourceUrls.toArray(new URL[codeSourceUrls.size()]),
+                    privateCopyPrefixes
+            );
+        }
+    }
+
+    static class LocalIsolatedURLClassLoader extends URLClassLoader {
+        private final ArrayList<String> privateCopyPrefixes;
+
+        public LocalIsolatedURLClassLoader(URL[] urls, ArrayList<String> privateCopyPrefixes) {
+            super(urls, null);
+            this.privateCopyPrefixes = privateCopyPrefixes;
         }
 
-        public void setSendBufferSize( int sendBufferSize )
-        {
-            try
-            {
-                ch.socket().setSendBufferSize( sendBufferSize );
-            }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+        @Override
+        public Class<?> findClass(String name) throws ClassNotFoundException {
+            if(classShouldBePrivate(name)) return super.findClass(name);
+            throw new ClassNotFoundException("Can only load classes with prefix : " + privateCopyPrefixes);
         }
 
-        public boolean isReuseAddress()
-        {
-            try
-            {
-                return ch.socket().getReuseAddress();
+        private boolean classShouldBePrivate(String name) {
+            for (String prefix : privateCopyPrefixes) {
+                if (name.startsWith(prefix)) return true;
             }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+            return false;
+        }
+    }
+
+    public static class ExcludingURLClassLoaderBuilder extends ClassLoaders {
+        private final ArrayList<String> privateCopyPrefixes = new ArrayList<String>();
+        private final ArrayList<URL> codeSourceUrls = new ArrayList<URL>();
+
+        public ExcludingURLClassLoaderBuilder without(String... privatePrefixes) {
+            privateCopyPrefixes.addAll(asList(privatePrefixes));
+            return this;
         }
 
-        public void setReuseAddress( boolean reuseAddress )
-        {
-            try
-            {
-                ch.socket().setReuseAddress( reuseAddress );
-            }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+        public ExcludingURLClassLoaderBuilder withCodeSourceUrls(String... urls) {
+            codeSourceUrls.addAll(pathsToURLs(urls));
+            return this;
         }
 
-        public int getTrafficClass()
-        {
-            try
-            {
-                return ch.socket().getTrafficClass();
+        public ExcludingURLClassLoaderBuilder withCodeSourceUrlOf(Class<?>... classes) {
+            for (Class<?> clazz : classes) {
+                codeSourceUrls.add(obtainClassPathOf(clazz.getName()));
             }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
-            }
+            return this;
         }
 
-        public void setTrafficClass( int trafficClass )
-        {
-            try
-            {
-                ch.socket().setTrafficClass( trafficClass );
+        public ExcludingURLClassLoaderBuilder withCurrentCodeSourceUrls() {
+            codeSourceUrls.add(obtainClassPathOf(ClassLoaders.class.getName()));
+            return this;
+        }
+
+        public ClassLoader build() {
+            return new LocalExcludingURLClassLoader(
+                    codeSourceUrls.toArray(new URL[codeSourceUrls.size()]),
+                    privateCopyPrefixes
+            );
+        }
+    }
+
+    static class LocalExcludingURLClassLoader extends URLClassLoader {
+        private final ArrayList<String> privateCopyPrefixes;
+
+        public LocalExcludingURLClassLoader(URL[] urls, ArrayList<String> privateCopyPrefixes) {
+            super(urls, null);
+            this.privateCopyPrefixes = privateCopyPrefixes;
+        }
+
+        @Override
+        public Class<?> findClass(String name) throws ClassNotFoundException {
+            if(classShouldBePrivate(name)) throw new ClassNotFoundException("classes with prefix : " + privateCopyPrefixes + " are excluded");
+            return super.findClass(name);
+        }
+
+        private boolean classShouldBePrivate(String name) {
+            for (String prefix : privateCopyPrefixes) {
+                if (name.startsWith(prefix)) return true;
             }
-            catch( SocketException e )
-            {
-                throw new RuntimeIOException( e );
+            return false;
+        }
+    }
+
+    public static class InMemoryClassLoaderBuilder extends ClassLoaders {
+        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
+
+        public InMemoryClassLoaderBuilder withClassDefinition(String name, byte[] classDefinition) {
+            inMemoryClassObjects.put(name, classDefinition);
+            return this;
+        }
+
+        public ClassLoader build() {
+            return new InMemoryClassLoader(inMemoryClassObjects);
+        }
+    }
+
+    static class InMemoryClassLoader extends ClassLoader {
+        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
+
+        public InMemoryClassLoader(Map<String, byte[]> inMemoryClassObjects) {
+            this.inMemoryClassObjects = inMemoryClassObjects;
+        }
+
+        protected Class findClass(String name) throws ClassNotFoundException {
+            byte[] classDefinition = inMemoryClassObjects.get(name);
+            if (classDefinition != null) {
+                return defineClass(name, classDefinition, 0, classDefinition.length);
             }
+            throw new ClassNotFoundException(name);
+        }
+
+
+    }
+
+    protected URL obtainClassPathOf(String className) {
+        String path = className.replace('.', '/') + ".class";
+        String url = ClassLoaders.class.getClassLoader().getResource(path).toExternalForm();
+
+        try {
+            return new URL(url.substring(0, url.length() - path.length()));
+        } catch (MalformedURLException e) {
+            throw new RuntimeException("Classloader couldn't obtain a proper classpath URL", e);
+        }
+    }
+
+    protected List<URL> pathsToURLs(String... codeSourceUrls) {
+        return pathsToURLs(Arrays.asList(codeSourceUrls));
+    }
+    private List<URL> pathsToURLs(List<String> codeSourceUrls) {
+        ArrayList<URL> urls = new ArrayList<URL>(codeSourceUrls.size());
+        for (String codeSourceUrl : codeSourceUrls) {
+            URL url = pathToUrl(codeSourceUrl);
+            urls.add(url);
+        }
+        return urls;
+    }
+
+    private URL pathToUrl(String path) {
+        try {
+            return new File(path).getAbsoluteFile().toURI().toURL();
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("Path is malformed", e);
         }
     }
 }

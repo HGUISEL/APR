@@ -1,12 +1,11 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Copyright (C) 2011 Google Inc.
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,260 +14,207 @@
  * limitations under the License.
  */
 
-package org.apache.commons.math.analysis.solvers;
+package com.google.gson.internal;
 
-import org.apache.commons.math.util.FastMath;
-import org.apache.commons.math.analysis.UnivariateRealFunction;
-import org.apache.commons.math.exception.MathInternalError;
+import com.google.gson.InstanceCreator;
+import com.google.gson.JsonIOException;
+import com.google.gson.reflect.TypeToken;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.EnumSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 /**
- * Base class for all bracketing <em>Secant</em>-based methods for root-finding
- * (approximating a zero of a univariate real function).
- *
- * <p>Implementation of the {@link RegulaFalsiSolver <em>Regula Falsi</em>} and
- * {@link IllinoisSolver <em>Illinois</em>} methods is based on the
- * following article: M. Dowell and P. Jarratt,
- * <em>A modified regula falsi method for computing the root of an
- * equation</em>, BIT Numerical Mathematics, volume 11, number 2,
- * pages 168-174, Springer, 1971.</p>
- *
- * <p>Implementation of the {@link PegasusSolver <em>Pegasus</em>} method is
- * based on the following article: M. Dowell and P. Jarratt,
- * <em>The "Pegasus" method for computing the root of an equation</em>,
- * BIT Numerical Mathematics, volume 12, number 4, pages 503-508, Springer,
- * 1972.</p>
- *
- * <p>The {@link SecantSolver <em>Secant</em>} method is <em>not</em> a
- * bracketing method, so it is not implemented here. It has a separate
- * implementation.</p>
- *
- * @since 3.0
- * @version $Id$
+ * Returns a function that can construct an instance of a requested type.
  */
-public abstract class BaseSecantSolver
-    extends AbstractUnivariateRealSolver
-    implements BracketedUnivariateRealSolver<UnivariateRealFunction> {
+public final class ConstructorConstructor {
+  private final Map<Type, InstanceCreator<?>> instanceCreators;
 
-    /** Default absolute accuracy. */
-    protected static final double DEFAULT_ABSOLUTE_ACCURACY = 1e-6;
+  public ConstructorConstructor(Map<Type, InstanceCreator<?>> instanceCreators) {
+    this.instanceCreators = instanceCreators;
+  }
 
-    /** The kinds of solutions that the algorithm may accept. */
-    private AllowedSolution allowed;
+  public <T> ObjectConstructor<T> get(TypeToken<T> typeToken) {
+    final Type type = typeToken.getType();
+    final Class<? super T> rawType = typeToken.getRawType();
 
-    /** The <em>Secant</em>-based root-finding method to use. */
-    private final Method method;
+    // first try an instance creator
 
-    /**
-     * Construct a solver.
-     *
-     * @param absoluteAccuracy absolute accuracy
-     * @param method <em>Secant</em>-based root-finding method to use
-     */
-    protected BaseSecantSolver(final double absoluteAccuracy, final Method method) {
-        super(absoluteAccuracy);
-        this.allowed = AllowedSolution.ANY_SIDE;
-        this.method = method;
-    }
-
-    /**
-     * Construct a solver.
-     *
-     * @param relativeAccuracy relative accuracy
-     * @param absoluteAccuracy absolute accuracy
-     * @param method <em>Secant</em>-based root-finding method to use
-     */
-    protected BaseSecantSolver(final double relativeAccuracy,
-                               final double absoluteAccuracy,
-                               final Method method) {
-        super(relativeAccuracy, absoluteAccuracy);
-        this.allowed = AllowedSolution.ANY_SIDE;
-        this.method = method;
-    }
-
-    /**
-     * Construct a solver.
-     *
-     * @param relativeAccuracy Maximum relative error.
-     * @param absoluteAccuracy Maximum absolute error.
-     * @param functionValueAccuracy Maximum function value error.
-     * @param method <em>Secant</em>-based root-finding method to use
-     */
-    protected BaseSecantSolver(final double relativeAccuracy,
-                               final double absoluteAccuracy,
-                               final double functionValueAccuracy,
-                               final Method method) {
-        super(relativeAccuracy, absoluteAccuracy, functionValueAccuracy);
-        this.allowed = AllowedSolution.ANY_SIDE;
-        this.method = method;
-    }
-
-    /** {@inheritDoc} */
-    public double solve(final int maxEval, final UnivariateRealFunction f,
-                        final double min, final double max,
-                        final AllowedSolution allowedSolution) {
-        return solve(maxEval, f, min, max, min + 0.5 * (max - min), allowedSolution);
-    }
-
-    /** {@inheritDoc} */
-    public double solve(final int maxEval, final UnivariateRealFunction f,
-                        final double min, final double max, final double startValue,
-                        final AllowedSolution allowedSolution) {
-        this.allowed = allowedSolution;
-        return super.solve(maxEval, f, min, max, startValue);
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    public double solve(final int maxEval, final UnivariateRealFunction f,
-                        final double min, final double max, final double startValue) {
-        return solve(maxEval, f, min, max, startValue, AllowedSolution.ANY_SIDE);
-    }
-
-    /** {@inheritDoc} */
-    protected final double doSolve() {
-        // Get initial solution
-        double x0 = getMin();
-        double x1 = getMax();
-        double f0 = computeObjectiveValue(x0);
-        double f1 = computeObjectiveValue(x1);
-
-        // If one of the bounds is the exact root, return it. Since these are
-        // not under-approximations or over-approximations, we can return them
-        // regardless of the allowed solutions.
-        if (f0 == 0.0) {
-            return x0;
+    @SuppressWarnings("unchecked") // types must agree
+    final InstanceCreator<T> typeCreator = (InstanceCreator<T>) instanceCreators.get(type);
+    if (typeCreator != null) {
+      return new ObjectConstructor<T>() {
+        public T construct() {
+          return typeCreator.createInstance(type);
         }
-        if (f1 == 0.0) {
-            return x1;
+      };
+    }
+
+    // Next try raw type match for instance creators
+    @SuppressWarnings("unchecked") // types must agree
+    final InstanceCreator<T> rawTypeCreator =
+        (InstanceCreator<T>) instanceCreators.get(rawType);
+    if (rawTypeCreator != null) {
+      return new ObjectConstructor<T>() {
+        public T construct() {
+          return rawTypeCreator.createInstance(type);
         }
+      };
+    }
 
-        // Verify bracketing of initial solution.
-        verifyBracketing(x0, x1);
+    ObjectConstructor<T> defaultConstructor = newDefaultConstructor(rawType);
+    if (defaultConstructor != null) {
+      return defaultConstructor;
+    }
 
-        // Get accuracies.
-        final double ftol = getFunctionValueAccuracy();
-        final double atol = getAbsoluteAccuracy();
-        final double rtol = getRelativeAccuracy();
+    ObjectConstructor<T> defaultImplementation = newDefaultImplementationConstructor(type, rawType);
+    if (defaultImplementation != null) {
+      return defaultImplementation;
+    }
 
-        // Keep track of inverted intervals, meaning that the left bound is
-        // larger than the right bound.
-        boolean inverted = false;
+    // finally try unsafe
+    return newUnsafeAllocator(type, rawType);
+  }
 
-        // Keep finding better approximations.
-        while (true) {
-            // Calculate the next approximation.
-            final double x = x1 - ((f1 * (x1 - x0)) / (f1 - f0));
-            final double fx = computeObjectiveValue(x);
+  private <T> ObjectConstructor<T> newDefaultConstructor(Class<? super T> rawType) {
+    try {
+      final Constructor<? super T> constructor = rawType.getDeclaredConstructor();
+      if (!constructor.isAccessible()) {
+        constructor.setAccessible(true);
+      }
+      return new ObjectConstructor<T>() {
+        @SuppressWarnings("unchecked") // T is the same raw type as is requested
+        public T construct() {
+          try {
+            Object[] args = null;
+            return (T) constructor.newInstance(args);
+          } catch (InstantiationException e) {
+            // TODO: JsonParseException ?
+            throw new RuntimeException("Failed to invoke " + constructor + " with no args", e);
+          } catch (InvocationTargetException e) {
+            // TODO: don't wrap if cause is unchecked!
+            // TODO: JsonParseException ?
+            throw new RuntimeException("Failed to invoke " + constructor + " with no args",
+                e.getTargetException());
+          } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+          }
+        }
+      };
+    } catch (NoSuchMethodException e) {
+      return null;
+    }
+  }
 
-            // If the new approximation is the exact root, return it. Since
-            // this is not an under-approximation or an over-approximation,
-            // we can return it regardless of the allowed solutions.
-            if (fx == 0.0) {
-                return x;
-            }
-
-            // Update the bounds with the new approximation.
-            if (f1 * fx < 0) {
-                // The value of x1 has switched to the other bound, thus inverting
-                // the interval.
-                x0 = x1;
-                f0 = f1;
-                inverted = !inverted;
+  /**
+   * Constructors for common interface types like Map and List and their
+   * subtypes.
+   */
+  @SuppressWarnings("unchecked") // use runtime checks to guarantee that 'T' is what it is
+  private <T> ObjectConstructor<T> newDefaultImplementationConstructor(
+      final Type type, Class<? super T> rawType) {
+    if (Collection.class.isAssignableFrom(rawType)) {
+      if (SortedSet.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new TreeSet<Object>();
+          }
+        };
+      } else if (EnumSet.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          @SuppressWarnings("rawtypes")
+          public T construct() {
+            if (type instanceof ParameterizedType) {
+              Type elementType = ((ParameterizedType) type).getActualTypeArguments()[0];
+              if (elementType instanceof Class) {
+                return (T) EnumSet.noneOf((Class)elementType);
+              } else {
+                throw new JsonIOException("Invalid EnumSet type: " + type.toString());
+              }
             } else {
-                switch (method) {
-                case ILLINOIS:
-                    f0 *= 0.5;
-                    break;
-                case PEGASUS:
-                    f0 *= f1 / (f1 + fx);
-                    break;
-                case REGULA_FALSI:
-                    if (x == x1) {
-                        final double delta = FastMath.max(rtol * FastMath.abs(x1),
-                                                          atol);
-                        // Update formula cannot make any progress: Update the
-                        // search interval.
-                        x0 = 0.5 * (x0 + x1 - delta);
-                        f0 = computeObjectiveValue(x0);
-                    }
-                    break;
-                default:
-                    // Should never happen.
-                    throw new MathInternalError();
-                }
+              throw new JsonIOException("Invalid EnumSet type: " + type.toString());
             }
-            // Update from [x0, x1] to [x0, x].
-            x1 = x;
-            f1 = fx;
+          }
+        };
+      } else if (Set.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new LinkedHashSet<Object>();
+          }
+        };
+      } else if (Queue.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new LinkedList<Object>();
+          }
+        };
+      } else {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new ArrayList<Object>();
+          }
+        };
+      }
+    }
 
-            // If the function value of the last approximation is too small,
-            // given the function value accuracy, then we can't get closer to
-            // the root than we already are.
-            if (FastMath.abs(f1) <= ftol) {
-                switch (allowed) {
-                case ANY_SIDE:
-                    return x1;
-                case LEFT_SIDE:
-                    if (inverted) {
-                        return x1;
-                    }
-                    break;
-                case RIGHT_SIDE:
-                    if (!inverted) {
-                        return x1;
-                    }
-                    break;
-                case BELOW_SIDE:
-                    if (f1 <= 0) {
-                        return x1;
-                    }
-                    break;
-                case ABOVE_SIDE:
-                    if (f1 >= 0) {
-                        return x1;
-                    }
-                    break;
-                default:
-                    throw new MathInternalError();
-                }
-            }
+    if (Map.class.isAssignableFrom(rawType)) {
+      if (SortedMap.class.isAssignableFrom(rawType)) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new TreeMap<Object, Object>();
+          }
+        };
+      } else if (type instanceof ParameterizedType && !(String.class.isAssignableFrom(
+          TypeToken.get(((ParameterizedType) type).getActualTypeArguments()[0]).getRawType()))) {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new LinkedHashMap<Object, Object>();
+          }
+        };
+      } else {
+        return new ObjectConstructor<T>() {
+          public T construct() {
+            return (T) new LinkedTreeMap<String, Object>();
+          }
+        };
+      }
+    }
 
-            // If the current interval is within the given accuracies, we
-            // are satisfied with the current approximation.
-            if (FastMath.abs(x1 - x0) < FastMath.max(rtol * FastMath.abs(x1),
-                                                     atol)) {
-                switch (allowed) {
-                case ANY_SIDE:
-                    return x1;
-                case LEFT_SIDE:
-                    return inverted ? x1 : x0;
-                case RIGHT_SIDE:
-                    return inverted ? x0 : x1;
-                case BELOW_SIDE:
-                    return (f1 <= 0) ? x1 : x0;
-                case ABOVE_SIDE:
-                    return (f1 >= 0) ? x1 : x0;
-                default:
-                    throw new MathInternalError();
-                }
-            }
+    return null;
+  }
+
+  private <T> ObjectConstructor<T> newUnsafeAllocator(
+      final Type type, final Class<? super T> rawType) {
+    return new ObjectConstructor<T>() {
+      private final UnsafeAllocator unsafeAllocator = UnsafeAllocator.create();
+      @SuppressWarnings("unchecked")
+      public T construct() {
+        try {
+          Object newInstance = unsafeAllocator.newInstance(rawType);
+          return (T) newInstance;
+        } catch (Exception e) {
+          throw new RuntimeException(("Unable to invoke no-args constructor for " + type + ". "
+              + "Register an InstanceCreator with Gson for this type may fix this problem."), e);
         }
-    }
+      }
+    };
+  }
 
-    /** <em>Secant</em>-based root-finding methods. */
-    protected enum Method {
-
-        /**
-         * The {@link RegulaFalsiSolver <em>Regula Falsi</em>} or
-         * <em>False Position</em> method.
-         */
-        REGULA_FALSI,
-
-        /** The {@link IllinoisSolver <em>Illinois</em>} method. */
-        ILLINOIS,
-
-        /** The {@link PegasusSolver <em>Pegasus</em>} method. */
-        PEGASUS;
-
-    }
+  @Override public String toString() {
+    return instanceCreators.toString();
+  }
 }

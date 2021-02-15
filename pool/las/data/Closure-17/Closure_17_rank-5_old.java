@@ -1,739 +1,448 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
+ * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//jxpath/src/java/org/apache/commons/jxpath/ri/pointers/Attic/DOMNodePointer.java,v 1.5 2002/04/11 02:59:42 dmitri Exp $
+ * $Revision: 1.5 $
+ * $Date: 2002/04/11 02:59:42 $
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
+ * The Apache Software License, Version 1.1
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation and was
+ * originally based on software copyright (c) 2001, Plotnix, Inc,
+ * <http://www.plotnix.com/>.
+ * For more information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
  */
+package org.apache.commons.jxpath.ri.pointers;
 
-package org.apache.sandesha2.msgprocessors;
+import org.apache.commons.jxpath.*;
+import org.apache.commons.jxpath.ri.Compiler;
+import org.apache.commons.jxpath.ri.compiler.*;
 
-import org.apache.axiom.soap.SOAPBody;
-import org.apache.axiom.soap.SOAPEnvelope;
-import org.apache.axis2.AxisFault;
-import org.apache.axis2.addressing.AddressingConstants;
-import org.apache.axis2.addressing.EndpointReference;
-import org.apache.axis2.addressing.RelatesTo;
-import org.apache.axis2.context.ConfigurationContext;
-import org.apache.axis2.context.MessageContext;
-import org.apache.axis2.context.OperationContext;
-import org.apache.axis2.description.AxisOperation;
-import org.apache.axis2.wsdl.WSDLConstants;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.sandesha2.RMMsgContext;
-import org.apache.sandesha2.Sandesha2Constants;
-import org.apache.sandesha2.SandeshaException;
-import org.apache.sandesha2.client.SandeshaClientConstants;
-import org.apache.sandesha2.client.SandeshaListener;
-import org.apache.sandesha2.i18n.SandeshaMessageHelper;
-import org.apache.sandesha2.i18n.SandeshaMessageKeys;
-import org.apache.sandesha2.policy.SandeshaPolicyBean;
-import org.apache.sandesha2.security.SecurityManager;
-import org.apache.sandesha2.security.SecurityToken;
-import org.apache.sandesha2.storage.StorageManager;
-import org.apache.sandesha2.storage.Transaction;
-import org.apache.sandesha2.storage.beanmanagers.RMSBeanMgr;
-import org.apache.sandesha2.storage.beanmanagers.SenderBeanMgr;
-import org.apache.sandesha2.storage.beans.RMDBean;
-import org.apache.sandesha2.storage.beans.RMSBean;
-import org.apache.sandesha2.storage.beans.SenderBean;
-import org.apache.sandesha2.util.RMMsgCreator;
-import org.apache.sandesha2.util.SOAPAbstractFactory;
-import org.apache.sandesha2.util.SandeshaUtil;
-import org.apache.sandesha2.util.SequenceManager;
-import org.apache.sandesha2.workers.SandeshaThread;
-import org.apache.sandesha2.workers.SenderWorker;
-import org.apache.sandesha2.workers.WorkerLock;
-import org.apache.sandesha2.wsrm.CreateSequence;
-import org.apache.sandesha2.wsrm.SequenceOffer;
+import java.lang.reflect.*;
+import java.util.*;
+import java.beans.*;
+import org.w3c.dom.*;
 
 /**
- * Responsible for processing an incoming Application message.
+ * A Pointer that points to a DOM node.
+ *
+ * @author Dmitri Plotnikov
+ * @version $Revision: 1.5 $ $Date: 2002/04/11 02:59:42 $
  */
+public class DOMNodePointer extends NodePointer {
+    private Node node;
+    private Map namespaces;
+    private String defaultNamespace;
 
-public class ApplicationMsgProcessor implements MsgProcessor {
+    public static final String XML_NAMESPACE_URI = "http://www.w3.org/XML/1998/namespace";
+    public static final String XMLNS_NAMESPACE_URI = "http://www.w3.org/2000/xmlns/";
 
-	private static final Log log = LogFactory.getLog(ApplicationMsgProcessor.class);
+    public DOMNodePointer(Node node, Locale locale){
+        super(null, locale);
+        this.node = node;
+    }
 
-	private String inboundSequence = null;
-	private long   inboundMessageNumber;
-	private Transaction appMsgProcTran = null;
-	
-	public ApplicationMsgProcessor() {
-		// Nothing to do
-	}
-	
-	public ApplicationMsgProcessor(String inboundSequenceId, long inboundMessageNumber) {
-		this.inboundSequence = inboundSequenceId;
-		this.inboundMessageNumber = inboundMessageNumber;
-	}
-	
-	public boolean processInMessage(RMMsgContext rmMsgCtx, Transaction transaction) {
-		if (log.isDebugEnabled()) {
-			log.debug("Enter: ApplicationMsgProcessor::processInMessage");
-			log.debug("Exit: ApplicationMsgProcessor::processInMessage");
-		}
-		return false;
-	}
-	
-	private String getSequenceID(RMMsgContext rmMsgCtx, boolean serverSide, boolean forceNewSequence)throws SandeshaException{
-		MessageContext msgContext = rmMsgCtx.getMessageContext();
-		ConfigurationContext configContext = msgContext.getConfigurationContext();
-		
-		String internalSequenceId = null;
-		if (serverSide) {
-			if (inboundSequence == null || "".equals(inboundSequence)) {
-				String message = SandeshaMessageHelper.getMessage(SandeshaMessageKeys.incomingSequenceNotValidID, inboundSequence);
-				log.debug(message);
-				throw new SandeshaException(message);
-			}
+    public DOMNodePointer(NodePointer parent, Node node){
+        super(parent);
+        this.node = node;
+    }
 
-			internalSequenceId = SandeshaUtil.getOutgoingSideInternalSequenceID(inboundSequence);
-		} else {
-			// set the internal sequence id for the client side.
-			EndpointReference toEPR = msgContext.getTo();
-			if (toEPR == null || toEPR.getAddress() == null || "".equals(toEPR.getAddress())) {
-				String message = SandeshaMessageHelper.getMessage(SandeshaMessageKeys.toEPRNotValid, null);
-				log.debug(message);
-				throw new SandeshaException(message);
-			}
+    public boolean testNode(NodeTest test){
+        return testNode(this, node, test);
+    }
 
-			String to = toEPR.getAddress();
-			String sequenceKey = null;
-			if(forceNewSequence){
-				sequenceKey = SandeshaUtil.getUUID();
-				msgContext.setProperty(SandeshaClientConstants.SEQUENCE_KEY, sequenceKey);
-			}
-			else{
-				sequenceKey = (String) msgContext.getProperty(SandeshaClientConstants.SEQUENCE_KEY);
-				if (sequenceKey == null)
-					sequenceKey = (String)configContext.getAxisConfiguration().getParameterValue(SandeshaClientConstants.SEQUENCE_KEY);
-			}
+    public static boolean testNode(NodePointer pointer, Node node, NodeTest test){
+        if (test == null){
+            return true;
+        }
+        else if (test instanceof NodeNameTest){
+            if (node.getNodeType() != Node.ELEMENT_NODE){
+                return false;
+            }
 
-			
-			internalSequenceId = SandeshaUtil.getInternalSequenceID(to, sequenceKey);
-		}
-		return internalSequenceId;
-	}
-	
-	public boolean processOutMessage(RMMsgContext rmMsgCtx, Transaction tran) throws AxisFault {
-		if (log.isDebugEnabled())
-			log.debug("Enter: ApplicationMsgProcessor::processOutMessage");
+            QName testName = ((NodeNameTest)test).getNodeName();
+            String testLocalName = testName.getName();
+            if (testLocalName.equals("*") || testLocalName.equals(DOMNodePointer.getLocalName(node))){
+                String testPrefix = testName.getPrefix();
+                String nodePrefix = DOMNodePointer.getPrefix(node);
+                if (equalStrings(testPrefix, nodePrefix)){
+                    return true;
+                }
 
-		appMsgProcTran= tran;
-		MessageContext msgContext = rmMsgCtx.getMessageContext();
-		ConfigurationContext configContext = msgContext.getConfigurationContext();
-		
-		//Please note: no need to check that RM1.0 annon out-in has a sequence offer, since we actually force an offer in this case
-		
-		// setting the Fault callback
-		SandeshaListener faultCallback = (SandeshaListener) msgContext.getOptions().getProperty(
-				SandeshaClientConstants.SANDESHA_LISTENER);
-		if (faultCallback != null) {
-			OperationContext operationContext = msgContext.getOperationContext();
-			if (operationContext != null) {
-				operationContext.setProperty(SandeshaClientConstants.SANDESHA_LISTENER, faultCallback);
-			}
-		}
+                String testNS = pointer.getNamespaceURI(testPrefix);
+                String nodeNS = pointer.getNamespaceURI(nodePrefix);
+                return equalStrings(testNS, nodeNS);
+            }
+        }
+        else if (test instanceof NodeTypeTest){
+            int nodeType = node.getNodeType();
+            switch (((NodeTypeTest)test).getNodeType()){
+                case Compiler.NODE_TYPE_NODE:
+                    return nodeType == Node.ELEMENT_NODE;
+                case Compiler.NODE_TYPE_TEXT:
+                    return nodeType == Node.CDATA_SECTION_NODE ||
+                            nodeType == Node.TEXT_NODE;
+                case Compiler.NODE_TYPE_COMMENT:
+                    return nodeType == Node.COMMENT_NODE;
+                case Compiler.NODE_TYPE_PI:
+                    return nodeType == Node.PROCESSING_INSTRUCTION_NODE;
+            }
+            return false;
+        }
+        else if (test instanceof ProcessingInstructionTest){
+            if (node.getNodeType() == Node.PROCESSING_INSTRUCTION_NODE){
+                String testPI = ((ProcessingInstructionTest)test).getTarget();
+                String nodePI = ((ProcessingInstruction)node).getTarget();
+                return testPI.equals(nodePI);
+            }
+        }
+        return false;
+    }
 
-		StorageManager storageManager = SandeshaUtil.getSandeshaStorageManager(configContext, configContext
-				.getAxisConfiguration());
+    private static boolean equalStrings(String s1, String s2){
+        if (s1 == null && s2 != null){
+            return false;
+        }
+        if (s1 != null && s2 == null){
+            return false;
+        }
 
-		//check the TO address is ok
-		SandeshaUtil.getEPRDecorator(configContext).checkEndpointReference(msgContext.getTo());
-		
-		boolean serverSide = msgContext.isServerSide();
+        if (s1 != null && !s1.trim().equals(s2.trim())){
+            return false;
+        }
 
-		// setting message Id if null
-		if (msgContext.getMessageID() == null)
-			msgContext.setMessageID(SandeshaUtil.getUUID());
+        return true;
+    }
 
-		
+    public QName getName(){
+        int type = node.getNodeType();
+        if (type == Node.ELEMENT_NODE){
+            return new QName(DOMNodePointer.getPrefix(node), DOMNodePointer.getLocalName(node));
+        }
+        else if (type == Node.PROCESSING_INSTRUCTION_NODE){
+            return new QName(null, ((ProcessingInstruction)node).getTarget());
+        }
+        return null;
+    }
 
-		/*
-		 * Internal sequence id is the one used to refer to the sequence (since
-		 * actual sequence id is not available when first msg arrives) server
-		 * side - a derivation of the sequenceId of the incoming sequence client
-		 * side - a derivation of wsaTo & SeequenceKey
-		 */
-		String internalSequenceId = getSequenceID(rmMsgCtx, serverSide, false); //get a sequenceID, possibly pre-existing
-		
-		boolean lastMessage = false;
-		if(!serverSide){
-			String lastAppMessage = (String) msgContext.getProperty(SandeshaClientConstants.LAST_MESSAGE);
-			if (lastAppMessage != null && "true".equals(lastAppMessage))
-				lastMessage = true;
-		}
-		
-		if (internalSequenceId!=null)
-			rmMsgCtx.setProperty(Sandesha2Constants.MessageContextProperties.INTERNAL_SEQUENCE_ID,internalSequenceId);
+    public String getNamespaceURI(){
+        if (node.getNodeType() == Node.ELEMENT_NODE){
+            return getNamespaceURI(getName().getPrefix());
+        }
+        return null;
+    }
 
-		/*
-		 * checking weather the user has given the messageNumber (most of the
-		 * cases this will not be the case where the system will generate the
-		 * message numbers
-		 */
+    public QName getExpandedName(){
+        return new QName(getNamespaceURI(), getName().getName());
+    }
 
-		// User should set it as a long object.
-		Long messageNumberLng = (Long) msgContext.getProperty(SandeshaClientConstants.MESSAGE_NUMBER);
+    public NodeIterator childIterator(NodeTest test, boolean reverse){
+        return new DOMNodeIterator(this, true, test, reverse);
+    }
 
-		long givenMessageNumber = -1;
-		if (messageNumberLng != null) {
-			givenMessageNumber = messageNumberLng.longValue();
-			if (givenMessageNumber <= 0) {
-				throw new SandeshaException(SandeshaMessageHelper.getMessage(
-						SandeshaMessageKeys.msgNumberMustBeLargerThanZero, Long.toString(givenMessageNumber)));
-			}
-		}
+    public NodeIterator siblingIterator(NodeTest test, boolean reverse){
+        return new DOMNodeIterator(this, false, test, reverse);
+    }
 
-		// A dummy message is a one which will not be processed as a actual
-		// application message.
-		// The RM handlers will simply let these go.
-		String dummyMessageString = (String) msgContext.getOptions().getProperty(SandeshaClientConstants.DUMMY_MESSAGE);
-		boolean dummyMessage = false;
-		if (dummyMessageString != null && Sandesha2Constants.VALUE_TRUE.equals(dummyMessageString))
-			dummyMessage = true;
+    public NodeIterator attributeIterator(QName name){
+        return new DOMAttributeIterator(this, name);
+    }
 
-		RMSBean rmsBean = SandeshaUtil.getRMSBeanFromInternalSequenceId(storageManager, internalSequenceId);
+    public NodePointer namespacePointer(String prefix){
+        return new NamespacePointer(this, prefix);
+    }
 
-		//see if the sequence is closed
-		if(rmsBean != null && 
-			(rmsBean.isSequenceClosedClient() || rmsBean.isTerminateAdded() || rmsBean.isTimedOut())){
-			if(SandeshaUtil.isAutoStartNewSequence(msgContext)){
-				internalSequenceId = getSequenceID(rmMsgCtx, serverSide, true); //require a new sequence
-				rmMsgCtx.setProperty(Sandesha2Constants.MessageContextProperties.INTERNAL_SEQUENCE_ID,internalSequenceId);
-			}
-			else if(rmsBean.isSequenceClosedClient()){
-				throw new SandeshaException(SandeshaMessageHelper.getMessage(SandeshaMessageKeys.cannotSendMsgAsSequenceClosed, internalSequenceId));
-			}
-			else if(rmsBean.isTerminateAdded()){
-				throw new SandeshaException(SandeshaMessageHelper.getMessage(SandeshaMessageKeys.cannotSendMsgAsSequenceTerminated, internalSequenceId));
-			}
-			else if(rmsBean.isTimedOut()){
-				throw new SandeshaException(SandeshaMessageHelper.getMessage(SandeshaMessageKeys.cannotSendMsgAsSequenceTimedout, internalSequenceId));
-			}
-		}
-		
-		// If the call application is a 2-way MEP, and uses a anonymous replyTo, and the
-		// RM 1.1 spec level, then we must have MakeConnection enabled. We check that here,
-		// before we start creating a new Sequence.
-		if(!serverSide) {
-			AxisOperation op = msgContext.getAxisOperation();
-			int mep = WSDLConstants.MEP_CONSTANT_INVALID;
-			if(op != null) {
-				mep = op.getAxisSpecificMEPConstant();
-			}
-			if(mep == WSDLConstants.MEP_CONSTANT_OUT_IN) {
-				String specVersion = null;
-				if(rmsBean == null) {
-					specVersion = SequenceManager.getSpecVersion(msgContext, storageManager);
-				} else {
-					specVersion = rmsBean.getRMVersion();
-				}
-				if(specVersion.equals(Sandesha2Constants.SPEC_VERSIONS.v1_1)) {
-					EndpointReference replyTo = msgContext.getReplyTo();
-					if(replyTo == null || replyTo.hasAnonymousAddress()) {
-						//we are sync
-						SandeshaPolicyBean policy = SandeshaUtil.getPropertyBean(configContext.getAxisConfiguration());
-						if(!policy.isEnableMakeConnection()) {
-							String message = SandeshaMessageHelper.getMessage(SandeshaMessageKeys.makeConnectionDisabled);
-							throw new SandeshaException(message);
-						}
-					}
-				}
-			}
-		}
+    public NodeIterator namespaceIterator(){
+        return new DOMNamespaceIterator(this);
+    }
 
-		//setting the reference msg store key.
-		if (rmsBean!=null && rmsBean.getReferenceMessageStoreKey()==null) {
-			//setting this application message as the reference, if it hsnt already been set.
-			
-			String referenceMsgKey = SandeshaUtil.getUUID();
-			storageManager.storeMessageContext(referenceMsgKey, msgContext);
-			rmsBean.setReferenceMessageStoreKey(referenceMsgKey);
-		}
-		
-		String outSequenceID = null;
+    public String getNamespaceURI(String prefix){
+        if (prefix == null || prefix.equals("")){
+            return getDefaultNamespaceURI();
+        }
 
+        if (prefix.equals("xml")){
+            return XML_NAMESPACE_URI;
+        }
 
-		// Work out if there is a user transaction involved before updating any store state
-		// to give any storage manager interface a chance to setup any transactional state
-		boolean hasUserTransaction = storageManager.hasUserTransaction(msgContext);
-		
-		try {
-			
-			if (rmsBean == null) { 
-				// SENDING THE CREATE SEQUENCE.
-				while (rmsBean == null) {
-					// There is a timing window where 2 sending threads can hit this point
-					// at the same time and both will create an RMSBean to the same endpoint
-					// with the same internal sequenceid
-					// Check that someone hasn't created the bean
-					rmsBean = SandeshaUtil.getRMSBeanFromInternalSequenceId(storageManager, internalSequenceId);
-	
-					// if first message - setup the sending side sequence - both for the
-					// server and the client sides.
-					if (rmsBean == null) {
-						rmsBean = SequenceManager.setupNewClientSequence(msgContext, internalSequenceId, storageManager);
-						rmsBean = addCreateSequenceMessage(rmMsgCtx, rmsBean, storageManager);
-						if(rmsBean != null) outSequenceID = rmsBean.getSequenceID();
-						
-						if (rmsBean == null && appMsgProcTran != null && appMsgProcTran.isActive()) {
-							// Rollback the current locks.
-							appMsgProcTran.rollback();
-	
-							// Create a new tran.  This avoids a potential deadlock where the RMS/RMDBeans
-							// are taken in reverse order.
-							appMsgProcTran = storageManager.getTransaction();
-						}
-					}
+        if (prefix.equals("xmlns")){
+            return XMLNS_NAMESPACE_URI;
+        }
 
-				}
-	
-			} else {
-				outSequenceID = rmsBean.getSequenceID();
-			}
-			
-			// the message number that was last used.
-			long systemMessageNumber = rmsBean.getNextMessageNumber();
-	
-			// The number given by the user has to be larger than the last stored
-			// number.
-			if (givenMessageNumber > 0 && givenMessageNumber <= systemMessageNumber) {
-				String message = SandeshaMessageHelper.getMessage(SandeshaMessageKeys.msgNumberNotLargerThanLastMsg, Long
-						.toString(givenMessageNumber));
-				throw new SandeshaException(message);
-			}
-	
-			// Finding the correct message number.
-			long messageNumber = -1;
-			if (givenMessageNumber > 0) // if given message number is valid use it.
-										// (this is larger than the last stored due
-										// to the last check)
-				messageNumber = givenMessageNumber;
-			else if (systemMessageNumber > 0) { // if system message number is valid
-												// use it.
-				messageNumber = systemMessageNumber + 1;
-			} else { // This is the first message (systemMessageNumber = -1)
-				messageNumber = 1;
-			}
-	
-			if (serverSide) {
-				// Deciding whether this is the last message. We assume it is if it relates to
-				// a message which arrived with the LastMessage flag on it. 
-				RMDBean rmdBean = SandeshaUtil.getRMDBeanFromSequenceId(storageManager, inboundSequence);			
-				// Get the last in message
-				String lastRequestId = rmdBean.getLastInMessageId();
-				RelatesTo relatesTo = msgContext.getRelatesTo();
-				if(relatesTo != null && lastRequestId != null &&
-						lastRequestId.equals(relatesTo.getValue())) {
-					lastMessage = true;
-				}
-				
-				//or a constant property may call it as the last msg
-				Boolean inboundLast = (Boolean) msgContext.getProperty(Sandesha2Constants.MessageContextProperties.INBOUND_LAST_MESSAGE); 
-				if (inboundLast!=null && inboundLast.booleanValue())
-					lastMessage = true;
-			}
-			
-			if (lastMessage) 
-				rmsBean.setLastOutMessage(messageNumber);		
-	
-			// set this as the response highest message.
-			rmsBean.setHighestOutMessageNumber(messageNumber);
-			
-			// saving the used message number, and the expected reply count
-			boolean startPolling = false;
-			if (!dummyMessage) {
-				rmsBean.setNextMessageNumber(messageNumber);
-	
-				// Identify the MEP associated with the message.
-				AxisOperation op = msgContext.getAxisOperation();
-				int mep = WSDLConstants.MEP_CONSTANT_INVALID;
-				if(op != null) {
-					mep = op.getAxisSpecificMEPConstant();
-				}
-	
-				if(mep == WSDLConstants.MEP_CONSTANT_OUT_IN) {
-					// We only match up requests and replies when we are doing sync interactions
-					if (log.isDebugEnabled()) log.debug("MEP OUT_IN");
-					EndpointReference replyTo = msgContext.getReplyTo();
-					if(replyTo == null || replyTo.hasAnonymousAddress()) {
-						long expectedReplies = rmsBean.getExpectedReplies();
-						rmsBean.setExpectedReplies(expectedReplies + 1);
-					}
-	
-					// If we support the RM anonymous URI then rewrite the ws-a anon to use the RM equivalent.
-					//(do should be done only for WSRM 1.1)
-					
-					String specVersion = SequenceManager.getSpecVersion(rmMsgCtx.getMessageContext(), storageManager);
-					if (Sandesha2Constants.SPEC_VERSIONS.v1_1.equals(specVersion)) {
-						if (log.isDebugEnabled()) log.debug("SPEC_1_1");
-						String oldAddress = (replyTo == null) ? null : replyTo.getAddress();
-						EndpointReference newReplyTo = SandeshaUtil.rewriteEPR(rmsBean, msgContext
-								.getReplyTo(), configContext);
-						String newAddress = (newReplyTo == null) ? null : newReplyTo.getAddress();
-						if (newAddress != null && !newAddress.equals(oldAddress)) {
-							// We have rewritten the replyTo. If this is the first message that we have needed to
-							// rewrite then we should set the sequence up for polling, and once we have saved the
-							// changes to the sequence then we can start the polling thread.
-							
-							//Firstly, we are going to use make connection in this configuration so we should now ensure that
-							//WS-Adressing is enabled
-							if (log.isDebugEnabled()) log.debug("Ensuring that WS-A is enabled for msg " + msgContext);
-							msgContext.setProperty(AddressingConstants.DISABLE_ADDRESSING_FOR_OUT_MESSAGES,Boolean.FALSE);
-							msgContext.setReplyTo(newReplyTo);
-							
-							//start the polling process to pull back response messages
-							if (!rmsBean.isPollingMode()) {
-								rmsBean.setPollingMode(true);
-								startPolling = true;
-							}
-						}
-					}
-				}
-			}
-			if (log.isDebugEnabled()) log.debug("App msg using replyTo EPR as " + msgContext.getReplyTo());
-			
-			RelatesTo relatesTo = msgContext.getRelatesTo();
-			if(relatesTo != null) {
-				rmsBean.setHighestOutRelatesTo(relatesTo.getValue());
-			}
-	
-			// setting async ack endpoint for the server side. (if present)
-			if (serverSide) {
-				if (rmsBean.getToEndpointReference() != null) {
-					msgContext.setProperty(SandeshaClientConstants.AcksTo, rmsBean.getToEndpointReference().getAddress());
-				}
-			}
-	
-			// Update the rmsBean
-			storageManager.getRMSBeanMgr().update(rmsBean);
-			
-			if(startPolling) {
-				SandeshaUtil.startWorkersForSequence(msgContext.getConfigurationContext(), rmsBean);
-			}
-			
-			
-			int SOAPVersion = Sandesha2Constants.SOAPVersion.v1_1;
-			if (!msgContext.isSOAP11())
-				SOAPVersion = Sandesha2Constants.SOAPVersion.v1_2;
-			if (msgContext.getEnvelope() == null) {
-				try {
-					msgContext.setEnvelope(SOAPAbstractFactory.getSOAPFactory(
-							SOAPVersion).getDefaultEnvelope());
-				} catch (AxisFault e) {
-					throw new SandeshaException(e.getMessage());
-				}
-			}
-	
-			SOAPBody soapBody = rmMsgCtx.getSOAPEnvelope().getBody();
-			if (soapBody == null) {
-				String message = SandeshaMessageHelper.getMessage(SandeshaMessageKeys.soapBodyNotPresent);
-				log.debug(message);
-				throw new SandeshaException(message);
-			}
-	
-			
-			if (rmMsgCtx.getMessageId() == null) {
-				String messageId1 = SandeshaUtil.getUUID();
-				rmMsgCtx.setMessageId(messageId1);
-			}
-	
-			EndpointReference toEPR = msgContext.getTo();
-	
-			
-			if (toEPR != null) {
-				// setting default actions.
-				String to = toEPR.getAddress();
-				String operationName = msgContext.getOperationContext().getAxisOperation().getName().getLocalPart();
-				if (msgContext.getWSAAction() == null) {
-					msgContext.setWSAAction(to + "/" + operationName);
-				}
-				if (msgContext.getSoapAction() == null) {
-					msgContext.setSoapAction("\"" + to + "/" + operationName + "\"");
-				}
-			}
-			
-			// processing the response if not an dummy.
-			if (!dummyMessage){
-				String storageKey = SandeshaUtil.getUUID(); 
-				processResponseMessage(rmMsgCtx, rmsBean, internalSequenceId, outSequenceID, messageNumber, storageKey, storageManager, tran, hasUserTransaction);
-			}
-			//Users wont be able to get reliable response msgs in the back channel in the back channel of a 
-			//reliable message. If he doesn't have a endpoint he should use polling mechanisms.
-			msgContext.pause();
-			
-			if (appMsgProcTran != null && appMsgProcTran.isActive()) {
-				appMsgProcTran.commit();
-				appMsgProcTran = null;
-			}
-		}
+        String namespace = null;
+        if (namespaces == null){
+            namespaces = new HashMap();
+        }
+        else {
+            namespace = (String)namespaces.get(prefix);
+        }
 
-		finally {
-			if (appMsgProcTran != null && appMsgProcTran.isActive())
-				appMsgProcTran.rollback();
-		}
-		
-		if (log.isDebugEnabled())
-			log.debug("Exit: ApplicationMsgProcessor::processOutMessage " + Boolean.TRUE);
-		return true;
-	}
+        if (namespace == null){
+            String qname = "xmlns:" + prefix;
+            Node aNode = node;
+            while (aNode != null){
+                if (aNode.getNodeType() == Node.ELEMENT_NODE){
+                    Attr attr = ((Element)aNode).getAttributeNode(qname);
+                    if (attr != null){
+                        namespace = attr.getValue();
+                        break;
+                    }
+                }
+                aNode = aNode.getParentNode();
+            }
+            if (namespace == null || namespace.equals("")){
+                namespace = NodePointer.UNKNOWN_NAMESPACE;
+            }
+        }
 
-	private RMSBean addCreateSequenceMessage(RMMsgContext applicationRMMsg, RMSBean rmsBean,
-			StorageManager storageManager) throws AxisFault {
+        namespaces.put(prefix, namespace);
+        // TBD: We are supposed to resolve relative URIs to absolute ones.
+        return namespace;
+    }
 
-		if (log.isDebugEnabled())
-			log.debug("Enter: ApplicationMsgProcessor::addCreateSequenceMessage, " + rmsBean);
+    public String getDefaultNamespaceURI(){
+        if (defaultNamespace == null){
+            Node aNode = node;
+            while (aNode != null){
+                if (aNode.getNodeType() == Node.ELEMENT_NODE){
+                    Attr attr = ((Element)aNode).getAttributeNode("xmlns");
+                    if (attr != null){
+                        defaultNamespace = attr.getValue();
+                        break;
+                    }
+                }
+                aNode = aNode.getParentNode();
+            }
+        }
+        if (defaultNamespace == null){
+            defaultNamespace = "";
+        }
+        // TBD: We are supposed to resolve relative URIs to absolute ones.
+        return defaultNamespace.equals("") ? null : defaultNamespace;
+    }
 
-		MessageContext applicationMsg = applicationRMMsg.getMessageContext();
-		ConfigurationContext configCtx = applicationMsg.getConfigurationContext();
+    public Object getBaseValue(){
+        return node;
+    }
 
-		// generating a new create sequence message.
-		RMMsgContext createSeqRMMessage = RMMsgCreator.createCreateSeqMsg(rmsBean, applicationRMMsg);
+    public Object getValue(){
+        return node;
+    }
 
-		createSeqRMMessage.setFlow(MessageContext.OUT_FLOW);
-		CreateSequence createSequencePart = createSeqRMMessage.getCreateSequence();
+    public boolean isActual(){
+        return true;
+    }
 
-		SequenceOffer offer = createSequencePart.getSequenceOffer();
-		if (offer != null) {
-			String offeredSequenceId = offer.getIdentifer().getIdentifier();
+    public boolean isCollection(){
+        return false;
+    }
 
-			rmsBean.setOfferedSequence(offeredSequenceId);
-		}
+    public int getLength(){
+        return 1;
+    }
 
-		MessageContext createSeqMsg = createSeqRMMessage.getMessageContext();
-		createSeqMsg.setRelationships(null); // create seq msg does not
-											 // relateTo anything
-		
-		String createSequenceMessageStoreKey = SandeshaUtil.getUUID(); // the key that will be used to store 
-																	   //the create sequence message.
-		
-		rmsBean.setCreateSeqMsgID(createSeqMsg.getMessageID());
-		rmsBean.setCreateSequenceMsgStoreKey(createSequenceMessageStoreKey);
-		
-		if (storageManager.getRMSBeanMgr().insert(rmsBean)) {
-			//cloning the message and storing it as a reference.
-			MessageContext clonedMessage = SandeshaUtil.cloneMessageContext(createSeqMsg);
-			String clonedMsgStoreKey = SandeshaUtil.getUUID();
-			storageManager.storeMessageContext(clonedMsgStoreKey, clonedMessage);
-			rmsBean.setReferenceMessageStoreKey(clonedMsgStoreKey);
-			
-			SecurityToken token = (SecurityToken) createSeqRMMessage.getProperty(Sandesha2Constants.MessageContextProperties.SECURITY_TOKEN);
-			if(token != null) {
-				SecurityManager secManager = SandeshaUtil.getSecurityManager(configCtx);
-				rmsBean.setSecurityTokenData(secManager.getTokenRecoveryData(token));
-			}
+    public boolean isLeaf(){
+        return !node.hasChildNodes();
+    }
 
-      // Update the RMSBean 
-      storageManager.getRMSBeanMgr().update(rmsBean);
-			SenderBean createSeqEntry = new SenderBean();
-			createSeqEntry.setMessageContextRefKey(createSequenceMessageStoreKey);
-			createSeqEntry.setTimeToSend(System.currentTimeMillis());
-			createSeqEntry.setMessageID(createSeqRMMessage.getMessageId());
-			createSeqEntry.setInternalSequenceID(rmsBean.getInternalSequenceID());
-			// this will be set to true in the sender
-			createSeqEntry.setSend(true);
-			// Indicate that this message is a create sequence
-			createSeqEntry.setMessageType(Sandesha2Constants.MessageTypes.CREATE_SEQ);
-			EndpointReference to = createSeqRMMessage.getTo();
-			if (to!=null)
-				createSeqEntry.setToAddress(to.getAddress());
-			// If this message is targetted at an anonymous address then we must not have a transport
-			// ready for it, as the create sequence is not a reply.
-			if(to == null || to.hasAnonymousAddress())
-				createSeqEntry.setTransportAvailable(false);
-	
-			createSeqMsg.setProperty(Sandesha2Constants.QUALIFIED_FOR_SENDING, Sandesha2Constants.VALUE_FALSE);
-			
-			SandeshaUtil.executeAndStore(createSeqRMMessage, createSequenceMessageStoreKey, storageManager);
-	
-			storageManager.getSenderBeanMgr().insert(createSeqEntry);
-			
-			if(appMsgProcTran != null && createSeqRMMessage.getMessageId() != null && !storageManager.hasUserTransaction(createSeqMsg)) {
+    /**
+     * Returns true if the xml:lang attribute for the current node
+     * or its parent has the specified prefix <i>lang</i>.
+     * If no node has this prefix, calls <code>super.isLanguage(lang)</code>.
+     */
+    public boolean isLanguage(String lang){
+        String current = getLanguage();
+        if (current == null){
+            return super.isLanguage(lang);
+        }
+        return current.toUpperCase().startsWith(lang.toUpperCase());
+    }
 
-				// Lock the sender bean before we insert it, if we are planning to send it ourselves
-				String workId = createSeqEntry.getMessageID() + createSeqEntry.getTimeToSend();
-				SandeshaThread sender = storageManager.getSender();
+    protected String getLanguage(){
+        Node n = node;
+        while (n != null){
+            if (n.getNodeType() == Node.ELEMENT_NODE){
+                Element e = (Element)n;
+                String attr = e.getAttribute("xml:lang");
+                if (attr != null && !attr.equals("")){
+                    return attr;
+                }
+            }
+            n = n.getParentNode();
+        }
+        return null;
+    }
 
-				ConfigurationContext context = createSeqMsg.getConfigurationContext();
-				WorkerLock lock = sender.getWorkerLock();
-		
-				SenderWorker worker = new SenderWorker(context, createSeqEntry, rmsBean.getRMVersion());
-				worker.setLock(lock);
-				worker.setWorkId(workId);
-				// Actually take the lock
-				lock.addWork(workId, worker);
-			  
-				// Commit the transaction, so that the sender worker starts with a clean slate.
-				if(appMsgProcTran.isActive()) appMsgProcTran.commit();				
-						
-				if(worker != null) {
-					try {
-						worker.run();
-					} catch(Exception e)  {
-						
-						log.debug("Caught exception running SandeshaWorker", e);
-					}
-				}
-		
-				//Create transaction
-				appMsgProcTran = storageManager.getTransaction();
-			
-				//Find RMSBean
-				RMSBeanMgr rmsBeanMgr = storageManager.getRMSBeanMgr();
-				RMSBean tempRMSBean = new RMSBean();
-				tempRMSBean.setInternalSequenceID(rmsBean.getInternalSequenceID());
-				rmsBean = rmsBeanMgr.findUnique(tempRMSBean);
-			
-				// If the RMSBean has been terminated this means that we may 
-				// well have encountered a problem sending this message
-				if (rmsBean == null || rmsBean.isTerminated()){
-					
-					if (log.isDebugEnabled())
-						log.debug("Exit: ApplicationMsgProcessor::addCreateSequenceMessage, Failed to establish sequence " + rmsBean);
-					
-					if (rmsBean != null && rmsBean.getLastSendError() != null) {
-						if (rmsBean.getLastSendError() instanceof AxisFault)
-							throw (AxisFault)rmsBean.getLastSendError();
-						
-						throw new AxisFault(SandeshaMessageHelper.getMessage(SandeshaMessageKeys.createSequenceRefused), 
-								rmsBean.getLastSendError());
-					}
-					
-					throw new AxisFault(SandeshaMessageHelper.getMessage(SandeshaMessageKeys.createSequenceRefused));						
-				}
-			}
-			// Setup enough of the workers to get this create sequence off the box.
-			SandeshaUtil.startWorkersForSequence(configCtx, rmsBean);
-		} else {
-			rmsBean = null;
-		}
-				
-		if (log.isDebugEnabled())
-			log.debug("Exit: ApplicationMsgProcessor::addCreateSequenceMessage, " + rmsBean);
-		
-		return rmsBean;
-	}
+    /**
+     * Throws UnsupportedOperationException.
+     */
+    public void setValue(Object value){
+        throw new UnsupportedOperationException("Cannot modify DOM trees");
+    }
 
-	private void processResponseMessage(RMMsgContext rmMsg, RMSBean rmsBean, String internalSequenceId, String outSequenceID, long messageNumber,
-		    String storageKey, StorageManager storageManager, Transaction tran, boolean hasUserTransaction) throws AxisFault {
+    public String asPath(){
+        StringBuffer buffer = new StringBuffer();
+        if (parent != null){
+            buffer.append(parent.asPath());
+        }
+        switch(node.getNodeType()){
+            case Node.ELEMENT_NODE:
+                // If the parent pointer is not a DOMNodePointer, it is
+                // the parent's responsibility to produce the node test part
+                // of the path
+                if (parent instanceof DOMNodePointer){
+                    buffer.append('/');
+                    buffer.append(getName());
+                    buffer.append('[').append(getRelativePositionByName()).append(']');
+                }
+                break;
+            case Node.TEXT_NODE:
+            case Node.CDATA_SECTION_NODE:
+                buffer.append("/text()");
+                buffer.append('[').append(getRelativePositionOfTextNode()).append(']');
+                break;
+            case Node.PROCESSING_INSTRUCTION_NODE:
+                String target = ((ProcessingInstruction)node).getTarget();
+                buffer.append("/processing-instruction(\'").append(target).append("')");
+                buffer.append('[').append(getRelativePositionOfPI(target)).append(']');
+                break;
+            case Node.DOCUMENT_NODE:
+                // That'll be empty
+        }
+        return buffer.toString();
+    }
 
-		if (log.isDebugEnabled())
-			log.debug("Enter: ApplicationMsgProcessor::processResponseMessage, " + internalSequenceId + ", " + outSequenceID);
+    private int getRelativePositionByName(){
+        int count = 1;
+        Node n = node.getPreviousSibling();
+        while (n != null){
+            if (n.getNodeType() == Node.ELEMENT_NODE){
+                String nm = n.getNodeName();
+                if (nm.equals(node.getNodeName())){
+                    count ++;
+                }
+            }
+            n = n.getPreviousSibling();
+        }
+        return count;
+    }
 
-		MessageContext msg = rmMsg.getMessageContext();
+    private int getRelativePositionOfTextNode(){
+        int count = 1;
+        Node n = node.getPreviousSibling();
+        while (n != null){
+            if (n.getNodeType() == Node.TEXT_NODE || n.getNodeType() == Node.CDATA_SECTION_NODE){
+                count ++;
+            }
+            n = n.getPreviousSibling();
+        }
+        return count;
+    }
 
-		SenderBeanMgr retransmitterMgr = storageManager.getSenderBeanMgr();
+    private int getRelativePositionOfPI(String target){
+        int count = 1;
+        Node n = node.getPreviousSibling();
+        while (n != null){
+            if (n.getNodeType() == Node.PROCESSING_INSTRUCTION_NODE &&
+                    ((ProcessingInstruction)n).getTarget().equals(target)){
+                count ++;
+            }
+            n = n.getPreviousSibling();
+        }
+        return count;
+    }
 
-		// setting last message
-		boolean lastMessage = false;
-		if (msg.isServerSide()) {
-			Boolean inboundLast = (Boolean) msg.getProperty(Sandesha2Constants.MessageContextProperties.INBOUND_LAST_MESSAGE);
-			if (inboundLast != null && inboundLast.booleanValue()) {
-				lastMessage = true;
-			}
+    public int hashCode(){
+        return System.identityHashCode(node);
+    }
 
-		} else {
-			// client side
-			Object obj = msg.getProperty(SandeshaClientConstants.LAST_MESSAGE);
-			if (obj != null && "true".equals(obj)) {
-				lastMessage = true;
-			}
-		}
+    public boolean equals(Object object){
+        if (object == this){
+            return true;
+        }
 
-		boolean sendingNow = false;
-		if(outSequenceID != null && !hasUserTransaction) {
-		  sendingNow = true;
-		}
-		
-		// Now that we have decided which sequence to use for the message, make sure that we secure
-		// it with the correct token.
-		RMMsgCreator.secureOutboundMessage(rmsBean, msg);
+        if (!(object instanceof DOMNodePointer)){
+            return false;
+        }
 
-		// Retransmitter bean entry for the application message
-		SenderBean appMsgEntry = new SenderBean();
+        DOMNodePointer other = (DOMNodePointer)object;
+        return node == other.node;
+    }
 
-		appMsgEntry.setMessageContextRefKey(storageKey);
+    public static String getPrefix(Node node){
+        String prefix = node.getPrefix();
+        if (prefix != null){
+            return prefix;
+        }
 
-		appMsgEntry.setTimeToSend(System.currentTimeMillis());
-		appMsgEntry.setMessageID(rmMsg.getMessageId());
-		appMsgEntry.setMessageNumber(messageNumber);
-		appMsgEntry.setLastMessage(lastMessage);
-		
-		SOAPEnvelope envelope = rmMsg.getSOAPEnvelope();
-		if (lastMessage && envelope!=null && envelope.getBody().getFirstOMChild()==null)
-			appMsgEntry.setMessageType(Sandesha2Constants.MessageTypes.LAST_MESSAGE);
-		else
-			appMsgEntry.setMessageType(Sandesha2Constants.MessageTypes.APPLICATION);
-		
-		appMsgEntry.setInboundSequenceId(inboundSequence);
-		appMsgEntry.setInboundMessageNumber(inboundMessageNumber);
-		if (outSequenceID == null) {
-			appMsgEntry.setSend(false);
-		} else {
-			appMsgEntry.setSend(true);
-			// Send will be set to true at the sender.
-			msg.setProperty(Sandesha2Constants.SET_SEND_TO_TRUE, Sandesha2Constants.VALUE_TRUE);
-			appMsgEntry.setSequenceID(outSequenceID);
-		}
-		
-		EndpointReference to = rmMsg.getTo();
-		if (to!=null)
-			appMsgEntry.setToAddress(to.getAddress());
-		
-		appMsgEntry.setInternalSequenceID(internalSequenceId);
+        String name = node.getNodeName();
+        int index = name.lastIndexOf(':');
+        if (index == -1){
+            return null;
+        }
 
-		msg.setProperty(Sandesha2Constants.QUALIFIED_FOR_SENDING, Sandesha2Constants.VALUE_FALSE);
+        return name.substring(0, index);
+    }
 
-		// increasing the current handler index, so that the message will not be
-		// going throught the SandeshaOutHandler again.
-		msg.setCurrentHandlerIndex(msg.getCurrentHandlerIndex() + 1);
+    public static String getLocalName(Node node){
+        String localName = node.getLocalName();
+        if (localName != null){
+            return localName;
+        }
 
-		SandeshaUtil.executeAndStore(rmMsg, storageKey, storageManager);
-		
-		// Insert the SenderBean
-		retransmitterMgr.insert(appMsgEntry);
+        String name = node.getNodeName();
+        int index = name.lastIndexOf(':');
+        if (index == -1){
+            return name;
+        }
 
-		// Lock the sender bean before we insert it, if we are planning to send it ourselves
-		SenderWorker worker = null;
-		if(sendingNow) {
-		  String workId = appMsgEntry.getMessageID() + appMsgEntry.getTimeToSend();
-		  SandeshaThread sender = storageManager.getSender();
-		  ConfigurationContext context = msg.getConfigurationContext();
-		  WorkerLock lock = sender.getWorkerLock();
-      
-		  worker = new SenderWorker(context, appMsgEntry, rmsBean.getRMVersion());
-		  worker.setLock(lock);
-		  worker.setWorkId(workId);
-		  // Actually take the lock
-		  lock.addWork(workId, worker);
-		}
-		
-		// Commit the transaction, so that the sender worker starts with a clean slate.
-		if(appMsgProcTran != null && appMsgProcTran.isActive()) appMsgProcTran.commit();
-		 
-		if(worker != null) {
-		  try {
-		    worker.run();
-		  } catch(Exception e)  {
-		    log.error("Caught exception running SandeshaWorker", e);
-		  }
-		}
-		if (log.isDebugEnabled())
-			log.debug("Exit: ApplicationMsgProcessor::processResponseMessage");
-	}
-
+        return name.substring(index + 1);
+    }
 }

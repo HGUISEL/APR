@@ -1,84 +1,113 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2007 Mockito contributors
+ * This program is made available under the terms of the MIT License.
  */
-package org.apache.accumulo.test.functional;
+package org.mockito.internal.returnvalues;
 
-import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
-import org.apache.accumulo.core.client.AccumuloException;
-import org.apache.accumulo.core.client.AccumuloSecurityException;
-import org.apache.accumulo.core.client.Connector;
-import org.apache.accumulo.core.client.MutationsRejectedException;
-import org.apache.accumulo.core.client.TableExistsException;
-import org.apache.accumulo.core.client.TableNotFoundException;
-import org.apache.accumulo.core.util.CachedConfiguration;
-import org.apache.accumulo.test.TestIngest;
-import org.apache.accumulo.test.TestIngest.Opts;
-import org.apache.accumulo.test.VerifyIngest;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.junit.Test;
+import org.mockito.ReturnValues;
+import org.mockito.internal.creation.ClassNameFinder;
+import org.mockito.internal.invocation.Invocation;
+import org.mockito.internal.util.Primitives;
+import org.mockito.invocation.InvocationOnMock;
 
-public class BulkIT extends SimpleMacIT {
-
-  static final int N = 100000;
-  static final int COUNT = 5;
-
-  @Test(timeout = 4 * 60 * 1000)
-  public void test() throws Exception {
-    runTest(getConnector(), getTableNames(1)[0]);
-  }
-
-  static void runTest(Connector c, String tableName) throws AccumuloException, AccumuloSecurityException, TableExistsException, IOException, TableNotFoundException,
-      MutationsRejectedException {
-    c.tableOperations().create(tableName);
-    FileSystem fs = FileSystem.get(CachedConfiguration.getInstance());
-    String base = "target/accumulo-maven-plugin";
-    fs.delete(new Path(base + "/testrf"), true);
-    fs.mkdirs(new Path(base + "/testBulkFail"));
-
-    Opts opts = new Opts();
-    opts.timestamp = 1;
-    opts.random = 56;
-    opts.rows = N;
-    opts.instance = c.getInstance().getInstanceName();
-    opts.cols = 1;
-    opts.tableName = tableName;
-    for (int i = 0; i < COUNT; i++) {
-      opts.outputFile = base + String.format("/testrf/rf%02d", i);
-      opts.startRow = N * i;
-      TestIngest.ingest(c, opts, BWOPTS);
+/**
+ * Used by default by every Mockito mock.
+ * <ul>
+ * <li>
+ *  Returns appropriate primitive for primitive-returning methods
+ * </li>
+ * <li>
+ *  Returns consistent values for primitive wrapper classes (e.g. int-returning method retuns 0 <b>and</b> Integer-returning method returns 0, too)
+ * </li>
+ * <li>
+ *  Returns empty collection for collection-returning methods (works for most commonly used collection types)
+ * </li>
+ * <li>
+ *  Returns description of mock for toString() method
+ * </li>
+ * <li>
+ *  Returns null for everything else
+ * </li>
+ * </ul>
+ */
+public class EmptyReturnValues implements ReturnValues {
+    
+    /* (non-Javadoc)
+     * @see org.mockito.configuration.ReturnValues#valueFor(org.mockito.invocation.InvocationOnMock)
+     */
+    public Object valueFor(InvocationOnMock invocation) {
+        if (Invocation.isToString(invocation)) {
+            Object mock = invocation.getMock();
+            String mockDescription = "Mock for " + ClassNameFinder.classNameForMock(mock) + ", hashCode: " + mock.hashCode();
+            return mockDescription;
+        }
+        
+        Class<?> returnType = invocation.getMethod().getReturnType();
+        return returnValueFor(returnType);
     }
-    opts.outputFile = base + String.format("/testrf/rf%02d", N);
-    opts.startRow = N;
-    opts.rows = 1;
-    // create an rfile with one entry, there was a bug with this:
-    TestIngest.ingest(c, opts, BWOPTS);
-    c.tableOperations().importDirectory(tableName, base + "/testrf", base + "/testBulkFail", false);
-    VerifyIngest.Opts vopts = new VerifyIngest.Opts();
-    vopts.tableName = tableName;
-    vopts.random = 56;
-    for (int i = 0; i < COUNT; i++) {
-      vopts.startRow = i * N;
-      vopts.rows = N;
-      VerifyIngest.verifyIngest(c, vopts, SOPTS);
+    
+    Object returnValueFor(Class<?> type) {
+        if (type.isPrimitive()) {
+            return primitiveOf(type);
+        } else if (Primitives.isPrimitiveWrapper(type)) {
+            return Primitives.primitiveWrapperOf(type);
+        //new instances are used instead of Collections.emptyList(), etc.
+        //to avoid UnsupportedOperationException if code under test modifies returned collection
+        } else if (type == Collection.class) {
+            return new LinkedList<Object>();
+        } else if (type == Set.class) {
+            return new HashSet<Object>();
+        } else if (type == HashSet.class) {
+            return new HashSet<Object>();
+        } else if (type == SortedSet.class) {
+            return new TreeSet<Object>();
+        } else if (type == TreeSet.class) {
+            return new TreeSet<Object>();
+        } else if (type == LinkedHashSet.class) {
+            return new LinkedHashSet<Object>();
+        } else if (type == List.class) {
+            return new LinkedList<Object>();
+        } else if (type == LinkedList.class) {
+            return new LinkedList<Object>();
+        } else if (type == ArrayList.class) {
+            return new ArrayList<Object>();
+        } else if (type == Map.class) {
+            return new HashMap<Object, Object>();
+        } else if (type == HashMap.class) {
+            return new HashMap<Object, Object>();
+        } else if (type == SortedMap.class) {
+            return new TreeMap<Object, Object>();
+        } else if (type == TreeMap.class) {
+            return new TreeMap<Object, Object>();
+        } else if (type == LinkedHashMap.class) {
+            return new LinkedHashMap<Object, Object>();
+        }       
+        //Let's not care about the rest of collections.
+        return null;
     }
-    vopts.startRow = N;
-    vopts.rows = 1;
-    VerifyIngest.verifyIngest(c, vopts, SOPTS);
-  }
 
+    private Object primitiveOf(Class<?> type) {
+        if (type == Boolean.TYPE) {
+            return false;
+        } else if (type == Character.TYPE) {
+            return (char) 0;
+        } else {
+            return 0;
+        } 
+    }
 }

@@ -1,711 +1,1808 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- * <p>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p>
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.atlas.web.rest;
 
-import org.apache.atlas.AtlasClient;
-import org.apache.atlas.AtlasErrorCode;
-import org.apache.atlas.SortOrder;
-import org.apache.atlas.authorize.AtlasAuthorizationUtils;
-import org.apache.atlas.discovery.AtlasDiscoveryService;
-import org.apache.atlas.discovery.EntityDiscoveryService;
-import org.apache.atlas.exception.AtlasBaseException;
-import org.apache.atlas.model.discovery.*;
-import org.apache.atlas.model.discovery.SearchParameters.FilterCriteria;
-import org.apache.atlas.model.profile.AtlasUserSavedSearch;
-import org.apache.atlas.repository.Constants;
-import org.apache.atlas.type.AtlasEntityType;
-import org.apache.atlas.type.AtlasStructType;
-import org.apache.atlas.type.AtlasTypeRegistry;
-import org.apache.atlas.utils.AtlasPerfTracer;
-import org.apache.atlas.web.util.Servlets;
-import org.apache.commons.collections.CollectionUtils;
-import org.apache.commons.configuration.Configuration;
-import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.springframework.stereotype.Service;
+package org.apache.ignite.internal.processors.cache;
 
-import javax.inject.Inject;
-import javax.inject.Singleton;
-import javax.servlet.http.HttpServletRequest;
-import javax.ws.rs.Consumes;
-import javax.ws.rs.DELETE;
-import javax.ws.rs.GET;
-import javax.ws.rs.POST;
-import javax.ws.rs.PUT;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.MediaType;
-import java.io.IOException;
-import java.util.List;
+import org.apache.ignite.*;
+import org.apache.ignite.cache.*;
+import org.apache.ignite.cache.affinity.*;
+import org.apache.ignite.cluster.*;
+import org.apache.ignite.configuration.*;
+import org.apache.ignite.internal.*;
+import org.apache.ignite.internal.processors.cache.distributed.*;
+import org.apache.ignite.internal.processors.cache.distributed.dht.*;
+import org.apache.ignite.internal.processors.cache.transactions.*;
+import org.apache.ignite.internal.processors.cache.version.*;
+import org.apache.ignite.internal.util.*;
+import org.apache.ignite.internal.util.lang.*;
+import org.apache.ignite.internal.util.typedef.*;
+import org.apache.ignite.internal.util.typedef.T2;
+import org.apache.ignite.internal.util.typedef.internal.*;
+import org.apache.ignite.lang.*;
+import org.apache.ignite.transactions.*;
+import org.jdk8.backport.*;
+import org.jetbrains.annotations.*;
+
+import javax.cache.*;
+import javax.cache.expiry.*;
+import java.io.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+
+import static org.apache.ignite.IgniteSystemProperties.*;
+import static org.apache.ignite.cache.CacheAtomicityMode.*;
+import static org.apache.ignite.cache.CacheDistributionMode.*;
+import static org.apache.ignite.cache.CacheMode.*;
+import static org.apache.ignite.cache.CachePreloadMode.*;
+import static org.apache.ignite.cache.CacheWriteSynchronizationMode.*;
+import static org.apache.ignite.internal.GridTopic.*;
+import static org.apache.ignite.internal.IgniteNodeAttributes.*;
+import static org.apache.ignite.internal.processors.cache.GridCacheOperation.*;
+import static org.apache.ignite.internal.processors.cache.GridCachePeekMode.*;
 
 /**
- * REST interface for data discovery using dsl or full text search
+ * Cache utility methods.
  */
-@Path("v2/search")
-@Singleton
-@Service
-@Consumes({Servlets.JSON_MEDIA_TYPE, MediaType.APPLICATION_JSON})
-@Produces({Servlets.JSON_MEDIA_TYPE, MediaType.APPLICATION_JSON})
-public class DiscoveryREST {
-    private static final Logger PERF_LOG = AtlasPerfTracer.getPerfLogger("rest.DiscoveryREST");
+public class GridCacheUtils {
+    /**  Hadoop syste cache name. */
+    public static final String SYS_CACHE_HADOOP_MR = "ignite-hadoop-mr-sys-cache";
 
-    @Context
-    private       HttpServletRequest httpServletRequest;
-    private final int                maxFullTextQueryLength;
-    private final int                maxDslQueryLength;
+    /** System cache name. */
+    public static final String UTILITY_CACHE_NAME = "ignite-sys-cache";
 
-    private final AtlasTypeRegistry     typeRegistry;
-    private final AtlasDiscoveryService discoveryService;
+    /** Atomics system cache name. */
+    public static final String ATOMICS_CACHE_NAME = "ignite-atomics-sys-cache";
 
-    @Inject
-    public DiscoveryREST(AtlasTypeRegistry typeRegistry, AtlasDiscoveryService discoveryService, Configuration configuration) {
-        this.typeRegistry           = typeRegistry;
-        this.discoveryService       = discoveryService;
-        this.maxFullTextQueryLength = configuration.getInt(Constants.MAX_FULLTEXT_QUERY_STR_LENGTH, 4096);
-        this.maxDslQueryLength      = configuration.getInt(Constants.MAX_DSL_QUERY_STR_LENGTH, 4096);
+    /** Default mask name. */
+    private static final String DEFAULT_MASK_NAME = "<default>";
+
+    /** Peek flags. */
+    private static final GridCachePeekMode[] PEEK_FLAGS = new GridCachePeekMode[] { GLOBAL, SWAP };
+
+    /** TTL: minimum positive value. */
+    public static final long TTL_MINIMUM = 1L;
+
+    /** TTL: eternal. */
+    public static final long TTL_ETERNAL = 0L;
+
+    /** TTL: not changed. */
+    public static final long TTL_NOT_CHANGED = -1L;
+
+    /** TTL: zero (immediate expiration). */
+    public static final long TTL_ZERO = -2L;
+
+    /** Expire time: eternal. */
+    public static final long EXPIRE_TIME_ETERNAL = 0L;
+
+    /** Expire time: must be calculated based on TTL value. */
+    public static final long EXPIRE_TIME_CALCULATE = -1L;
+
+    /** Per-thread generated UID store. */
+    private static final ThreadLocal<String> UUIDS = new ThreadLocal<String>() {
+        @Override protected String initialValue() {
+            return UUID.randomUUID().toString();
+        }
+    };
+
+    /** Empty predicate array. */
+    private static final IgnitePredicate[] EMPTY = new IgnitePredicate[0];
+
+    /** Partition to state transformer. */
+    private static final IgniteClosure PART2STATE =
+        new C1<GridDhtLocalPartition, GridDhtPartitionState>() {
+            @Override public GridDhtPartitionState apply(GridDhtLocalPartition p) {
+                return p.state();
+            }
+        };
+
+    /** Not evicted partitions. */
+    private static final IgnitePredicate PART_NOT_EVICTED = new P1<GridDhtLocalPartition>() {
+        @Override public boolean apply(GridDhtLocalPartition p) {
+            return p.state() != GridDhtPartitionState.EVICTED;
+        }
+    };
+
+    /** */
+    private static final IgniteClosure<Integer, GridCacheVersion[]> VER_ARR_FACTORY =
+        new C1<Integer, GridCacheVersion[]>() {
+            @Override public GridCacheVersion[] apply(Integer size) {
+                return new GridCacheVersion[size];
+            }
+        };
+
+    /** Empty predicate array. */
+    private static final IgnitePredicate[] EMPTY_FILTER = new IgnitePredicate[0];
+
+    /** Always false predicat array. */
+    private static final IgnitePredicate[] ALWAYS_FALSE = new IgnitePredicate[] {
+        new P1() {
+            @Override public boolean apply(Object e) {
+                return false;
+            }
+        }
+    };
+
+    /** Read filter. */
+    private static final IgnitePredicate READ_FILTER = new P1<Object>() {
+        @Override public boolean apply(Object e) {
+            return ((IgniteTxEntry)e).op() == READ;
+        }
+
+        @Override public String toString() {
+            return "Cache transaction read filter";
+        }
+    };
+
+    /** Write filter. */
+    private static final IgnitePredicate WRITE_FILTER = new P1<Object>() {
+        @Override public boolean apply(Object e) {
+            return ((IgniteTxEntry)e).op() != READ;
+        }
+
+        @Override public String toString() {
+            return "Cache transaction write filter";
+        }
+    };
+
+    /** Transaction entry to key. */
+    private static final IgniteClosure tx2key = new C1<IgniteTxEntry, Object>() {
+        @Override public Object apply(IgniteTxEntry e) {
+            return e.key();
+        }
+
+        @Override public String toString() {
+            return "Cache transaction entry to key converter.";
+        }
+    };
+
+    /** Transaction entry to key. */
+    private static final IgniteClosure txCol2key = new C1<Collection<IgniteTxEntry>, Collection<Object>>() {
+        @SuppressWarnings( {"unchecked"})
+        @Override public Collection<Object> apply(Collection<IgniteTxEntry> e) {
+            return F.viewReadOnly(e, tx2key);
+        }
+
+        @Override public String toString() {
+            return "Cache transaction entry collection to key collection converter.";
+        }
+    };
+
+    /** Converts transaction to XID version. */
+    private static final IgniteClosure tx2xidVer = new C1<IgniteInternalTx, GridCacheVersion>() {
+        @Override public GridCacheVersion apply(IgniteInternalTx tx) {
+            return tx.xidVersion();
+        }
+
+        @Override public String toString() {
+            return "Transaction to XID version converter.";
+        }
+    };
+
+    /** Converts tx entry to entry. */
+    private static final IgniteClosure tx2entry = new C1<IgniteTxEntry, GridCacheEntryEx>() {
+        @Override public GridCacheEntryEx apply(IgniteTxEntry e) {
+            return e.cached();
+        }
+    };
+
+    /** Transaction entry to key bytes. */
+    private static final IgniteClosure tx2keyBytes = new C1<IgniteTxEntry, byte[]>() {
+        @Nullable @Override public byte[] apply(IgniteTxEntry e) {
+            return e.keyBytes();
+        }
+
+        @Override public String toString() {
+            return "Cache transaction entry to key converter.";
+        }
+    };
+
+    /** Transaction entry to key. */
+    private static final IgniteClosure entry2key = new C1<GridCacheEntryEx, Object>() {
+        @Override public Object apply(GridCacheEntryEx e) {
+            return e.key();
+        }
+
+        @Override public String toString() {
+            return "Cache extended entry to key converter.";
+        }
+    };
+
+    /** Transaction entry to key. */
+    private static final IgniteClosure info2key = new C1<GridCacheEntryInfo, Object>() {
+        @Override public Object apply(GridCacheEntryInfo e) {
+            return e.key();
+        }
+
+        @Override public String toString() {
+            return "Cache extended entry to key converter.";
+        }
+    };
+
+    /**
+     * Ensure singleton.
+     */
+    protected GridCacheUtils() {
+        // No-op.
     }
 
     /**
-     * Retrieve data for the specified DSL
+     * Gets per-thread-unique ID for this thread.
      *
-     * @param query          DSL query
-     * @param typeName       limit the result to only entities of specified type or its sub-types
-     * @param classification limit the result to only entities tagged with the given classification or or its sub-types
-     * @param limit          limit the result set to only include the specified number of entries
-     * @param offset         start offset of the result set (useful for pagination)
-     * @return Search results
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful DSL execution with some results, might return an empty list if execution succeeded
-     * without any results
-     * @HTTP 400 Invalid DSL or query parameters
+     * @return ID for this thread.
      */
-    @GET
-    @Path("/dsl")
-    public AtlasSearchResult searchUsingDSL(@QueryParam("query")          String query,
-                                            @QueryParam("typeName")       String typeName,
-                                            @QueryParam("classification") String classification,
-                                            @QueryParam("limit")          int    limit,
-                                            @QueryParam("offset")         int    offset) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("typeName", typeName);
-        Servlets.validateQueryParamLength("classification", classification);
-
-        if (StringUtils.isNotEmpty(query) && query.length() > maxDslQueryLength) {
-            throw new AtlasBaseException(AtlasErrorCode.INVALID_QUERY_LENGTH, Constants.MAX_DSL_QUERY_STR_LENGTH);
-        }
-
-        AtlasPerfTracer perf = null;
-
-        try {
-
-            query = Servlets.decodeQueryString(query);
-
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.searchUsingDSL(" + query + "," + typeName
-                        + "," + classification + "," + limit + "," + offset + ")");
-            }
-
-            String queryStr = discoveryService.getDslQueryUsingTypeNameClassification(query, typeName, classification);
-
-            return discoveryService.searchUsingDslQuery(queryStr, limit, offset);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+    public static String uuid() {
+        return UUIDS.get();
     }
 
-
+    /**
+     * @param msg Message to check.
+     * @return {@code True} if preloader message.
+     */
+    public static boolean allowForStartup(Object msg) {
+        return ((GridCacheMessage)msg).allowForStartup();
+    }
 
     /**
-     * Retrieve data for the specified fulltext query
+     * Writes {@link GridCacheVersion} to output stream. This method is meant to be used by
+     * implementations of {@link Externalizable} interface.
      *
-     * @param query  Fulltext query
-     * @param limit  limit the result set to only include the specified number of entries
-     * @param offset start offset of the result set (useful for pagination)
-     * @return Search results
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful FullText lookup with some results, might return an empty list if execution succeeded
-     * without any results
-     * @HTTP 400 Invalid fulltext or query parameters
+     * @param out Output stream.
+     * @param ver Version to write.
+     * @throws IOException If write failed.
      */
-    @GET
-    @Path("/fulltext")
-    public AtlasSearchResult searchUsingFullText(@QueryParam("query")                  String  query,
-                                                 @QueryParam("excludeDeletedEntities") boolean excludeDeletedEntities,
-                                                 @QueryParam("limit")                  int     limit,
-                                                 @QueryParam("offset")                 int     offset) throws AtlasBaseException {
-        // Validate FullText query for max allowed length
-        if(StringUtils.isNotEmpty(query) && query.length() > maxFullTextQueryLength){
-            throw new AtlasBaseException(AtlasErrorCode.INVALID_QUERY_LENGTH, Constants.MAX_FULLTEXT_QUERY_STR_LENGTH );
-        }
+    public static void writeVersion(ObjectOutput out, GridCacheVersion ver) throws IOException {
+        // Write null flag.
+        out.writeBoolean(ver == null);
 
-        AtlasPerfTracer perf = null;
+        if (ver != null) {
+            out.writeBoolean(ver instanceof GridCacheVersionEx);
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.searchUsingFullText(" + query + "," +
-                        limit + "," + offset + ")");
-            }
-
-            return discoveryService.searchUsingFullTextQuery(query, excludeDeletedEntities, limit, offset);
-        } finally {
-            AtlasPerfTracer.log(perf);
+            ver.writeExternal(out);
         }
     }
 
     /**
-     * Retrieve data for the specified fulltext query
+     * Reads {@link GridCacheVersion} from input stream. This method is meant to be used by
+     * implementations of {@link Externalizable} interface.
      *
-     * @param query          Fulltext query
-     * @param typeName       limit the result to only entities of specified type or its sub-types
-     * @param classification limit the result to only entities tagged with the given classification or or its sub-types
-     * @param limit          limit the result set to only include the specified number of entries
-     * @param offset         start offset of the result set (useful for pagination)
-     * @return Search results
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful FullText lookup with some results, might return an empty list if execution succeeded
-     * without any results
-     * @HTTP 400 Invalid fulltext or query parameters
+     * @param in Input stream.
+     * @return Read version.
+     * @throws IOException If read failed.
      */
-    @GET
-    @Path("/basic")
-    public AtlasSearchResult searchUsingBasic(@QueryParam("query")                  String  query,
-                                              @QueryParam("typeName")               String  typeName,
-                                              @QueryParam("classification")         String  classification,
-                                              @QueryParam("sortBy")                 String    sortByAttribute,
-                                              @QueryParam("sortOrder")              SortOrder sortOrder,
-                                              @QueryParam("excludeDeletedEntities") boolean excludeDeletedEntities,
-                                              @QueryParam("limit")                  int     limit,
-                                              @QueryParam("offset")                 int     offset) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("typeName", typeName);
-        Servlets.validateQueryParamLength("classification", classification);
-        Servlets.validateQueryParamLength("sortBy", sortByAttribute);
-        if (StringUtils.isNotEmpty(query) && query.length() > maxFullTextQueryLength) {
-            throw new AtlasBaseException(AtlasErrorCode.INVALID_QUERY_LENGTH, Constants.MAX_FULLTEXT_QUERY_STR_LENGTH);
+    @Nullable public static GridCacheVersion readVersion(ObjectInput in) throws IOException {
+        // If UUID is not null.
+        if (!in.readBoolean()) {
+            GridCacheVersion ver = in.readBoolean() ? new GridCacheVersionEx() : new GridCacheVersion();
+
+            ver.readExternal(in);
+
+            return ver;
         }
 
-        AtlasPerfTracer perf = null;
-
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.searchUsingBasic(" + query + "," +
-                        typeName + "," + classification + "," + limit + "," + offset + ")");
-            }
-
-            SearchParameters searchParameters = new SearchParameters();
-            searchParameters.setTypeName(typeName);
-            searchParameters.setClassification(classification);
-            searchParameters.setQuery(query);
-            searchParameters.setExcludeDeletedEntities(excludeDeletedEntities);
-            searchParameters.setLimit(limit);
-            searchParameters.setOffset(offset);
-            searchParameters.setSortBy(sortByAttribute);
-            searchParameters.setSortOrder(sortOrder);
-
-            return discoveryService.searchWithParameters(searchParameters);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+        return null;
     }
 
     /**
-     * Retrieve data for the specified attribute search query
-     *
-     * @param attrName        Attribute name
-     * @param attrValuePrefix Attibute value to search on
-     * @param typeName        limit the result to only entities of specified type or its sub-types
-     * @param limit           limit the result set to only include the specified number of entries
-     * @param offset          start offset of the result set (useful for pagination)
-     * @return Search results
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful FullText lookup with some results, might return an empty list if execution succeeded
-     * without any results
-     * @HTTP 400 Invalid wildcard or query parameters
+     * @param ctx Cache context.
+     * @param meta Meta name.
+     * @param <K> Key type.
+     * @param <V> Value type.
+     * @return Filter for entries with meta.
      */
-    @GET
-    @Path("/attribute")
-    public AtlasSearchResult searchUsingAttribute(@QueryParam("attrName")        String attrName,
-                                                  @QueryParam("attrValuePrefix") String attrValuePrefix,
-                                                  @QueryParam("typeName")        String typeName,
-                                                  @QueryParam("limit")           int    limit,
-                                                  @QueryParam("offset")          int    offset) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("attrName", attrName);
-        Servlets.validateQueryParamLength("attrValuePrefix", attrValuePrefix);
-        Servlets.validateQueryParamLength("typeName", typeName);
+    public static <K, V> IgnitePredicate<K> keyHasMeta(final GridCacheContext<K, V> ctx, final String meta) {
+        return new P1<K>() {
+            @Override public boolean apply(K k) {
+                GridCacheEntryEx<K, V> e = ctx.cache().peekEx(k);
 
-        AtlasPerfTracer perf = null;
-
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.searchUsingAttribute(" + attrName + "," +
-                        attrValuePrefix + "," + typeName + "," + limit + "," + offset + ")");
+                return e != null && e.hasMeta(meta);
             }
+        };
+    }
 
-            if (StringUtils.isEmpty(attrName) && StringUtils.isEmpty(attrValuePrefix)) {
-                throw new AtlasBaseException(AtlasErrorCode.INVALID_PARAMETERS,
-                        String.format("attrName : %s, attrValue: %s for attribute search.", attrName, attrValuePrefix));
+    /**
+     * @param err If {@code true}, then throw {@link GridCacheFilterFailedException},
+     *      otherwise return {@code val} passed in.
+     * @param <T> Return type.
+     * @return Always return {@code null}.
+     * @throws GridCacheFilterFailedException If {@code err} flag is {@code true}.
+     */
+    @Nullable public static <T> T failed(boolean err) throws GridCacheFilterFailedException {
+        return failed(err, (T)null);
+    }
+
+    /**
+     * @param err If {@code true}, then throw {@link GridCacheFilterFailedException},
+     *      otherwise return {@code val} passed in.
+     * @param val Value for which evaluation happened.
+     * @param <T> Return type.
+     * @return Always return {@code val} passed in or throw exception.
+     * @throws GridCacheFilterFailedException If {@code err} flag is {@code true}.
+     */
+    @Nullable public static <T> T failed(boolean err, T val) throws GridCacheFilterFailedException {
+        if (err)
+            throw new GridCacheFilterFailedException(val);
+
+        return null;
+    }
+
+    /**
+     * Entry predicate factory mostly used for deserialization.
+     *
+     * @param <K> Key type.
+     * @param <V> Value type.
+     * @return Factory instance.
+     */
+    public static <K, V> IgniteClosure<Integer, IgnitePredicate<Cache.Entry<K, V>>[]> factory() {
+        return new IgniteClosure<Integer, IgnitePredicate<Cache.Entry<K, V>>[]>() {
+            @SuppressWarnings({"unchecked"})
+            @Override public IgnitePredicate<Cache.Entry<K, V>>[] apply(Integer len) {
+                return (IgnitePredicate<Cache.Entry<K, V>>[])(len == 0 ? EMPTY : new IgnitePredicate[len]);
             }
+        };
+    }
 
-            if (StringUtils.isEmpty(attrName)) {
-                AtlasEntityType entityType = typeRegistry.getEntityTypeByName(typeName);
+    /**
+     * Checks that cache store is present.
+     *
+     * @param ctx Registry.
+     * @throws IgniteCheckedException If cache store is not present.
+     */
+    public static void checkStore(GridCacheContext<?, ?> ctx) throws IgniteCheckedException {
+        if (!ctx.store().configured())
+            throw new IgniteCheckedException("Failed to find cache store for method 'reload(..)' " +
+                "(is GridCacheStore configured?)");
+    }
 
-                if (entityType != null) {
-                    String[] defaultAttrNames = new String[] { AtlasClient.QUALIFIED_NAME, AtlasClient.NAME };
+    /**
+     * @param ctx Cache registry.
+     * @return Space name.
+     */
+    public static String swapSpaceName(GridCacheContext<?, ?> ctx) {
+        String name = ctx.namex();
 
-                    for (String defaultAttrName : defaultAttrNames) {
-                        AtlasStructType.AtlasAttribute attribute = entityType.getAttribute(defaultAttrName);
+        name = name == null ? "gg-swap-cache-dflt" : "gg-swap-cache-" + name;
 
-                        if (attribute != null) {
-                            attrName = defaultAttrName;
+        return name;
+    }
 
-                            break;
-                        }
-                    }
+    /**
+     * @param swapSpaceName Swap space name.
+     * @return Cache name.
+     */
+    public static String cacheNameForSwapSpaceName(String swapSpaceName) {
+        assert swapSpaceName != null;
+
+        return "gg-swap-cache-dflt".equals(swapSpaceName) ? null : swapSpaceName.substring("gg-swap-cache-".length());
+    }
+
+    /**
+     * Gets closure which returns {@code Entry} given cache key.
+     * If current cache is DHT and key doesn't belong to current partition,
+     * {@code null} is returned.
+     *
+     * @param ctx Cache context.
+     * @param <K> Cache key type.
+     * @param <V> Cache value type.
+     * @return Closure which returns {@code Entry} given cache key or {@code null} if partition is invalid.
+     */
+    public static <K, V> IgniteClosure<K, Cache.Entry<K, V>> cacheKey2Entry(
+        final GridCacheContext<K, V> ctx) {
+        return new IgniteClosure<K, Cache.Entry<K, V>>() {
+            @Nullable @Override public Cache.Entry<K, V> apply(K k) {
+                try {
+                    return ctx.cache().entry(k);
                 }
-
-                if (StringUtils.isEmpty(attrName)) {
-                    attrName = AtlasClient.QUALIFIED_NAME;
+                catch (GridDhtInvalidPartitionException ignored) {
+                    return null;
                 }
             }
 
-            SearchParameters searchParams = new SearchParameters();
-            FilterCriteria   attrFilter   = new FilterCriteria();
-
-            attrFilter.setAttributeName(StringUtils.isEmpty(attrName) ? AtlasClient.QUALIFIED_NAME : attrName);
-            attrFilter.setOperator(SearchParameters.Operator.STARTS_WITH);
-            attrFilter.setAttributeValue(attrValuePrefix);
-
-            searchParams.setTypeName(typeName);
-            searchParams.setEntityFilters(attrFilter);
-            searchParams.setOffset(offset);
-            searchParams.setLimit(limit);
-
-            return searchWithParameters(searchParams);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+            @Override public String toString() {
+                return "Key-to-entry transformer.";
+            }
+        };
     }
 
     /**
-     * Attribute based search for entities satisfying the search parameters
+     * @return Partition to state transformer.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgniteClosure<GridDhtLocalPartition<K, V>, GridDhtPartitionState> part2state() {
+        return PART2STATE;
+    }
+
+    /**
+     * @return Not evicted partitions.
+     */
+    @SuppressWarnings( {"unchecked"})
+    public static <K, V> IgnitePredicate<GridDhtLocalPartition<K, V>> notEvicted() {
+        return PART_NOT_EVICTED;
+    }
+
+    /**
+     * Gets all nodes on which cache with the same name is started.
      *
-     * @param parameters Search parameters
-     * @return Atlas search result
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful search
-     * @HTTP 400 Tag/Entity doesn't exist or Tag/entity filter is present without tag/type name
+     * @param ctx Cache context.
+     * @return All nodes on which cache with the same name is started (including nodes
+     *      that may have already left).
      */
-    @Path("basic")
-    @POST
-    public AtlasSearchResult searchWithParameters(SearchParameters parameters) throws AtlasBaseException {
-        AtlasPerfTracer perf = null;
-
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.searchWithParameters(" + parameters + ")");
-            }
-
-            if (parameters.getLimit() < 0 || parameters.getOffset() < 0) {
-                throw new AtlasBaseException(AtlasErrorCode.BAD_REQUEST, "Limit/offset should be non-negative");
-            }
-
-            if (StringUtils.isEmpty(parameters.getTypeName()) && !isEmpty(parameters.getEntityFilters())) {
-                throw new AtlasBaseException(AtlasErrorCode.BAD_REQUEST, "EntityFilters specified without Type name");
-            }
-
-            if (StringUtils.isEmpty(parameters.getClassification()) && !isEmpty(parameters.getTagFilters())) {
-                throw new AtlasBaseException(AtlasErrorCode.BAD_REQUEST, "TagFilters specified without tag name");
-            }
-
-            if (StringUtils.isEmpty(parameters.getTypeName()) && StringUtils.isEmpty(parameters.getClassification()) && StringUtils.isEmpty(parameters.getQuery()) && StringUtils.isEmpty(parameters.getTermName())) {
-                throw new AtlasBaseException(AtlasErrorCode.INVALID_SEARCH_PARAMS);
-            }
-
-            validateSearchParameters(parameters);
-
-            return discoveryService.searchWithParameters(parameters);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+    public static Collection<ClusterNode> allNodes(GridCacheContext ctx) {
+        return allNodes(ctx, -1);
     }
 
     /**
-     * Relationship search to search for related entities satisfying the search parameters
+     * Gets all nodes on which cache with the same name is started.
      *
-     * @param guid            Attribute name
-     * @param relation        relationName
-     * @param sortByAttribute sort the result using this attribute name, default value is 'name'
-     * @param sortOrder       sorting order
-     * @param limit           limit the result set to only include the specified number of entries
-     * @param offset          start offset of the result set (useful for pagination)
-     * @return Atlas search result
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful search
-     * @HTTP 400 guid is not a valid entity type or attributeName is not a valid relationship attribute
+     * @param ctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return All nodes on which cache with the same name is started (including nodes
+     *      that may have already left).
      */
-    @GET
-    @Path("relationship")
-    public AtlasSearchResult searchRelatedEntities(@QueryParam("guid")                   String    guid,
-                                                   @QueryParam("relation")               String    relation,
-                                                   @QueryParam("sortBy")                 String    sortByAttribute,
-                                                   @QueryParam("sortOrder")              SortOrder sortOrder,
-                                                   @QueryParam("excludeDeletedEntities") boolean   excludeDeletedEntities,
-                                                   @QueryParam("limit")                  int       limit,
-                                                   @QueryParam("offset")                 int       offset) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("guid", guid);
-        Servlets.validateQueryParamLength("relation", relation);
-        Servlets.validateQueryParamLength("sortBy", sortByAttribute);
-
-        AtlasPerfTracer perf = null;
-
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.relatedEntitiesSearchUsingGremlin(" + guid +
-                        ", " + relation + ", " + sortByAttribute + ", " + sortOrder + ", " + excludeDeletedEntities + ", " + ", " + limit + ", " + offset + ")");
-            }
-
-            return discoveryService.searchRelatedEntities(guid, relation, sortByAttribute, sortOrder, excludeDeletedEntities, limit, offset);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+    public static Collection<ClusterNode> allNodes(GridCacheContext ctx, long topOrder) {
+        return ctx.discovery().cacheNodes(ctx.namex(), topOrder);
     }
 
     /**
-     * @param savedSearch
-     * @return the saved search-object
-     * @throws AtlasBaseException
-     * @throws IOException
-     */
-    @POST
-    @Path("saved")
-    public AtlasUserSavedSearch addSavedSearch(AtlasUserSavedSearch savedSearch) throws AtlasBaseException, IOException {
-        validateUserSavedSearch(savedSearch);
-
-        AtlasPerfTracer perf = null;
-
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.addSavedSearch(userName=" + savedSearch.getOwnerName() + ", name=" + savedSearch.getName() + ", searchType=" + savedSearch.getSearchType() + ")");
-            }
-
-            return discoveryService.addSavedSearch(AtlasAuthorizationUtils.getCurrentUserName(), savedSearch);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
-    }
-
-    /***
+     * Gets all nodes with at least one cache configured.
      *
-     * @param savedSearch
-     * @return the updated search-object
-     * @throws AtlasBaseException
+     * @param ctx Shared cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return All nodes on which cache with the same name is started (including nodes
+     *      that may have already left).
      */
-    @PUT
-    @Path("saved")
-    public AtlasUserSavedSearch updateSavedSearch(AtlasUserSavedSearch savedSearch) throws AtlasBaseException {
-        validateUserSavedSearch(savedSearch);
+    public static Collection<ClusterNode> allNodes(GridCacheSharedContext ctx, long topOrder) {
+        return ctx.discovery().cacheNodes(topOrder);
+    }
 
-        AtlasPerfTracer perf = null;
+    /**
+     * Gets alive nodes.
+     *
+     * @param ctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Affinity nodes.
+     */
+    public static Collection<ClusterNode> aliveNodes(final GridCacheContext ctx, long topOrder) {
+        return ctx.discovery().aliveCacheNodes(ctx.namex(), topOrder);
+    }
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.updateSavedSearch(userName=" + savedSearch.getOwnerName() + ", name=" + savedSearch.getName() + ", searchType=" + savedSearch.getSearchType() + ")");
+    /**
+     * Gets remote nodes on which cache with the same name is started.
+     *
+     * @param ctx Cache context.
+     * @return Remote nodes on which cache with the same name is started.
+     */
+    public static Collection<ClusterNode> remoteNodes(final GridCacheContext ctx) {
+        return remoteNodes(ctx, -1);
+    }
+
+    /**
+     * Gets remote node with at least one cache configured.
+     *
+     * @param ctx Shared cache context.
+     * @return Collection of nodes with at least one cache configured.
+     */
+    public static Collection<ClusterNode> remoteNodes(GridCacheSharedContext ctx) {
+        return remoteNodes(ctx, -1);
+    }
+
+    /**
+     * Gets remote nodes on which cache with the same name is started.
+     *
+     * @param ctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Remote nodes on which cache with the same name is started.
+     */
+    public static Collection<ClusterNode> remoteNodes(final GridCacheContext ctx, long topOrder) {
+        return ctx.discovery().remoteCacheNodes(ctx.namex(), topOrder);
+    }
+
+    /**
+     * Gets alive nodes.
+     *
+     * @param ctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Affinity nodes.
+     */
+    public static Collection<ClusterNode> aliveRemoteNodes(final GridCacheContext ctx, long topOrder) {
+        return ctx.discovery().aliveRemoteCacheNodes(ctx.namex(), topOrder);
+    }
+
+    /**
+     * Gets remote nodes with at least one cache configured.
+     *
+     * @param ctx Cache shared context.
+     * @param topVer Topology version.
+     * @return Collection of remote nodes with at least one cache configured.
+     */
+    public static Collection<ClusterNode> remoteNodes(final GridCacheSharedContext ctx, long topVer) {
+        return ctx.discovery().remoteCacheNodes(topVer);
+    }
+
+    /**
+     * Gets alive nodes with at least one cache configured.
+     *
+     * @param ctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Affinity nodes.
+     */
+    public static Collection<ClusterNode> aliveCacheNodes(final GridCacheSharedContext ctx, long topOrder) {
+        return ctx.discovery().aliveNodesWithCaches(topOrder);
+    }
+
+    /**
+     * Gets alive remote nodes with at least one cache configured.
+     *
+     * @param ctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Affinity nodes.
+     */
+    public static Collection<ClusterNode> aliveRemoteCacheNodes(final GridCacheSharedContext ctx, long topOrder) {
+        return ctx.discovery().aliveRemoteNodesWithCaches(topOrder);
+    }
+
+    /**
+     * Gets all nodes on which cache with the same name is started and the local DHT storage is enabled.
+     *
+     * @param ctx Cache context.
+     * @return All nodes on which cache with the same name is started.
+     */
+    public static Collection<ClusterNode> affinityNodes(final GridCacheContext ctx) {
+        return ctx.discovery().cacheAffinityNodes(ctx.namex(), -1);
+    }
+
+    /**
+     * Checks if node is affinity node for given cache configuration.
+     *
+     * @param cfg Configuration to check.
+     * @return {@code True} if local node is affinity node (i.e. will store partitions).
+     */
+    public static boolean isAffinityNode(CacheConfiguration cfg) {
+        if (cfg.getCacheMode() == LOCAL)
+            return true;
+
+        CacheDistributionMode partTax = cfg.getDistributionMode();
+
+        if (partTax == null)
+            partTax = distributionMode(cfg);
+
+        return partTax == CacheDistributionMode.PARTITIONED_ONLY ||
+            partTax == CacheDistributionMode.NEAR_PARTITIONED;
+    }
+
+    /**
+     * Gets DHT affinity nodes.
+     *
+     * @param ctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Affinity nodes.
+     */
+    public static Collection<ClusterNode> affinityNodes(GridCacheContext ctx, long topOrder) {
+        return ctx.discovery().cacheAffinityNodes(ctx.namex(), topOrder);
+    }
+
+    /**
+     * Checks if given node has specified cache started and the local DHT storage is enabled.
+     *
+     * @param ctx Cache context.
+     * @param s Node shadow to check.
+     * @return {@code True} if given node has specified cache started.
+     */
+    public static boolean affinityNode(GridCacheContext ctx, ClusterNode s) {
+        assert ctx != null;
+        assert s != null;
+
+        GridCacheAttributes[] caches = s.attribute(ATTR_CACHE);
+
+        if (caches != null)
+            for (GridCacheAttributes attrs : caches)
+                if (F.eq(ctx.namex(), attrs.cacheName()))
+                    return attrs.isAffinityNode();
+
+        return false;
+    }
+
+    /**
+     * Checks if given node contains configured cache with the name
+     * as described by given cache context.
+     *
+     * @param ctx Cache context.
+     * @param node Node to check.
+     * @return {@code true} if node contains required cache.
+     */
+    public static boolean cacheNode(GridCacheContext ctx, ClusterNode node) {
+        assert ctx != null;
+        assert node != null;
+
+        return U.hasCache(node, ctx.namex());
+    }
+
+    /**
+     * Checks if near cache is enabled for cache context.
+     *
+     * @param ctx Cache context to check.
+     * @return {@code True} if near cache is enabled, {@code false} otherwise.
+     */
+    public static boolean isNearEnabled(GridCacheContext ctx) {
+        return isNearEnabled(ctx.config());
+    }
+
+    /**
+     * Checks if near cache is enabled for cache configuration.
+     *
+     * @param cfg Cache configuration to check.
+     * @return {@code True} if near cache is enabled, {@code false} otherwise.
+     */
+    @SuppressWarnings("SimplifiableIfStatement")
+    public static boolean isNearEnabled(CacheConfiguration cfg) {
+        if (cfg.getCacheMode() == LOCAL)
+            return false;
+
+        return cfg.getDistributionMode() == NEAR_PARTITIONED ||
+            cfg.getDistributionMode() == CacheDistributionMode.NEAR_ONLY;
+    }
+
+    /**
+     * Gets default partitioned cache mode.
+     *
+     * @param cfg Configuration.
+     * @return Partitioned cache mode.
+     */
+    public static CacheDistributionMode distributionMode(CacheConfiguration cfg) {
+        return cfg.getDistributionMode() != null ?
+            cfg.getDistributionMode() : CacheDistributionMode.PARTITIONED_ONLY;
+    }
+
+    /**
+     * Checks if given node has specified cache started.
+     *
+     * @param cacheName Cache name.
+     * @param node Node to check.
+     * @return {@code True} if given node has specified cache started.
+     */
+    public static boolean cacheNode(String cacheName, ClusterNode node) {
+        return cacheNode(cacheName, (GridCacheAttributes[])node.attribute(ATTR_CACHE));
+    }
+
+    /**
+     * Checks if given attributes relate the the node which has (or had) specified cache started.
+     *
+     * @param cacheName Cache name.
+     * @param caches Node cache attributes.
+     * @return {@code True} if given node has specified cache started.
+     */
+    public static boolean cacheNode(String cacheName, GridCacheAttributes[] caches) {
+        if (caches != null)
+            for (GridCacheAttributes attrs : caches)
+                if (F.eq(cacheName, attrs.cacheName()))
+                    return true;
+
+        return false;
+    }
+
+    /**
+     * Gets oldest alive node for specified topology version.
+     *
+     * @param cctx Cache context.
+     * @return Oldest node for the current topology version.
+     */
+    public static ClusterNode oldest(GridCacheContext cctx) {
+        return oldest(cctx, -1);
+    }
+
+    /**
+     * Gets oldest alive node across nodes with at least one cache configured.
+     *
+     * @param ctx Cache context.
+     * @return Oldest node.
+     */
+    public static ClusterNode oldest(GridCacheSharedContext ctx) {
+        return oldest(ctx, -1);
+    }
+
+    /**
+     * Gets oldest alive node for specified topology version.
+     *
+     * @param cctx Cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Oldest node for the given topology version.
+     */
+    public static ClusterNode oldest(GridCacheContext cctx, long topOrder) {
+        ClusterNode oldest = null;
+
+        for (ClusterNode n : aliveNodes(cctx, topOrder))
+            if (oldest == null || n.order() < oldest.order())
+                oldest = n;
+
+        assert oldest != null;
+        assert oldest.order() <= topOrder || topOrder < 0;
+
+        return oldest;
+    }
+
+    /**
+     * Gets oldest alive node with at least one cache configured for specified topology version.
+     *
+     * @param cctx Shared cache context.
+     * @param topOrder Maximum allowed node order.
+     * @return Oldest node for the given topology version.
+     */
+    public static ClusterNode oldest(GridCacheSharedContext cctx, long topOrder) {
+        ClusterNode oldest = null;
+
+        for (ClusterNode n : aliveCacheNodes(cctx, topOrder))
+            if (oldest == null || n.order() < oldest.order())
+                oldest = n;
+
+        assert oldest != null;
+        assert oldest.order() <= topOrder || topOrder < 0;
+
+        return oldest;
+    }
+
+    /**
+     * @return Empty filter.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgnitePredicate<Cache.Entry<K, V>>[] empty() {
+        return (IgnitePredicate<Cache.Entry<K, V>>[])EMPTY_FILTER;
+    }
+
+    /**
+     * @return Always false filter.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgnitePredicate<Cache.Entry<K, V>>[] alwaysFalse() {
+        return (IgnitePredicate<Cache.Entry<K, V>>[])ALWAYS_FALSE;
+    }
+
+    /**
+     * @return Closure that converts tx entry to key.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgniteClosure<IgniteTxEntry<K, V>, K> tx2key() {
+        return (IgniteClosure<IgniteTxEntry<K, V>, K>)tx2key;
+    }
+
+    /**
+     * @return Closure that converts tx entry collection to key collection.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgniteClosure<Collection<IgniteTxEntry<K, V>>, Collection<K>> txCol2Key() {
+        return (IgniteClosure<Collection<IgniteTxEntry<K, V>>, Collection<K>>)txCol2key;
+    }
+
+    /**
+     * @return Closure that converts tx entry to key.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgniteClosure<IgniteTxEntry<K, V>, byte[]> tx2keyBytes() {
+        return (IgniteClosure<IgniteTxEntry<K, V>, byte[]>)tx2keyBytes;
+    }
+
+    /**
+     * @return Converts transaction entry to cache entry.
+     */
+    @SuppressWarnings( {"unchecked"})
+    public static <K, V> IgniteClosure<IgniteTxEntry<K, V>, GridCacheEntryEx<K, V>> tx2entry() {
+        return (IgniteClosure<IgniteTxEntry<K, V>, GridCacheEntryEx<K, V>>)tx2entry;
+    }
+
+    /**
+     * @return Closure which converts transaction entry xid to XID version.
+     */
+    @SuppressWarnings( {"unchecked"})
+    public static <K, V> IgniteClosure<IgniteInternalTx<K, V>, GridCacheVersion> tx2xidVersion() {
+        return (IgniteClosure<IgniteInternalTx<K, V>, GridCacheVersion>)tx2xidVer;
+    }
+
+    /**
+     * @return Closure that converts entry to key.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgniteClosure<GridCacheEntryEx<K, V>, K> entry2Key() {
+        return (IgniteClosure<GridCacheEntryEx<K, V>, K>)entry2key;
+    }
+
+    /**
+     * @return Closure that converts entry info to key.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgniteClosure<GridCacheEntryInfo<K, V>, K> info2Key() {
+        return (IgniteClosure<GridCacheEntryInfo<K, V>, K>)info2key;
+    }
+
+    /**
+     * @return Filter for transaction reads.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgnitePredicate<IgniteTxEntry<K, V>> reads() {
+        return READ_FILTER;
+    }
+
+    /**
+     * @return Filter for transaction writes.
+     */
+    @SuppressWarnings({"unchecked"})
+    public static <K, V> IgnitePredicate<IgniteTxEntry<K, V>> writes() {
+        return WRITE_FILTER;
+    }
+
+    /**
+     * Gets type filter for projections.
+     *
+     * @param keyType Key type.
+     * @param valType Value type.
+     * @param <K> Key type.
+     * @param <V> Value type.
+     * @return Type filter.
+     */
+    public static <K, V> IgniteBiPredicate<K, V> typeFilter(final Class<?> keyType, final Class<?> valType) {
+        return new P2<K, V>() {
+            @Override public boolean apply(K k, V v) {
+                return keyType.isAssignableFrom(k.getClass()) && valType.isAssignableFrom(v.getClass());
             }
 
-            return discoveryService.updateSavedSearch(AtlasAuthorizationUtils.getCurrentUserName(), savedSearch);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+            @Override public String toString() {
+                return "Type filter [keyType=" + keyType + ", valType=" + valType + ']';
+            }
+        };
+    }
+
+    /**
+     * @return Boolean reducer.
+     */
+    public static IgniteReducer<Boolean, Boolean> boolReducer() {
+        return new IgniteReducer<Boolean, Boolean>() {
+            private final AtomicBoolean bool = new AtomicBoolean(true);
+
+            @Override public boolean collect(Boolean b) {
+                bool.compareAndSet(true, b);
+
+                // Stop collecting on first failure.
+                return bool.get();
+            }
+
+            @Override public Boolean reduce() {
+                return bool.get();
+            }
+
+            @Override public String toString() {
+                return "Bool reducer: " + bool;
+            }
+        };
+    }
+
+    /**
+     * Gets reducer that aggregates maps into one.
+     *
+     * @param size Predicted size of the resulting map to avoid resizings.
+     * @param <K> Key type.
+     * @param <V> Value type.
+     * @return Reducer.
+     */
+    public static <K, V> IgniteReducer<Map<K, V>, Map<K, V>> mapsReducer(final int size) {
+        return new IgniteReducer<Map<K, V>, Map<K, V>>() {
+            private final Map<K, V> ret = new ConcurrentHashMap8<>(size);
+
+            @Override public boolean collect(Map<K, V> map) {
+                if (map != null)
+                    ret.putAll(map);
+
+                return true;
+            }
+
+            @Override public Map<K, V> reduce() {
+                return ret;
+            }
+
+            /** {@inheritDoc} */
+            @Override public String toString() {
+                return "Map reducer: " + ret;
+            }
+        };
+    }
+
+    /**
+     * Gets reducer that aggregates collections.
+     *
+     * @param <T> Collection element type.
+     * @return Reducer.
+     */
+    public static <T> IgniteReducer<Collection<T>, Collection<T>> collectionsReducer() {
+        return new IgniteReducer<Collection<T>, Collection<T>>() {
+            private final Collection<T> ret = new ConcurrentLinkedQueue<>();
+
+            @Override public boolean collect(Collection<T> c) {
+                if (c != null)
+                    ret.addAll(c);
+
+                return true;
+            }
+
+            @Override public Collection<T> reduce() {
+                return ret;
+            }
+
+            /** {@inheritDoc} */
+            @Override public String toString() {
+                return "Collection reducer: " + ret;
+            }
+        };
+    }
+
+    /**
+     * Gets reducer that aggregates items into collection.
+     *
+     * @param <T> Items type.
+     * @return Reducer.
+     */
+    public static <T> IgniteReducer<T, Collection<T>> objectsReducer() {
+        return new IgniteReducer<T, Collection<T>>() {
+            private final Collection<T> ret = new ConcurrentLinkedQueue<>();
+
+            @Override public boolean collect(T item) {
+                if (item != null)
+                    ret.add(item);
+
+                return true;
+            }
+
+            @Override public Collection<T> reduce() {
+                return ret;
+            }
+        };
     }
 
     /**
      *
-     * @param searchName Name of the saved search
-     * @param userName User for whom the search is retrieved
-     * @return
-     * @throws AtlasBaseException
+     * @param nodes Set of nodes.
+     * @return Primary node.
      */
-    @GET
-    @Path("saved/{name}")
-    public AtlasUserSavedSearch getSavedSearch(@PathParam("name") String searchName,
-                                               @QueryParam("user") String userName) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("name", searchName);
-        Servlets.validateQueryParamLength("user", userName);
+    public static ClusterNode primary(Iterable<? extends ClusterNode> nodes) {
+        ClusterNode n = F.first(nodes);
 
-        AtlasPerfTracer perf = null;
+        assert n != null;
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.getSavedSearch(userName=" + userName + ", name=" + searchName + ")");
-            }
-
-            return discoveryService.getSavedSearchByName(AtlasAuthorizationUtils.getCurrentUserName(), userName, searchName);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+        return n;
     }
 
     /**
+     * @param nodes Nodes.
+     * @param locId Local node ID.
+     * @return Local node if it is in the list of nodes, or primary node.
+     */
+    public static ClusterNode localOrPrimary(Iterable<ClusterNode> nodes, UUID locId) {
+        assert !F.isEmpty(nodes);
+
+        for (ClusterNode n : nodes)
+            if (n.id().equals(locId))
+                return n;
+
+        return F.first(nodes);
+    }
+
+    /**
+     * @param nodes Nodes.
+     * @return Backup nodes.
+     */
+    public static Collection<ClusterNode> backups(Collection<ClusterNode> nodes) {
+        if (nodes == null || nodes.size() <= 1)
+            return Collections.emptyList();
+
+        return F.view(nodes, F.notEqualTo(F.first(nodes)));
+    }
+
+    /**
+     * @param mappings Mappings.
+     * @param k map key.
+     * @return Either current list value or newly created one.
+     */
+    public static <K, V> Collection<V> getOrSet(Map<K, List<V>> mappings, K k) {
+        List<V> vals = mappings.get(k);
+
+        if (vals == null)
+            mappings.put(k, vals = new LinkedList<>());
+
+        return vals;
+    }
+
+    /**
+     * @param mappings Mappings.
+     * @param k map key.
+     * @return Either current list value or newly created one.
+     */
+    public static <K, V> Collection<V> getOrSet(ConcurrentMap<K, Collection<V>> mappings, K k) {
+        Collection<V> vals = mappings.get(k);
+
+        if (vals == null) {
+            Collection<V> old = mappings.putIfAbsent(k, vals = new ConcurrentLinkedDeque8<>());
+
+            if (old != null)
+                vals = old;
+        }
+
+        return vals;
+    }
+
+    /**
+     * @return Peek flags.
+     */
+    public static GridCachePeekMode[] peekFlags() {
+        return PEEK_FLAGS;
+    }
+
+    /**
+     * @param log Logger.
+     * @param excl Excludes.
+     * @return Future listener that logs errors.
+     */
+    public static IgniteInClosure<IgniteInternalFuture<?>> errorLogger(final IgniteLogger log,
+        final Class<? extends Exception>... excl) {
+        return new CI1<IgniteInternalFuture<?>>() {
+            @Override public void apply(IgniteInternalFuture<?> f) {
+                try {
+                    f.get();
+                }
+                catch (IgniteCheckedException e) {
+                    if (!F.isEmpty(excl))
+                        for (Class cls : excl)
+                            if (e.hasCause(cls))
+                                return;
+
+                    U.error(log, "Future execution resulted in error: " + f, e);
+                }
+            }
+
+            @Override public String toString() {
+                return "Error logger [excludes=" + Arrays.toString(excl) + ']';
+            }
+        };
+    }
+
+    /**
+     * @param ctx Context.
+     * @param keys Keys.
+     * @return Mapped keys.
+     */
+    @SuppressWarnings( {"unchecked", "MismatchedQueryAndUpdateOfCollection"})
+    public static <K> Map<ClusterNode, Collection<K>> mapKeysToNodes(GridCacheContext<K, ?> ctx,
+        Collection<? extends K> keys) {
+        if (keys == null || keys.isEmpty())
+            return Collections.emptyMap();
+
+        // Map all keys to local node for local caches.
+        if (ctx.config().getCacheMode() == LOCAL)
+            return F.asMap(ctx.localNode(), (Collection<K>)keys);
+
+        long topVer = ctx.discovery().topologyVersion();
+
+        if (CU.affinityNodes(ctx, topVer).isEmpty())
+            return Collections.emptyMap();
+
+        if (keys.size() == 1)
+            return Collections.singletonMap(ctx.affinity().primary(F.first(keys), topVer), (Collection<K>)keys);
+
+        Map<ClusterNode, Collection<K>> map = new GridLeanMap<>(5);
+
+        for (K k : keys) {
+            ClusterNode primary = ctx.affinity().primary(k, topVer);
+
+            Collection<K> mapped = map.get(primary);
+
+            if (mapped == null)
+                map.put(primary, mapped = new LinkedList<>());
+
+            mapped.add(k);
+        }
+
+        return map;
+    }
+
+    /**
+     * @param t Exception to check.
+     * @return {@code true} if caused by lock timeout.
+     */
+    public static boolean isLockTimeout(Throwable t) {
+        if (t == null)
+            return false;
+
+        while (t instanceof IgniteCheckedException || t instanceof IgniteException)
+            t = t.getCause();
+
+        return t instanceof GridCacheLockTimeoutException;
+    }
+
+    /**
+     * @param t Exception to check.
+     * @return {@code true} if caused by lock timeout or cancellation.
+     */
+    public static boolean isLockTimeoutOrCancelled(Throwable t) {
+        if (t == null)
+            return false;
+
+        while (t instanceof IgniteCheckedException || t instanceof IgniteException)
+            t = t.getCause();
+
+        return t instanceof GridCacheLockTimeoutException || t instanceof GridDistributedLockCancelledException;
+    }
+
+    /**
+     * @param ctx Cache context.
+     * @param obj Object to marshal.
+     * @return Buffer that contains obtained byte array.
+     * @throws IgniteCheckedException If marshalling failed.
+     */
+    @SuppressWarnings("unchecked")
+    public static byte[] marshal(GridCacheSharedContext ctx, Object obj)
+        throws IgniteCheckedException {
+        assert ctx != null;
+
+        if (ctx.gridDeploy().enabled()) {
+            if (obj != null) {
+                if (obj instanceof Iterable)
+                    ctx.deploy().registerClasses((Iterable<?>)obj);
+                else if (obj.getClass().isArray()) {
+                    if (!U.isPrimitiveArray(obj))
+                        ctx.deploy().registerClasses((Object[])obj);
+                }
+                else
+                    ctx.deploy().registerClass(obj);
+            }
+        }
+
+        return ctx.marshaller().marshal(obj);
+    }
+
+    /**
+     * Method executes any Callable out of scope of transaction.
+     * If transaction started by this thread {@code cmd} will be executed in another thread.
      *
-     * @param userName User for whom the search is retrieved
-     * @throws AtlasBaseException
-     * @return list of all saved searches for given user
+     * @param cmd Callable.
+     * @param ctx Cache context.
+     * @return T Callable result.
+     * @throws IgniteCheckedException If execution failed.
      */
-    @GET
-    @Path("saved")
-    public List<AtlasUserSavedSearch> getSavedSearches(@QueryParam("user") String userName) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("user", userName);
-
-        AtlasPerfTracer perf = null;
-
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.getSavedSearches(userName=" + userName + ")");
+    public static <T> T outTx(Callable<T> cmd, GridCacheContext ctx) throws IgniteCheckedException {
+        if (ctx.tm().inUserTx())
+            return ctx.closures().callLocalSafe(cmd, false).get();
+        else {
+            try {
+                return cmd.call();
             }
-
-            return discoveryService.getSavedSearches(AtlasAuthorizationUtils.getCurrentUserName(), userName);
-        } finally {
-            AtlasPerfTracer.log(perf);
+            catch (IgniteCheckedException | IgniteException | IllegalStateException e) {
+                throw e;
+            }
+            catch (Exception e) {
+                throw new IgniteCheckedException(e);
+            }
         }
     }
 
     /**
-     * @param guid Name of the saved search
+     * @param val Value.
+     * @param skip Skip value flag.
+     * @return Value.
      */
-    @DELETE
-    @Path("saved/{guid}")
-    public void deleteSavedSearch(@PathParam("guid") String guid) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("guid", guid);
+    public static Object skipValue(Object val, boolean skip) {
+        if (skip)
+            return val != null ? true : null;
+        else
+            return val;
+    }
 
-        AtlasPerfTracer perf = null;
+    /**
+     * @param ctx Context.
+     * @param prj Projection.
+     * @param concurrency Concurrency.
+     * @param isolation Isolation.
+     * @return New transaction.
+     */
+    public static IgniteInternalTx txStartInternal(GridCacheContext ctx, CacheProjection prj,
+        TransactionConcurrency concurrency, TransactionIsolation isolation) {
+        assert ctx != null;
+        assert prj != null;
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.deleteSavedSearch(guid=" + guid + ")");
-            }
+        ctx.tm().txContextReset();
 
-            discoveryService.deleteSavedSearch(AtlasAuthorizationUtils.getCurrentUserName(), guid);
-        } finally {
-            AtlasPerfTracer.log(perf);
+        return prj.txStartEx(concurrency, isolation);
+    }
+
+    /**
+     * @param tx Transaction.
+     * @return String view of all safe-to-print transaction properties.
+     */
+    public static String txString(@Nullable IgniteInternalTx tx) {
+        if (tx == null)
+            return "null";
+
+        return tx.getClass().getSimpleName() + "[id=" + tx.xid() + ", concurrency=" + tx.concurrency() +
+            ", isolation=" + tx.isolation() + ", state=" + tx.state() + ", invalidate=" + tx.isInvalidate() +
+            ", rollbackOnly=" + tx.isRollbackOnly() + ", nodeId=" + tx.nodeId() +
+            ", duration=" + (U.currentTimeMillis() - tx.startTime()) + ']';
+    }
+
+    /**
+     * @param ctx Cache context.
+     */
+    public static void resetTxContext(GridCacheSharedContext ctx) {
+        assert ctx != null;
+
+        ctx.tm().txContextReset();
+    }
+
+    /**
+     * @param ctx Cache context.
+     */
+    public static void unwindEvicts(GridCacheContext ctx) {
+        assert ctx != null;
+
+        ctx.evicts().unwind();
+
+        if (ctx.isNear())
+            ctx.near().dht().context().evicts().unwind();
+    }
+
+    /**
+     * @param ctx Shared cache context.
+     */
+    public static <K, V> void unwindEvicts(GridCacheSharedContext<K, V> ctx) {
+        for (GridCacheContext<K, V> cacheCtx : ctx.cacheContexts()) {
+            assert ctx != null;
+
+            cacheCtx.evicts().unwind();
+
+            if (cacheCtx.isNear())
+                cacheCtx.near().dht().context().evicts().unwind();
         }
     }
 
-
     /**
-     * Attribute based search for entities satisfying the search parameters
+     * Gets primary node on which given key is cached.
      *
-     * @param searchName name of saved-search
-     * @param userName saved-search owner
-     * @return Atlas search result
-     * @throws AtlasBaseException
+     * @param ctx Cache.
+     * @param key Key to find primary node for.
+     * @return Primary node for the key.
      */
-    @Path("saved/execute/{name}")
-    @GET
-    public AtlasSearchResult executeSavedSearchByName(@PathParam("name") String searchName,
-                                                      @QueryParam("user") String userName) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("name", searchName);
-        Servlets.validateQueryParamLength("user", userName);
+    @SuppressWarnings( {"unchecked"})
+    public static ClusterNode primaryNode(GridCacheContext ctx, Object key) {
+        assert ctx != null;
+        assert key != null;
 
-        AtlasPerfTracer perf = null;
+        CacheConfiguration cfg = ctx.cache().configuration();
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG,
-                        "DiscoveryREST.executeSavedSearchByName(userName=" + userName + ", " + "name=" + searchName + ")");
-            }
+        if (cfg.getCacheMode() != PARTITIONED)
+            return ctx.localNode();
 
-            AtlasUserSavedSearch savedSearch = discoveryService.getSavedSearchByName(AtlasAuthorizationUtils.getCurrentUserName(), userName, searchName);
+        ClusterNode primary = ctx.affinity().primary(key, ctx.affinity().affinityTopologyVersion());
 
-            return executeSavedSearch(savedSearch);
-        } finally {
-            AtlasPerfTracer.log(perf);
-        }
+        assert primary != null;
+
+        return primary;
     }
 
     /**
-     * Attribute based search for entities satisfying the search parameters
+     * @param asc {@code True} for ascending.
+     * @return Descending order comparator.
+     */
+    public static Comparator<ClusterNode> nodeComparator(final boolean asc) {
+        return new Comparator<ClusterNode>() {
+            @Override public int compare(ClusterNode n1, ClusterNode n2) {
+                long o1 = n1.order();
+                long o2 = n2.order();
+
+                return asc ? o1 < o2 ? -1 : o1 == o2 ? 0 : 1 : o1 < o2 ? 1 : o1 == o2 ? 0 : -1;
+            }
+
+            @Override public String toString() {
+                return "Node comparator [asc=" + asc + ']';
+            }
+        };
+    }
+
+    /**
+     * @return Version array factory.
+     */
+    public static IgniteClosure<Integer, GridCacheVersion[]> versionArrayFactory() {
+        return VER_ARR_FACTORY;
+    }
+
+    /**
+     * Converts cache version to byte array.
      *
-     * @param searchGuid Guid identifying saved search
-     * @return Atlas search result
-     * @throws AtlasBaseException
+     * @param ver Version.
+     * @return Byte array.
      */
-    @Path("saved/execute/guid/{guid}")
-    @GET
-    public AtlasSearchResult executeSavedSearchByGuid(@PathParam("guid") String searchGuid) throws AtlasBaseException {
-        Servlets.validateQueryParamLength("guid", searchGuid);
+    public static byte[] versionToBytes(GridCacheVersion ver) {
+        assert ver != null;
 
-        AtlasPerfTracer perf = null;
+        byte[] bytes = new byte[28];
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.executeSavedSearchByGuid(" + searchGuid + ")");
+        U.intToBytes(ver.topologyVersion(), bytes, 0);
+        U.longToBytes(ver.globalTime(), bytes, 4);
+        U.longToBytes(ver.order(), bytes, 12);
+        U.intToBytes(ver.nodeOrderAndDrIdRaw(), bytes, 20);
+
+        return bytes;
+    }
+
+    /**
+     * Mask cache name in case it is null.
+     *
+     * @param cacheName Cache name.
+     * @return The same cache name or {@code <default>} in case the name is {@code null}.
+     */
+    public static String mask(String cacheName) {
+        return cacheName != null ? cacheName : DEFAULT_MASK_NAME;
+    }
+
+    /**
+     * Unmask cache name.
+     *
+     * @param cacheName Cache name.
+     * @return Unmasked cache name, i.e. in case provided parameter was {@code <default>} then {@code null}
+     *     will be returned.
+     */
+    @Nullable public static String unmask(String cacheName) {
+        return DEFAULT_MASK_NAME.equals(cacheName) ? null : cacheName;
+    }
+
+    /**
+     * Get topic to which replication requests are sent.
+     *
+     * @return Topic to which replication requests are sent.
+     */
+    public static String replicationTopicSend() {
+        return TOPIC_REPLICATION.toString();
+    }
+
+    /**
+     * Get topic to which replication responses are sent.
+     *
+     * @param cacheName Cache name.
+     * @return Topic to which replication responses are sent.
+     */
+    public static String replicationTopicReceive(String cacheName) {
+        return TOPIC_REPLICATION + "-" + mask(cacheName);
+    }
+
+    /**
+     * Checks that local and remove configurations have the same value of given attribute.
+     *
+     * @param log Logger used to log warning message (used only if fail flag is not set).
+     * @param locCfg Local configuration.
+     * @param rmtCfg Remote configuration.
+     * @param rmt Remote node.
+     * @param attr Attribute name.
+     * @param fail If true throws IgniteCheckedException in case of attribute values mismatch, otherwise logs warning.
+     * @throws IgniteCheckedException If attribute values are different and fail flag is true.
+     */
+    public static void checkAttributeMismatch(IgniteLogger log, CacheConfiguration locCfg,
+        CacheConfiguration rmtCfg, ClusterNode rmt, T2<String, String> attr, boolean fail) throws IgniteCheckedException {
+        assert rmt != null;
+        assert attr != null;
+        assert attr.get1() != null;
+        assert attr.get2() != null;
+
+        Object locVal = U.property(locCfg, attr.get1());
+
+        Object rmtVal = U.property(rmtCfg, attr.get1());
+
+        checkAttributeMismatch(log, rmtCfg.getName(), rmt, attr.get1(), attr.get2(), locVal, rmtVal, fail);
+    }
+
+    /**
+     * Checks that cache configuration attribute has the same value in local and remote cache configurations.
+     *
+     * @param log Logger used to log warning message (used only if fail flag is not set).
+     * @param cfgName Remote cache name.
+     * @param rmt Remote node.
+     * @param attrName Short attribute name for error message.
+     * @param attrMsg Full attribute name for error message.
+     * @param locVal Local value.
+     * @param rmtVal Remote value.
+     * @param fail If true throws IgniteCheckedException in case of attribute values mismatch, otherwise logs warning.
+     * @throws IgniteCheckedException If attribute values are different and fail flag is true.
+     */
+    public static void checkAttributeMismatch(IgniteLogger log, String cfgName, ClusterNode rmt, String attrName,
+        String attrMsg, @Nullable Object locVal, @Nullable Object rmtVal, boolean fail) throws IgniteCheckedException {
+        assert rmt != null;
+        assert attrName != null;
+        assert attrMsg != null;
+
+        if (!F.eq(locVal, rmtVal)) {
+            if (fail) {
+                throw new IgniteCheckedException(attrMsg + " mismatch (fix " + attrMsg.toLowerCase() + " in cache " +
+                    "configuration or set -D" + IGNITE_SKIP_CONFIGURATION_CONSISTENCY_CHECK + "=true " +
+                    "system property) [cacheName=" + cfgName +
+                    ", local" + capitalize(attrName) + "=" + locVal +
+                    ", remote" + capitalize(attrName) + "=" + rmtVal +
+                    ", rmtNodeId=" + rmt.id() + ']');
             }
+            else {
+                assert log != null;
 
-            AtlasUserSavedSearch savedSearch = discoveryService.getSavedSearchByGuid(AtlasAuthorizationUtils.getCurrentUserName(), searchGuid);
-
-            return executeSavedSearch(savedSearch);
-        } finally {
-            AtlasPerfTracer.log(perf);
+                U.warn(log, attrMsg + " mismatch (fix " + attrMsg.toLowerCase() + " in cache " +
+                    "configuration) [cacheName=" + cfgName +
+                    ", local" + capitalize(attrName) + "=" + locVal +
+                    ", remote" + capitalize(attrName) + "=" + rmtVal +
+                    ", rmtNodeId=" + rmt.id() + ']');
+            }
         }
     }
 
     /**
-     * Attribute based search for entities satisfying the search parameters
-     *@return Atlas search result
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful search
-     * @HTTP 400 Tag/Entity doesn't exist or Tag/entity filter is present without tag/type name
+     * @param str String.
+     * @return String with first symbol in upper case.
      */
-    @Path("/quick")
-    @GET
-    public AtlasQuickSearchResult quickSearch(@QueryParam("query")                  String  query,
-                                              @QueryParam("typeName")               String  typeName,
-                                              @QueryParam("excludeDeletedEntities") boolean excludeDeletedEntities,
-                                              @QueryParam("offset")                 int     offset,
-                                              @QueryParam("limit")                  int     limit) throws AtlasBaseException {
+    private static String capitalize(String str) {
+        return Character.toUpperCase(str.charAt(0)) + str.substring(1);
+    }
 
+    /**
+     * Validates that cache value object implements {@link Externalizable}.
+     *
+     * @param log Logger used to log warning message.
+     * @param val Value.
+     */
+    public static void validateCacheValue(IgniteLogger log, @Nullable Object val) {
+        if (val == null)
+            return;
 
+        validateExternalizable(log, val);
+    }
 
-        if (StringUtils.isNotEmpty(query) && query.length() > maxFullTextQueryLength) {
-            throw new AtlasBaseException(AtlasErrorCode.INVALID_QUERY_LENGTH, Constants.MAX_FULLTEXT_QUERY_STR_LENGTH);
+    /**
+     * Validates that cache key object has overridden equals and hashCode methods and
+     * implements {@link Externalizable}.
+     *
+     * @param log Logger used to log warning message.
+     * @param key Key.
+     * @throws IllegalArgumentException If equals or hashCode is not implemented.
+     */
+    public static void validateCacheKey(IgniteLogger log, @Nullable Object key) {
+        if (key == null)
+            return;
+
+        validateExternalizable(log, key);
+
+        if (!U.overridesEqualsAndHashCode(key))
+            throw new IllegalArgumentException("Cache key must override hashCode() and equals() methods: " +
+                key.getClass().getName());
+    }
+
+    /**
+     * @param cacheName Cache name.
+     * @return {@code True} if this is Hadoop system cache.
+     */
+    public static boolean isHadoopSystemCache(String cacheName) {
+        return F.eq(cacheName, SYS_CACHE_HADOOP_MR);
+    }
+
+    /**
+     * Create system cache used by Hadoop component.
+     *
+     * @return Hadoop cache configuration.
+     */
+    public static CacheConfiguration hadoopSystemCache() {
+        CacheConfiguration cache = new CacheConfiguration();
+
+        cache.setName(CU.SYS_CACHE_HADOOP_MR);
+        cache.setCacheMode(REPLICATED);
+        cache.setAtomicityMode(TRANSACTIONAL);
+        cache.setWriteSynchronizationMode(FULL_SYNC);
+
+        cache.setEvictionPolicy(null);
+        cache.setSwapEnabled(false);
+        cache.setQueryIndexEnabled(false);
+        cache.setCacheStoreFactory(null);
+        cache.setEagerTtl(true);
+        cache.setPreloadMode(SYNC);
+
+        return cache;
+    }
+
+    /**
+     * @param cacheName Cache name.
+     * @return {@code True} if this is security system cache.
+     */
+    public static boolean isUtilityCache(String cacheName) {
+        return UTILITY_CACHE_NAME.equals(cacheName);
+    }
+
+    /**
+     * @param cacheName Cache name.
+     * @return {@code True} if this is security system cache.
+     */
+    public static boolean isAtomicsCache(String cacheName) {
+        return ATOMICS_CACHE_NAME.equals(cacheName);
+    }
+
+    /**
+     * @param cacheName Cache name.
+     * @return {@code True} if system cache.
+     */
+    public static boolean isSystemCache(String cacheName) {
+        return isUtilityCache(cacheName) || isHadoopSystemCache(cacheName) || isAtomicsCache(cacheName);
+    }
+
+    /**
+     * @return Cache ID for utility cache.
+     */
+    public static int utilityCacheId() {
+        int hc = UTILITY_CACHE_NAME.hashCode();
+
+        return hc == 0 ? 1 : hc;
+    }
+
+    /**
+     * Validates that cache key or cache value implements {@link Externalizable}
+     *
+     * @param log Logger used to log warning message.
+     * @param obj Cache key or cache value.
+     */
+    private static void validateExternalizable(IgniteLogger log, Object obj) {
+        Class<?> cls = obj.getClass();
+
+        if (!cls.isArray() && !U.isJdk(cls) && !(obj instanceof Externalizable) && !(obj instanceof GridCacheInternal))
+            LT.warn(log, null, "For best performance you should implement " +
+                "java.io.Externalizable for all cache keys and values: " + cls.getName());
+    }
+
+//    /**
+//     * @param cfg Grid configuration.
+//     * @param cacheName Cache name.
+//     * @return {@code True} in this is Mongo data or meta cache.
+//     */
+//    public static boolean isMongoCache(GridConfiguration cfg, @Nullable String cacheName) {
+//        GridMongoConfiguration mongoCfg = cfg.getMongoConfiguration();
+//
+//        if (mongoCfg != null) {
+//            if (F.eq(cacheName, mongoCfg.getDefaultDataCacheName()) || F.eq(cacheName, mongoCfg.getMetaCacheName()))
+//                return true;
+//
+//            // Mongo config probably has not been validated yet => possible NPE, so we check for null.
+//            if (mongoCfg.getDataCacheNames() != null) {
+//                for (String mongoCacheName : mongoCfg.getDataCacheNames().values()) {
+//                    if (F.eq(cacheName, mongoCacheName))
+//                        return true;
+//                }
+//            }
+//        }
+//
+//        return false;
+//    }
+
+    /**
+     * @param cfg Grid configuration.
+     * @param cacheName Cache name.
+     * @return {@code True} in this is IGFS data or meta cache.
+     */
+    public static boolean isIgfsCache(IgniteConfiguration cfg, @Nullable String cacheName) {
+        IgfsConfiguration[] igfsCfgs = cfg.getIgfsConfiguration();
+
+        if (igfsCfgs != null) {
+            for (IgfsConfiguration igfsCfg : igfsCfgs) {
+                // IGFS config probably has not been validated yet => possible NPE, so we check for null.
+                if (igfsCfg != null &&
+                    (F.eq(cacheName, igfsCfg.getDataCacheName()) || F.eq(cacheName, igfsCfg.getMetaCacheName())))
+                    return true;
+            }
         }
 
-        AtlasPerfTracer perf = null;
+        return false;
+    }
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.quick(" + query + "," +
-                        "excludeDeletedEntities:" + excludeDeletedEntities + "," + limit + "," + offset + ")");
-            }
+    /**
+     * Convert TTL to expire time.
+     *
+     * @param ttl TTL.
+     * @return Expire time.
+     */
+    public static long toExpireTime(long ttl) {
+        assert ttl != CU.TTL_ZERO && ttl != CU.TTL_NOT_CHANGED && ttl >= 0 : "Invalid TTL: " + ttl;
 
-            QuickSearchParameters quickSearchParameters = new QuickSearchParameters(query,
-                                                                                    typeName,
-                                                                                    null,  // entityFilters
-                                                                                    false, // includeSubTypes
-                                                                                    excludeDeletedEntities,
-                                                                                    offset,
-                                                                                    limit,
-                                                                                    null); // attributes
+        long expireTime = ttl == CU.TTL_ETERNAL ? CU.EXPIRE_TIME_ETERNAL : U.currentTimeMillis() + ttl;
 
-            return discoveryService.quickSearch(quickSearchParameters);
-        } finally {
-            AtlasPerfTracer.log(perf);
+        // Account for overflow.
+        if (expireTime < 0)
+            expireTime = CU.EXPIRE_TIME_ETERNAL;
+
+        return expireTime;
+    }
+
+    /**
+     * Execute closure inside cache transaction.
+     *
+     * @param cache Cache.
+     * @param concurrency Concurrency.
+     * @param isolation Isolation.
+     * @param clo Closure.
+     * @throws IgniteCheckedException If failed.
+     */
+    public static <K, V> void inTx(CacheProjection<K, V> cache, TransactionConcurrency concurrency,
+        TransactionIsolation isolation, IgniteInClosureX<CacheProjection<K ,V>> clo) throws IgniteCheckedException {
+
+        try (IgniteInternalTx tx = cache.txStartEx(concurrency, isolation);) {
+            clo.applyx(cache);
+
+            tx.commit();
         }
     }
 
     /**
-     * Attribute based search for entities satisfying the search parameters
-     *@return Atlas search result
-     * @throws AtlasBaseException
-     * @HTTP 200 On successful search
-     * @HTTP 400 Entity/attribute doesn't exist or entity filter is present without type name
+     * Execute closure inside cache transaction.
+     *
+     * @param cache Cache.
+     * @param concurrency Concurrency.
+     * @param isolation Isolation.
+     * @param clo Closure.
+     * @throws IgniteCheckedException If failed.
      */
-    @Path("/quick")
-    @POST
-    public AtlasQuickSearchResult quickSearch(QuickSearchParameters quickSearchParameters) throws AtlasBaseException {
-        AtlasPerfTracer perf = null;
+    public static <K, V> void inTx(Ignite ignite, IgniteCache<K, V> cache, TransactionConcurrency concurrency,
+        TransactionIsolation isolation, IgniteInClosureX<IgniteCache<K ,V>> clo) throws IgniteCheckedException {
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.searchWithParameters(" + quickSearchParameters + ")");
-            }
+        try (Transaction tx = ignite.transactions().txStart(concurrency, isolation)) {
+            clo.applyx(cache);
 
-            if (quickSearchParameters.getLimit() < 0 || quickSearchParameters.getOffset() < 0) {
-                throw new AtlasBaseException(AtlasErrorCode.BAD_REQUEST, "Limit/offset should be non-negative");
-            }
-
-            if (StringUtils.isEmpty(quickSearchParameters.getTypeName()) &&
-                !isEmpty(quickSearchParameters.getEntityFilters())) {
-                throw new AtlasBaseException(AtlasErrorCode.BAD_REQUEST, "EntityFilters specified without Type name");
-            }
-
-            if (StringUtils.isEmpty(quickSearchParameters.getTypeName()) &&
-                StringUtils.isEmpty(quickSearchParameters.getQuery())){
-                throw new AtlasBaseException(AtlasErrorCode.INVALID_SEARCH_PARAMS);
-            }
-
-            validateSearchParameters(quickSearchParameters);
-
-            return discoveryService.quickSearch(quickSearchParameters);
-        } finally {
-            AtlasPerfTracer.log(perf);
+            tx.commit();
         }
     }
 
-    @Path("suggestions")
-    @GET
-    public AtlasSuggestionsResult getSuggestions(@QueryParam("prefixString") String prefixString, @QueryParam("fieldName") String fieldName) {
-        AtlasPerfTracer perf = null;
+    /**
+     * Gets subject ID by transaction.
+     *
+     * @param tx Transaction.
+     * @return Subject ID.
+     */
+    public static <K, V> UUID subjectId(IgniteInternalTx<K, V> tx, GridCacheSharedContext<K, V> ctx) {
+        if (tx == null)
+            return ctx.localNodeId();
 
-        try {
-            if (AtlasPerfTracer.isPerfTraceEnabled(PERF_LOG)) {
-                perf = AtlasPerfTracer.getPerfTracer(PERF_LOG, "DiscoveryREST.getSuggestions(" + prefixString + "," + fieldName + ")");
+        UUID subjId = tx.subjectId();
+
+        return subjId != null ? subjId : tx.originatingNodeId();
+    }
+
+    /**
+     * Invalidate entry in cache.
+     *
+     * @param cache Cache.
+     * @param key Key.
+     * @return {@code True} if entry was invalidated.
+     */
+    public static <K, V> boolean invalidate(CacheProjection<K, V> cache, K key) {
+        return cache.clearLocally(key);
+    }
+
+    /**
+     * @param duration Duration.
+     * @return TTL.
+     */
+    public static long toTtl(Duration duration) {
+        if (duration == null)
+            return TTL_NOT_CHANGED;
+
+        if (duration.getDurationAmount() == 0) {
+            if (duration.isEternal())
+                return TTL_ETERNAL;
+
+            assert duration.isZero();
+
+            return TTL_ZERO;
+        }
+
+        assert duration.getTimeUnit() != null : duration;
+
+        return duration.getTimeUnit().toMillis(duration.getDurationAmount());
+    }
+
+    /**
+     * Get TTL for load operation.
+     *
+     * @param plc Expiry policy.
+     * @return TTL for load operation or {@link #TTL_ZERO} in case of immediate expiration.
+     */
+    public static long ttlForLoad(ExpiryPolicy plc) {
+        if (plc != null) {
+            long ttl = toTtl(plc.getExpiryForCreation());
+
+            if (ttl == TTL_NOT_CHANGED)
+                ttl = TTL_ETERNAL;
+
+            return ttl;
+        }
+        else
+            return TTL_ETERNAL;
+    }
+
+    /**
+     * @return Expire time denoting a point in the past.
+     */
+    public static long expireTimeInPast() {
+        return U.currentTimeMillis() - 1L;
+    }
+
+    /**
+     * Reads array from input stream.
+     *
+     * @param in Input stream.
+     * @return Deserialized array.
+     * @throws IOException If failed.
+     * @throws ClassNotFoundException If class not found.
+     */
+    @SuppressWarnings("unchecked")
+    @Nullable public static <K, V> IgnitePredicate<Cache.Entry<K, V>>[] readEntryFilterArray(ObjectInput in)
+        throws IOException, ClassNotFoundException {
+        int len = in.readInt();
+
+        IgnitePredicate<Cache.Entry<K, V>>[] arr = null;
+
+        if (len > 0) {
+            arr = new IgnitePredicate[len];
+
+            for (int i = 0; i < len; i++)
+                arr[i] = (IgnitePredicate<Cache.Entry<K, V>>)in.readObject();
+        }
+
+        return arr;
+    }
+
+    /**
+     * @param aff Affinity.
+     * @param n Node.
+     * @return Predicate that evaulates to {@code true} if entry is primary for node.
+     */
+    public static <K, V> IgnitePredicate<Cache.Entry<K, V>> cachePrimary(
+        final CacheAffinity<K> aff,
+        final ClusterNode n
+    ) {
+        return new IgnitePredicate<Cache.Entry<K, V>>() {
+            @Override public boolean apply(Cache.Entry<K, V> e) {
+                return aff.isPrimary(n, e.getKey());
             }
+        };
+    }
 
-            return discoveryService.getSuggestions(prefixString, fieldName);
-        } finally {
-            AtlasPerfTracer.log(perf);
+
+    /* Solely to publish U.getExceptionConverter(clazz) without explicit inheritance. */
+    private static class UU extends U {
+        public static C1<IgniteCheckedException, IgniteException> getExceptionConverter(Class<? extends IgniteCheckedException> clazz) {
+            return U.getExceptionConverter(clazz);
         }
     }
 
-    private boolean isEmpty(SearchParameters.FilterCriteria filterCriteria) {
-        return filterCriteria == null ||
-                (StringUtils.isEmpty(filterCriteria.getAttributeName()) && CollectionUtils.isEmpty(filterCriteria.getCriterion()));
+    /**
+     * @param e Ignite checked exception.
+     * @return Ignite runtime exception.
+     */
+    @Nullable
+    public static CacheException convertToCacheException(IgniteCheckedException e) {
+        if (e instanceof CachePartialUpdateCheckedException)
+            return new CachePartialUpdateException((CachePartialUpdateCheckedException)e);
+        else if (e instanceof CacheAtomicUpdateTimeoutCheckedException)
+            return new CacheAtomicUpdateTimeoutException(e.getMessage(), e);
+
+        if (e.getCause() instanceof CacheException)
+            return (CacheException)e.getCause();
+
+        C1<IgniteCheckedException, IgniteException> converter = UU.getExceptionConverter(e.getClass());
+
+        return converter != null ? new CacheException(converter.apply(e)) : new CacheException(e);
     }
 
-    private AtlasSearchResult executeSavedSearch(AtlasUserSavedSearch savedSearch) throws AtlasBaseException {
-        SearchParameters sp = savedSearch.getSearchParameters();
-
-        if(savedSearch.getSearchType() == AtlasUserSavedSearch.SavedSearchType.ADVANCED) {
-            String dslQuery = discoveryService.getDslQueryUsingTypeNameClassification(sp.getQuery(), sp.getTypeName(), sp.getClassification());
-
-            return discoveryService.searchUsingDslQuery(dslQuery, sp.getLimit(), sp.getOffset());
-        } else {
-            return discoveryService.searchWithParameters(sp);
-        }
-    }
-
-    private void validateUserSavedSearch(AtlasUserSavedSearch savedSearch) throws AtlasBaseException {
-        if (savedSearch != null) {
-            Servlets.validateQueryParamLength("name", savedSearch.getName());
-            Servlets.validateQueryParamLength("ownerName", savedSearch.getOwnerName());
-            Servlets.validateQueryParamLength("guid", savedSearch.getGuid());
-
-            validateSearchParameters(savedSearch.getSearchParameters());
-        }
-    }
-
-    private void validateSearchParameters(SearchParameters parameters) throws AtlasBaseException {
-        if (parameters != null) {
-            Servlets.validateQueryParamLength("typeName", parameters.getTypeName());
-            Servlets.validateQueryParamLength("classification", parameters.getClassification());
-            Servlets.validateQueryParamLength("sortBy", parameters.getSortBy());
-            if (StringUtils.isNotEmpty(parameters.getQuery()) && parameters.getQuery().length() > maxFullTextQueryLength) {
-                throw new AtlasBaseException(AtlasErrorCode.INVALID_QUERY_LENGTH, Constants.MAX_FULLTEXT_QUERY_STR_LENGTH);
-            }
-
-        }
-    }
-
-    private void validateSearchParameters(QuickSearchParameters parameters) throws AtlasBaseException {
-        if (parameters != null) {
-            validateSearchParameters(EntityDiscoveryService.createSearchParameters(parameters));
-        }
-    }
 }

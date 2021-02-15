@@ -1,678 +1,381 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE
- * file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
- * License. You may obtain a copy of the License at
+/*
+ * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//dbcp/src/java/org/apache/commons/dbcp/DelegatingResultSet.java,v 1.8 2003/08/11 23:54:59 dirkv Exp $
+ * $Revision: 1.8 $
+ * $Date: 2003/08/11 23:54:59 $
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
- * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
  */
-package org.apache.flink.python.api;
+package org.apache.commons.dbcp;
 
-import org.apache.flink.api.common.JobExecutionResult;
-import org.apache.flink.api.common.operators.Keys;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.java.DataSet;
-import org.apache.flink.api.java.ExecutionEnvironment;
-import org.apache.flink.api.java.io.PrintingOutputFormat;
-import org.apache.flink.api.java.io.TupleCsvInputFormat;
-import org.apache.flink.api.java.operators.CoGroupRawOperator;
-import org.apache.flink.api.java.operators.CrossOperator.DefaultCross;
-import org.apache.flink.api.java.operators.SortedGrouping;
-import org.apache.flink.api.java.operators.UdfOperator;
-import org.apache.flink.api.java.operators.UnsortedGrouping;
-import org.apache.flink.api.java.tuple.Tuple;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.api.java.typeutils.TupleTypeInfo;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.GlobalConfiguration;
-import org.apache.flink.core.fs.FileSystem;
-import org.apache.flink.core.fs.Path;
-import org.apache.flink.python.api.PythonOperationInfo.DatasizeHint;
-import org.apache.flink.python.api.functions.PythonCoGroup;
-import org.apache.flink.python.api.functions.PythonMapPartition;
-import org.apache.flink.python.api.functions.util.IdentityGroupReduce;
-import org.apache.flink.python.api.functions.util.KeyDiscarder;
-import org.apache.flink.python.api.functions.util.NestedKeyDiscarder;
-import org.apache.flink.python.api.functions.util.SerializerMap;
-import org.apache.flink.python.api.functions.util.StringDeserializerMap;
-import org.apache.flink.python.api.functions.util.StringTupleDeserializerMap;
-import org.apache.flink.python.api.streaming.plan.PythonPlanStreamer;
-import org.apache.flink.python.api.util.SetCache;
-import org.apache.flink.runtime.filecache.FileCache;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.File;
-import java.io.IOException;
-import java.net.URISyntaxException;
-import java.util.Arrays;
-import java.util.Random;
-
-import static org.apache.flink.python.api.PythonOperationInfo.DatasizeHint.HUGE;
-import static org.apache.flink.python.api.PythonOperationInfo.DatasizeHint.NONE;
-import static org.apache.flink.python.api.PythonOperationInfo.DatasizeHint.TINY;
+import java.sql.ResultSet;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.io.InputStream;
+import java.sql.SQLWarning;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.io.Reader;
+import java.sql.Statement;
+import java.util.Map;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
 
 /**
- * This class allows the execution of a Flink plan written in python.
+ * A base delegating implementation of {@link ResultSet}.
+ * <p>
+ * All of the methods from the {@link ResultSet} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement result set tracking and
+ * logging of code which created the ResultSet. Tracking the
+ * ResultSet ensures that the Statment which created it can
+ * close any open ResultSet's on Statement close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House (<a href="mailto:james@interobjective.com">james@interobjective.com</a>)
  */
-public class PythonPlanBinder {
-	static final Logger LOG = LoggerFactory.getLogger(PythonPlanBinder.class);
-
-	public static final String FLINK_PYTHON_DC_ID = "flink";
-	public static final String FLINK_PYTHON_PLAN_NAME = File.separator + "plan.py";
-
-	public static final String PLANBINDER_CONFIG_BCVAR_COUNT = "PLANBINDER_BCVAR_COUNT";
-	public static final String PLANBINDER_CONFIG_BCVAR_NAME_PREFIX = "PLANBINDER_BCVAR_";
-
-	private static final Random r = new Random();
-
-	public static final String PLAN_ARGUMENTS_KEY = "python.plan.arguments";
-
-	private static final String FLINK_PYTHON_REL_LOCAL_PATH = File.separator + "resources" + File.separator + "python";
-
-	private final Configuration operatorConfig;
-
-	private final String pythonLibraryPath;
-
-	private final String tmpPlanFilesDir;
-	private String tmpDistributedDir;
-
-	private final SetCache sets = new SetCache();
-	public ExecutionEnvironment env;
-	private int currentEnvironmentID = 0;
-	private PythonPlanStreamer streamer;
-
-	/**
-	 * Entry point for the execution of a python plan.
-	 *
-	 * @param args planPath[ package1[ packageX[ - parameter1[ parameterX]]]]
-	 * @throws Exception
-	 */
-	public static void main(String[] args) throws Exception {
-		if (args.length < 2) {
-			System.out.println("Usage: ./bin/pyflink<2/3>.[sh/bat] <pathToScript>[ <pathToPackage1>[ <pathToPackageX]][ - <parameter1>[ <parameterX>]]");
-			return;
-		}
-
-		Configuration globalConfig = GlobalConfiguration.loadConfiguration();
-		PythonPlanBinder binder = new PythonPlanBinder(globalConfig);
-		binder.runPlan(args);
-	}
-
-	public PythonPlanBinder(Configuration globalConfig) {
-		String configuredPlanTmpPath = globalConfig.getString(PythonOptions.PLAN_TMP_DIR);
-		tmpPlanFilesDir = configuredPlanTmpPath != null
-			? configuredPlanTmpPath
-			: System.getProperty("java.io.tmpdir") + File.separator + "flink_plan_" + r.nextInt();
-		
-		tmpDistributedDir = globalConfig.getString(PythonOptions.DC_TMP_DIR);
-		
-		String flinkRootDir = System.getenv("FLINK_ROOT_DIR");
-		pythonLibraryPath = flinkRootDir != null
-				//command-line
-				? flinkRootDir + FLINK_PYTHON_REL_LOCAL_PATH
-				//testing
-				: new File(System.getProperty("user.dir"), "src/main/python/org/apache/flink/python/api").getAbsolutePath();
-
-		operatorConfig = new Configuration();
-		operatorConfig.setString(PythonOptions.PYTHON_BINARY_PATH, globalConfig.getString(PythonOptions.PYTHON_BINARY_PATH));
-		String configuredTmpDataDir = globalConfig.getString(PythonOptions.DATA_TMP_DIR);
-		if (configuredTmpDataDir != null) {
-			operatorConfig.setString(PythonOptions.DATA_TMP_DIR, configuredTmpDataDir);
-		}
-		operatorConfig.setLong(PythonOptions.MMAP_FILE_SIZE, globalConfig.getLong(PythonOptions.MMAP_FILE_SIZE));
-	}
-
-	void runPlan(String[] args) throws Exception {
-		int split = 0;
-		for (int x = 0; x < args.length; x++) {
-			if (args[x].compareTo("-") == 0) {
-				split = x;
-			}
-		}
-
-		try {
-			String tmpPath = tmpPlanFilesDir;
-			prepareFiles(tmpPath, Arrays.copyOfRange(args, 0, split == 0 ? args.length : split));
-			startPython(tmpPath, Arrays.copyOfRange(args, split == 0 ? args.length : split + 1, args.length));
-
-			// Python process should terminate itself when all jobs have been run
-			while (streamer.preparePlanMode()) {
-				receivePlan();
-
-				distributeFiles(tmpPath, env);
-				JobExecutionResult jer = env.execute();
-				sendResult(jer);
-
-				streamer.finishPlanMode();
-			}
-
-			clearPath(tmpPath);
-			close();
-		} catch (Exception e) {
-			close();
-			throw e;
-		}
-	}
-
-	//=====Setup========================================================================================================
-
-	/**
-	 * Copies all files to a common directory {@link PythonOptions#PLAN_TMP_DIR}). This allows us to distribute it as
-	 * one big package which resolves PYTHONPATH issues.
-	 *
-	 * @param filePaths
-	 * @throws IOException
-	 * @throws URISyntaxException
-	 */
-	private void prepareFiles(String tempFilePath, String... filePaths) throws IOException, URISyntaxException {
-		//Flink python package
-		clearPath(tempFilePath);
-		FileCache.copy(new Path(pythonLibraryPath), new Path(tmpPlanFilesDir), false);
-
-		//plan file		
-		copyFile(filePaths[0], tempFilePath, FLINK_PYTHON_PLAN_NAME);
-
-		//additional files/folders
-		for (int x = 1; x < filePaths.length; x++) {
-			copyFile(filePaths[x], tempFilePath, null);
-		}
-	}
-
-	private static void clearPath(String path) throws IOException {
-		FileSystem fs = FileSystem.get(new Path(path).toUri());
-		if (fs.exists(new Path(path))) {
-			fs.delete(new Path(path), true);
-		}
-	}
-
-	private static void copyFile(String path, String target, String name) throws IOException, URISyntaxException {
-		if (path.endsWith("/")) {
-			path = path.substring(0, path.length() - 1);
-		}
-		String identifier = name == null ? path.substring(path.lastIndexOf("/")) : name;
-		String tmpFilePath = target + "/" + identifier;
-		clearPath(tmpFilePath);
-		Path p = new Path(path);
-		FileCache.copy(p.makeQualified(FileSystem.get(p.toUri())), new Path(tmpFilePath), true);
-	}
-
-	private void distributeFiles(String tmpPath, ExecutionEnvironment env) throws IOException {
-		clearPath(tmpDistributedDir);
-		FileCache.copy(new Path(tmpPath), new Path(tmpDistributedDir), true);
-		env.registerCachedFile(new Path(tmpDistributedDir).toUri().toString(), FLINK_PYTHON_DC_ID);
-	}
-
-	private void startPython(String tempPath, String[] args) throws IOException {
-		StringBuilder arguments = new StringBuilder();
-		for (String arg : args) {
-			arguments.append(" ").append(arg);
-		}
-
-		operatorConfig.setString(PLAN_ARGUMENTS_KEY, arguments.toString());
-
-		streamer = new PythonPlanStreamer(operatorConfig);
-		streamer.open(tempPath, arguments.toString());
-	}
-
-	private void sendResult(JobExecutionResult jer) throws IOException {
-		long runtime = jer.getNetRuntime();
-		streamer.sendRecord(runtime);
-	}
-
-	private void close() {
-		try { //prevent throwing exception so that previous exceptions aren't hidden.
-			FileSystem hdfs = new Path(tmpDistributedDir).getFileSystem();
-			hdfs.delete(new Path(tmpDistributedDir), true);
-
-			FileSystem local = FileSystem.getLocalFileSystem();
-			local.delete(new Path(tmpPlanFilesDir), true);
-			streamer.close();
-		} catch (NullPointerException ignored) {
-		} catch (IOException ioe) {
-			LOG.error("PythonAPI file cleanup failed. {}", ioe.getMessage());
-		}
-	}
-
-	//====Plan==========================================================================================================
-	private void receivePlan() throws IOException {
-		env = ExecutionEnvironment.getExecutionEnvironment();
-		//IDs used in HashMap of sets are only unique for each environment
-		sets.reset();
-		receiveParameters();
-		receiveOperations();
-	}
-
-	//====Environment===================================================================================================
-
-	/**
-	 * This enum contains the identifiers for all supported environment parameters.
-	 */
-	private enum Parameters {
-		DOP,
-		MODE,
-		RETRY,
-		ID
-	}
-
-	private void receiveParameters() throws IOException {
-		for (int x = 0; x < 4; x++) {
-			Tuple value = (Tuple) streamer.getRecord(true);
-			switch (Parameters.valueOf(((String) value.getField(0)).toUpperCase())) {
-				case DOP:
-					Integer dop = value.<Integer>getField(1);
-					env.setParallelism(dop);
-					break;
-				case MODE:
-					if (value.<Boolean>getField(1)) {
-						LOG.info("Local execution specified, using default for {}.", PythonOptions.DC_TMP_DIR);
-						tmpDistributedDir = PythonOptions.DC_TMP_DIR.defaultValue();
-					}
-					break;
-				case RETRY:
-					int retry = value.<Integer>getField(1);
-					env.setRestartStrategy(RestartStrategies.fixedDelayRestart(retry, 10000L));
-					break;
-				case ID:
-					currentEnvironmentID = value.<Integer>getField(1);
-					break;
-			}
-		}
-		if (env.getParallelism() < 0) {
-			env.setParallelism(1);
-		}
-	}
-
-	//====Operations====================================================================================================
-
-	/**
-	 * This enum contains the identifiers for all supported DataSet operations.
-	 */
-	protected enum Operation {
-		SOURCE_CSV, SOURCE_TEXT, SOURCE_VALUE, SOURCE_SEQ, SINK_CSV, SINK_TEXT, SINK_PRINT,
-		SORT, UNION, FIRST, DISTINCT, GROUPBY,
-		REBALANCE, PARTITION_HASH,
-		BROADCAST,
-		COGROUP, CROSS, CROSS_H, CROSS_T, FILTER, FLATMAP, GROUPREDUCE, JOIN, JOIN_H, JOIN_T, MAP, REDUCE, MAPPARTITION
-	}
-
-	private void receiveOperations() throws IOException {
-		Integer operationCount = (Integer) streamer.getRecord(true);
-		for (int x = 0; x < operationCount; x++) {
-			PythonOperationInfo info = new PythonOperationInfo(streamer, currentEnvironmentID);
-			Operation op = Operation.valueOf(info.identifier.toUpperCase());
-			switch (op) {
-				case SOURCE_CSV:
-					createCsvSource(info);
-					break;
-				case SOURCE_TEXT:
-					createTextSource(info);
-					break;
-				case SOURCE_VALUE:
-					createValueSource(info);
-					break;
-				case SOURCE_SEQ:
-					createSequenceSource(info);
-					break;
-				case SINK_CSV:
-					createCsvSink(info);
-					break;
-				case SINK_TEXT:
-					createTextSink(info);
-					break;
-				case SINK_PRINT:
-					createPrintSink(info);
-					break;
-				case BROADCAST:
-					createBroadcastVariable(info);
-					break;
-				case DISTINCT:
-					createDistinctOperation(info);
-					break;
-				case FIRST:
-					createFirstOperation(info);
-					break;
-				case PARTITION_HASH:
-					createHashPartitionOperation(info);
-					break;
-				case REBALANCE:
-					createRebalanceOperation(info);
-					break;
-				case GROUPBY:
-					createGroupOperation(info);
-					break;
-				case SORT:
-					createSortOperation(info);
-					break;
-				case UNION:
-					createUnionOperation(info);
-					break;
-				case COGROUP:
-					createCoGroupOperation(info, info.types);
-					break;
-				case CROSS:
-					createCrossOperation(NONE, info, info.types);
-					break;
-				case CROSS_H:
-					createCrossOperation(HUGE, info, info.types);
-					break;
-				case CROSS_T:
-					createCrossOperation(TINY, info, info.types);
-					break;
-				case FILTER:
-					createFilterOperation(info, info.types);
-					break;
-				case FLATMAP:
-					createFlatMapOperation(info, info.types);
-					break;
-				case GROUPREDUCE:
-					createGroupReduceOperation(info);
-					break;
-				case JOIN:
-					createJoinOperation(NONE, info, info.types);
-					break;
-				case JOIN_H:
-					createJoinOperation(HUGE, info, info.types);
-					break;
-				case JOIN_T:
-					createJoinOperation(TINY, info, info.types);
-					break;
-				case MAP:
-					createMapOperation(info, info.types);
-					break;
-				case MAPPARTITION:
-					createMapPartitionOperation(info, info.types);
-					break;
-				case REDUCE:
-					createReduceOperation(info);
-					break;
-			}
-		}
-	}
-
-	private int getParallelism(PythonOperationInfo info) {
-		return info.parallelism == -1 ? env.getParallelism() : info.parallelism;
-	}
-
-	@SuppressWarnings("unchecked")
-	private <T extends Tuple> void createCsvSource(PythonOperationInfo info) {
-		if (!(info.types instanceof TupleTypeInfo)) {
-			throw new RuntimeException("The output type of a csv source has to be a tuple. The derived type is " + info);
-		}
-		Path path = new Path(info.path);
-		String lineD = info.lineDelimiter;
-		String fieldD = info.fieldDelimiter;
-		TupleTypeInfo<T> types = (TupleTypeInfo<T>) info.types;
-		sets.add(info.setID, env.createInput(new TupleCsvInputFormat<>(path, lineD, fieldD, types), types).setParallelism(getParallelism(info)).name("CsvSource")
-			.map(new SerializerMap<T>()).setParallelism(getParallelism(info)).name("CsvSourcePostStep"));
-	}
-
-	private void createTextSource(PythonOperationInfo info) {
-		sets.add(info.setID, env.readTextFile(info.path).setParallelism(getParallelism(info)).name("TextSource")
-			.map(new SerializerMap<String>()).setParallelism(getParallelism(info)).name("TextSourcePostStep"));
-	}
-
-	private void createValueSource(PythonOperationInfo info) {
-		sets.add(info.setID, env.fromElements(info.values).setParallelism(getParallelism(info)).name("ValueSource")
-			.map(new SerializerMap<>()).setParallelism(getParallelism(info)).name("ValueSourcePostStep"));
-	}
-
-	private void createSequenceSource(PythonOperationInfo info) {
-		sets.add(info.setID, env.generateSequence(info.frm, info.to).setParallelism(getParallelism(info)).name("SequenceSource")
-			.map(new SerializerMap<Long>()).setParallelism(getParallelism(info)).name("SequenceSourcePostStep"));
-	}
-
-	private void createCsvSink(PythonOperationInfo info) {
-		DataSet<byte[]> parent = sets.getDataSet(info.parentID);
-		parent.map(new StringTupleDeserializerMap()).setParallelism(getParallelism(info)).name("CsvSinkPreStep")
-				.writeAsCsv(info.path, info.lineDelimiter, info.fieldDelimiter, info.writeMode).setParallelism(getParallelism(info)).name("CsvSink");
-	}
-
-	private void createTextSink(PythonOperationInfo info) {
-		DataSet<byte[]> parent = sets.getDataSet(info.parentID);
-		parent.map(new StringDeserializerMap()).setParallelism(getParallelism(info))
-			.writeAsText(info.path, info.writeMode).setParallelism(getParallelism(info)).name("TextSink");
-	}
-
-	private void createPrintSink(PythonOperationInfo info) {
-		DataSet<byte[]> parent = sets.getDataSet(info.parentID);
-		parent.map(new StringDeserializerMap()).setParallelism(getParallelism(info)).name("PrintSinkPreStep")
-			.output(new PrintingOutputFormat<String>(info.toError)).setParallelism(getParallelism(info));
-	}
-
-	private void createBroadcastVariable(PythonOperationInfo info) {
-		UdfOperator<?> op1 = (UdfOperator<?>) sets.getDataSet(info.parentID);
-		DataSet<?> op2 = sets.getDataSet(info.otherID);
-
-		op1.withBroadcastSet(op2, info.name);
-		Configuration c = op1.getParameters();
-
-		if (c == null) {
-			c = new Configuration();
-		}
-
-		int count = c.getInteger(PLANBINDER_CONFIG_BCVAR_COUNT, 0);
-		c.setInteger(PLANBINDER_CONFIG_BCVAR_COUNT, count + 1);
-		c.setString(PLANBINDER_CONFIG_BCVAR_NAME_PREFIX + count, info.name);
-
-		op1.withParameters(c);
-	}
-
-	private <K extends Tuple> void createDistinctOperation(PythonOperationInfo info) {
-		DataSet<Tuple2<K, byte[]>> op = sets.getDataSet(info.parentID);
-		DataSet<byte[]> result = op
-			.distinct(info.keys).setParallelism(getParallelism(info)).name("Distinct")
-			.map(new KeyDiscarder<K>()).setParallelism(getParallelism(info)).name("DistinctPostStep");
-		sets.add(info.setID, result);
-	}
-
-	private <K extends Tuple> void createFirstOperation(PythonOperationInfo info) {
-		if (sets.isDataSet(info.parentID)) {
-			DataSet<byte[]> op = sets.getDataSet(info.parentID);
-			sets.add(info.setID, op
-				.first(info.count).setParallelism(getParallelism(info)).name("First"));
-		} else if (sets.isUnsortedGrouping(info.parentID)) {
-			UnsortedGrouping<Tuple2<K, byte[]>> op = sets.getUnsortedGrouping(info.parentID);
-			sets.add(info.setID, op
-				.first(info.count).setParallelism(getParallelism(info)).name("First")
-				.map(new KeyDiscarder<K>()).setParallelism(getParallelism(info)).name("FirstPostStep"));
-		} else if (sets.isSortedGrouping(info.parentID)) {
-			SortedGrouping<Tuple2<K, byte[]>> op = sets.getSortedGrouping(info.parentID);
-			sets.add(info.setID, op
-				.first(info.count).setParallelism(getParallelism(info)).name("First")
-				.map(new KeyDiscarder<K>()).setParallelism(getParallelism(info)).name("FirstPostStep"));
-		}
-	}
-
-	private void createGroupOperation(PythonOperationInfo info) {
-		DataSet<?> op1 = sets.getDataSet(info.parentID);
-		sets.add(info.setID, op1.groupBy(info.keys));
-	}
-
-	private <K extends Tuple> void createHashPartitionOperation(PythonOperationInfo info) {
-		DataSet<Tuple2<K, byte[]>> op1 = sets.getDataSet(info.parentID);
-		DataSet<byte[]> result = op1
-			.partitionByHash(info.keys).setParallelism(getParallelism(info))
-			.map(new KeyDiscarder<K>()).setParallelism(getParallelism(info)).name("HashPartitionPostStep");
-		sets.add(info.setID, result);
-	}
-
-	private void createRebalanceOperation(PythonOperationInfo info) {
-		DataSet<?> op = sets.getDataSet(info.parentID);
-		sets.add(info.setID, op.rebalance().setParallelism(getParallelism(info)).name("Rebalance"));
-	}
-
-	private void createSortOperation(PythonOperationInfo info) {
-		if (sets.isDataSet(info.parentID)) {
-			throw new IllegalArgumentException("sort() can not be applied on a DataSet.");
-		} else if (sets.isUnsortedGrouping(info.parentID)) {
-			sets.add(info.setID, sets.getUnsortedGrouping(info.parentID).sortGroup(info.field, info.order));
-		} else if (sets.isSortedGrouping(info.parentID)) {
-			sets.add(info.setID, sets.getSortedGrouping(info.parentID).sortGroup(info.field, info.order));
-		}
-	}
-
-	private <IN> void createUnionOperation(PythonOperationInfo info) {
-		DataSet<IN> op1 = sets.getDataSet(info.parentID);
-		DataSet<IN> op2 = sets.getDataSet(info.otherID);
-		sets.add(info.setID, op1.union(op2).setParallelism(getParallelism(info)).name("Union"));
-	}
-
-	private <IN1, IN2, OUT> void createCoGroupOperation(PythonOperationInfo info, TypeInformation<OUT> type) {
-		DataSet<IN1> op1 = sets.getDataSet(info.parentID);
-		DataSet<IN2> op2 = sets.getDataSet(info.otherID);
-		Keys.ExpressionKeys<IN1> key1 = new Keys.ExpressionKeys<>(info.keys1, op1.getType());
-		Keys.ExpressionKeys<IN2> key2 = new Keys.ExpressionKeys<>(info.keys2, op2.getType());
-		PythonCoGroup<IN1, IN2, OUT> pcg = new PythonCoGroup<>(operatorConfig, info.envID, info.setID, type);
-		sets.add(info.setID, new CoGroupRawOperator<>(op1, op2, key1, key2, pcg, type, info.name).setParallelism(getParallelism(info)));
-	}
-
-	private <IN1, IN2, OUT> void createCrossOperation(DatasizeHint mode, PythonOperationInfo info, TypeInformation<OUT> type) {
-		DataSet<IN1> op1 = sets.getDataSet(info.parentID);
-		DataSet<IN2> op2 = sets.getDataSet(info.otherID);
-
-		DefaultCross<IN1, IN2> defaultResult;
-		switch (mode) {
-			case NONE:
-				defaultResult = op1.cross(op2);
-				break;
-			case HUGE:
-				defaultResult = op1.crossWithHuge(op2);
-				break;
-			case TINY:
-				defaultResult = op1.crossWithTiny(op2);
-				break;
-			default:
-				throw new IllegalArgumentException("Invalid Cross mode specified: " + mode);
-		}
-
-		defaultResult.setParallelism(getParallelism(info));
-		if (info.usesUDF) {
-			sets.add(info.setID, defaultResult
-				.mapPartition(new PythonMapPartition<Tuple2<IN1, IN2>, OUT>(operatorConfig, info.envID, info.setID, type))
-				.setParallelism(getParallelism(info)).name(info.name));
-		} else {
-			sets.add(info.setID, defaultResult.name("DefaultCross"));
-		}
-	}
-
-	private <IN, OUT> void createFilterOperation(PythonOperationInfo info, TypeInformation<OUT> type) {
-		DataSet<IN> op1 = sets.getDataSet(info.parentID);
-		sets.add(info.setID, op1
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name));
-	}
-
-	private <IN, OUT> void createFlatMapOperation(PythonOperationInfo info, TypeInformation<OUT> type) {
-		DataSet<IN> op1 = sets.getDataSet(info.parentID);
-		sets.add(info.setID, op1
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name));
-	}
-
-	private void createGroupReduceOperation(PythonOperationInfo info) {
-		if (sets.isDataSet(info.parentID)) {
-			sets.add(info.setID, applyGroupReduceOperation(sets.getDataSet(info.parentID), info, info.types));
-		} else if (sets.isUnsortedGrouping(info.parentID)) {
-			sets.add(info.setID, applyGroupReduceOperation(sets.getUnsortedGrouping(info.parentID), info, info.types));
-		} else if (sets.isSortedGrouping(info.parentID)) {
-			sets.add(info.setID, applyGroupReduceOperation(sets.getSortedGrouping(info.parentID), info, info.types));
-		}
-	}
-
-	private <IN, OUT> DataSet<OUT> applyGroupReduceOperation(DataSet<IN> op1, PythonOperationInfo info, TypeInformation<OUT> type) {
-		return op1
-			.reduceGroup(new IdentityGroupReduce<IN>()).setCombinable(false).name("PythonGroupReducePreStep").setParallelism(getParallelism(info))
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name);
-	}
-
-	private <IN, OUT> DataSet<OUT> applyGroupReduceOperation(UnsortedGrouping<IN> op1, PythonOperationInfo info, TypeInformation<OUT> type) {
-		return op1
-			.reduceGroup(new IdentityGroupReduce<IN>()).setCombinable(false).setParallelism(getParallelism(info)).name("PythonGroupReducePreStep")
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name);
-	}
-
-	private <IN, OUT> DataSet<OUT> applyGroupReduceOperation(SortedGrouping<IN> op1, PythonOperationInfo info, TypeInformation<OUT> type) {
-		return op1
-			.reduceGroup(new IdentityGroupReduce<IN>()).setCombinable(false).setParallelism(getParallelism(info)).name("PythonGroupReducePreStep")
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name);
-	}
-
-	private <IN1, IN2, OUT> void createJoinOperation(DatasizeHint mode, PythonOperationInfo info, TypeInformation<OUT> type) {
-		DataSet<IN1> op1 = sets.getDataSet(info.parentID);
-		DataSet<IN2> op2 = sets.getDataSet(info.otherID);
-
-		if (info.usesUDF) {
-			sets.add(info.setID, createDefaultJoin(op1, op2, info.keys1, info.keys2, mode, getParallelism(info))
-				.mapPartition(new PythonMapPartition<Tuple2<byte[], byte[]>, OUT>(operatorConfig, info.envID, info.setID, type))
-				.setParallelism(getParallelism(info)).name(info.name));
-		} else {
-			sets.add(info.setID, createDefaultJoin(op1, op2, info.keys1, info.keys2, mode, getParallelism(info)));
-		}
-	}
-
-	private <IN1, IN2> DataSet<Tuple2<byte[], byte[]>> createDefaultJoin(DataSet<IN1> op1, DataSet<IN2> op2, String[] firstKeys, String[] secondKeys, DatasizeHint mode, int parallelism) {
-		switch (mode) {
-			case NONE:
-				return op1
-					.join(op2).where(firstKeys).equalTo(secondKeys).setParallelism(parallelism)
-					.map(new NestedKeyDiscarder<Tuple2<IN1, IN2>>()).setParallelism(parallelism).name("DefaultJoinPostStep");
-			case HUGE:
-				return op1
-					.joinWithHuge(op2).where(firstKeys).equalTo(secondKeys).setParallelism(parallelism)
-					.map(new NestedKeyDiscarder<Tuple2<IN1, IN2>>()).setParallelism(parallelism).name("DefaultJoinPostStep");
-			case TINY:
-				return op1
-					.joinWithTiny(op2).where(firstKeys).equalTo(secondKeys).setParallelism(parallelism)
-					.map(new NestedKeyDiscarder<Tuple2<IN1, IN2>>()).setParallelism(parallelism).name("DefaultJoinPostStep");
-			default:
-				throw new IllegalArgumentException("Invalid join mode specified.");
-		}
-	}
-
-	private <IN, OUT> void createMapOperation(PythonOperationInfo info, TypeInformation<OUT> type) {
-		DataSet<IN> op1 = sets.getDataSet(info.parentID);
-		sets.add(info.setID, op1
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name));
-	}
-
-	private <IN, OUT> void createMapPartitionOperation(PythonOperationInfo info, TypeInformation<OUT> type) {
-		DataSet<IN> op1 = sets.getDataSet(info.parentID);
-		sets.add(info.setID, op1
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name));
-	}
-
-	private void createReduceOperation(PythonOperationInfo info) {
-		if (sets.isDataSet(info.parentID)) {
-			sets.add(info.setID, applyReduceOperation(sets.getDataSet(info.parentID), info, info.types));
-		} else if (sets.isUnsortedGrouping(info.parentID)) {
-			sets.add(info.setID, applyReduceOperation(sets.getUnsortedGrouping(info.parentID), info, info.types));
-		} else if (sets.isSortedGrouping(info.parentID)) {
-			throw new IllegalArgumentException("Reduce cannot be applied on a SortedGrouping.");
-		}
-	}
-
-	private <IN, OUT> DataSet<OUT> applyReduceOperation(DataSet<IN> op1, PythonOperationInfo info, TypeInformation<OUT> type) {
-		return op1
-			.reduceGroup(new IdentityGroupReduce<IN>()).setCombinable(false).setParallelism(getParallelism(info)).name("PythonReducePreStep")
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name);
-	}
-
-	private <IN, OUT> DataSet<OUT> applyReduceOperation(UnsortedGrouping<IN> op1, PythonOperationInfo info, TypeInformation<OUT> type) {
-		return op1
-			.reduceGroup(new IdentityGroupReduce<IN>()).setCombinable(false).setParallelism(getParallelism(info)).name("PythonReducePreStep")
-			.mapPartition(new PythonMapPartition<IN, OUT>(operatorConfig, info.envID, info.setID, type))
-			.setParallelism(getParallelism(info)).name(info.name);
-	}
+public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
+
+    /** My delegate. **/
+    private ResultSet _res;
+
+    /** The Statement that created me, if any. **/
+    private Statement _stmt;
+
+    /**
+     * Create a wrapper for the ResultSet which traces this
+     * ResultSet to the Statement which created it and the
+     * code which created it.
+     *
+     * @param Statement stmt which create this ResultSet
+     * @param ResultSet to wrap
+     */
+    public DelegatingResultSet(Statement stmt, ResultSet res) {
+        super((AbandonedTrace)stmt);
+        this._stmt = stmt;
+        this._res = res;
+    }
+    
+    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
+        if(null == rset) {
+            return null;
+        } else {
+            return new DelegatingResultSet(stmt,rset);
+        }
+    }
+
+    public ResultSet getDelegate() {
+        return _res;
+    }
+
+    public boolean equals(Object obj) {
+        ResultSet delegate = getInnermostDelegate();
+        if (delegate == null) {
+            return false;
+        }
+        if (obj instanceof DelegatingResultSet) {
+            DelegatingResultSet s = (DelegatingResultSet) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
+    }
+
+    public int hashCode() {
+        Object obj = getInnermostDelegate();
+        if (obj == null) {
+            return 0;
+        }
+        return obj.hashCode();
+    }
+
+    /**
+     * If my underlying {@link ResultSet} is not a
+     * <tt>DelegatingResultSet</tt>, returns it,
+     * otherwise recursively invokes this method on
+     * my delegate.
+     * <p>
+     * Hence this method will return the first
+     * delegate that is not a <tt>DelegatingResultSet</tt>,
+     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
+     * delegate can be found by transversing this chain.
+     * <p>
+     * This method is useful when you may have nested
+     * <tt>DelegatingResultSet</tt>s, and you want to make
+     * sure to obtain a "genuine" {@link ResultSet}.
+     */
+    public ResultSet getInnermostDelegate() {
+        ResultSet r = _res;
+        while(r != null && r instanceof DelegatingResultSet) {
+            r = ((DelegatingResultSet)r).getDelegate();
+            if(this == r) {
+                return null;
+            }
+        }
+        return r;
+    }
+    
+    public Statement getStatement() throws SQLException {
+        return _stmt;
+    }
+
+    /**
+     * Wrapper for close of ResultSet which removes this
+     * result set from being traced then calls close on
+     * the original ResultSet.
+     */
+    public void close() throws SQLException {
+        if(_stmt != null) {
+            ((AbandonedTrace)_stmt).removeTrace(this);
+            _stmt = null;
+        }
+        _res.close();
+    }
+
+    public boolean next() throws SQLException { return _res.next();  }
+    public boolean wasNull() throws SQLException { return _res.wasNull();  }
+    public String getString(int columnIndex) throws SQLException { return _res.getString(columnIndex);  }
+    public boolean getBoolean(int columnIndex) throws SQLException { return _res.getBoolean(columnIndex);  }
+    public byte getByte(int columnIndex) throws SQLException { return _res.getByte(columnIndex); }
+    public short getShort(int columnIndex) throws SQLException { return _res.getShort(columnIndex); }
+    public int getInt(int columnIndex) throws SQLException { return _res.getInt(columnIndex); }
+    public long getLong(int columnIndex) throws SQLException { return _res.getLong(columnIndex); }
+    public float getFloat(int columnIndex) throws SQLException { return _res.getFloat(columnIndex); }
+    public double getDouble(int columnIndex) throws SQLException { return _res.getDouble(columnIndex); }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException { return _res.getBigDecimal(columnIndex); }
+    public byte[] getBytes(int columnIndex) throws SQLException { return _res.getBytes(columnIndex); }
+    public Date getDate(int columnIndex) throws SQLException { return _res.getDate(columnIndex); }
+    public Time getTime(int columnIndex) throws SQLException { return _res.getTime(columnIndex); }
+    public Timestamp getTimestamp(int columnIndex) throws SQLException { return _res.getTimestamp(columnIndex); }
+    public InputStream getAsciiStream(int columnIndex) throws SQLException { return _res.getAsciiStream(columnIndex); }
+    /** @deprecated */
+    public InputStream getUnicodeStream(int columnIndex) throws SQLException { return _res.getUnicodeStream(columnIndex); }
+    public InputStream getBinaryStream(int columnIndex) throws SQLException { return _res.getBinaryStream(columnIndex); }
+    public String getString(String columnName) throws SQLException { return _res.getString(columnName); }
+    public boolean getBoolean(String columnName) throws SQLException { return _res.getBoolean(columnName); }
+    public byte getByte(String columnName) throws SQLException { return _res.getByte(columnName); }
+    public short getShort(String columnName) throws SQLException { return _res.getShort(columnName); }
+    public int getInt(String columnName) throws SQLException { return _res.getInt(columnName); }
+    public long getLong(String columnName) throws SQLException { return _res.getLong(columnName); }
+    public float getFloat(String columnName) throws SQLException { return _res.getFloat(columnName); }
+    public double getDouble(String columnName) throws SQLException { return _res.getDouble(columnName); }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException { return _res.getBigDecimal(columnName); }
+    public byte[] getBytes(String columnName) throws SQLException { return _res.getBytes(columnName); }
+    public Date getDate(String columnName) throws SQLException { return _res.getDate(columnName); }
+    public Time getTime(String columnName) throws SQLException { return _res.getTime(columnName); }
+    public Timestamp getTimestamp(String columnName) throws SQLException { return _res.getTimestamp(columnName); }
+    public InputStream getAsciiStream(String columnName) throws SQLException { return _res.getAsciiStream(columnName); }
+    /** @deprecated */
+    public InputStream getUnicodeStream(String columnName) throws SQLException { return _res.getUnicodeStream(columnName); }
+    public InputStream getBinaryStream(String columnName) throws SQLException { return _res.getBinaryStream(columnName); }
+    public SQLWarning getWarnings() throws SQLException { return _res.getWarnings();  }
+    public void clearWarnings() throws SQLException { _res.clearWarnings();  }
+    public String getCursorName() throws SQLException { return _res.getCursorName();  }
+    public ResultSetMetaData getMetaData() throws SQLException { return _res.getMetaData();  }
+    public Object getObject(int columnIndex) throws SQLException { return _res.getObject(columnIndex);  }
+    public Object getObject(String columnName) throws SQLException { return _res.getObject(columnName);  }
+    public int findColumn(String columnName) throws SQLException { return _res.findColumn(columnName);  }
+    public Reader getCharacterStream(int columnIndex) throws SQLException { return _res.getCharacterStream(columnIndex);  }
+    public Reader getCharacterStream(String columnName) throws SQLException { return _res.getCharacterStream(columnName);  }
+    public BigDecimal getBigDecimal(int columnIndex) throws SQLException { return _res.getBigDecimal(columnIndex);  }
+    public BigDecimal getBigDecimal(String columnName) throws SQLException { return _res.getBigDecimal(columnName);  }
+    public boolean isBeforeFirst() throws SQLException { return _res.isBeforeFirst();  }
+    public boolean isAfterLast() throws SQLException { return _res.isAfterLast();  }
+    public boolean isFirst() throws SQLException { return _res.isFirst();  }
+    public boolean isLast() throws SQLException { return _res.isLast();  }
+    public void beforeFirst() throws SQLException { _res.beforeFirst();  }
+    public void afterLast() throws SQLException { _res.afterLast();  }
+    public boolean first() throws SQLException { return _res.first();  }
+    public boolean last() throws SQLException { return _res.last();  }
+    public int getRow() throws SQLException { return _res.getRow();  }
+    public boolean absolute(int row) throws SQLException { return _res.absolute(row);  }
+    public boolean relative(int rows) throws SQLException { return _res.relative(rows);  }
+    public boolean previous() throws SQLException { return _res.previous();  }
+    public void setFetchDirection(int direction) throws SQLException { _res.setFetchDirection(direction);  }
+    public int getFetchDirection() throws SQLException { return _res.getFetchDirection();  }
+    public void setFetchSize(int rows) throws SQLException { _res.setFetchSize(rows); }
+    public int getFetchSize() throws SQLException { return _res.getFetchSize();  }
+    public int getType() throws SQLException { return _res.getType();  }
+    public int getConcurrency() throws SQLException { return _res.getConcurrency();  }
+    public boolean rowUpdated() throws SQLException { return _res.rowUpdated();  }
+    public boolean rowInserted() throws SQLException { return _res.rowInserted();  }
+    public boolean rowDeleted() throws SQLException { return _res.rowDeleted();  }
+    public void updateNull(int columnIndex) throws SQLException {  _res.updateNull(columnIndex);  }
+    public void updateBoolean(int columnIndex, boolean x) throws SQLException {  _res.updateBoolean(columnIndex, x);  }
+    public void updateByte(int columnIndex, byte x) throws SQLException {  _res.updateByte(columnIndex, x);  }
+    public void updateShort(int columnIndex, short x) throws SQLException {  _res.updateShort(columnIndex, x);  }
+    public void updateInt(int columnIndex, int x) throws SQLException {  _res.updateInt(columnIndex, x);  }
+    public void updateLong(int columnIndex, long x) throws SQLException {  _res.updateLong(columnIndex, x); }
+    public void updateFloat(int columnIndex, float x) throws SQLException {  _res.updateFloat(columnIndex, x);  }
+    public void updateDouble(int columnIndex, double x) throws SQLException {  _res.updateDouble(columnIndex, x);  }
+    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnIndex, x);  }
+    public void updateString(int columnIndex, String x) throws SQLException {  _res.updateString(columnIndex, x);  }
+    public void updateBytes(int columnIndex, byte[] x) throws SQLException {  _res.updateBytes(columnIndex, x); }
+    public void updateDate(int columnIndex, Date x) throws SQLException {  _res.updateDate(columnIndex, x);  }
+    public void updateTime(int columnIndex, Time x) throws SQLException {  _res.updateTime(columnIndex, x); }
+    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException {  _res.updateTimestamp(columnIndex, x);  }
+    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnIndex, x, length);  }
+    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnIndex, x, length); }
+    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {  _res.updateCharacterStream(columnIndex, x, length); }
+    public void updateObject(int columnIndex, Object x, int scale) throws SQLException {  _res.updateObject(columnIndex, x);  }
+    public void updateObject(int columnIndex, Object x) throws SQLException {  _res.updateObject(columnIndex, x);  }
+    public void updateNull(String columnName) throws SQLException {  _res.updateNull(columnName);  }
+    public void updateBoolean(String columnName, boolean x) throws SQLException {  _res.updateBoolean(columnName, x);  }
+    public void updateByte(String columnName, byte x) throws SQLException {  _res.updateByte(columnName, x);  }
+    public void updateShort(String columnName, short x) throws SQLException {  _res.updateShort(columnName, x);  }
+    public void updateInt(String columnName, int x) throws SQLException {  _res.updateInt(columnName, x);  }
+    public void updateLong(String columnName, long x) throws SQLException {  _res.updateLong(columnName, x);  }
+    public void updateFloat(String columnName, float x) throws SQLException {  _res.updateFloat(columnName, x);  }
+    public void updateDouble(String columnName, double x) throws SQLException { _res.updateDouble(columnName, x);  }
+    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnName, x);  }
+    public void updateString(String columnName, String x) throws SQLException {  _res.updateString(columnName, x);  }
+    public void updateBytes(String columnName, byte[] x) throws SQLException {  _res.updateBytes(columnName, x);  }
+    public void updateDate(String columnName, Date x) throws SQLException {  _res.updateDate(columnName, x);  }
+    public void updateTime(String columnName, Time x) throws SQLException {  _res.updateTime(columnName, x);  }
+    public void updateTimestamp(String columnName, Timestamp x) throws SQLException {  _res.updateTimestamp(columnName, x);  }
+    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnName, x, length);  }
+    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnName, x, length);  }
+    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException {  _res.updateCharacterStream(columnName, reader, length);  }
+    public void updateObject(String columnName, Object x, int scale) throws SQLException {  _res.updateObject(columnName, x);  }
+    public void updateObject(String columnName, Object x) throws SQLException {  _res.updateObject(columnName, x);  }
+    public void insertRow() throws SQLException {  _res.insertRow();  }
+    public void updateRow() throws SQLException {  _res.updateRow();  }
+    public void deleteRow() throws SQLException {  _res.deleteRow();  }
+    public void refreshRow() throws SQLException {  _res.refreshRow();  }
+    public void cancelRowUpdates() throws SQLException {  _res.cancelRowUpdates();  }
+    public void moveToInsertRow() throws SQLException {  _res.moveToInsertRow();  }
+    public void moveToCurrentRow() throws SQLException {  _res.moveToCurrentRow();  }
+    public Object getObject(int i, Map map) throws SQLException { return _res.getObject(i, map);  }
+    public Ref getRef(int i) throws SQLException { return _res.getRef(i);  }
+    public Blob getBlob(int i) throws SQLException { return _res.getBlob(i);  }
+    public Clob getClob(int i) throws SQLException { return _res.getClob(i);  }
+    public Array getArray(int i) throws SQLException { return _res.getArray(i);  }
+    public Object getObject(String colName, Map map) throws SQLException { return _res.getObject(colName, map);  }
+    public Ref getRef(String colName) throws SQLException { return _res.getRef(colName);  }
+    public Blob getBlob(String colName) throws SQLException { return _res.getBlob(colName);  }
+    public Clob getClob(String colName) throws SQLException { return _res.getClob(colName);  }
+    public Array getArray(String colName) throws SQLException { return _res.getArray(colName);  }
+    public Date getDate(int columnIndex, Calendar cal) throws SQLException { return _res.getDate(columnIndex, cal);  }
+    public Date getDate(String columnName, Calendar cal) throws SQLException { return _res.getDate(columnName, cal);  }
+    public Time getTime(int columnIndex, Calendar cal) throws SQLException { return _res.getTime(columnIndex, cal);  }
+    public Time getTime(String columnName, Calendar cal) throws SQLException { return _res.getTime(columnName, cal);  }
+    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException { return _res.getTimestamp(columnIndex, cal);  }
+    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException { return _res.getTimestamp(columnName, cal);  }
+
+    // ------------------- JDBC 3.0 -----------------------------------------
+    // Will be commented by the build process on a JDBC 2.0 system
+
+/* JDBC_3_ANT_KEY_BEGIN */
+
+    public java.net.URL getURL(int columnIndex) throws SQLException {
+        return _res.getURL(columnIndex);
+    }
+
+    public java.net.URL getURL(String columnName) throws SQLException {
+        return _res.getURL(columnName);
+    }
+
+    public void updateRef(int columnIndex, java.sql.Ref x)
+        throws SQLException {
+        _res.updateRef(columnIndex, x);
+    }
+
+    public void updateRef(String columnName, java.sql.Ref x)
+        throws SQLException {
+        _res.updateRef(columnName, x);
+    }
+
+    public void updateBlob(int columnIndex, java.sql.Blob x)
+        throws SQLException {
+        _res.updateBlob(columnIndex, x);
+    }
+
+    public void updateBlob(String columnName, java.sql.Blob x)
+        throws SQLException {
+        _res.updateBlob(columnName, x);
+    }
+
+    public void updateClob(int columnIndex, java.sql.Clob x)
+        throws SQLException {
+        _res.updateClob(columnIndex, x);
+    }
+
+    public void updateClob(String columnName, java.sql.Clob x)
+        throws SQLException {
+        _res.updateClob(columnName, x);
+    }
+
+    public void updateArray(int columnIndex, java.sql.Array x)
+        throws SQLException {
+        _res.updateArray(columnIndex, x);
+    }
+
+    public void updateArray(String columnName, java.sql.Array x)
+        throws SQLException {
+        _res.updateArray(columnName, x);
+    }
+
+/* JDBC_3_ANT_KEY_END */
 }

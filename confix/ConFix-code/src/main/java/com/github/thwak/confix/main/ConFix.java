@@ -104,7 +104,7 @@ public class ConFix {
 		Patcher patcher = null;
 
 		// ======= STEP 0. Set Properties ======= //
-		System.out.println("// ======= STEP 0. Set Properties ======= //");
+		System.out.println("\n// ======= STEP 0. Set Properties ======= //");
 		loadProperties("confix.properties");
 		loadTests();
 		loadCoverage();
@@ -113,11 +113,11 @@ public class ConFix {
 		Random randomSeed = setRandomSeed(startTime);
 
 		// ======= STEP 1. Generate Pool from SimFin Results ======= //
-		System.out.println("// ======= STEP 1. Generate Pool from SimFin Results ======= //");
+		System.out.println("\n// ======= STEP 1. Generate Pool from SimFin Results ======= //");
 		setPoolFromSimFinResults();
 
 		// ======= STEP 1-2. Create Patch Strategy ======= //
-		System.out.println("// ======= STEP 1-2. Create Patch Strategy ======= //");
+		System.out.println("\n// ======= STEP 1-2. Create Patch Strategy ======= //");
 		PatchStrategy pStrategy;
 		if (flMetric.compareTo("perfect") == 0) {
 			pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
@@ -130,13 +130,13 @@ public class ConFix {
 		IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
 
 		// ======= STEP 2. Generate Patch Candidates ======= //
-		System.out.println("// ======= STEP 2. Generate Patch Candidates ======= //");
+		System.out.println("\n// ======= STEP 2. Generate Patch Candidates ======= //");
 		while (candidateNum <= patchCount) {
 			int trial = 0;
 			int returnCode = -1;
 
 			// ======= STEP 2-1. Select Location to Fix ======= //
-			System.out.println("// ======= STEP 2-1. Select Location to Fix ======= //");
+			System.out.println("\n// ======= STEP 2-1. Select Location to Fix ======= //");
 			TargetLocation loc = pStrategy.selectLocation();
 			targetClass = loc == null ? "" : loc.className;
 			currentLocKey = pStrategy.getCurrentLocKey();
@@ -147,13 +147,27 @@ public class ConFix {
 			}
 
 			// ======= STEP 2-2. Create Patcher ======= //
-			System.out.println("// ======= STEP 2-2. Create Patcher ======= //");
+			System.out.println("\n// ======= STEP 2-2. Create Patcher ======= //");
 			patcher = pStrategy.patcher();
-			if (patcher == null)
-				break;
+			if (patcher == null){
+				startTime = setTimer();
+				randomSeed = setRandomSeed(startTime);
+				if (flMetric.compareTo("perfect") == 0) {
+					pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+							cStrategyKey, sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
+				} else {
+					pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+							cStrategyKey, sourceDir, compileClassPathEntries);
+				}
+				pStrategy.finishUpdate();
+				IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
+				continue ;
+				//break;
+			}
+				
 
 			// ======= STEP 2-3. Select Change Information ======= //
-			System.out.println("// ======= STEP 2-3. Select Change Information ======= //");
+			System.out.println("\n// ======= STEP 2-3. Select Change Information ======= //");
 			Change change = pStrategy.selectChange();
 			if (change != null) {
 				changeNum++;
@@ -166,7 +180,7 @@ public class ConFix {
 
 			// ======= STEP 2-4. Apply Change Information to Create Patch Candidate =======
 			// //
-			System.out.println("// ======= STEP 2-4. Apply Change Information to Create Patch Candidate ======= //");
+			System.out.println("\n// ======= STEP 2-4. Apply Change Information to Create Patch Candidate ======= //");
 			Set<String> candidates = new HashSet<>();
 			do {
 				PatchInfo info = new PatchInfo(targetClass, change, loc);
@@ -190,7 +204,7 @@ public class ConFix {
 					break;
 				} else {
 					if (returnCode == Patcher.C_APPLIED) {
-						System.out.println("Patch Candidate-" + candidateNum + " is generated.");
+						System.out.println("\nPatch Candidate-" + candidateNum + " is generated.");
 						if (change != null && !change.equals(oldApplied)) {
 							oldApplied = change;
 							applied++;
@@ -209,7 +223,8 @@ public class ConFix {
 						String candidateFileName = storeCandidate(newSource, editText, targetClass, change);
 
 						// ======= STEP 2-5. Verify Patch Candidate ======= //
-						System.out.println("// ======= STEP 2-5. Verify Patch Candidate ======= //");
+						System.out.println(
+								"// ======= STEP 2-5. Verify Patch Candidate(" + candidateNum + ") ======= //");
 						int result = verify(candidateFileName);
 						if (result == PASS) {
 							String patchFileName = storePatch(newSource, editText, targetClass, change);

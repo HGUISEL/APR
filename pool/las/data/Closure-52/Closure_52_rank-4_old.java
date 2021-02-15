@@ -1,238 +1,282 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+package org.jsoup.nodes;
+
+import org.jsoup.SerializationException;
+import org.jsoup.helper.Validate;
+
+import java.io.IOException;
+import java.util.*;
+
+/**
+ * The attributes of an Element.
+ * <p>
+ * Attributes are treated as a map: there can be only one value associated with an attribute key.
+ * </p>
+ * <p>
+ * Attribute key and value comparisons are done case insensitively, and keys are normalised to
+ * lower-case.
+ * </p>
+ * 
+ * @author Jonathan Hedley, jonathan@hedley.net
  */
-package org.apache.syncope.core.spring;
+public class Attributes implements Iterable<Attribute>, Cloneable {
+    protected static final String dataPrefix = "data-";
+    
+    private LinkedHashMap<String, Attribute> attributes = null;
+    // linked hash map to preserve insertion order.
+    // null be default as so many elements have no attributes -- saves a good chunk of memory
 
-import groovy.lang.GroovyClassLoader;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
-import org.apache.syncope.common.lib.policy.AccountRuleConf;
-import org.apache.syncope.common.lib.policy.PasswordRuleConf;
-import org.apache.syncope.common.lib.policy.PullCorrelationRuleConf;
-import org.apache.syncope.common.lib.report.ReportletConf;
-import org.apache.syncope.core.persistence.api.ImplementationLookup;
-import org.apache.syncope.core.persistence.api.dao.AccountRule;
-import org.apache.syncope.core.persistence.api.dao.PasswordRule;
-import org.apache.syncope.core.persistence.api.dao.Reportlet;
-import org.apache.syncope.core.persistence.api.entity.Implementation;
-import org.apache.syncope.core.persistence.api.dao.PullCorrelationRule;
-import org.apache.syncope.core.provisioning.api.serialization.POJOHelper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.support.AbstractBeanDefinition;
+    /**
+     Get an attribute value by key.
+     @param key the attribute key
+     @return the attribute value if set; or empty string if not set.
+     @see #hasKey(String)
+     */
+    public String get(String key) {
+        Validate.notEmpty(key);
 
-public final class ImplementationManager {
+        if (attributes == null)
+            return "";
 
-    private static final Logger LOG = LoggerFactory.getLogger(ImplementationManager.class);
+        Attribute attr = attributes.get(key.toLowerCase());
+        return attr != null ? attr.getValue() : "";
+    }
 
-    private static final GroovyClassLoader GROOVY_CLASSLOADER = new GroovyClassLoader();
+    /**
+     Set a new attribute, or replace an existing one by key.
+     @param key attribute key
+     @param value attribute value
+     */
+    public void put(String key, String value) {
+        Attribute attr = new Attribute(key, value);
+        put(attr);
+    }
+    
+    /**
+    Set a new boolean attribute, remove attribute if value is false.
+    @param key attribute key
+    @param value attribute value
+    */
+    public void put(String key, boolean value) {
+        if (value)
+            put(new BooleanAttribute(key));
+        else
+            remove(key);
+    }
 
-    private static final Map<String, Class<?>> CLASS_CACHE = Collections.synchronizedMap(new HashMap<>());
+    /**
+     Set a new attribute, or replace an existing one by key.
+     @param attribute attribute
+     */
+    public void put(Attribute attribute) {
+        Validate.notNull(attribute);
+        if (attributes == null)
+             attributes = new LinkedHashMap<String, Attribute>(2);
+        attributes.put(attribute.getKey(), attribute);
+    }
 
-    public static Optional<Reportlet> buildReportlet(final Implementation impl)
-            throws InstantiationException, IllegalAccessException {
+    /**
+     Remove an attribute by key.
+     @param key attribute key to remove
+     */
+    public void remove(String key) {
+        Validate.notEmpty(key);
+        if (attributes == null)
+            return;
+        attributes.remove(key.toLowerCase());
+    }
 
-        switch (impl.getEngine()) {
-            case GROOVY:
-                return Optional.of(ImplementationManager.<Reportlet>buildGroovy(impl));
+    /**
+     Tests if these attributes contain an attribute with this key.
+     @param key key to check for
+     @return true if key exists, false otherwise
+     */
+    public boolean hasKey(String key) {
+        return attributes != null && attributes.containsKey(key.toLowerCase());
+    }
 
-            case JAVA:
-            default:
-                Reportlet reportlet = null;
+    /**
+     Get the number of attributes in this set.
+     @return size
+     */
+    public int size() {
+        if (attributes == null)
+            return 0;
+        return attributes.size();
+    }
 
-                ReportletConf reportletConf = POJOHelper.deserialize(impl.getBody(), ReportletConf.class);
-                Class<? extends Reportlet> reportletClass = ApplicationContextProvider.getApplicationContext().
-                        getBean(ImplementationLookup.class).getReportletClass(reportletConf.getClass());
-                if (reportletClass == null) {
-                    LOG.warn("Could not find matching reportlet for {}", reportletConf.getClass());
-                } else {
-                    // fetch (or create) reportlet
-                    if (ApplicationContextProvider.getBeanFactory().containsSingleton(reportletClass.getName())) {
-                        reportlet = (Reportlet) ApplicationContextProvider.getBeanFactory().
-                                getSingleton(reportletClass.getName());
-                    } else {
-                        reportlet = (Reportlet) ApplicationContextProvider.getBeanFactory().
-                                createBean(reportletClass, AbstractBeanDefinition.AUTOWIRE_BY_TYPE, false);
-                        ApplicationContextProvider.getBeanFactory().
-                                registerSingleton(reportletClass.getName(), reportlet);
-                    }
-                    reportlet.setConf(reportletConf);
+    /**
+     Add all the attributes from the incoming set to this set.
+     @param incoming attributes to add to these attributes.
+     */
+    public void addAll(Attributes incoming) {
+        if (incoming.size() == 0)
+            return;
+        if (attributes == null)
+            attributes = new LinkedHashMap<String, Attribute>(incoming.size());
+        attributes.putAll(incoming.attributes);
+    }
+    
+    public Iterator<Attribute> iterator() {
+        return asList().iterator();
+    }
+
+    /**
+     Get the attributes as a List, for iteration. Do not modify the keys of the attributes via this view, as changes
+     to keys will not be recognised in the containing set.
+     @return an view of the attributes as a List.
+     */
+    public List<Attribute> asList() {
+        if (attributes == null)
+            return Collections.emptyList();
+
+        List<Attribute> list = new ArrayList<Attribute>(attributes.size());
+        for (Map.Entry<String, Attribute> entry : attributes.entrySet()) {
+            list.add(entry.getValue());
+        }
+        return Collections.unmodifiableList(list);
+    }
+
+    /**
+     * Retrieves a filtered view of attributes that are HTML5 custom data attributes; that is, attributes with keys
+     * starting with {@code data-}.
+     * @return map of custom data attributes.
+     */
+    public Map<String, String> dataset() {
+        return new Dataset();
+    }
+
+    /**
+     Get the HTML representation of these attributes.
+     @return HTML
+     @throws SerializationException if the HTML representation of the attributes cannot be constructed.
+     */
+    public String html() {
+        StringBuilder accum = new StringBuilder();
+        try {
+            html(accum, (new Document("")).outputSettings()); // output settings a bit funky, but this html() seldom used
+        } catch (IOException e) { // ought never happen
+            throw new SerializationException(e);
+        }
+        return accum.toString();
+    }
+    
+    void html(Appendable accum, Document.OutputSettings out) throws IOException {
+        if (attributes == null)
+            return;
+        
+        for (Map.Entry<String, Attribute> entry : attributes.entrySet()) {
+            Attribute attribute = entry.getValue();
+            accum.append(" ");
+            attribute.html(accum, out);
+        }
+    }
+    
+    @Override
+    public String toString() {
+        return html();
+    }
+
+    /**
+     * Checks if these attributes are equal to another set of attributes, by comparing the two sets
+     * @param o attributes to compare with
+     * @return if both sets of attributes have the same content
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Attributes)) return false;
+        
+        Attributes that = (Attributes) o;
+        
+        return !(attributes != null ? !attributes.equals(that.attributes) : that.attributes != null);
+    }
+
+    /**
+     * Calculates the hashcode of these attributes, by iterating all attributes and summing their hashcodes.
+     * @return calculated hashcode
+     */
+    @Override
+    public int hashCode() {
+        return attributes != null ? attributes.hashCode() : 0;
+    }
+
+    @Override
+    public Attributes clone() {
+        if (attributes == null)
+            return new Attributes();
+
+        Attributes clone;
+        try {
+            clone = (Attributes) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+        }
+        clone.attributes = new LinkedHashMap<String, Attribute>(attributes.size());
+        for (Attribute attribute: this)
+            clone.attributes.put(attribute.getKey(), attribute.clone());
+        return clone;
+    }
+
+    private class Dataset extends AbstractMap<String, String> {
+
+        private Dataset() {
+            if (attributes == null)
+                attributes = new LinkedHashMap<String, Attribute>(2);
+        }
+
+        @Override
+        public Set<Entry<String, String>> entrySet() {
+            return new EntrySet();
+        }
+
+        @Override
+        public String put(String key, String value) {
+            String dataKey = dataKey(key);
+            String oldValue = hasKey(dataKey) ? attributes.get(dataKey).getValue() : null;
+            Attribute attr = new Attribute(dataKey, value);
+            attributes.put(dataKey, attr);
+            return oldValue;
+        }
+
+        private class EntrySet extends AbstractSet<Map.Entry<String, String>> {
+
+            @Override
+            public Iterator<Map.Entry<String, String>> iterator() {
+                return new DatasetIterator();
+            }
+
+           @Override
+            public int size() {
+                int count = 0;
+                Iterator iter = new DatasetIterator();
+                while (iter.hasNext())
+                    count++;
+                return count;
+            }
+        }
+
+        private class DatasetIterator implements Iterator<Map.Entry<String, String>> {
+            private Iterator<Attribute> attrIter = attributes.values().iterator();
+            private Attribute attr;
+            public boolean hasNext() {
+                while (attrIter.hasNext()) {
+                    attr = attrIter.next();
+                    if (attr.isDataAttribute()) return true;
                 }
+                return false;
+            }
 
-                return Optional.ofNullable(reportlet);
+            public Entry<String, String> next() {
+                return new Attribute(attr.getKey().substring(dataPrefix.length()), attr.getValue());
+            }
+
+            public void remove() {
+                attributes.remove(attr.getKey());
+            }
         }
     }
 
-    public static Optional<AccountRule> buildAccountRule(final Implementation impl)
-            throws InstantiationException, IllegalAccessException {
-
-        switch (impl.getEngine()) {
-            case GROOVY:
-                return Optional.of(ImplementationManager.<AccountRule>buildGroovy(impl));
-
-            case JAVA:
-            default:
-                AccountRule rule = null;
-
-                AccountRuleConf ruleConf = POJOHelper.deserialize(impl.getBody(), AccountRuleConf.class);
-                Class<? extends AccountRule> ruleClass = ApplicationContextProvider.getApplicationContext().
-                        getBean(ImplementationLookup.class).getAccountRuleClass(ruleConf.getClass());
-                if (ruleClass == null) {
-                    LOG.warn("Could not find matching account rule for {}", impl.getClass());
-                } else {
-                    // fetch (or create) rule
-                    if (ApplicationContextProvider.getBeanFactory().containsSingleton(ruleClass.getName())) {
-                        rule = (AccountRule) ApplicationContextProvider.getBeanFactory().
-                                getSingleton(ruleClass.getName());
-                    } else {
-                        rule = (AccountRule) ApplicationContextProvider.getBeanFactory().
-                                createBean(ruleClass, AbstractBeanDefinition.AUTOWIRE_BY_TYPE, false);
-                        ApplicationContextProvider.getBeanFactory().
-                                registerSingleton(ruleClass.getName(), rule);
-                    }
-                    rule.setConf(ruleConf);
-                }
-
-                return Optional.ofNullable(rule);
-        }
-    }
-
-    public static Optional<PasswordRule> buildPasswordRule(final Implementation impl)
-            throws InstantiationException, IllegalAccessException {
-
-        switch (impl.getEngine()) {
-            case GROOVY:
-                return Optional.of(ImplementationManager.<PasswordRule>buildGroovy(impl));
-
-            case JAVA:
-            default:
-                PasswordRule rule = null;
-
-                PasswordRuleConf ruleConf = POJOHelper.deserialize(impl.getBody(), PasswordRuleConf.class);
-                Class<? extends PasswordRule> ruleClass = ApplicationContextProvider.getApplicationContext().
-                        getBean(ImplementationLookup.class).getPasswordRuleClass(ruleConf.getClass());
-                if (ruleClass == null) {
-                    LOG.warn("Could not find matching password rule for {}", impl.getClass());
-                } else {
-                    // fetch (or create) rule
-                    if (ApplicationContextProvider.getBeanFactory().containsSingleton(ruleClass.getName())) {
-                        rule = (PasswordRule) ApplicationContextProvider.getBeanFactory().
-                                getSingleton(ruleClass.getName());
-                    } else {
-                        rule = (PasswordRule) ApplicationContextProvider.getBeanFactory().
-                                createBean(ruleClass, AbstractBeanDefinition.AUTOWIRE_BY_TYPE, false);
-                        ApplicationContextProvider.getBeanFactory().
-                                registerSingleton(ruleClass.getName(), rule);
-                    }
-                    rule.setConf(ruleConf);
-                }
-
-                return Optional.ofNullable(rule);
-        }
-    }
-
-    public static Optional<PullCorrelationRule> buildPullCorrelationRule(final Implementation impl)
-            throws InstantiationException, IllegalAccessException {
-
-        switch (impl.getEngine()) {
-            case GROOVY:
-                return Optional.of(ImplementationManager.<PullCorrelationRule>buildGroovy(impl));
-
-            case JAVA:
-            default:
-                PullCorrelationRule rule = null;
-
-                PullCorrelationRuleConf ruleConf =
-                        POJOHelper.deserialize(impl.getBody(), PullCorrelationRuleConf.class);
-                Class<? extends PullCorrelationRule> ruleClass = ApplicationContextProvider.getApplicationContext().
-                        getBean(ImplementationLookup.class).getPullCorrelationRuleClass(ruleConf.getClass());
-                if (ruleClass == null) {
-                    LOG.warn("Could not find matching pull correlation rule for {}", impl.getClass());
-                } else {
-                    // fetch (or create) rule
-                    if (ApplicationContextProvider.getBeanFactory().containsSingleton(ruleClass.getName())) {
-                        rule = (PullCorrelationRule) ApplicationContextProvider.getBeanFactory().
-                                getSingleton(ruleClass.getName());
-                    } else {
-                        rule = (PullCorrelationRule) ApplicationContextProvider.getBeanFactory().
-                                createBean(ruleClass, AbstractBeanDefinition.AUTOWIRE_BY_TYPE, false);
-                        ApplicationContextProvider.getBeanFactory().
-                                registerSingleton(ruleClass.getName(), rule);
-                    }
-                    rule.setConf(ruleConf);
-                }
-
-                return Optional.ofNullable(rule);
-        }
-    }
-
-    public static <T> T build(final Implementation impl)
-            throws InstantiationException, IllegalAccessException, ClassNotFoundException {
-
-        switch (impl.getEngine()) {
-            case GROOVY:
-                return ImplementationManager.<T>buildGroovy(impl);
-
-            case JAVA:
-            default:
-                return ImplementationManager.<T>buildJava(impl);
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T> T buildGroovy(final Implementation impl)
-            throws InstantiationException, IllegalAccessException {
-
-        Class<?> clazz;
-        if (CLASS_CACHE.containsKey(impl.getKey())) {
-            clazz = CLASS_CACHE.get(impl.getKey());
-        } else {
-            clazz = GROOVY_CLASSLOADER.parseClass(impl.getBody());
-            CLASS_CACHE.put(impl.getKey(), clazz);
-        }
-
-        return (T) ApplicationContextProvider.getBeanFactory().
-                createBean(clazz, AbstractBeanDefinition.AUTOWIRE_BY_TYPE, false);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T> T buildJava(final Implementation impl)
-            throws ClassNotFoundException {
-
-        Class<?> clazz;
-        if (CLASS_CACHE.containsKey(impl.getKey())) {
-            clazz = CLASS_CACHE.get(impl.getKey());
-        } else {
-            clazz = Class.forName(impl.getBody());
-            CLASS_CACHE.put(impl.getKey(), clazz);
-        }
-
-        return (T) ApplicationContextProvider.getBeanFactory().
-                createBean(clazz, AbstractBeanDefinition.AUTOWIRE_BY_TYPE, false);
-    }
-
-    public static Class<?> purge(final String implementation) {
-        return CLASS_CACHE.remove(implementation);
-    }
-
-    private ImplementationManager() {
-        // private constructor for static utility class
+    private static String dataKey(String key) {
+        return dataPrefix + key;
     }
 }

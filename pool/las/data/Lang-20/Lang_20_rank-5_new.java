@@ -1,6 +1,4 @@
- /**
- * Copyright 2009 The Apache Software Foundation
- *
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,2439 +14,1777 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- */
-package org.apache.hadoop.hbase.regionserver;
+*/
 
+package org.apache.kylin.common;
+
+import java.io.File;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.util.ArrayList;
+import java.io.Serializable;
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.NavigableSet;
-import java.util.TreeMap;
-import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.Map.Entry;
+import java.util.Properties;
+import java.util.SortedSet;
+import java.util.TimeZone;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.fs.FileStatus;
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.text.StrSubstitutor;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.DroppedSnapshotException;
-import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HColumnDescriptor;
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.HTableDescriptor;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.NotServingRegionException;
-import org.apache.hadoop.hbase.RegionHistorian;
-import org.apache.hadoop.hbase.client.Delete;
-import org.apache.hadoop.hbase.client.Get;
-import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.Result;
-import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.io.HeapSize;
-import org.apache.hadoop.hbase.io.Reference.Range;
-import org.apache.hadoop.hbase.io.hfile.BlockCache;
-import org.apache.hadoop.hbase.ipc.HRegionInterface;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.ClassSize;
-import org.apache.hadoop.hbase.util.FSUtils;
-import org.apache.hadoop.hbase.util.Writables;
-import org.apache.hadoop.util.Progressable;
-import org.apache.hadoop.util.StringUtils;
+import org.apache.kylin.common.lock.DistributedLockFactory;
+import org.apache.kylin.common.util.ClassUtil;
+import org.apache.kylin.common.util.CliCommandExecutor;
+import org.apache.kylin.common.util.HadoopUtil;
+import org.apache.kylin.common.util.ZooKeeperUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
 
 /**
- * HRegion stores data for a certain region of a table.  It stores all columns
- * for each row. A given table consists of one or more HRegions.
- *
- * <p>We maintain multiple HStores for a single HRegion.
- * 
- * <p>An Store is a set of rows with some column data; together,
- * they make up all the data for the rows.  
- *
- * <p>Each HRegion has a 'startKey' and 'endKey'.
- * <p>The first is inclusive, the second is exclusive (except for
- * the final region)  The endKey of region 0 is the same as
- * startKey for region 1 (if it exists).  The startKey for the
- * first region is null. The endKey for the final region is null.
- *
- * <p>Locking at the HRegion level serves only one purpose: preventing the
- * region from being closed (and consequently split) while other operations
- * are ongoing. Each row level operation obtains both a row lock and a region
- * read lock for the duration of the operation. While a scanner is being
- * constructed, getScanner holds a read lock. If the scanner is successfully
- * constructed, it holds a read lock until it is closed. A close takes out a
- * write lock and consequently will block for ongoing operations and will block
- * new operations from starting while the close is in progress.
- * 
- * <p>An HRegion is defined by its table and its key extent.
- * 
- * <p>It consists of at least one Store.  The number of Stores should be
- * configurable, so that data which is accessed together is stored in the same
- * Store.  Right now, we approximate that by building a single Store for 
- * each column family.  (This config info will be communicated via the 
- * tabledesc.)
- * 
- * <p>The HTableDescriptor contains metainfo about the HRegion's table.
- * regionName is a unique identifier for this HRegion. (startKey, endKey]
- * defines the keyspace for this HRegion.
+ * An abstract class to encapsulate access to a set of 'properties'.
+ * Subclass can override methods in this class to extend the content of the 'properties',
+ * with some override values for example.
  */
-public class HRegion implements HConstants, HeapSize { // , Writable{
-  static final Log LOG = LogFactory.getLog(HRegion.class);
-  static final String SPLITDIR = "splits";
-  static final String MERGEDIR = "merges";
-  final AtomicBoolean closed = new AtomicBoolean(false);
-  /* Closing can take some time; use the closing flag if there is stuff we don't 
-   * want to do while in closing state; e.g. like offer this region up to the 
-   * master as a region to close if the carrying regionserver is overloaded.
-   * Once set, it is never cleared.
-   */
-  final AtomicBoolean closing = new AtomicBoolean(false);
-  private final RegionHistorian historian;
+abstract public class KylinConfigBase implements Serializable {
+    private static final long serialVersionUID = 1L;
+    private static final Logger logger = LoggerFactory.getLogger(KylinConfigBase.class);
 
-  //////////////////////////////////////////////////////////////////////////////
-  // Members
-  //////////////////////////////////////////////////////////////////////////////
+    /*
+     * DON'T DEFINE CONSTANTS FOR PROPERTY KEYS!
+     *
+     * For 1), no external need to access property keys, all accesses are by public methods.
+     * For 2), it's cumbersome to maintain constants at top and code at bottom.
+     * For 3), key literals usually appear only once.
+     */
 
-  private final Map<Integer, byte []> locksToRows =
-    new ConcurrentHashMap<Integer, byte []>();
-  protected final Map<byte [], Store> stores =
-    new ConcurrentSkipListMap<byte [], Store>(KeyValue.FAMILY_COMPARATOR);
-  
-  //These variable are just used for getting data out of the region, to test on
-  //client side
-  // private int numStores = 0;
-  // private int [] storeSize = null;
-  // private byte [] name = null;
-  
-  final AtomicLong memstoreSize = new AtomicLong(0);
+    public static String getKylinHome() {
+        String kylinHome = getKylinHomeWithoutWarn();
+        if (StringUtils.isEmpty(kylinHome)) {
+            logger.warn("KYLIN_HOME was not set");
+        }
+        return kylinHome;
+    }
 
-  // This is the table subdirectory.
-  final Path basedir;
-  final HLog log;
-  final FileSystem fs;
-  final HBaseConfiguration conf;
-  final HRegionInfo regionInfo;
-  final Path regiondir;
-  private final Path regionCompactionDir;
-  KeyValue.KVComparator comparator;
+    public static String getKylinHomeWithoutWarn() {
+        String kylinHome = System.getenv("KYLIN_HOME");
+        if (StringUtils.isEmpty(kylinHome)) {
+            kylinHome = System.getProperty("KYLIN_HOME");
+        }
+        return kylinHome;
+    }
 
-  /*
-   * Set this when scheduling compaction if want the next compaction to be a
-   * major compaction.  Cleared each time through compaction code.
-   */
-  private volatile boolean forceMajorCompaction = false;
+    public static String getSparkHome() {
+        String sparkHome = System.getenv("SPARK_HOME");
+        if (StringUtils.isNotEmpty(sparkHome)) {
+            logger.info("SPARK_HOME was set to " + sparkHome);
+            return sparkHome;
+        }
 
-  /*
-   * Data structure of write state flags used coordinating flushes,
-   * compactions and closes.
-   */
-  static class WriteState {
-    // Set while a memstore flush is happening.
-    volatile boolean flushing = false;
-    // Set when a flush has been requested.
-    volatile boolean flushRequested = false;
-    // Set while a compaction is running.
-    volatile boolean compacting = false;
-    // Gets set in close. If set, cannot compact or flush again.
-    volatile boolean writesEnabled = true;
-    // Set if region is read-only
-    volatile boolean readOnly = false;
+        sparkHome = System.getProperty("SPARK_HOME");
+        if (StringUtils.isNotEmpty(sparkHome)) {
+            logger.info("SPARK_HOME was set to " + sparkHome);
+            return sparkHome;
+        }
+
+        return getKylinHome() + File.separator + "spark";
+    }
+
+    // backward compatibility check happens when properties is loaded or updated
+    static BackwardCompatibilityConfig BCC = new BackwardCompatibilityConfig();
+
+    // ============================================================================
+
+    volatile Properties properties = new Properties();
+
+    public KylinConfigBase() {
+        this(new Properties());
+    }
+
+    public KylinConfigBase(Properties props) {
+        this.properties = BCC.check(props);
+    }
+
+    protected KylinConfigBase(Properties props, boolean force) {
+        this.properties = force ? props : BCC.check(props);
+    }
+
+    final protected String getOptional(String prop) {
+        return getOptional(prop, null);
+    }
+
+    protected String getOptional(String prop, String dft) {
+
+        final String property = System.getProperty(prop);
+        return property != null ? StrSubstitutor.replace(property, System.getenv())
+                : StrSubstitutor.replace(properties.getProperty(prop, dft), System.getenv());
+    }
+
+    protected Properties getAllProperties() {
+        return getProperties(null);
+    }
 
     /**
-     * Set flags that make this region read-only.
+     *
+     * @param propertyKeys the collection of the properties; if null will return all properties
+     * @return
      */
-    synchronized void setReadOnly(final boolean onOff) {
-      this.writesEnabled = !onOff;
-      this.readOnly = onOff;
-    }
-    
-    boolean isReadOnly() {
-      return this.readOnly;
-    }
+    protected Properties getProperties(Collection<String> propertyKeys) {
+        Map<String, String> envMap = System.getenv();
+        StrSubstitutor sub = new StrSubstitutor(envMap);
 
-    boolean isFlushRequested() {
-      return this.flushRequested;
-    }
-  }
-
-  private volatile WriteState writestate = new WriteState();
-
-  final int memstoreFlushSize;
-  private volatile long lastFlushTime;
-  final FlushRequester flushListener;
-  private final int blockingMemStoreSize;
-  final long threadWakeFrequency;
-  // Used to guard splits and closes
-  private final ReentrantReadWriteLock splitsAndClosesLock =
-    new ReentrantReadWriteLock();
-  private final ReentrantReadWriteLock newScannerLock = 
-    new ReentrantReadWriteLock();
-
-  // Stop updates lock
-  private final ReentrantReadWriteLock updatesLock =
-    new ReentrantReadWriteLock();
-  private final Object splitLock = new Object();
-  private long minSequenceId;
-  
-  /**
-   * Name of the region info file that resides just under the region directory.
-   */
-  public final static String REGIONINFO_FILE = ".regioninfo";
-
-  /**
-   * REGIONINFO_FILE as byte array.
-   */
-  public final static byte [] REGIONINFO_FILE_BYTES =
-    Bytes.toBytes(REGIONINFO_FILE);
-
-  /**
-   * Should only be used for testing purposes
-   */
-  public HRegion(){
-    this.basedir = null;
-    this.blockingMemStoreSize = 0;
-    this.conf = null;
-    this.flushListener = null;
-    this.fs = null;
-    this.historian = null;
-    this.memstoreFlushSize = 0;
-    this.log = null;
-    this.regionCompactionDir = null;
-    this.regiondir = null;
-    this.regionInfo = null;
-    this.threadWakeFrequency = 0L;
-  }
-  
-  /**
-   * HRegion constructor.
-   *
-   * @param basedir qualified path of directory where region should be located,
-   * usually the table directory.
-   * @param log The HLog is the outbound log for any updates to the HRegion
-   * (There's a single HLog for all the HRegions on a single HRegionServer.)
-   * The log file is a logfile from the previous execution that's
-   * custom-computed for this HRegion. The HRegionServer computes and sorts the
-   * appropriate log info for this HRegion. If there is a previous log file
-   * (implying that the HRegion has been written-to before), then read it from
-   * the supplied path.
-   * @param fs is the filesystem.  
-   * @param conf is global configuration settings.
-   * @param regionInfo - HRegionInfo that describes the region
-   * is new), then read them from the supplied path.
-   * @param flushListener an object that implements CacheFlushListener or null
-   * making progress to master -- otherwise master might think region deploy
-   * failed.  Can be null.
-   */
-  public HRegion(Path basedir, HLog log, FileSystem fs, HBaseConfiguration conf, 
-      HRegionInfo regionInfo, FlushRequester flushListener) {
-    this.basedir = basedir;
-    this.comparator = regionInfo.getComparator();
-    this.log = log;
-    this.fs = fs;
-    this.conf = conf;
-    this.regionInfo = regionInfo;
-    this.flushListener = flushListener;
-    this.threadWakeFrequency = conf.getLong(THREAD_WAKE_FREQUENCY, 10 * 1000);
-    String encodedNameStr = Integer.toString(this.regionInfo.getEncodedName());
-    this.regiondir = new Path(basedir, encodedNameStr);
-    this.historian = RegionHistorian.getInstance();
-    if (LOG.isDebugEnabled()) {
-      // Write out region name as string and its encoded name.
-      LOG.debug("Opening region " + this + ", encoded=" +
-        this.regionInfo.getEncodedName());
-    }
-    this.regionCompactionDir =
-      new Path(getCompactionDir(basedir), encodedNameStr);
-    int flushSize = regionInfo.getTableDesc().getMemStoreFlushSize();
-    if (flushSize == HTableDescriptor.DEFAULT_MEMSTORE_FLUSH_SIZE) {
-      flushSize = conf.getInt("hbase.hregion.memstore.flush.size",
-                      HTableDescriptor.DEFAULT_MEMSTORE_FLUSH_SIZE);
-    }
-    this.memstoreFlushSize = flushSize;
-    this.blockingMemStoreSize = this.memstoreFlushSize *
-      conf.getInt("hbase.hregion.memstore.block.multiplier", 1);
-  }
-
-  /**
-   * Initialize this region and get it ready to roll.
-   * Called after construction.
-   * 
-   * @param initialFiles
-   * @param reporter
-   * @throws IOException
-   */
-  public void initialize(Path initialFiles, final Progressable reporter)
-  throws IOException {
-    Path oldLogFile = new Path(regiondir, HREGION_OLDLOGFILE_NAME);
-
-    // Move prefab HStore files into place (if any).  This picks up split files
-    // and any merges from splits and merges dirs.
-    if (initialFiles != null && fs.exists(initialFiles)) {
-      fs.rename(initialFiles, this.regiondir);
-    }
-
-    // Write HRI to a file in case we need to recover .META.
-    checkRegioninfoOnFilesystem();
-
-    // Load in all the HStores.
-    long maxSeqId = -1;
-    long minSeqId = Integer.MAX_VALUE;
-    for (HColumnDescriptor c : this.regionInfo.getTableDesc().getFamilies()) {
-      Store store = instantiateHStore(this.basedir, c, oldLogFile, reporter);
-      this.stores.put(c.getName(), store);
-      long storeSeqId = store.getMaxSequenceId();
-      if (storeSeqId > maxSeqId) {
-        maxSeqId = storeSeqId;
-      }
-      if (storeSeqId < minSeqId) {
-        minSeqId = storeSeqId;
-      }
-    }
-
-    // Play log if one.  Delete when done.
-    doReconstructionLog(oldLogFile, minSeqId, maxSeqId, reporter);
-    if (fs.exists(oldLogFile)) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Deleting old log file: " + oldLogFile);
-      }
-      fs.delete(oldLogFile, false);
-    }
-    
-    // Add one to the current maximum sequence id so new edits are beyond.
-    this.minSequenceId = maxSeqId + 1;
-
-    // Get rid of any splits or merges that were lost in-progress
-    FSUtils.deleteDirectory(this.fs, new Path(regiondir, SPLITDIR));
-    FSUtils.deleteDirectory(this.fs, new Path(regiondir, MERGEDIR));
-
-    // See if region is meant to run read-only.
-    if (this.regionInfo.getTableDesc().isReadOnly()) {
-      this.writestate.setReadOnly(true);
-    }
-
-    // HRegion is ready to go!
-    this.writestate.compacting = false;
-    this.lastFlushTime = System.currentTimeMillis();
-    LOG.info("region " + this + "/" + this.regionInfo.getEncodedName() +
-      " available; sequence id is " + this.minSequenceId);
-  }
-
-  /**
-   * @return True if this region has references.
-   */
-  boolean hasReferences() {
-    for (Map.Entry<byte [], Store> e: this.stores.entrySet()) {
-      for (Map.Entry<Long, StoreFile> ee:
-          e.getValue().getStorefiles().entrySet()) {
-        // Found a reference, return.
-        if (ee.getValue().isReference()) return true;
-      }
-    }
-    return false;
-  }
-
-  /*
-   * Write out an info file under the region directory.  Useful recovering
-   * mangled regions.
-   * @throws IOException
-   */
-  private void checkRegioninfoOnFilesystem() throws IOException {
-    // Name of this file has two leading and trailing underscores so it doesn't
-    // clash w/ a store/family name.  There is possibility, but assumption is
-    // that its slim (don't want to use control character in filename because
-    // 
-    Path regioninfo = new Path(this.regiondir, REGIONINFO_FILE);
-    if (this.fs.exists(regioninfo) &&
-        this.fs.getFileStatus(regioninfo).getLen() > 0) {
-      return;
-    }
-    FSDataOutputStream out = this.fs.create(regioninfo, true);
-    try {
-      this.regionInfo.write(out);
-      out.write('\n');
-      out.write('\n');
-      out.write(Bytes.toBytes(this.regionInfo.toString()));
-    } finally {
-      out.close();
-    }
-  }
-
-  /**
-   * @return Updates to this region need to have a sequence id that is >= to
-   * the this number.
-   */
-  long getMinSequenceId() {
-    return this.minSequenceId;
-  }
-  
-  /** @return a HRegionInfo object for this region */
-  public HRegionInfo getRegionInfo() {
-    return this.regionInfo;
-  }
-
-  /** @return true if region is closed */
-  public boolean isClosed() {
-    return this.closed.get();
-  }
-  
-  /**
-   * @return True if closing process has started.
-   */
-  public boolean isClosing() {
-    return this.closing.get();
-  }
-
-  /**
-   * Close down this HRegion.  Flush the cache, shut down each HStore, don't 
-   * service any more calls.
-   *
-   * <p>This method could take some time to execute, so don't call it from a 
-   * time-sensitive thread.
-   * 
-   * @return Vector of all the storage files that the HRegion's component 
-   * HStores make use of.  It's a list of all HStoreFile objects. Returns empty
-   * vector if already closed and null if judged that it should not close.
-   * 
-   * @throws IOException
-   */
-  public List<StoreFile> close() throws IOException {
-    return close(false);
-  }
-
-  /**
-   * Close down this HRegion.  Flush the cache unless abort parameter is true,
-   * Shut down each HStore, don't service any more calls.
-   *
-   * This method could take some time to execute, so don't call it from a 
-   * time-sensitive thread.
-   * 
-   * @param abort true if server is aborting (only during testing)
-   * @return Vector of all the storage files that the HRegion's component 
-   * HStores make use of.  It's a list of HStoreFile objects.  Can be null if
-   * we are not to close at this time or we are already closed.
-   * 
-   * @throws IOException
-   */
-  public List<StoreFile> close(final boolean abort) throws IOException {
-    if (isClosed()) {
-      LOG.warn("region " + this + " already closed");
-      return null;
-    }
-    this.closing.set(true);
-    synchronized (splitLock) {
-      synchronized (writestate) {
-        // Disable compacting and flushing by background threads for this
-        // region.
-        writestate.writesEnabled = false;
-        LOG.debug("Closing " + this + ": compactions & flushes disabled ");
-        while (writestate.compacting || writestate.flushing) {
-          LOG.debug("waiting for" +
-              (writestate.compacting ? " compaction" : "") +
-              (writestate.flushing ?
-                  (writestate.compacting ? "," : "") + " cache flush" :
-                    "") + " to complete for region " + this);
-          try {
-            writestate.wait();
-          } catch (InterruptedException iex) {
-            // continue
-          }
-        }
-      }
-      newScannerLock.writeLock().lock();
-      try {
-        splitsAndClosesLock.writeLock().lock();
-        LOG.debug("Updates disabled for region, no outstanding scanners on " +
-          this);
-        try {
-          // Write lock means no more row locks can be given out.  Wait on
-          // outstanding row locks to come in before we close so we do not drop
-          // outstanding updates.
-          waitOnRowLocks();
-          LOG.debug("No more row locks outstanding on region " + this);
-  
-          // Don't flush the cache if we are aborting
-          if (!abort) {
-            internalFlushcache();
-          }
-  
-          List<StoreFile> result = new ArrayList<StoreFile>();
-          for (Store store: stores.values()) {
-            result.addAll(store.close());
-          }
-          this.closed.set(true);
-          LOG.info("Closed " + this);
-          return result;
-        } finally {
-          splitsAndClosesLock.writeLock().unlock();
-        }
-      } finally {
-        newScannerLock.writeLock().unlock();
-      }
-    }
-  }
-
-  //////////////////////////////////////////////////////////////////////////////
-  // HRegion accessors
-  //////////////////////////////////////////////////////////////////////////////
-
-  /** @return start key for region */
-  public byte [] getStartKey() {
-    return this.regionInfo.getStartKey();
-  }
-
-  /** @return end key for region */
-  public byte [] getEndKey() {
-    return this.regionInfo.getEndKey();
-  }
-
-  /** @return region id */
-  public long getRegionId() {
-    return this.regionInfo.getRegionId();
-  }
-
-  /** @return region name */
-  public byte [] getRegionName() {
-    return this.regionInfo.getRegionName();
-  }
-
-  /** @return region name as string for logging */
-  public String getRegionNameAsString() {
-    return this.regionInfo.getRegionNameAsString();
-  }
-
-  /** @return HTableDescriptor for this region */
-  public HTableDescriptor getTableDesc() {
-    return this.regionInfo.getTableDesc();
-  }
-
-  /** @return HLog in use for this region */
-  public HLog getLog() {
-    return this.log;
-  }
-
-  /** @return Configuration object */
-  public HBaseConfiguration getConf() {
-    return this.conf;
-  }
-
-  /** @return region directory Path */
-  public Path getRegionDir() {
-    return this.regiondir;
-  }
-
-  /** @return FileSystem being used by this region */
-  public FileSystem getFilesystem() {
-    return this.fs;
-  }
-
-  /** @return the last time the region was flushed */
-  public long getLastFlushTime() {
-    return this.lastFlushTime;
-  }
-  
-  //////////////////////////////////////////////////////////////////////////////
-  // HRegion maintenance.  
-  //
-  // These methods are meant to be called periodically by the HRegionServer for 
-  // upkeep.
-  //////////////////////////////////////////////////////////////////////////////
-
-  /** @return returns size of largest HStore. */
-  public long getLargestHStoreSize() {
-    long size = 0;
-    for (Store h: stores.values()) {
-      long storeSize = h.getSize();
-      if (storeSize > size) {
-        size = storeSize;
-      }
-    }
-    return size;
-  }
-
-  /*
-   * Split the HRegion to create two brand-new ones.  This also closes
-   * current HRegion.  Split should be fast since we don't rewrite store files
-   * but instead create new 'reference' store files that read off the top and
-   * bottom ranges of parent store files.
-   * @param splitRow row on which to split region
-   * @return two brand-new (and open) HRegions or null if a split is not needed
-   * @throws IOException
-   */
-  HRegion [] splitRegion(final byte [] splitRow) throws IOException {
-    prepareToSplit();
-    synchronized (splitLock) {
-      if (closed.get()) {
-        return null;
-      }
-      // Add start/end key checking: hbase-428.
-      byte [] startKey = this.regionInfo.getStartKey();
-      byte [] endKey = this.regionInfo.getEndKey();
-      if (this.comparator.matchingRows(startKey, 0, startKey.length,
-          splitRow, 0, splitRow.length)) {
-        LOG.debug("Startkey and midkey are same, not splitting");
-        return null;
-      }
-      if (this.comparator.matchingRows(splitRow, 0, splitRow.length,
-          endKey, 0, endKey.length)) {
-        LOG.debug("Endkey and midkey are same, not splitting");
-        return null;
-      }
-      LOG.info("Starting split of region " + this);
-      Path splits = new Path(this.regiondir, SPLITDIR);
-      if(!this.fs.exists(splits)) {
-        this.fs.mkdirs(splits);
-      }
-      // Calculate regionid to use.  Can't be less than that of parent else
-      // it'll insert into wrong location over in .META. table: HBASE-710.
-      long rid = System.currentTimeMillis();
-      if (rid < this.regionInfo.getRegionId()) {
-        LOG.warn("Clock skew; parent regions id is " +
-          this.regionInfo.getRegionId() + " but current time here is " + rid);
-        rid = this.regionInfo.getRegionId() + 1;
-      }
-      HRegionInfo regionAInfo = new HRegionInfo(this.regionInfo.getTableDesc(),
-        startKey, splitRow, false, rid);
-      Path dirA =
-        new Path(splits, Integer.toString(regionAInfo.getEncodedName()));
-      if(fs.exists(dirA)) {
-        throw new IOException("Cannot split; target file collision at " + dirA);
-      }
-      HRegionInfo regionBInfo = new HRegionInfo(this.regionInfo.getTableDesc(),
-        splitRow, endKey, false, rid);
-      Path dirB =
-        new Path(splits, Integer.toString(regionBInfo.getEncodedName()));
-      if(this.fs.exists(dirB)) {
-        throw new IOException("Cannot split; target file collision at " + dirB);
-      }
-
-      // Now close the HRegion.  Close returns all store files or null if not
-      // supposed to close (? What to do in this case? Implement abort of close?)
-      // Close also does wait on outstanding rows and calls a flush just-in-case.
-      List<StoreFile> hstoreFilesToSplit = close(false);
-      if (hstoreFilesToSplit == null) {
-        LOG.warn("Close came back null (Implement abort of close?)");
-        throw new RuntimeException("close returned empty vector of HStoreFiles");
-      }
-
-      // Split each store file.
-      for(StoreFile h: hstoreFilesToSplit) {
-        StoreFile.split(fs,
-          Store.getStoreHomedir(splits, regionAInfo.getEncodedName(),
-            h.getFamily()),
-          h, splitRow, Range.bottom);
-        StoreFile.split(fs,
-          Store.getStoreHomedir(splits, regionBInfo.getEncodedName(),
-            h.getFamily()),
-          h, splitRow, Range.top);
-      }
-
-      // Done!
-      // Opening the region copies the splits files from the splits directory
-      // under each region.
-      HRegion regionA = new HRegion(basedir, log, fs, conf, regionAInfo, null);
-      regionA.initialize(dirA, null);
-      regionA.close();
-      HRegion regionB = new HRegion(basedir, log, fs, conf, regionBInfo, null);
-      regionB.initialize(dirB, null);
-      regionB.close();
-
-      // Cleanup
-      boolean deleted = fs.delete(splits, true); // Get rid of splits directory
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Cleaned up " + FSUtils.getPath(splits) + " " + deleted);
-      }
-      HRegion regions[] = new HRegion [] {regionA, regionB};
-      this.historian.addRegionSplit(this.regionInfo,
-        regionA.getRegionInfo(), regionB.getRegionInfo());
-      return regions;
-    }
-  }
-  
-  protected void prepareToSplit() {
-    // nothing
-  }
-  
-  /*
-   * @param dir
-   * @return compaction directory for the passed in <code>dir</code>
-   */
-  static Path getCompactionDir(final Path dir) {
-   return new Path(dir, HREGION_COMPACTIONDIR_NAME);
-  }
-
-  /*
-   * Do preparation for pending compaction.
-   * Clean out any vestiges of previous failed compactions.
-   * @throws IOException
-   */
-  private void doRegionCompactionPrep() throws IOException {
-    doRegionCompactionCleanup();
-  }
-  
-  /*
-   * Removes the compaction directory for this Store.
-   * @throws IOException
-   */
-  private void doRegionCompactionCleanup() throws IOException {
-    FSUtils.deleteDirectory(this.fs, this.regionCompactionDir);
-  }
-
-  void setForceMajorCompaction(final boolean b) {
-    this.forceMajorCompaction = b;
-  }
-
-  boolean getForceMajorCompaction() {
-    return this.forceMajorCompaction;
-  }
-
-  /**
-   * Called by compaction thread and after region is opened to compact the
-   * HStores if necessary.
-   *
-   * <p>This operation could block for a long time, so don't call it from a 
-   * time-sensitive thread.
-   *
-   * Note that no locking is necessary at this level because compaction only
-   * conflicts with a region split, and that cannot happen because the region
-   * server does them sequentially and not in parallel.
-   * 
-   * @return mid key if split is needed
-   * @throws IOException
-   */
-  public byte [] compactStores() throws IOException {
-    boolean majorCompaction = this.forceMajorCompaction;
-    this.forceMajorCompaction = false;
-    return compactStores(majorCompaction);
-  }
-
-  /*
-   * Called by compaction thread and after region is opened to compact the
-   * HStores if necessary.
-   *
-   * <p>This operation could block for a long time, so don't call it from a 
-   * time-sensitive thread.
-   *
-   * Note that no locking is necessary at this level because compaction only
-   * conflicts with a region split, and that cannot happen because the region
-   * server does them sequentially and not in parallel.
-   * 
-   * @param majorCompaction True to force a major compaction regardless of thresholds
-   * @return split row if split is needed
-   * @throws IOException
-   */
-  byte [] compactStores(final boolean majorCompaction)
-  throws IOException {
-    if (this.closing.get() || this.closed.get()) {
-      LOG.debug("Skipping compaction on " + this + " because closing/closed");
-      return null;
-    }
-    splitsAndClosesLock.readLock().lock();
-    try {
-      byte [] splitRow = null;
-      if (this.closed.get()) {
-        return splitRow;
-      }
-      try {
-        synchronized (writestate) {
-          if (!writestate.compacting && writestate.writesEnabled) {
-            writestate.compacting = true;
-          } else {
-            LOG.info("NOT compacting region " + this +
-                ": compacting=" + writestate.compacting + ", writesEnabled=" +
-                writestate.writesEnabled);
-              return splitRow;
-          }
-        }
-        LOG.info("Starting" + (majorCompaction? " major " : " ") + 
-            "compaction on region " + this);
-        long startTime = System.currentTimeMillis();
-        doRegionCompactionPrep();
-        long maxSize = -1;
-        for (Store store: stores.values()) {
-          final Store.StoreSize ss = store.compact(majorCompaction);
-          if (ss != null && ss.getSize() > maxSize) {
-            maxSize = ss.getSize();
-            splitRow = ss.getSplitRow();
-          }
-        }
-        doRegionCompactionCleanup();
-        String timeTaken = StringUtils.formatTimeDiff(System.currentTimeMillis(), 
-            startTime);
-        LOG.info("compaction completed on region " + this + " in " + timeTaken);
-        this.historian.addRegionCompaction(regionInfo, timeTaken);
-      } finally {
-        synchronized (writestate) {
-          writestate.compacting = false;
-          writestate.notifyAll();
-        }
-      }
-      return splitRow;
-    } finally {
-      splitsAndClosesLock.readLock().unlock();
-    }
-  }
-
-  /**
-   * Flush the cache.
-   * 
-   * When this method is called the cache will be flushed unless:
-   * <ol>
-   *   <li>the cache is empty</li>
-   *   <li>the region is closed.</li>
-   *   <li>a flush is already in progress</li>
-   *   <li>writes are disabled</li>
-   * </ol>
-   *
-   * <p>This method may block for some time, so it should not be called from a 
-   * time-sensitive thread.
-   * 
-   * @return true if cache was flushed
-   * 
-   * @throws IOException
-   * @throws DroppedSnapshotException Thrown when replay of hlog is required
-   * because a Snapshot was not properly persisted.
-   */
-  public boolean flushcache() throws IOException {
-    if (this.closed.get()) {
-      return false;
-    }
-    synchronized (writestate) {
-      if (!writestate.flushing && writestate.writesEnabled) {
-        this.writestate.flushing = true;
-      } else {
-        if(LOG.isDebugEnabled()) {
-          LOG.debug("NOT flushing memstore for region " + this +
-            ", flushing=" +
-              writestate.flushing + ", writesEnabled=" +
-              writestate.writesEnabled);
-        }
-        return false;  
-      }
-    }
-    try {
-      // Prevent splits and closes
-      splitsAndClosesLock.readLock().lock();
-      try {
-        return internalFlushcache();
-      } finally {
-        splitsAndClosesLock.readLock().unlock();
-      }
-    } finally {
-      synchronized (writestate) {
-        writestate.flushing = false;
-        this.writestate.flushRequested = false;
-        writestate.notifyAll();
-      }
-    }
-  }
-
-  /**
-   * Flushing the cache is a little tricky. We have a lot of updates in the
-   * memstore, all of which have also been written to the log. We need to
-   * write those updates in the memstore out to disk, while being able to
-   * process reads/writes as much as possible during the flush operation. Also,
-   * the log has to state clearly the point in time at which the memstore was
-   * flushed. (That way, during recovery, we know when we can rely on the
-   * on-disk flushed structures and when we have to recover the memstore from
-   * the log.)
-   * 
-   * <p>So, we have a three-step process:
-   * 
-   * <ul><li>A. Flush the memstore to the on-disk stores, noting the current
-   * sequence ID for the log.<li>
-   * 
-   * <li>B. Write a FLUSHCACHE-COMPLETE message to the log, using the sequence
-   * ID that was current at the time of memstore-flush.</li>
-   * 
-   * <li>C. Get rid of the memstore structures that are now redundant, as
-   * they've been flushed to the on-disk HStores.</li>
-   * </ul>
-   * <p>This method is protected, but can be accessed via several public
-   * routes.
-   * 
-   * <p> This method may block for some time.
-   * 
-   * @return true if the region needs compacting
-   * 
-   * @throws IOException
-   * @throws DroppedSnapshotException Thrown when replay of hlog is required
-   * because a Snapshot was not properly persisted.
-   */
-  private boolean internalFlushcache() throws IOException {
-    final long startTime = System.currentTimeMillis();
-    // Clear flush flag.
-    // Record latest flush time
-    this.lastFlushTime = startTime;
-    // If nothing to flush, return and avoid logging start/stop flush.
-    if (this.memstoreSize.get() <= 0) {
-      return false;
-    }
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Started memstore flush for region " + this +
-        ". Current region memstore size " +
-          StringUtils.humanReadableInt(this.memstoreSize.get()));
-    }
-
-    // Stop updates while we snapshot the memstore of all stores. We only have
-    // to do this for a moment.  Its quick.  The subsequent sequence id that
-    // goes into the HLog after we've flushed all these snapshots also goes
-    // into the info file that sits beside the flushed files.
-    // We also set the memstore size to zero here before we allow updates
-    // again so its value will represent the size of the updates received
-    // during the flush
-    long sequenceId = -1L;
-    long completeSequenceId = -1L;
-    this.updatesLock.writeLock().lock();
-    // Get current size of memstores.
-    final long currentMemStoreSize = this.memstoreSize.get();
-    try {
-      for (Store s: stores.values()) {
-        s.snapshot();
-      }
-      sequenceId = log.startCacheFlush();
-      completeSequenceId = this.getCompleteCacheFlushSequenceId(sequenceId);
-    } finally {
-      this.updatesLock.writeLock().unlock();
-    }
-
-    // Any failure from here on out will be catastrophic requiring server
-    // restart so hlog content can be replayed and put back into the memstore.
-    // Otherwise, the snapshot content while backed up in the hlog, it will not
-    // be part of the current running servers state.
-    boolean compactionRequested = false;
-    try {
-      // A.  Flush memstore to all the HStores.
-      // Keep running vector of all store files that includes both old and the
-      // just-made new flush store file.
-      for (Store hstore: stores.values()) {
-        boolean needsCompaction = hstore.flushCache(completeSequenceId);
-        if (needsCompaction) {
-          compactionRequested = true;
-        }
-      }
-      // Set down the memstore size by amount of flush.
-      this.memstoreSize.addAndGet(-currentMemStoreSize);
-    } catch (Throwable t) {
-      // An exception here means that the snapshot was not persisted.
-      // The hlog needs to be replayed so its content is restored to memstore.
-      // Currently, only a server restart will do this.
-      // We used to only catch IOEs but its possible that we'd get other
-      // exceptions -- e.g. HBASE-659 was about an NPE -- so now we catch
-      // all and sundry.
-      this.log.abortCacheFlush();
-      DroppedSnapshotException dse = new DroppedSnapshotException("region: " +
-          Bytes.toStringBinary(getRegionName()));
-      dse.initCause(t);
-      throw dse;
-    }
-
-    // If we get to here, the HStores have been written. If we get an
-    // error in completeCacheFlush it will release the lock it is holding
-
-    // B.  Write a FLUSHCACHE-COMPLETE message to the log.
-    //     This tells future readers that the HStores were emitted correctly,
-    //     and that all updates to the log for this regionName that have lower 
-    //     log-sequence-ids can be safely ignored.
-    this.log.completeCacheFlush(getRegionName(),
-        regionInfo.getTableDesc().getName(), completeSequenceId);
-
-    // C. Finally notify anyone waiting on memstore to clear:
-    // e.g. checkResources().
-    synchronized (this) {
-      notifyAll();
-    }
-    
-    if (LOG.isDebugEnabled()) {
-      long now = System.currentTimeMillis();
-      String timeTaken = StringUtils.formatTimeDiff(now, startTime);
-      LOG.debug("Finished memstore flush of ~" +
-        StringUtils.humanReadableInt(currentMemStoreSize) + " for region " +
-        this + " in " + (now - startTime) + "ms, sequence id=" + sequenceId +
-        ", compaction requested=" + compactionRequested);
-      if (!regionInfo.isMetaRegion()) {
-        this.historian.addRegionFlush(regionInfo, timeTaken);
-      }
-    }
-    return compactionRequested;
-  }
-  
-  /**
-   * Get the sequence number to be associated with this cache flush. Used by
-   * TransactionalRegion to not complete pending transactions.
-   * 
-   * 
-   * @param currentSequenceId
-   * @return sequence id to complete the cache flush with
-   */ 
-  protected long getCompleteCacheFlushSequenceId(long currentSequenceId) {
-    return currentSequenceId;
-  }
-  
-  //////////////////////////////////////////////////////////////////////////////
-  // get() methods for client use.
-  //////////////////////////////////////////////////////////////////////////////
-  /**
-   * Return all the data for the row that matches <i>row</i> exactly, 
-   * or the one that immediately preceeds it, at or immediately before 
-   * <i>ts</i>.
-   * 
-   * @param row row key
-   * @return map of values
-   * @throws IOException
-   */
-  Result getClosestRowBefore(final byte [] row)
-  throws IOException{
-    return getClosestRowBefore(row, HConstants.CATALOG_FAMILY);
-  }
-
-  /**
-   * Return all the data for the row that matches <i>row</i> exactly, 
-   * or the one that immediately preceeds it, at or immediately before 
-   * <i>ts</i>.
-   * 
-   * @param row row key
-   * @param family
-   * @return map of values
-   * @throws IOException
-   */
-  public Result getClosestRowBefore(final byte [] row,
-    final byte [] family)
-  throws IOException{
-    // look across all the HStores for this region and determine what the
-    // closest key is across all column families, since the data may be sparse
-    KeyValue key = null;
-    checkRow(row);
-    splitsAndClosesLock.readLock().lock();
-    try {
-      Store store = getStore(family);
-      KeyValue kv = new KeyValue(row, HConstants.LATEST_TIMESTAMP);
-      // get the closest key. (HStore.getRowKeyAtOrBefore can return null)
-      key = store.getRowKeyAtOrBefore(kv);
-      if (key == null) {
-        return null;
-      }
-      List<KeyValue> results = new ArrayList<KeyValue>();
-      // This will get all results for this store.  TODO: Do I have to make a
-      // new key?
-      if (!this.comparator.matchingRows(kv, key)) {
-        kv = new KeyValue(key.getRow(), HConstants.LATEST_TIMESTAMP);
-      }
-      Get get = new Get(key.getRow());
-      store.get(get, null, results);
-      
-      return new Result(results);
-    } finally {
-      splitsAndClosesLock.readLock().unlock();
-    }
-  }
-
-  //TODO
-  /**
-   * Return an iterator that scans over the HRegion, returning the indicated 
-   * columns and rows specified by the {@link Scan}.
-   * <p>
-   * This Iterator must be closed by the caller.
-   *
-   * @param scan configured {@link Scan}
-   * @return InternalScanner
-   * @throws IOException
-   */
-  public InternalScanner getScanner(Scan scan)
-  throws IOException {
-   return getScanner(scan, null);
-  }
-  
-  protected InternalScanner getScanner(Scan scan, List<KeyValueScanner> additionalScanners) throws IOException {
-    newScannerLock.readLock().lock();
-    try {
-      if (this.closed.get()) {
-        throw new IOException("Region " + this + " closed");
-      }
-      // Verify families are all valid
-      if(scan.hasFamilies()) {
-        for(byte [] family : scan.getFamilyMap().keySet()) {
-          checkFamily(family);
-        }
-      } else { // Adding all families to scanner
-        for(byte[] family: regionInfo.getTableDesc().getFamiliesKeys()){
-          scan.addFamily(family);
-        }
-      }
-      return new RegionScanner(scan, additionalScanners);
-      
-    } finally {
-      newScannerLock.readLock().unlock();
-    }
-  }
-
-  //////////////////////////////////////////////////////////////////////////////
-  // set() methods for client use.
-  //////////////////////////////////////////////////////////////////////////////
-  /**
-   * @param delete
-   * @param lockid
-   * @param writeToWAL
-   * @throws IOException
-   */
-  public void delete(Delete delete, Integer lockid, boolean writeToWAL)
-  throws IOException {
-    checkReadOnly();
-    checkResources();
-    splitsAndClosesLock.readLock().lock();
-    Integer lid = null;
-    try {
-      byte [] row = delete.getRow();
-      // If we did not pass an existing row lock, obtain a new one
-      lid = getLock(lockid, row);
-
-      //Check to see if this is a deleteRow insert
-      if(delete.getFamilyMap().isEmpty()){
-        for(byte [] family : regionInfo.getTableDesc().getFamiliesKeys()){
-          delete.deleteFamily(family);
-        }
-      } else {
-        for(byte [] family : delete.getFamilyMap().keySet()) {
-          if(family == null) {
-            throw new NoSuchColumnFamilyException("Empty family is invalid");
-          }
-          checkFamily(family);
-        }
-      }
-      
-      for(Map.Entry<byte[], List<KeyValue>> e: delete.getFamilyMap().entrySet()) {
-        byte [] family = e.getKey();
-        delete(family, e.getValue(), writeToWAL);
-      }
-    } finally {
-      if(lockid == null) releaseRowLock(lid);
-      splitsAndClosesLock.readLock().unlock();
-    }
-  }
-  
-  
-  /**
-   * @param family
-   * @param kvs
-   * @param writeToWAL
-   * @throws IOException
-   */
-  public void delete(byte [] family, List<KeyValue> kvs, boolean writeToWAL)
-  throws IOException {
-    long now = System.currentTimeMillis();
-    byte [] byteNow = Bytes.toBytes(now);
-    boolean flush = false;
-    this.updatesLock.readLock().lock();
-
-    try {
-      if (writeToWAL) {
-        this.log.append(regionInfo.getRegionName(),
-          regionInfo.getTableDesc().getName(), kvs,
-          (regionInfo.isMetaRegion() || regionInfo.isRootRegion()), now);
-      }
-      long size = 0;
-      Store store = getStore(family);
-      for (KeyValue kv: kvs) {
-        // Check if time is LATEST, change to time of most recent addition if so
-        // This is expensive.
-        if (kv.isLatestTimestamp() && kv.isDeleteType()) {
-          List<KeyValue> result = new ArrayList<KeyValue>(1);
-          Get g = new Get(kv.getRow());
-          NavigableSet<byte []> qualifiers =
-            new TreeSet<byte []>(Bytes.BYTES_COMPARATOR);
-          qualifiers.add(kv.getQualifier());
-          get(store, g, qualifiers, result);
-          if (result.isEmpty()) {
-            // Nothing to delete
-            continue;
-          }
-          if (result.size() > 1) {
-            throw new RuntimeException("Unexpected size: " + result.size());
-          }
-          KeyValue getkv = result.get(0);
-          Bytes.putBytes(kv.getBuffer(), kv.getTimestampOffset(),
-            getkv.getBuffer(), getkv.getTimestampOffset(), Bytes.SIZEOF_LONG);
-        } else {
-          kv.updateLatestStamp(byteNow);
-        }
-
-        size = this.memstoreSize.addAndGet(store.delete(kv));
-      }
-      flush = isFlushSize(size);
-    } finally {
-      this.updatesLock.readLock().unlock();
-    }
-    if (flush) {
-      // Request a cache flush.  Do it outside update lock.
-      requestFlush();
-    }
-  }
-  
-  /**
-   * @param put
-   * @throws IOException
-   */
-  public void put(Put put) throws IOException {
-    this.put(put, null, put.writeToWAL());
-  }
-  
-  /**
-   * @param put
-   * @param writeToWAL
-   * @throws IOException
-   */
-  public void put(Put put, boolean writeToWAL) throws IOException {
-    this.put(put, null, writeToWAL);
-  }
-
-  /**
-   * @param put
-   * @param lockid
-   * @throws IOException
-   */
-  public void put(Put put, Integer lockid) throws IOException {
-    this.put(put, lockid, put.writeToWAL());
-  }
-
-  /**
-   * @param put
-   * @param lockid
-   * @param writeToWAL
-   * @throws IOException
-   */
-  public void put(Put put, Integer lockid, boolean writeToWAL)
-  throws IOException {
-    checkReadOnly();
-//    validateValuesLength(put);
-
-    // Do a rough check that we have resources to accept a write.  The check is
-    // 'rough' in that between the resource check and the call to obtain a 
-    // read lock, resources may run out.  For now, the thought is that this
-    // will be extremely rare; we'll deal with it when it happens.
-    checkResources();
-    splitsAndClosesLock.readLock().lock();
-    try {
-      // We obtain a per-row lock, so other clients will block while one client
-      // performs an update. The read lock is released by the client calling
-      // #commit or #abort or if the HRegionServer lease on the lock expires.
-      // See HRegionServer#RegionListener for how the expire on HRegionServer
-      // invokes a HRegion#abort.
-      byte [] row = put.getRow();
-      // If we did not pass an existing row lock, obtain a new one
-      Integer lid = getLock(lockid, row);
-      byte [] now = Bytes.toBytes(System.currentTimeMillis());
-      try {
-        for (Map.Entry<byte[], List<KeyValue>> entry : 
-            put.getFamilyMap().entrySet()) {
-          byte [] family = entry.getKey();
-          checkFamily(family);
-          List<KeyValue> puts = entry.getValue();
-          if (updateKeys(puts, now)) {
-            put(family, puts, writeToWAL);
-          }
-        }
-      } finally {
-        if(lockid == null) releaseRowLock(lid);
-      }
-    } finally {
-      splitsAndClosesLock.readLock().unlock();
-    }
-  }
-
-  
-  //TODO, Think that gets/puts and deletes should be refactored a bit so that 
-  //the getting of the lock happens before, so that you would just pass it into
-  //the methods. So in the case of checkAndPut you could just do lockRow, 
-  //get, put, unlockRow or something
-  /**
-   * 
-   * @param row
-   * @param family
-   * @param qualifier
-   * @param expectedValue
-   * @param put
-   * @param lockId
-   * @param writeToWAL
-   * @throws IOException
-   * @return true if the new put was execute, false otherwise
-   */
-  public boolean checkAndPut(byte [] row, byte [] family, byte [] qualifier,
-      byte [] expectedValue, Put put, Integer lockId, boolean writeToWAL) 
-  throws IOException{
-    checkReadOnly();
-    //TODO, add check for value length or maybe even better move this to the 
-    //client if this becomes a global setting
-    checkResources();
-    splitsAndClosesLock.readLock().lock();
-    try {
-      Get get = new Get(row, put.getRowLock());
-      checkFamily(family);
-      get.addColumn(family, qualifier);
-
-      byte [] now = Bytes.toBytes(System.currentTimeMillis());
-
-      // Lock row
-      Integer lid = getLock(lockId, get.getRow()); 
-      List<KeyValue> result = new ArrayList<KeyValue>();
-      try {
-        //Getting data
-        for(Map.Entry<byte[],NavigableSet<byte[]>> entry:
-          get.getFamilyMap().entrySet()) {
-          get(this.stores.get(entry.getKey()), get, entry.getValue(), result);
-        }
-        boolean matches = false;
-        if (result.size() == 0 && expectedValue.length == 0) {
-          matches = true;
-        } else if(result.size() == 1) {
-          //Compare the expected value with the actual value
-          byte [] actualValue = result.get(0).getValue();
-          matches = Bytes.equals(expectedValue, actualValue);
-        }
-        //If matches put the new put
-        if(matches) {
-          for(Map.Entry<byte[], List<KeyValue>> entry :
-            put.getFamilyMap().entrySet()) {
-            byte [] fam = entry.getKey();
-            checkFamily(fam);
-            List<KeyValue> puts = entry.getValue();
-            if(updateKeys(puts, now)) {
-              put(fam, puts, writeToWAL);
+        Properties properties = new Properties();
+        for (Entry<Object, Object> entry : this.properties.entrySet()) {
+            if (propertyKeys == null || propertyKeys.contains(entry.getKey())) {
+                properties.put(entry.getKey(), sub.replace((String) entry.getValue()));
             }
-          }
-          return true;  
         }
-        return false;
-      } finally {
-        if(lockId == null) releaseRowLock(lid);
-      }
-    } finally {
-      splitsAndClosesLock.readLock().unlock();
-    }    
-  }
-      
-  
-  /**
-   * Checks if any stamps are > now.  If so, sets them to now.
-   * <p>
-   * This acts to be prevent users from inserting future stamps as well as
-   * to replace LATEST_TIMESTAMP with now.
-   * @param keys
-   * @param now
-   * @return <code>true</code> when updating the time stamp completed.
-   */
-  private boolean updateKeys(List<KeyValue> keys, byte [] now) {
-    if(keys == null || keys.isEmpty()) {
-      return false;
-    }
-    for(KeyValue key : keys) {
-      key.updateLatestStamp(now);
-    }
-    return true;
-  }
-  
-
-//  /*
-//   * Utility method to verify values length. 
-//   * @param batchUpdate The update to verify
-//   * @throws IOException Thrown if a value is too long
-//   */
-//  private void validateValuesLength(Put put)
-//  throws IOException {
-//    Map<byte[], List<KeyValue>> families = put.getFamilyMap();
-//    for(Map.Entry<byte[], List<KeyValue>> entry : families.entrySet()) {
-//      HColumnDescriptor hcd = 
-//        this.regionInfo.getTableDesc().getFamily(entry.getKey());
-//      int maxLen = hcd.getMaxValueLength();
-//      for(KeyValue kv : entry.getValue()) {
-//        if(kv.getValueLength() > maxLen) {
-//          throw new ValueOverMaxLengthException("Value in column "
-//            + Bytes.toString(kv.getColumn()) + " is too long. "
-//            + kv.getValueLength() + " > " + maxLen);
-//        }
-//      }
-//    }
-//  }
-
-  /*
-   * Check if resources to support an update.
-   * 
-   * Here we synchronize on HRegion, a broad scoped lock.  Its appropriate
-   * given we're figuring in here whether this region is able to take on
-   * writes.  This is only method with a synchronize (at time of writing),
-   * this and the synchronize on 'this' inside in internalFlushCache to send
-   * the notify.
-   */
-  private void checkResources() {
-    boolean blocked = false;
-    while (this.memstoreSize.get() > this.blockingMemStoreSize) {
-      requestFlush();
-      if (!blocked) {
-        LOG.info("Blocking updates for '" + Thread.currentThread().getName() +
-          "' on region " + Bytes.toStringBinary(getRegionName()) +
-          ": memstore size " +
-          StringUtils.humanReadableInt(this.memstoreSize.get()) +
-          " is >= than blocking " +
-          StringUtils.humanReadableInt(this.blockingMemStoreSize) + " size");
-      }
-      blocked = true;
-      synchronized(this) {
-        try {
-          wait(threadWakeFrequency);
-        } catch (InterruptedException e) {
-          // continue;
-        }
-      }
-    }
-    if (blocked) {
-      LOG.info("Unblocking updates for region " + this + " '"
-          + Thread.currentThread().getName() + "'");
-    }
-  }
-
-  /**
-   * @throws IOException Throws exception if region is in read-only mode.
-   */
-  protected void checkReadOnly() throws IOException {
-    if (this.writestate.isReadOnly()) {
-      throw new IOException("region is read only");
-    }
-  }
-
-  /** 
-   * Add updates first to the hlog and then add values to memstore.
-   * Warning: Assumption is caller has lock on passed in row.
-   * @param edits Cell updates by column
-   * @praram now
-   * @throws IOException
-   */
-  private void put(final byte [] family, final List<KeyValue> edits)
-  throws IOException {
-    this.put(family, edits, true);
-  }
-
-  /** 
-   * Add updates first to the hlog (if writeToWal) and then add values to memstore.
-   * Warning: Assumption is caller has lock on passed in row.
-   * @param family
-   * @param edits
-   * @param writeToWAL if true, then we should write to the log
-   * @throws IOException
-   */
-  private void put(final byte [] family, final List<KeyValue> edits, 
-      boolean writeToWAL) throws IOException {
-    if (edits == null || edits.isEmpty()) {
-      return;
-    }
-    boolean flush = false;
-    this.updatesLock.readLock().lock();
-    try {
-      if (writeToWAL) {
-        long now = System.currentTimeMillis();
-        this.log.append(regionInfo.getRegionName(),
-          regionInfo.getTableDesc().getName(), edits,
-          (regionInfo.isMetaRegion() || regionInfo.isRootRegion()), now);
-      }
-      long size = 0;
-      Store store = getStore(family);
-      for (KeyValue kv: edits) {
-        size = this.memstoreSize.addAndGet(store.add(kv));
-      }
-      flush = isFlushSize(size);
-    } finally {
-      this.updatesLock.readLock().unlock();
-    }
-    if (flush) {
-      // Request a cache flush.  Do it outside update lock.
-      requestFlush();
-    }
-  }
-
-  private void requestFlush() {
-    if (this.flushListener == null) {
-      return;
-    }
-    synchronized (writestate) {
-      if (this.writestate.isFlushRequested()) {
-        return;
-      }
-      writestate.flushRequested = true;
-    }
-    // Make request outside of synchronize block; HBASE-818.
-    this.flushListener.request(this);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Flush requested on " + this);
-    }
-  }
-
-  /*
-   * @param size
-   * @return True if size is over the flush threshold
-   */
-  private boolean isFlushSize(final long size) {
-    return size > this.memstoreFlushSize;
-  }
-
-  // Do any reconstruction needed from the log
-  protected void doReconstructionLog(Path oldLogFile, long minSeqId, long maxSeqId,
-    Progressable reporter)
-  throws UnsupportedEncodingException, IOException {
-    // Nothing to do (Replaying is done in HStores)
-    // Used by subclasses; e.g. THBase.
-  }
-
-  protected Store instantiateHStore(Path baseDir, 
-    HColumnDescriptor c, Path oldLogFile, Progressable reporter)
-  throws IOException {
-    return new Store(baseDir, this.regionInfo, c, this.fs, oldLogFile,
-      this.conf, reporter);
-  }
-
-  /**
-   * Return HStore instance.
-   * Use with caution.  Exposed for use of fixup utilities.
-   * @param column Name of column family hosted by this region.
-   * @return Store that goes with the family on passed <code>column</code>.
-   * TODO: Make this lookup faster.
-   */
-  public Store getStore(final byte [] column) {
-    return this.stores.get(column); 
-  }
-
-  //////////////////////////////////////////////////////////////////////////////
-  // Support code
-  //////////////////////////////////////////////////////////////////////////////
-
-  /** Make sure this is a valid row for the HRegion */
-  private void checkRow(final byte [] row) throws IOException {
-    if(!rowIsInRange(regionInfo, row)) {
-      throw new WrongRegionException("Requested row out of range for " +
-          "HRegion " + this + ", startKey='" +
-          Bytes.toStringBinary(regionInfo.getStartKey()) + "', getEndKey()='" +
-          Bytes.toStringBinary(regionInfo.getEndKey()) + "', row='" +
-          Bytes.toStringBinary(row) + "'");
-    }
-  }
-
-  /**
-   * Obtain a lock on the given row.  Blocks until success.
-   *
-   * I know it's strange to have two mappings:
-   * <pre>
-   *   ROWS  ==> LOCKS
-   * </pre>
-   * as well as
-   * <pre>
-   *   LOCKS ==> ROWS
-   * </pre>
-   *
-   * But it acts as a guard on the client; a miswritten client just can't
-   * submit the name of a row and start writing to it; it must know the correct
-   * lockid, which matches the lock list in memory.
-   * 
-   * <p>It would be more memory-efficient to assume a correctly-written client, 
-   * which maybe we'll do in the future.
-   * 
-   * @param row Name of row to lock.
-   * @throws IOException
-   * @return The id of the held lock.
-   */
-  public Integer obtainRowLock(final byte [] row) throws IOException {
-    checkRow(row);
-    splitsAndClosesLock.readLock().lock();
-    try {
-      if (this.closed.get()) {
-        throw new NotServingRegionException("Region " + this + " closed");
-      }
-      Integer key = Bytes.mapKey(row);
-      synchronized (locksToRows) {
-        while (locksToRows.containsKey(key)) {
-          try {
-            locksToRows.wait();
-          } catch (InterruptedException ie) {
-            // Empty
-          }
-        }
-        locksToRows.put(key, row);
-        locksToRows.notifyAll();
-        return key;
-      }
-    } finally {
-      splitsAndClosesLock.readLock().unlock();
-    }
-  }
-  
-  /**
-   * Used by unit tests.
-   * @param lockid
-   * @return Row that goes with <code>lockid</code>
-   */
-  byte [] getRowFromLock(final Integer lockid) {
-    return locksToRows.get(lockid);
-  }
-  
-  /** 
-   * Release the row lock!
-   * @param lockid  The lock ID to release.
-   */
-  void releaseRowLock(final Integer lockid) {
-    synchronized (locksToRows) {
-      locksToRows.remove(lockid);
-      locksToRows.notifyAll();
-    }
-  }
-  
-  /**
-   * See if row is currently locked.
-   * @param lockid
-   * @return boolean
-   */
-  private boolean isRowLocked(final Integer lockid) {
-    synchronized (locksToRows) {
-      if(locksToRows.containsKey(lockid)) {
-        return true;
-      }
-      return false;
-    }
-  }
-  
-  /**
-   * Returns existing row lock if found, otherwise
-   * obtains a new row lock and returns it.
-   * @param lockid
-   * @return lockid
-   */
-  private Integer getLock(Integer lockid, byte [] row) 
-  throws IOException {
-    Integer lid = null;
-    if (lockid == null) {
-      lid = obtainRowLock(row);
-    } else {
-      if (!isRowLocked(lockid)) {
-        throw new IOException("Invalid row lock");
-      }
-      lid = lockid;
-    }
-    return lid;
-  }
-  
-  private void waitOnRowLocks() {
-    synchronized (locksToRows) {
-      while (this.locksToRows.size() > 0) {
-        LOG.debug("waiting for " + this.locksToRows.size() + " row locks");
-        try {
-          this.locksToRows.wait();
-        } catch (InterruptedException e) {
-          // Catch. Let while test determine loop-end.
-        }
-      }
-    }
-  }
-  
-  @Override
-  public boolean equals(Object o) {
-    return this.hashCode() == ((HRegion)o).hashCode();
-  }
-  
-  @Override
-  public int hashCode() {
-    return this.regionInfo.getRegionName().hashCode();
-  }
-  
-  @Override
-  public String toString() {
-    return this.regionInfo.getRegionNameAsString();
-  }
-
-  /** @return Path of region base directory */
-  public Path getBaseDir() {
-    return this.basedir;
-  }
-
-  /**
-   * RegionScanner is an iterator through a bunch of rows in an HRegion.
-   * <p>
-   * It is used to combine scanners from multiple Stores (aka column families).
-   */
-  class RegionScanner implements InternalScanner {
-    private final KeyValueHeap storeHeap;
-    private final byte [] stopRow;
-
-    RegionScanner(Scan scan, List<KeyValueScanner> additionalScanners) {
-      if (Bytes.equals(scan.getStopRow(), HConstants.EMPTY_END_ROW)) {
-        this.stopRow = null;
-      } else {
-        this.stopRow = scan.getStopRow();
-      }
-      
-      List<KeyValueScanner> scanners = new ArrayList<KeyValueScanner>();
-      if (additionalScanners != null) {
-        scanners.addAll(additionalScanners);
-      }
-      for (Map.Entry<byte[], NavigableSet<byte[]>> entry : 
-          scan.getFamilyMap().entrySet()) {
-        Store store = stores.get(entry.getKey());
-        scanners.add(store.getScanner(scan, entry.getValue()));
-      }
-      this.storeHeap = 
-        new KeyValueHeap(scanners.toArray(new KeyValueScanner[0]), comparator);
-    }
-    
-    RegionScanner(Scan scan) {
-      this(scan, null);
+        return properties;
     }
 
-    /**
-     * Get the next row of results from this region.
-     * @param results list to append results to
-     * @return true if there are more rows, false if scanner is done
-     * @throws NotServerRegionException If this region is closing or closed
-     */
-    public boolean next(List<KeyValue> results)
-    throws IOException {
-      if (closing.get() || closed.get()) {
-        close();
-        throw new NotServingRegionException(regionInfo.getRegionNameAsString() +
-          " is closing=" + closing.get() + " or closed=" + closed.get());
-      }
-      // This method should probably be reorganized a bit... has gotten messy
-      KeyValue kv = this.storeHeap.peek();
-      if (kv == null) {
-        return false;
-      }
-      byte [] currentRow = kv.getRow();
-      // See if we passed stopRow
-      if (stopRow != null &&
-        comparator.compareRows(stopRow, 0, stopRow.length,
-          currentRow, 0, currentRow.length) <= 0) {
-        return false;
-      }
-      this.storeHeap.next(results);
-      while(true) {
-        kv = this.storeHeap.peek();
-        if (kv == null) {
-          return false;
-        }
-        byte [] row = kv.getRow();
-        if(!Bytes.equals(currentRow, row)) {
-          // Next row:
+    protected Properties getRawAllProperties() {
+        return properties;
 
-          // what happens if there are _no_ results:
-          if (results.isEmpty()) {
-            // Continue on the next row:
-            currentRow = row;
+    }
 
-            // But did we pass the stop row?
-            if (stopRow != null &&
-                comparator.compareRows(stopRow, 0, stopRow.length,
-                    currentRow, 0, currentRow.length) <= 0) {
-              return false;
+    final protected Map<String, String> getPropertiesByPrefix(String prefix) {
+        Map<String, String> result = Maps.newLinkedHashMap();
+        for (Entry<Object, Object> entry : getAllProperties().entrySet()) {
+            String key = (String) entry.getKey();
+            if (key.startsWith(prefix)) {
+                result.put(key.substring(prefix.length()), (String) entry.getValue());
             }
-            continue;
-          }
-          return true;
         }
-        this.storeHeap.next(results);
-      }
+        return result;
     }
 
-    public void close() {
-      storeHeap.close();
-    }
-
-    /**
-     * 
-     * @param scanner to be closed
-     */
-    public void close(KeyValueScanner scanner) {
-      try {
-        scanner.close();
-      } catch(NullPointerException npe) {}
-    }
-    
-    /**
-     * @return the current storeHeap
-     */
-    public KeyValueHeap getStoreHeap() {
-      return this.storeHeap;
-    }
-  }
-  
-  // Utility methods
-
-  /**
-   * Convenience method creating new HRegions. Used by createTable and by the
-   * bootstrap code in the HMaster constructor.
-   * Note, this method creates an {@link HLog} for the created region. It
-   * needs to be closed explicitly.  Use {@link HRegion#getLog()} to get
-   * access.
-   * @param info Info for region to create.
-   * @param rootDir Root directory for HBase instance
-   * @param conf
-   * @return new HRegion
-   * 
-   * @throws IOException
-   */
-  public static HRegion createHRegion(final HRegionInfo info, final Path rootDir,
-    final HBaseConfiguration conf)
-  throws IOException {
-    Path tableDir =
-      HTableDescriptor.getTableDir(rootDir, info.getTableDesc().getName());
-    Path regionDir = HRegion.getRegionDir(tableDir, info.getEncodedName());
-    FileSystem fs = FileSystem.get(conf);
-    fs.mkdirs(regionDir);
-    // Note in historian the creation of new region.
-    if (!info.isMetaRegion()) {
-      RegionHistorian.getInstance().addRegionCreation(info);
-    }
-    HRegion region = new HRegion(tableDir,
-      new HLog(fs, new Path(regionDir, HREGION_LOGDIR_NAME), conf, null),
-      fs, conf, info, null);
-    region.initialize(null, null);
-    return region;
-  }
-  
-  /**
-   * Convenience method to open a HRegion outside of an HRegionServer context.
-   * @param info Info for region to be opened.
-   * @param rootDir Root directory for HBase instance
-   * @param log HLog for region to use. This method will call
-   * HLog#setSequenceNumber(long) passing the result of the call to
-   * HRegion#getMinSequenceId() to ensure the log id is properly kept
-   * up.  HRegionStore does this every time it opens a new region.
-   * @param conf
-   * @return new HRegion
-   * 
-   * @throws IOException
-   */
-  public static HRegion openHRegion(final HRegionInfo info, final Path rootDir,
-    final HLog log, final HBaseConfiguration conf)
-  throws IOException {
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Opening region: " + info);
-    }
-    if (info == null) {
-      throw new NullPointerException("Passed region info is null");
-    }
-    HRegion r = new HRegion(
-        HTableDescriptor.getTableDir(rootDir, info.getTableDesc().getName()),
-        log, FileSystem.get(conf), conf, info, null);
-    r.initialize(null, null);
-    if (log != null) {
-      log.setSequenceNumber(r.getMinSequenceId());
-    }
-    return r;
-  }
-  
-  /**
-   * Inserts a new region's meta information into the passed
-   * <code>meta</code> region. Used by the HMaster bootstrap code adding
-   * new table to ROOT table.
-   * 
-   * @param meta META HRegion to be updated
-   * @param r HRegion to add to <code>meta</code>
-   *
-   * @throws IOException
-   */
-  public static void addRegionToMETA(HRegion meta, HRegion r) 
-  throws IOException {
-    meta.checkResources();
-    // The row key is the region name
-    byte [] row = r.getRegionName();
-    Integer lid = meta.obtainRowLock(row);
-    try {
-      List<KeyValue> edits = new ArrayList<KeyValue>();
-      edits.add(new KeyValue(row, CATALOG_FAMILY, REGIONINFO_QUALIFIER,
-          System.currentTimeMillis(), Writables.getBytes(r.getRegionInfo())));
-      meta.put(HConstants.CATALOG_FAMILY, edits);
-    } finally {
-      meta.releaseRowLock(lid);
-    }
-  }
-
-  /**
-   * Delete a region's meta information from the passed
-   * <code>meta</code> region.  Removes content in the 'info' column family.
-   * Does not remove region historian info.
-   * 
-   * @param srvr META server to be updated
-   * @param metaRegionName Meta region name
-   * @param regionName HRegion to remove from <code>meta</code>
-   *
-   * @throws IOException
-   */
-  public static void removeRegionFromMETA(final HRegionInterface srvr,
-    final byte [] metaRegionName, final byte [] regionName)
-  throws IOException {
-    Delete delete = new Delete(regionName);
-    delete.deleteFamily(HConstants.CATALOG_FAMILY);
-    srvr.delete(metaRegionName, delete);
-  }
-
-  /**
-   * Utility method used by HMaster marking regions offlined.
-   * @param srvr META server to be updated
-   * @param metaRegionName Meta region name
-   * @param info HRegion to update in <code>meta</code>
-   *
-   * @throws IOException
-   */
-  public static void offlineRegionInMETA(final HRegionInterface srvr,
-    final byte [] metaRegionName, final HRegionInfo info)
-  throws IOException {
-    // Puts and Deletes used to be "atomic" here.  We can use row locks if
-    // we need to keep that property, or we can expand Puts and Deletes to
-    // allow them to be committed at once.
-    byte [] row = info.getRegionName();
-    Put put = new Put(row);
-    info.setOffline(true);
-    put.add(CATALOG_FAMILY, REGIONINFO_QUALIFIER, Writables.getBytes(info));
-    srvr.put(metaRegionName, put);
-    Delete del = new Delete(row);
-    del.deleteColumns(CATALOG_FAMILY, SERVER_QUALIFIER);
-    del.deleteColumns(CATALOG_FAMILY, STARTCODE_QUALIFIER);
-    srvr.delete(metaRegionName, del);
-  }
-  
-  /**
-   * Clean COL_SERVER and COL_STARTCODE for passed <code>info</code> in
-   * <code>.META.</code>
-   * @param srvr
-   * @param metaRegionName
-   * @param info
-   * @throws IOException
-   */
-  public static void cleanRegionInMETA(final HRegionInterface srvr,
-    final byte [] metaRegionName, final HRegionInfo info)
-  throws IOException {
-    Delete del = new Delete(info.getRegionName());
-    del.deleteColumns(CATALOG_FAMILY, SERVER_QUALIFIER);
-    del.deleteColumns(CATALOG_FAMILY, STARTCODE_QUALIFIER);
-    srvr.delete(metaRegionName, del);
-  }
-
-  /**
-   * Deletes all the files for a HRegion
-   * 
-   * @param fs the file system object
-   * @param rootdir qualified path of HBase root directory
-   * @param info HRegionInfo for region to be deleted
-   * @throws IOException
-   */
-  public static void deleteRegion(FileSystem fs, Path rootdir, HRegionInfo info)
-  throws IOException {
-    deleteRegion(fs, HRegion.getRegionDir(rootdir, info));
-  }
-
-  private static void deleteRegion(FileSystem fs, Path regiondir)
-  throws IOException {
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("DELETING region " + regiondir.toString());
-    }
-    if (!fs.delete(regiondir, true)) {
-      LOG.warn("Failed delete of " + regiondir);
-    }
-  }
-
-  /**
-   * Computes the Path of the HRegion
-   * 
-   * @param tabledir qualified path for table
-   * @param name ENCODED region name
-   * @return Path of HRegion directory
-   */
-  public static Path getRegionDir(final Path tabledir, final int name) {
-    return new Path(tabledir, Integer.toString(name));
-  }
-  
-  /**
-   * Computes the Path of the HRegion
-   * 
-   * @param rootdir qualified path of HBase root directory
-   * @param info HRegionInfo for the region
-   * @return qualified path of region directory
-   */
-  public static Path getRegionDir(final Path rootdir, final HRegionInfo info) {
-    return new Path(
-      HTableDescriptor.getTableDir(rootdir, info.getTableDesc().getName()),
-      Integer.toString(info.getEncodedName()));
-  }
-
-  /**
-   * Determines if the specified row is within the row range specified by the
-   * specified HRegionInfo
-   *  
-   * @param info HRegionInfo that specifies the row range
-   * @param row row to be checked
-   * @return true if the row is within the range specified by the HRegionInfo
-   */
-  public static boolean rowIsInRange(HRegionInfo info, final byte [] row) {
-    return ((info.getStartKey().length == 0) ||
-        (Bytes.compareTo(info.getStartKey(), row) <= 0)) &&
-        ((info.getEndKey().length == 0) ||
-            (Bytes.compareTo(info.getEndKey(), row) > 0));
-  }
-
-  /**
-   * Make the directories for a specific column family
-   * 
-   * @param fs the file system
-   * @param tabledir base directory where region will live (usually the table dir)
-   * @param hri
-   * @param colFamily the column family
-   * @throws IOException
-   */
-  public static void makeColumnFamilyDirs(FileSystem fs, Path tabledir,
-    final HRegionInfo hri, byte [] colFamily)
-  throws IOException {
-    Path dir = Store.getStoreHomedir(tabledir, hri.getEncodedName(), colFamily);
-    if (!fs.mkdirs(dir)) {
-      LOG.warn("Failed to create " + dir);
-    }
-  }
-
-  /**
-   * Merge two HRegions.  The regions must be adjacent and must not overlap.
-   * 
-   * @param srcA
-   * @param srcB
-   * @return new merged HRegion
-   * @throws IOException
-   */
-  public static HRegion mergeAdjacent(final HRegion srcA, final HRegion srcB)
-  throws IOException {
-    HRegion a = srcA;
-    HRegion b = srcB;
-
-    // Make sure that srcA comes first; important for key-ordering during
-    // write of the merged file.
-    if (srcA.getStartKey() == null) {
-      if (srcB.getStartKey() == null) {
-        throw new IOException("Cannot merge two regions with null start key");
-      }
-      // A's start key is null but B's isn't. Assume A comes before B
-    } else if ((srcB.getStartKey() == null) ||
-      (Bytes.compareTo(srcA.getStartKey(), srcB.getStartKey()) > 0)) {
-      a = srcB;
-      b = srcA;
-    }
-
-    if (!(Bytes.compareTo(a.getEndKey(), b.getStartKey()) == 0)) {
-      throw new IOException("Cannot merge non-adjacent regions");
-    }
-    return merge(a, b);
-  }
-
-  /**
-   * Merge two regions whether they are adjacent or not.
-   * 
-   * @param a region a
-   * @param b region b
-   * @return new merged region
-   * @throws IOException
-   */
-  public static HRegion merge(HRegion a, HRegion b) throws IOException {
-    if (!a.getRegionInfo().getTableDesc().getNameAsString().equals(
-        b.getRegionInfo().getTableDesc().getNameAsString())) {
-      throw new IOException("Regions do not belong to the same table");
-    }
-
-    FileSystem fs = a.getFilesystem();
-
-    // Make sure each region's cache is empty
-    
-    a.flushcache();
-    b.flushcache();
-    
-    // Compact each region so we only have one store file per family
-    
-    a.compactStores(true);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Files for region: " + a);
-      listPaths(fs, a.getRegionDir());
-    }
-    b.compactStores(true);
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Files for region: " + b);
-      listPaths(fs, b.getRegionDir());
-    }
-    
-    HBaseConfiguration conf = a.getConf();
-    HTableDescriptor tabledesc = a.getTableDesc();
-    HLog log = a.getLog();
-    Path basedir = a.getBaseDir();
-    // Presume both are of same region type -- i.e. both user or catalog 
-    // table regions.  This way can use comparator.
-    final byte [] startKey = a.comparator.matchingRows(a.getStartKey(), 0,
-          a.getStartKey().length,
-        EMPTY_BYTE_ARRAY, 0, EMPTY_BYTE_ARRAY.length) ||
-      b.comparator.matchingRows(b.getStartKey(), 0, b.getStartKey().length,
-        EMPTY_BYTE_ARRAY, 0, EMPTY_BYTE_ARRAY.length)?
-        EMPTY_BYTE_ARRAY:
-          a.comparator.compareRows(a.getStartKey(), 0, a.getStartKey().length, 
-          b.getStartKey(), 0, b.getStartKey().length) <= 0?
-        a.getStartKey(): b.getStartKey();
-    final byte [] endKey = a.comparator.matchingRows(a.getEndKey(), 0,
-        a.getEndKey().length, EMPTY_BYTE_ARRAY, 0, EMPTY_BYTE_ARRAY.length) ||
-      a.comparator.matchingRows(b.getEndKey(), 0, b.getEndKey().length,
-        EMPTY_BYTE_ARRAY, 0, EMPTY_BYTE_ARRAY.length)?
-        EMPTY_BYTE_ARRAY:
-        a.comparator.compareRows(a.getEndKey(), 0, a.getEndKey().length,
-            b.getEndKey(), 0, b.getEndKey().length) <= 0?
-                b.getEndKey(): a.getEndKey();
-
-    HRegionInfo newRegionInfo = new HRegionInfo(tabledesc, startKey, endKey);
-    LOG.info("Creating new region " + newRegionInfo.toString());
-    int encodedName = newRegionInfo.getEncodedName(); 
-    Path newRegionDir = HRegion.getRegionDir(a.getBaseDir(), encodedName);
-    if(fs.exists(newRegionDir)) {
-      throw new IOException("Cannot merge; target file collision at " +
-          newRegionDir);
-    }
-    fs.mkdirs(newRegionDir);
-
-    LOG.info("starting merge of regions: " + a + " and " + b +
-      " into new region " + newRegionInfo.toString() +
-        " with start key <" + Bytes.toString(startKey) + "> and end key <" +
-        Bytes.toString(endKey) + ">");
-
-    // Move HStoreFiles under new region directory
-    Map<byte [], List<StoreFile>> byFamily =
-      new TreeMap<byte [], List<StoreFile>>(Bytes.BYTES_COMPARATOR);
-    byFamily = filesByFamily(byFamily, a.close());
-    byFamily = filesByFamily(byFamily, b.close());
-    for (Map.Entry<byte [], List<StoreFile>> es : byFamily.entrySet()) {
-      byte [] colFamily = es.getKey();
-      makeColumnFamilyDirs(fs, basedir, newRegionInfo, colFamily);
-      // Because we compacted the source regions we should have no more than two
-      // HStoreFiles per family and there will be no reference store
-      List<StoreFile> srcFiles = es.getValue();
-      if (srcFiles.size() == 2) {
-        long seqA = srcFiles.get(0).getMaxSequenceId();
-        long seqB = srcFiles.get(1).getMaxSequenceId();
-        if (seqA == seqB) {
-          // Can't have same sequenceid since on open of a store, this is what
-          // distingushes the files (see the map of stores how its keyed by
-          // sequenceid).
-          throw new IOException("Files have same sequenceid: " + seqA);
-        }
-      }
-      for (StoreFile hsf: srcFiles) {
-        StoreFile.rename(fs, hsf.getPath(),
-          StoreFile.getUniqueFile(fs, Store.getStoreHomedir(basedir,
-            newRegionInfo.getEncodedName(), colFamily)));
-      }
-    }
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Files for new region");
-      listPaths(fs, newRegionDir);
-    }
-    HRegion dstRegion = new HRegion(basedir, log, fs, conf, newRegionInfo, null);
-    dstRegion.initialize(null, null);
-    dstRegion.compactStores();
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Files for new region");
-      listPaths(fs, dstRegion.getRegionDir());
-    }
-    deleteRegion(fs, a.getRegionDir());
-    deleteRegion(fs, b.getRegionDir());
-
-    LOG.info("merge completed. New region is " + dstRegion);
-
-    return dstRegion;
-  }
-
-  /*
-   * Fills a map with a vector of store files keyed by column family. 
-   * @param byFamily Map to fill.
-   * @param storeFiles Store files to process.
-   * @param family
-   * @return Returns <code>byFamily</code>
-   */
-  private static Map<byte [], List<StoreFile>> filesByFamily(
-      Map<byte [], List<StoreFile>> byFamily, List<StoreFile> storeFiles) {
-    for (StoreFile src: storeFiles) {
-      byte [] family = src.getFamily();
-      List<StoreFile> v = byFamily.get(family);
-      if (v == null) {
-        v = new ArrayList<StoreFile>();
-        byFamily.put(family, v);
-      }
-      v.add(src);
-    }
-    return byFamily;
-  }
-
-  /**
-   * @return True if needs a mojor compaction.
-   * @throws IOException 
-   */
-  boolean isMajorCompaction() throws IOException {
-    for (Store store: this.stores.values()) {
-      if (store.isMajorCompaction()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /*
-   * List the files under the specified directory
-   * 
-   * @param fs
-   * @param dir
-   * @throws IOException
-   */
-  private static void listPaths(FileSystem fs, Path dir) throws IOException {
-    if (LOG.isDebugEnabled()) {
-      FileStatus[] stats = fs.listStatus(dir);
-      if (stats == null || stats.length == 0) {
-        return;
-      }
-      for (int i = 0; i < stats.length; i++) {
-        String path = stats[i].getPath().toString();
-        if (stats[i].isDir()) {
-          LOG.debug("d " + path);
-          listPaths(fs, stats[i].getPath());
+    final protected String[] getOptionalStringArray(String prop, String[] dft) {
+        final String property = getOptional(prop);
+        if (!StringUtils.isBlank(property)) {
+            return property.split("\\s*,\\s*");
         } else {
-          LOG.debug("f " + path + " size=" + stats[i].getLen());
+            return dft;
         }
-      }
-    }
-  }
-
-  
-  //
-  // HBASE-880
-  //
-  /**
-   * @param get
-   * @param lockid
-   * @return result
-   * @throws IOException
-   */
-  public Result get(final Get get, final Integer lockid) throws IOException {
-    // Verify families are all valid
-    if (get.hasFamilies()) {
-      for (byte [] family: get.familySet()) {
-        checkFamily(family);
-      }
-    } else { // Adding all families to scanner
-      for (byte[] family: regionInfo.getTableDesc().getFamiliesKeys()) {
-        get.addFamily(family);
-      }
-    }
-    // Lock row
-    Integer lid = getLock(lockid, get.getRow()); 
-    List<KeyValue> result = new ArrayList<KeyValue>();
-    try {
-      for (Map.Entry<byte[],NavigableSet<byte[]>> entry:
-          get.getFamilyMap().entrySet()) {
-        get(this.stores.get(entry.getKey()), get, entry.getValue(), result);
-      }
-    } finally {
-      if(lockid == null) releaseRowLock(lid);
-    }
-    return new Result(result);
-  }
-
-  private void get(final Store store, final Get get,
-    final NavigableSet<byte []> qualifiers, List<KeyValue> result)
-  throws IOException {
-    store.get(get, qualifiers, result);
-  }
-
-  /**
-   * 
-   * @param row
-   * @param family
-   * @param qualifier
-   * @param amount
-   * @return The new value.
-   * @throws IOException
-   */
-  public long incrementColumnValue(byte [] row, byte [] family,
-      byte [] qualifier, long amount, boolean writeToWAL)
-  throws IOException {
-    checkRow(row);
-    boolean flush = false;
-    // Lock row
-    Integer lid = obtainRowLock(row);
-    long result = 0L;
-    try {
-      Store store = stores.get(family);
-      // Determine what to do and perform increment on returned KV, no insertion 
-      Store.ICVResult vas =
-        store.incrementColumnValue(row, family, qualifier, amount);
-      // Write incremented value to WAL before inserting
-      if (writeToWAL) {
-        long now = System.currentTimeMillis();
-        List<KeyValue> edits = new ArrayList<KeyValue>(1);
-        edits.add(vas.kv);
-        this.log.append(regionInfo.getRegionName(),
-          regionInfo.getTableDesc().getName(), edits,
-          (regionInfo.isMetaRegion() || regionInfo.isRootRegion()), now);
-      }
-      // Insert to the Store
-      store.add(vas.kv);
-      result = vas.value;
-      long size = this.memstoreSize.addAndGet(vas.sizeAdded);
-      flush = isFlushSize(size);
-    } finally {
-      releaseRowLock(lid);
     }
 
-    if (flush) {
-      // Request a cache flush.  Do it outside update lock.
-      requestFlush();
+    final protected int[] getOptionalIntArray(String prop, String[] dft) {
+        String[] strArray = getOptionalStringArray(prop, dft);
+        int[] intArray = new int[strArray.length];
+        for (int i = 0; i < strArray.length; i++) {
+            intArray[i] = Integer.parseInt(strArray[i]);
+        }
+        return intArray;
     }
 
-    return result;
-  }
-    
-  
-  //
-  // New HBASE-880 Helpers
-  //
-  
-  private void checkFamily(final byte [] family) 
-  throws NoSuchColumnFamilyException {
-    if(!regionInfo.getTableDesc().hasFamily(family)) {
-      throw new NoSuchColumnFamilyException("Column family " +
-          Bytes.toString(family) + " does not exist in region " + this
-            + " in table " + regionInfo.getTableDesc());
+    final protected String getRequired(String prop) {
+        String r = getOptional(prop);
+        if (StringUtils.isEmpty(r)) {
+            throw new IllegalArgumentException("missing '" + prop + "' in conf/kylin.properties");
+        }
+        return r;
     }
-  }
 
-  public static final long FIXED_OVERHEAD = ClassSize.align(
-      (3 * Bytes.SIZEOF_LONG) + (2 * Bytes.SIZEOF_INT) + Bytes.SIZEOF_BOOLEAN +
-      (20 * ClassSize.REFERENCE) + ClassSize.OBJECT);
-  
-  public static final long DEEP_OVERHEAD = ClassSize.align(FIXED_OVERHEAD +
-      ClassSize.OBJECT + (2 * ClassSize.ATOMIC_BOOLEAN) + 
-      ClassSize.ATOMIC_LONG + ClassSize.ATOMIC_INTEGER +
-      ClassSize.CONCURRENT_HASHMAP + 
-      (16 * ClassSize.CONCURRENT_HASHMAP_ENTRY) + 
-      (16 * ClassSize.CONCURRENT_HASHMAP_SEGMENT) +
-      ClassSize.CONCURRENT_SKIPLISTMAP + ClassSize.CONCURRENT_SKIPLISTMAP_ENTRY +
-      RegionHistorian.FIXED_OVERHEAD + HLog.FIXED_OVERHEAD +
-      ClassSize.align(ClassSize.OBJECT + (5 * Bytes.SIZEOF_BOOLEAN)) +
-      (3 * ClassSize.REENTRANT_LOCK));
-  
-  @Override
-  public long heapSize() {
-    long heapSize = DEEP_OVERHEAD;
-    for(Store store : this.stores.values()) {
-      heapSize += store.heapSize();
+    /**
+     * Use with care, properties should be read-only. This is for testing only.
+     */
+    final public void setProperty(String key, String value) {
+        logger.info("Kylin Config was updated with " + key + " : " + value);
+        properties.setProperty(BCC.check(key), value);
     }
-    return heapSize;
-  }
 
-  /*
-   * This method calls System.exit.
-   * @param message Message to print out.  May be null.
-   */
-  private static void printUsageAndExit(final String message) {
-    if (message != null && message.length() > 0) System.out.println(message);
-    System.out.println("Usage: HRegion CATLALOG_TABLE_DIR [major_compact]");
-    System.out.println("Options:");
-    System.out.println(" major_compact  Pass this option to major compact " +
-      "passed region.");
-    System.out.println("Default outputs scan of passed region.");
-    System.exit(1);
-  }
-
-  /*
-   * Process table.
-   * Do major compaction or list content.
-   * @param fs
-   * @param p
-   * @param log
-   * @param c
-   * @param majorCompact
-   * @throws IOException
-   */
-  private static void processTable(final FileSystem fs, final Path p,
-      final HLog log, final HBaseConfiguration c,
-      final boolean majorCompact)
-  throws IOException {
-    HRegion region = null;
-    String rootStr = Bytes.toString(HConstants.ROOT_TABLE_NAME);
-    String metaStr = Bytes.toString(HConstants.META_TABLE_NAME);
-    // Currently expects tables have one region only.
-    if (p.getName().startsWith(rootStr)) {
-      region = new HRegion(p, log, fs, c, HRegionInfo.ROOT_REGIONINFO, null);
-    } else if (p.getName().startsWith(metaStr)) {
-      region = new HRegion(p, log, fs, c, HRegionInfo.FIRST_META_REGIONINFO,
-          null);
-    } else {
-      throw new IOException("Not a known catalog table: " + p.toString());
+    final protected void reloadKylinConfig(Properties properties) {
+        this.properties = BCC.check(properties);
     }
-    try {
-      region.initialize(null, null);
-      if (majorCompact) {
-        region.compactStores(true);
-      } else {
-        // Default behavior
-        Scan scan = new Scan();
-        InternalScanner scanner = region.getScanner(scan);
+
+    private Map<Integer, String> convertKeyToInteger(Map<String, String> map) {
+        Map<Integer, String> result = Maps.newLinkedHashMap();
+        for (Entry<String, String> entry : map.entrySet()) {
+            result.put(Integer.valueOf(entry.getKey()), entry.getValue());
+        }
+        return result;
+    }
+
+    public String toString() {
+        return getMetadataUrl().toString();
+    }
+
+    // ============================================================================
+    // ENV
+    // ============================================================================
+
+    public boolean isDevEnv() {
+        return "DEV".equals(getOptional("kylin.env", "DEV"));
+    }
+
+    public String getDeployEnv() {
+        return getOptional("kylin.env", "DEV");
+    }
+
+    private String cachedHdfsWorkingDirectory;
+    private String cachedBigCellDirectory;
+
+    public String getHdfsWorkingDirectory() {
+        if (cachedHdfsWorkingDirectory != null)
+            return cachedHdfsWorkingDirectory;
+
+        String root = getOptional("kylin.env.hdfs-working-dir", "/kylin");
+
+        Path path = new Path(root);
+        if (!path.isAbsolute())
+            throw new IllegalArgumentException("kylin.env.hdfs-working-dir must be absolute, but got " + root);
+
+        // make sure path is qualified
         try {
-          List<KeyValue> kvs = new ArrayList<KeyValue>();
-          boolean done = false;
-          do {
-            kvs.clear();
-            done = scanner.next(kvs);
-            if (kvs.size() > 0) LOG.info(kvs);
-          } while (done);
-        } finally {
-          scanner.close();
+            FileSystem fs = path.getFileSystem(HadoopUtil.getCurrentConfiguration());
+            path = fs.makeQualified(path);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
-      }
-    } finally {
-      region.close();
-    }
-  }
 
-  /**
-   * Facility for dumping and compacting catalog tables.
-   * Only does catalog tables since these are only tables we for sure know
-   * schema on.  For usage run:
-   * <pre>
-   *   ./bin/hbase org.apache.hadoop.hbase.regionserver.HRegion
-   * </pre>
-   * @param args
-   * @throws IOException 
-   */
-  public static void main(String[] args) throws IOException {
-    if (args.length < 1) {
-      printUsageAndExit(null);
+        // append metadata-url prefix
+        root = new Path(path, StringUtils.replaceChars(getMetadataUrlPrefix(), ':', '-')).toString();
+
+        if (!root.endsWith("/"))
+            root += "/";
+
+        cachedHdfsWorkingDirectory = root;
+        if (cachedHdfsWorkingDirectory.startsWith("file:")) {
+            cachedHdfsWorkingDirectory = cachedHdfsWorkingDirectory.replace("file:", "file://");
+        } else if (cachedHdfsWorkingDirectory.startsWith("maprfs:")) {
+            cachedHdfsWorkingDirectory = cachedHdfsWorkingDirectory.replace("maprfs:", "maprfs://");
+        }
+        return cachedHdfsWorkingDirectory;
     }
-    boolean majorCompact = false;
-    if (args.length > 1) {
-      if (!args[1].toLowerCase().startsWith("major")) {
-        printUsageAndExit("ERROR: Unrecognized option <" + args[1] + ">");
-      }
-      majorCompact = true;
-    
+
+    public String getReadHdfsWorkingDirectory() {
+        if (StringUtils.isNotEmpty(getHBaseClusterFs())) {
+            Path workingDir = new Path(getHdfsWorkingDirectory());
+            return new Path(getHBaseClusterFs(), Path.getPathWithoutSchemeAndAuthority(workingDir)).toString()
+                    + "/";
+        }
+
+        return getHdfsWorkingDirectory();
     }
-    Path tableDir  = new Path(args[0]);
-    HBaseConfiguration c = new HBaseConfiguration();
-    FileSystem fs = FileSystem.get(c);
-    Path logdir = new Path(c.get("hbase.tmp.dir"),
-      "hlog" + tableDir.getName() + System.currentTimeMillis());
-    HLog log = new HLog(fs, logdir, c, null);
-    try {
-      processTable(fs, tableDir, log, c, majorCompact);
-     } finally {
-       log.close();
-       BlockCache bc = StoreFile.getBlockCache(c);
-       if (bc != null) bc.shutdown();
-     }
-  }
+
+    public String getHdfsWorkingDirectory(String project) {
+        if (isProjectIsolationEnabled() && project != null) {
+            return new Path(getHdfsWorkingDirectory(), project).toString() + "/";
+        } else {
+            return getHdfsWorkingDirectory();
+        }
+    }
+
+    public String getZookeeperBasePath() {
+        return getOptional("kylin.env.zookeeper-base-path", "/kylin");
+    }
+
+    /**
+     * A comma separated list of host:port pairs, each corresponding to a ZooKeeper server
+     */
+    public String getZookeeperConnectString() {
+        String str = getOptional("kylin.env.zookeeper-connect-string");
+        if (str != null)
+            return str;
+
+        str = ZooKeeperUtil.getZKConnectStringFromHBase();
+        if (str != null)
+            return str;
+
+        throw new RuntimeException("Please set 'kylin.env.zookeeper-connect-string' in kylin.properties");
+    }
+
+    public boolean isZookeeperAclEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.env.zookeeper-acl-enabled", "false"));
+    }
+
+    public String getZKAuths() {
+        return getOptional("kylin.env.zookeeper.zk-auth", "digest:ADMIN:KYLIN");
+    }
+
+    public String getZKAcls() {
+        return getOptional("kylin.env.zookeeper.zk-acl", "world:anyone:rwcda");
+    }
+
+    // ============================================================================
+    // METADATA
+    // ============================================================================
+
+    public StorageURL getMetadataUrl() {
+        return StorageURL.valueOf(getOptional("kylin.metadata.url", "kylin_metadata@hbase"));
+    }
+
+    public int getCacheSyncRetrys() {
+        return Integer.parseInt(getOptional("kylin.metadata.sync-retries", "3"));
+    }
+
+    public String getCacheSyncErrorHandler() {
+        return getOptional("kylin.metadata.sync-error-handler");
+    }
+
+    // for test only
+    public void setMetadataUrl(String metadataUrl) {
+        setProperty("kylin.metadata.url", metadataUrl);
+    }
+
+    public String getMetadataUrlPrefix() {
+        return getMetadataUrl().getIdentifier();
+    }
+
+    public Map<String, String> getResourceStoreImpls() {
+        Map<String, String> r = Maps.newLinkedHashMap();
+        // ref constants in ISourceAware
+        r.put("", "org.apache.kylin.common.persistence.FileResourceStore");
+        r.put("hbase", "org.apache.kylin.storage.hbase.HBaseResourceStore");
+        r.put("hdfs", "org.apache.kylin.common.persistence.HDFSResourceStore");
+        r.put("ifile", "org.apache.kylin.common.persistence.IdentifierFileResourceStore");
+        r.put("jdbc", "org.apache.kylin.common.persistence.JDBCResourceStore");
+        r.putAll(getPropertiesByPrefix("kylin.metadata.resource-store-provider.")); // note the naming convention -- http://kylin.apache.org/development/coding_naming_convention.html
+        return r;
+    }
+
+    public String getDataModelImpl() {
+        return getOptional("kylin.metadata.data-model-impl", null);
+    }
+
+    public String getDataModelManagerImpl() {
+        return getOptional("kylin.metadata.data-model-manager-impl", null);
+    }
+
+    public String[] getRealizationProviders() {
+        return getOptionalStringArray("kylin.metadata.realization-providers", //
+                new String[] { "org.apache.kylin.cube.CubeManager", "org.apache.kylin.storage.hybrid.HybridManager" });
+    }
+
+    public String[] getCubeDimensionCustomEncodingFactories() {
+        return getOptionalStringArray("kylin.metadata.custom-dimension-encodings", new String[0]);
+    }
+
+    public Map<String, String> getCubeCustomMeasureTypes() {
+        return getPropertiesByPrefix("kylin.metadata.custom-measure-types.");
+    }
+
+    public DistributedLockFactory getDistributedLockFactory() {
+        String clsName = getOptional("kylin.metadata.distributed-lock-impl",
+                "org.apache.kylin.storage.hbase.util.ZookeeperDistributedLock$Factory");
+        return (DistributedLockFactory) ClassUtil.newInstance(clsName);
+    }
+
+    public String getHBaseMappingAdapter() {
+        return getOptional("kylin.metadata.hbasemapping-adapter");
+    }
+
+    public boolean isCheckCopyOnWrite() {
+        return Boolean.parseBoolean(getOptional("kylin.metadata.check-copy-on-write", "false"));
+    }
+
+    public String getHbaseClientScannerTimeoutPeriod() {
+        return getOptional("kylin.metadata.hbase-client-scanner-timeout-period", "10000");
+    }
+
+    public String getHbaseRpcTimeout() {
+        return getOptional("kylin.metadata.hbase-rpc-timeout", "5000");
+    }
+
+    public String getHbaseClientRetriesNumber() {
+        return getOptional("kylin.metadata.hbase-client-retries-number", "1");
+    }
+
+    // ============================================================================
+    // DICTIONARY & SNAPSHOT
+    // ============================================================================
+
+    public boolean isUseForestTrieDictionary() {
+        return Boolean.parseBoolean(getOptional("kylin.dictionary.use-forest-trie", "true"));
+    }
+
+    public int getTrieDictionaryForestMaxTrieSizeMB() {
+        return Integer.parseInt(getOptional("kylin.dictionary.forest-trie-max-mb", "500"));
+    }
+
+    public int getCachedDictMaxEntrySize() {
+        return Integer.parseInt(getOptional("kylin.dictionary.max-cache-entry", "3000"));
+    }
+
+    public boolean isGrowingDictEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.dictionary.growing-enabled", "false"));
+    }
+
+    public boolean isDictResuable() {
+        return Boolean.parseBoolean(this.getOptional("kylin.dictionary.resuable", "false"));
+    }
+
+    public int getAppendDictEntrySize() {
+        return Integer.parseInt(getOptional("kylin.dictionary.append-entry-size", "10000000"));
+    }
+
+    public int getAppendDictMaxVersions() {
+        return Integer.parseInt(getOptional("kylin.dictionary.append-max-versions", "3"));
+    }
+
+    public int getAppendDictVersionTTL() {
+        return Integer.parseInt(getOptional("kylin.dictionary.append-version-ttl", "259200000"));
+    }
+
+    public int getCachedSnapshotMaxEntrySize() {
+        return Integer.parseInt(getOptional("kylin.snapshot.max-cache-entry", "500"));
+    }
+
+    public int getTableSnapshotMaxMB() {
+        return Integer.parseInt(getOptional("kylin.snapshot.max-mb", "300"));
+    }
+
+    public int getExtTableSnapshotShardingMB() {
+        return Integer.parseInt(getOptional("kylin.snapshot.ext.shard-mb", "500"));
+    }
+
+    public String getExtTableSnapshotLocalCachePath() {
+        return getOptional("kylin.snapshot.ext.local.cache.path", "lookup_cache");
+    }
+
+    public double getExtTableSnapshotLocalCacheMaxSizeGB() {
+        return Double.parseDouble(getOptional("kylin.snapshot.ext.local.cache.max-size-gb", "200"));
+    }
+
+    public boolean isShrunkenDictFromGlobalEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.dictionary.shrunken-from-global-enabled", "false"));
+    }
+
+    // ============================================================================
+    // CUBE
+    // ============================================================================
+
+    public String getCuboidScheduler() {
+        return getOptional("kylin.cube.cuboid-scheduler", "org.apache.kylin.cube.cuboid.DefaultCuboidScheduler");
+    }
+
+    public String getSegmentAdvisor() {
+        return getOptional("kylin.cube.segment-advisor", "org.apache.kylin.cube.CubeSegmentAdvisor");
+    }
+
+    public double getJobCuboidSizeRatio() {
+        return Double.parseDouble(getOptional("kylin.cube.size-estimate-ratio", "0.25"));
+    }
+
+    @Deprecated
+    public double getJobCuboidSizeMemHungryRatio() {
+        return Double.parseDouble(getOptional("kylin.cube.size-estimate-memhungry-ratio", "0.05"));
+    }
+
+    public double getJobCuboidSizeCountDistinctRatio() {
+        return Double.parseDouble(getOptional("kylin.cube.size-estimate-countdistinct-ratio", "0.5"));
+    }
+
+    public double getJobCuboidSizeTopNRatio() {
+        return Double.parseDouble(getOptional("kylin.cube.size-estimate-topn-ratio", "0.5"));
+    }
+
+    public String getCubeAlgorithm() {
+        return getOptional("kylin.cube.algorithm", "auto");
+    }
+
+    public double getCubeAlgorithmAutoThreshold() {
+        return Double.parseDouble(getOptional("kylin.cube.algorithm.layer-or-inmem-threshold", "7"));
+    }
+
+    public int getCubeAlgorithmAutoMapperLimit() {
+        return Integer.parseInt(getOptional("kylin.cube.algorithm.inmem-split-limit", "500"));
+    }
+
+    public int getCubeAlgorithmInMemConcurrentThreads() {
+        return Integer.parseInt(getOptional("kylin.cube.algorithm.inmem-concurrent-threads", "1"));
+    }
+
+    public boolean isIgnoreCubeSignatureInconsistency() {
+        return Boolean.parseBoolean(getOptional("kylin.cube.ignore-signature-inconsistency", "false"));
+    }
+
+    public long getCubeAggrGroupMaxCombination() {
+        return Long.parseLong(getOptional("kylin.cube.aggrgroup.max-combination", "32768"));
+    }
+
+    public boolean getCubeAggrGroupIsMandatoryOnlyValid() {
+        return Boolean.parseBoolean(getOptional("kylin.cube.aggrgroup.is-mandatory-only-valid", "false"));
+    }
+
+    public int getCubeRowkeyMaxSize() {
+        return Integer.parseInt(getOptional("kylin.cube.rowkey.max-size", "63"));
+    }
+
+    public int getDimensionEncodingMaxLength() {
+        return Integer.parseInt(getOptional("kylin.metadata.dimension-encoding-max-length", "256"));
+    }
+
+    public int getMaxBuildingSegments() {
+        return Integer.parseInt(getOptional("kylin.cube.max-building-segments", "10"));
+    }
+
+    public boolean allowCubeAppearInMultipleProjects() {
+        return Boolean.parseBoolean(getOptional("kylin.cube.allow-appear-in-multiple-projects", "false"));
+    }
+
+    public int getGTScanRequestSerializationLevel() {
+        return Integer.parseInt(getOptional("kylin.cube.gtscanrequest-serialization-level", "1"));
+    }
+
+    public boolean isAutoMergeEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.cube.is-automerge-enabled", "true"));
+    }
+
+    // ============================================================================
+    // Cube Planner
+    // ============================================================================
+
+    public boolean isCubePlannerEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.cube.cubeplanner.enabled", "true"));
+    }
+
+    public boolean isCubePlannerEnabledForExistingCube() {
+        return Boolean.parseBoolean(getOptional("kylin.cube.cubeplanner.enabled-for-existing-cube", "true"));
+    }
+
+    public double getCubePlannerExpansionRateThreshold() {
+        return Double.parseDouble(getOptional("kylin.cube.cubeplanner.expansion-threshold", "15.0"));
+    }
+
+    public int getCubePlannerRecommendCuboidCacheMaxSize() {
+        return Integer.parseInt(getOptional("kylin.cube.cubeplanner.recommend-cache-max-size", "200"));
+    }
+
+    public long getCubePlannerMandatoryRollUpThreshold() {
+        return Long.parseLong(getOptional("kylin.cube.cubeplanner.mandatory-rollup-threshold", "1000"));
+    }
+
+    public int getCubePlannerAgreedyAlgorithmAutoThreshold() {
+        return Integer.parseInt(getOptional("kylin.cube.cubeplanner.algorithm-threshold-greedy", "8"));
+    }
+
+    public int getCubePlannerGeneticAlgorithmAutoThreshold() {
+        return Integer.parseInt(getOptional("kylin.cube.cubeplanner.algorithm-threshold-genetic", "23"));
+    }
+
+    // ============================================================================
+    // JOB
+    // ============================================================================
+
+    public CliCommandExecutor getCliCommandExecutor() throws IOException {
+        CliCommandExecutor exec = new CliCommandExecutor();
+        if (getRunAsRemoteCommand()) {
+            exec.setRunAtRemote(getRemoteHadoopCliHostname(), getRemoteHadoopCliPort(), getRemoteHadoopCliUsername(),
+                    getRemoteHadoopCliPassword());
+        }
+        return exec;
+    }
+
+    public String getKylinJobLogDir() {
+        return getOptional("kylin.job.log-dir", "/tmp/kylin/logs");
+    }
+
+    public boolean getRunAsRemoteCommand() {
+        return Boolean.parseBoolean(getOptional("kylin.job.use-remote-cli"));
+    }
+
+    public int getRemoteHadoopCliPort() {
+        return Integer.parseInt(getOptional("kylin.job.remote-cli-port", "22"));
+    }
+
+    public String getRemoteHadoopCliHostname() {
+        return getOptional("kylin.job.remote-cli-hostname");
+    }
+
+    public String getRemoteHadoopCliUsername() {
+        return getOptional("kylin.job.remote-cli-username");
+    }
+
+    public String getRemoteHadoopCliPassword() {
+        return getOptional("kylin.job.remote-cli-password");
+    }
+
+    public String getCliWorkingDir() {
+        return getOptional("kylin.job.remote-cli-working-dir");
+    }
+
+    public boolean isEmptySegmentAllowed() {
+        return Boolean.parseBoolean(getOptional("kylin.job.allow-empty-segment", "true"));
+    }
+
+    public int getMaxConcurrentJobLimit() {
+        return Integer.parseInt(getOptional("kylin.job.max-concurrent-jobs", "10"));
+    }
+
+    public int getCubingInMemSamplingPercent() {
+        int percent = Integer.parseInt(this.getOptional("kylin.job.sampling-percentage", "100"));
+        percent = Math.max(percent, 1);
+        percent = Math.min(percent, 100);
+        return percent;
+    }
+
+    public String getHiveDependencyFilterList() {
+        return this.getOptional("kylin.job.dependency-filter-list", "[^,]*hive-exec[^,]*?\\.jar" + "|"
+                + "[^,]*hive-metastore[^,]*?\\.jar" + "|" + "[^,]*hive-hcatalog-core[^,]*?\\.jar");
+    }
+
+    public boolean isMailEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.job.notification-enabled", "false"));
+    }
+
+    public boolean isStarttlsEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.job.notification-mail-enable-starttls", "false"));
+    }
+
+    public String getSmtpPort() {
+        return getOptional("kylin.job.notification-mail-port", "25");
+    }
+
+    public String getMailHost() {
+        return getOptional("kylin.job.notification-mail-host", "");
+    }
+
+    public String getMailUsername() {
+        return getOptional("kylin.job.notification-mail-username", "");
+    }
+
+    public String getMailPassword() {
+        return getOptional("kylin.job.notification-mail-password", "");
+    }
+
+    public String getMailSender() {
+        return getOptional("kylin.job.notification-mail-sender", "");
+    }
+
+    public String[] getAdminDls() {
+        return getOptionalStringArray("kylin.job.notification-admin-emails", null);
+    }
+
+    public int getJobRetry() {
+        return Integer.parseInt(this.getOptional("kylin.job.retry", "0"));
+    }
+
+    public String[] getJobRetryExceptions() {
+        return getOptionalStringArray("kylin.job.retry-exception-classes", new String[0]);
+    }
+
+    public int getCubeStatsHLLPrecision() {
+        return Integer.parseInt(getOptional("kylin.job.sampling-hll-precision", "14"));
+    }
+
+    public Map<Integer, String> getSchedulers() {
+        Map<Integer, String> r = Maps.newLinkedHashMap();
+        r.put(0, "org.apache.kylin.job.impl.threadpool.DefaultScheduler");
+        r.put(2, "org.apache.kylin.job.impl.threadpool.DistributedScheduler");
+        r.put(77, "org.apache.kylin.job.impl.threadpool.NoopScheduler");
+        r.putAll(convertKeyToInteger(getPropertiesByPrefix("kylin.job.scheduler.provider.")));
+        return r;
+    }
+
+    public Integer getSchedulerType() {
+        return Integer.parseInt(getOptional("kylin.job.scheduler.default", "0"));
+    }
+
+    public boolean getSchedulerPriorityConsidered() {
+        return Boolean.parseBoolean(getOptional("kylin.job.scheduler.priority-considered", "false"));
+    }
+
+    public Integer getSchedulerPriorityBarFetchFromQueue() {
+        return Integer.parseInt(getOptional("kylin.job.scheduler.priority-bar-fetch-from-queue", "20"));
+    }
+
+    public Integer getSchedulerPollIntervalSecond() {
+        return Integer.parseInt(getOptional("kylin.job.scheduler.poll-interval-second", "30"));
+    }
+
+    public Integer getErrorRecordThreshold() {
+        return Integer.parseInt(getOptional("kylin.job.error-record-threshold", "0"));
+    }
+
+    public boolean isAdvancedFlatTableUsed() {
+        return Boolean.parseBoolean(getOptional("kylin.job.use-advanced-flat-table", "false"));
+    }
+
+    public String getAdvancedFlatTableClass() {
+        return getOptional("kylin.job.advanced-flat-table.class");
+    }
+
+    public String getJobTrackingURLPattern() {
+        return getOptional("kylin.job.tracking-url-pattern", "");
+    }
+
+    public int getJobMetadataPersistRetry() {
+        return Integer.parseInt(this.getOptional("kylin.job.metadata-persist-retry", "5"));
+    }
+
+    public boolean isJobAutoReadyCubeEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.job.cube-auto-ready-enabled", "true"));
+    }
+
+    // ============================================================================
+    // SOURCE.HIVE
+    // ============================================================================
+
+    public int getDefaultSource() {
+        return Integer.parseInt(getOptional("kylin.source.default", "0"));
+    }
+
+    public Map<Integer, String> getSourceEngines() {
+        Map<Integer, String> r = Maps.newLinkedHashMap();
+        // ref constants in ISourceAware
+        r.put(0, "org.apache.kylin.source.hive.HiveSource");
+        r.put(1, "org.apache.kylin.source.kafka.KafkaSource");
+        r.put(8, "org.apache.kylin.source.jdbc.JdbcSource");
+        r.putAll(convertKeyToInteger(getPropertiesByPrefix("kylin.source.provider.")));
+        return r;
+    }
+
+    /**
+     * was for route to hive, not used any more
+     */
+    @Deprecated
+    public String getHiveUrl() {
+        return getOptional("kylin.source.hive.connection-url", "");
+    }
+
+    /**
+     * was for route to hive, not used any more
+     */
+    @Deprecated
+    public String getHiveUser() {
+        return getOptional("kylin.source.hive.connection-user", "");
+    }
+
+    /**
+     * was for route to hive, not used any more
+     */
+    @Deprecated
+    public String getHivePassword() {
+        return getOptional("kylin.source.hive.connection-password", "");
+    }
+
+    public Map<String, String> getHiveConfigOverride() {
+        return getPropertiesByPrefix("kylin.source.hive.config-override.");
+    }
+
+    public String getOverrideHiveTableLocation(String table) {
+        return getOptional("kylin.source.hive.table-location." + table.toUpperCase(Locale.ROOT));
+    }
+
+    public boolean isHiveKeepFlatTable() {
+        return Boolean.parseBoolean(this.getOptional("kylin.source.hive.keep-flat-table", "false"));
+    }
+
+    public String getHiveDatabaseForIntermediateTable() {
+        return this.getOptional("kylin.source.hive.database-for-flat-table", "default");
+    }
+
+    public String getFlatTableStorageFormat() {
+        return this.getOptional("kylin.source.hive.flat-table-storage-format", "SEQUENCEFILE");
+    }
+
+    public String getFlatTableFieldDelimiter() {
+        return this.getOptional("kylin.source.hive.flat-table-field-delimiter", "\u001F");
+    }
+
+    public boolean isHiveRedistributeEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.source.hive.redistribute-flat-table", "true"));
+    }
+
+    public String getHiveClientMode() {
+        return getOptional("kylin.source.hive.client", "cli");
+    }
+
+    public String getHiveBeelineShell() {
+        return getOptional("kylin.source.hive.beeline-shell", "beeline");
+    }
+
+    public String getHiveBeelineParams() {
+        return getOptional("kylin.source.hive.beeline-params", "");
+    }
+
+    public boolean getEnableSparkSqlForTableOps() {
+        return Boolean.parseBoolean(getOptional("kylin.source.hive.enable-sparksql-for-table-ops", "false"));
+    }
+
+    public String getSparkSqlBeelineShell() {
+        return getOptional("kylin.source.hive.sparksql-beeline-shell", "");
+    }
+
+    public String getSparkSqlBeelineParams() {
+        return getOptional("kylin.source.hive.sparksql-beeline-params", "");
+    }
+
+    public boolean getHiveTableDirCreateFirst() {
+        return Boolean.parseBoolean(getOptional("kylin.source.hive.table-dir-create-first", "false"));
+    }
+
+    public String getFlatHiveTableClusterByDictColumn() {
+        return getOptional("kylin.source.hive.flat-table-cluster-by-dict-column");
+    }
+
+    public int getHiveRedistributeColumnCount() {
+        return Integer.parseInt(getOptional("kylin.source.hive.redistribute-column-count", "3"));
+    }
+
+    public int getDefaultVarcharPrecision() {
+        int v = Integer.parseInt(getOptional("kylin.source.hive.default-varchar-precision", "256"));
+        if (v < 1) {
+            return 256;
+        } else if (v > 65535) {
+            return 65535;
+        } else {
+            return v;
+        }
+    }
+
+    public int getDefaultCharPrecision() {
+        //at most 255 according to https://cwiki.apache.org/confluence/display/Hive/LanguageManual+Types#LanguageManualTypes-CharcharChar
+        int v = Integer.parseInt(getOptional("kylin.source.hive.default-char-precision", "255"));
+        if (v < 1) {
+            return 255;
+        } else if (v > 255) {
+            return 255;
+        } else {
+            return v;
+        }
+    }
+
+    public int getDefaultDecimalPrecision() {
+        int v = Integer.parseInt(getOptional("kylin.source.hive.default-decimal-precision", "19"));
+        if (v < 1) {
+            return 19;
+        } else {
+            return v;
+        }
+    }
+
+    public int getDefaultDecimalScale() {
+        int v = Integer.parseInt(getOptional("kylin.source.hive.default-decimal-scale", "4"));
+        if (v < 1) {
+            return 4;
+        } else {
+            return v;
+        }
+    }
+
+    // ============================================================================
+    // SOURCE.KAFKA
+    // ============================================================================
+
+    public Map<String, String> getKafkaConfigOverride() {
+        return getPropertiesByPrefix("kylin.source.kafka.config-override.");
+    }
+
+    // ============================================================================
+    // SOURCE.JDBC
+    // ============================================================================
+
+    public String getJdbcSourceConnectionUrl() {
+        return getOptional("kylin.source.jdbc.connection-url");
+    }
+
+    public String getJdbcSourceDriver() {
+        return getOptional("kylin.source.jdbc.driver");
+    }
+
+    public String getJdbcSourceDialect() {
+        return getOptional("kylin.source.jdbc.dialect", "default");
+    }
+
+    public String getJdbcSourceUser() {
+        return getOptional("kylin.source.jdbc.user");
+    }
+
+    public String getJdbcSourcePass() {
+        return getOptional("kylin.source.jdbc.pass");
+    }
+
+    public String getSqoopHome() {
+        return getOptional("kylin.source.jdbc.sqoop-home");
+    }
+
+    public int getSqoopMapperNum() {
+        return Integer.parseInt(getOptional("kylin.source.jdbc.sqoop-mapper-num", "4"));
+    }
+
+    public Map<String, String> getSqoopConfigOverride() {
+        return getPropertiesByPrefix("kylin.source.jdbc.sqoop-config-override.");
+    }
+
+    public String getJdbcSourceFieldDelimiter() {
+        return getOptional("kylin.source.jdbc.field-delimiter", "|");
+    }
+
+    // ============================================================================
+    // STORAGE.HBASE
+    // ============================================================================
+
+    public Map<Integer, String> getStorageEngines() {
+        Map<Integer, String> r = Maps.newLinkedHashMap();
+        // ref constants in IStorageAware
+        r.put(0, "org.apache.kylin.storage.hbase.HBaseStorage");
+        r.put(1, "org.apache.kylin.storage.hybrid.HybridStorage");
+        r.put(2, "org.apache.kylin.storage.hbase.HBaseStorage");
+        r.putAll(convertKeyToInteger(getPropertiesByPrefix("kylin.storage.provider.")));
+        return r;
+    }
+
+    public int getDefaultStorageEngine() {
+        return Integer.parseInt(getOptional("kylin.storage.default", "2"));
+    }
+
+    public StorageURL getStorageUrl() {
+        String url = getOptional("kylin.storage.url", "default@hbase");
+
+        // for backward compatibility
+        if ("hbase".equals(url))
+            url = "default@hbase";
+
+        return StorageURL.valueOf(url);
+    }
+
+    public String getHBaseTableNamePrefix() {
+        return getOptional("kylin.storage.hbase.table-name-prefix", "KYLIN_");
+    }
+
+    public String getHBaseStorageNameSpace() {
+        return getOptional("kylin.storage.hbase.namespace", "default");
+    }
+
+    public String getHBaseClusterFs() {
+        return getOptional("kylin.storage.hbase.cluster-fs", "");
+    }
+
+    public String getHBaseClusterHDFSConfigFile() {
+        return getOptional("kylin.storage.hbase.cluster-hdfs-config-file", "");
+    }
+
+    private static final Pattern COPROCESSOR_JAR_NAME_PATTERN = Pattern.compile("kylin-coprocessor-(.+)\\.jar");
+    private static final Pattern JOB_JAR_NAME_PATTERN = Pattern.compile("kylin-job-(.+)\\.jar");
+
+    public String getCoprocessorLocalJar() {
+        final String coprocessorJar = getOptional("kylin.storage.hbase.coprocessor-local-jar");
+        if (StringUtils.isNotEmpty(coprocessorJar)) {
+            return coprocessorJar;
+        }
+        String kylinHome = getKylinHome();
+        if (StringUtils.isEmpty(kylinHome)) {
+            throw new RuntimeException("getCoprocessorLocalJar needs KYLIN_HOME");
+        }
+        return getFileName(kylinHome + File.separator + "lib", COPROCESSOR_JAR_NAME_PATTERN);
+    }
+
+    public void overrideCoprocessorLocalJar(String path) {
+        logger.info("override " + "kylin.storage.hbase.coprocessor-local-jar" + " to " + path);
+        System.setProperty("kylin.storage.hbase.coprocessor-local-jar", path);
+    }
+
+    private static String getFileName(String homePath, Pattern pattern) {
+        File home = new File(homePath);
+        SortedSet<String> files = Sets.newTreeSet();
+        if (home.exists() && home.isDirectory()) {
+            File[] listFiles = home.listFiles();
+            if (listFiles != null) {
+                for (File file : listFiles) {
+                    final Matcher matcher = pattern.matcher(file.getName());
+                    if (matcher.matches()) {
+                        files.add(file.getAbsolutePath());
+                    }
+                }
+            }
+        }
+        if (files.isEmpty()) {
+            throw new RuntimeException("cannot find " + pattern.toString() + " in " + homePath);
+        } else {
+            return files.last();
+        }
+    }
+
+    public int getHBaseRegionCountMin() {
+        return Integer.parseInt(getOptional("kylin.storage.hbase.min-region-count", "1"));
+    }
+
+    public int getHBaseRegionCountMax() {
+        return Integer.parseInt(getOptional("kylin.storage.hbase.max-region-count", "500"));
+    }
+
+    public float getHBaseHFileSizeGB() {
+        return Float.parseFloat(getOptional("kylin.storage.hbase.hfile-size-gb", "2.0"));
+    }
+
+    public boolean getQueryRunLocalCoprocessor() {
+        return Boolean.parseBoolean(getOptional("kylin.storage.hbase.run-local-coprocessor", "false"));
+    }
+
+    public double getQueryCoprocessorMemGB() {
+        return Double.parseDouble(this.getOptional("kylin.storage.hbase.coprocessor-mem-gb", "3.0"));
+    }
+
+    public boolean getQueryCoprocessorSpillEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.storage.partition.aggr-spill-enabled", "true"));
+    }
+
+    public long getPartitionMaxScanBytes() {
+        long value = Long.parseLong(
+                this.getOptional("kylin.storage.partition.max-scan-bytes", String.valueOf(3L * 1024 * 1024 * 1024)));
+        return value > 0 ? value : Long.MAX_VALUE;
+    }
+
+    public int getQueryCoprocessorTimeoutSeconds() {
+        return Integer.parseInt(this.getOptional("kylin.storage.hbase.coprocessor-timeout-seconds", "0"));
+    }
+
+    public int getQueryScanFuzzyKeyMax() {
+        return Integer.parseInt(this.getOptional("kylin.storage.hbase.max-fuzzykey-scan", "200"));
+    }
+
+    public int getQueryScanFuzzyKeySplitMax() {
+        return Integer.parseInt(this.getOptional("kylin.storage.hbase.max-fuzzykey-scan-split", "1"));
+    }
+
+    public int getQueryStorageVisitScanRangeMax() {
+        return Integer.valueOf(this.getOptional("kylin.storage.hbase.max-visit-scanrange", "1000000"));
+    }
+
+    public String getDefaultIGTStorage() {
+        return getOptional("kylin.storage.hbase.gtstorage",
+                "org.apache.kylin.storage.hbase.cube.v2.CubeHBaseEndpointRPC");
+    }
+
+    public int getHBaseScanCacheRows() {
+        return Integer.parseInt(this.getOptional("kylin.storage.hbase.scan-cache-rows", "1024"));
+    }
+
+    public float getKylinHBaseRegionCut() {
+        return Float.valueOf(getOptional("kylin.storage.hbase.region-cut-gb", "5.0"));
+    }
+
+    public int getHBaseScanMaxResultSize() {
+        return Integer.parseInt(this.getOptional("kylin.storage.hbase.max-scan-result-bytes", "" + (5 * 1024 * 1024))); // 5 MB
+    }
+
+    public String getHbaseDefaultCompressionCodec() {
+        return getOptional("kylin.storage.hbase.compression-codec", "none");
+    }
+
+    public String getHbaseDefaultEncoding() {
+        return getOptional("kylin.storage.hbase.rowkey-encoding", "FAST_DIFF");
+    }
+
+    public int getHbaseDefaultBlockSize() {
+        return Integer.valueOf(getOptional("kylin.storage.hbase.block-size-bytes", "1048576"));
+    }
+
+    public int getHbaseSmallFamilyBlockSize() {
+        return Integer.valueOf(getOptional("kylin.storage.hbase.small-family-block-size-bytes", "65536"));
+    }
+
+    public String getKylinOwner() {
+        return this.getOptional("kylin.storage.hbase.owner-tag", "");
+    }
+
+    public boolean getCompressionResult() {
+        return Boolean.parseBoolean(getOptional("kylin.storage.hbase.endpoint-compress-result", "true"));
+    }
+
+    public int getHBaseMaxConnectionThreads() {
+        return Integer.parseInt(getOptional("kylin.storage.hbase.max-hconnection-threads", "2048"));
+    }
+
+    public int getHBaseCoreConnectionThreads() {
+        return Integer.parseInt(getOptional("kylin.storage.hbase.core-hconnection-threads", "2048"));
+    }
+
+    public long getHBaseConnectionThreadPoolAliveSeconds() {
+        return Long.parseLong(getOptional("kylin.storage.hbase.hconnection-threads-alive-seconds", "60"));
+    }
+
+    public int getHBaseReplicationScope() {
+        return Integer.parseInt(getOptional("kylin.storage.hbase.replication-scope", "0"));
+    }
+
+    // ============================================================================
+    // ENGINE.MR
+    // ============================================================================
+
+    public Map<Integer, String> getJobEngines() {
+        Map<Integer, String> r = Maps.newLinkedHashMap();
+        // ref constants in IEngineAware
+        r.put(0, "org.apache.kylin.engine.mr.MRBatchCubingEngine"); //IEngineAware.ID_MR_V1
+        r.put(2, "org.apache.kylin.engine.mr.MRBatchCubingEngine2"); //IEngineAware.ID_MR_V2
+        r.put(4, "org.apache.kylin.engine.spark.SparkBatchCubingEngine2"); //IEngineAware.ID_SPARK
+        r.putAll(convertKeyToInteger(getPropertiesByPrefix("kylin.engine.provider.")));
+        return r;
+    }
+
+    public int getDefaultCubeEngine() {
+        return Integer.parseInt(getOptional("kylin.engine.default", "2"));
+    }
+
+    public String getKylinJobJarPath() {
+        final String jobJar = getOptional("kylin.engine.mr.job-jar");
+        if (StringUtils.isNotEmpty(jobJar)) {
+            return jobJar;
+        }
+        String kylinHome = getKylinHome();
+        if (StringUtils.isEmpty(kylinHome)) {
+            return "";
+        }
+        return getFileName(kylinHome + File.separator + "lib", JOB_JAR_NAME_PATTERN);
+    }
+
+    public void overrideMRJobJarPath(String path) {
+        logger.info("override " + "kylin.engine.mr.job-jar" + " to " + path);
+        System.setProperty("kylin.engine.mr.job-jar", path);
+    }
+
+    public String getKylinJobMRLibDir() {
+        return getOptional("kylin.engine.mr.lib-dir", "");
+    }
+
+    public Map<String, String> getMRConfigOverride() {
+        return getPropertiesByPrefix("kylin.engine.mr.config-override.");
+    }
+
+    // used for some mem-hungry step
+    public Map<String, String> getMemHungryConfigOverride() {
+        return getPropertiesByPrefix("kylin.engine.mr.mem-hungry-config-override.");
+    }
+
+    public Map<String, String> getUHCMRConfigOverride() {
+        return getPropertiesByPrefix("kylin.engine.mr.uhc-config-override.");
+    }
+
+    public Map<String, String> getBaseCuboidMRConfigOverride() {
+        return getPropertiesByPrefix("kylin.engine.mr.base-cuboid-config-override.");
+    }
+
+    public Map<String, String> getSparkConfigOverride() {
+        return getPropertiesByPrefix("kylin.engine.spark-conf.");
+    }
+
+    public Map<String, String> getSparkConfigOverrideWithSpecificName(String configName) {
+        return getPropertiesByPrefix("kylin.engine.spark-conf-" + configName + ".");
+    }
+
+    public double getDefaultHadoopJobReducerInputMB() {
+        return Double.parseDouble(getOptional("kylin.engine.mr.reduce-input-mb", "500"));
+    }
+
+    public double getDefaultHadoopJobReducerCountRatio() {
+        return Double.parseDouble(getOptional("kylin.engine.mr.reduce-count-ratio", "1.0"));
+    }
+
+    public int getHadoopJobMinReducerNumber() {
+        return Integer.parseInt(getOptional("kylin.engine.mr.min-reducer-number", "1"));
+    }
+
+    public int getHadoopJobMaxReducerNumber() {
+        return Integer.parseInt(getOptional("kylin.engine.mr.max-reducer-number", "500"));
+    }
+
+    public int getHadoopJobMapperInputRows() {
+        return Integer.parseInt(getOptional("kylin.engine.mr.mapper-input-rows", "1000000"));
+    }
+
+    public int getCuboidStatsCalculatorMaxNumber() {
+        // set 1 to disable multi-thread statistics calculation
+        return Integer.parseInt(getOptional("kylin.engine.mr.max-cuboid-stats-calculator-number", "1"));
+    }
+
+    public int getCuboidNumberPerStatsCalculator() {
+        return Integer.parseInt(getOptional("kylin.engine.mr.cuboid-number-per-stats-calculator", "100"));
+    }
+
+    public int getHadoopJobPerReducerHLLCuboidNumber() {
+        return Integer.parseInt(getOptional("kylin.engine.mr.per-reducer-hll-cuboid-number", "100"));
+    }
+
+    public int getHadoopJobHLLMaxReducerNumber() {
+        // by default multi-reducer hll calculation is disabled
+        return Integer.parseInt(getOptional("kylin.engine.mr.hll-max-reducer-number", "1"));
+    }
+
+    //UHC: ultra high cardinality columns, contain the ShardByColumns and the GlobalDictionaryColumns
+    public int getUHCReducerCount() {
+        return Integer.parseInt(getOptional("kylin.engine.mr.uhc-reducer-count", "1"));
+    }
+
+    public boolean isBuildUHCDictWithMREnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.engine.mr.build-uhc-dict-in-additional-step", "false"));
+    }
+
+    public boolean isBuildDictInReducerEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.engine.mr.build-dict-in-reducer", "true"));
+    }
+
+    public String getYarnStatusCheckUrl() {
+        return getOptional("kylin.engine.mr.yarn-check-status-url", null);
+    }
+
+    public int getYarnStatusCheckIntervalSeconds() {
+        return Integer.parseInt(getOptional("kylin.engine.mr.yarn-check-interval-seconds", "10"));
+    }
+
+    // ============================================================================
+    // ENGINE.SPARK
+    // ============================================================================
+
+    public String getHadoopConfDir() {
+        return getOptional("kylin.env.hadoop-conf-dir", "");
+    }
+
+    public String getSparkAdditionalJars() {
+        return getOptional("kylin.engine.spark.additional-jars", "");
+    }
+
+    public float getSparkRDDPartitionCutMB() {
+        return Float.valueOf(getOptional("kylin.engine.spark.rdd-partition-cut-mb", "10.0"));
+    }
+
+    public int getSparkMinPartition() {
+        return Integer.valueOf(getOptional("kylin.engine.spark.min-partition", "1"));
+    }
+
+    public int getSparkMaxPartition() {
+        return Integer.valueOf(getOptional("kylin.engine.spark.max-partition", "5000"));
+    }
+
+    public String getSparkStorageLevel() {
+        return getOptional("kylin.engine.spark.storage-level", "MEMORY_AND_DISK_SER");
+    }
+
+    public boolean isSparkSanityCheckEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.engine.spark.sanity-check-enabled", "false"));
+    }
+
+    // ============================================================================
+    // QUERY
+    // ============================================================================
+
+    public boolean isDictionaryEnumeratorEnabled() {
+        return Boolean.valueOf(getOptional("kylin.query.enable-dict-enumerator", "false"));
+    }
+
+    public Boolean isEnumerableRulesEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.query.calcite.enumerable-rules-enabled", "false"));
+    }
+
+    public boolean isReduceExpressionsRulesEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.query.calcite.reduce-rules-enabled", "true"));
+    }
+
+    public boolean isConvertCreateTableToWith() {
+        return Boolean.valueOf(getOptional("kylin.query.convert-create-table-to-with", "false"));
+    }
+
+    /**
+     * Extras calcite properties to config Calcite connection
+     */
+    public Properties getCalciteExtrasProperties() {
+        Properties properties = new Properties();
+        Map<String, String> map = getPropertiesByPrefix("kylin.query.calcite.extras-props.");
+        properties.putAll(map);
+        return properties;
+    }
+
+    /**
+     * Rule is usually singleton as static field, the configuration of this property is like:
+     * RuleClassName1#FieldName1,RuleClassName2#FieldName2,...
+     */
+    public List<String> getCalciteAddRule() {
+        String rules = getOptional("kylin.query.calcite.add-rule");
+        if (rules == null) {
+            return Lists.newArrayList();
+        }
+        return Lists.newArrayList(rules.split(","));
+    }
+
+    /**
+     * Rule is usually singleton as static field, the configuration of this property is like:
+     * RuleClassName1#FieldName1,RuleClassName2#FieldName2,...
+     */
+    public List<String> getCalciteRemoveRule() {
+        String rules = getOptional("kylin.query.calcite.remove-rule");
+        if (rules == null) {
+            return Lists.newArrayList();
+        }
+        return Lists.newArrayList(rules.split(","));
+    }
+
+    // check KYLIN-3358, need deploy coprocessor if enabled
+    // finally should be deprecated
+    public boolean isDynamicColumnEnabled() {
+        return Boolean.valueOf(getOptional("kylin.query.enable-dynamic-column", "false"));
+    }
+
+    //check KYLIN-1684, in most cases keep the default value
+    public boolean isSkippingEmptySegments() {
+        return Boolean.valueOf(getOptional("kylin.query.skip-empty-segments", "true"));
+    }
+
+    public boolean isDisableCubeNoAggSQL() {
+        return Boolean.valueOf(getOptional("kylin.query.disable-cube-noagg-sql", "false"));
+    }
+
+    public boolean isStreamAggregateEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.query.stream-aggregate-enabled", "true"));
+    }
+
+    public boolean isProjectIsolationEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.storage.project-isolation-enable", "true"));
+    }
+
+    @Deprecated //Limit is good even it's large. This config is meaning less since we already have scan threshold
+    public int getStoragePushDownLimitMax() {
+        return Integer.parseInt(getOptional("kylin.query.max-limit-pushdown", "10000"));
+    }
+
+    // Select star on large table is too slow for BI, add limit by default if missing
+    // https://issues.apache.org/jira/browse/KYLIN-2649
+    public int getForceLimit() {
+        return Integer.parseInt(getOptional("kylin.query.force-limit", "-1"));
+    }
+
+    @Deprecated
+    public int getScanThreshold() {
+        return Integer.parseInt(getOptional("kylin.query.scan-threshold", "10000000"));
+    }
+
+    public int getQueryConcurrentRunningThresholdForProject() {
+        // by default there's no limitation
+        return Integer.parseInt(getOptional("kylin.query.project-concurrent-running-threshold", "0"));
+    }
+
+    public long getQueryMaxScanBytes() {
+        long value = Long.parseLong(getOptional("kylin.query.max-scan-bytes", "0"));
+        return value > 0 ? value : Long.MAX_VALUE;
+    }
+
+    public long getQueryMaxReturnRows() {
+        return Integer.parseInt(this.getOptional("kylin.query.max-return-rows", "5000000"));
+    }
+
+    public int getTranslatedInClauseMaxSize() {
+        return Integer.parseInt(getOptional("kylin.query.translated-in-clause-max-size", String.valueOf(1024 * 1024)));
+    }
+
+    public int getLargeQueryThreshold() {
+        return Integer.parseInt(getOptional("kylin.query.large-query-threshold", String.valueOf(1000000)));
+    }
+
+    public int getDerivedInThreshold() {
+        return Integer.parseInt(getOptional("kylin.query.derived-filter-translation-threshold", "20"));
+    }
+
+    public int getBadQueryStackTraceDepth() {
+        return Integer.parseInt(getOptional("kylin.query.badquery-stacktrace-depth", "10"));
+    }
+
+    public int getBadQueryHistoryNum() {
+        return Integer.parseInt(getOptional("kylin.query.badquery-history-number", "50"));
+    }
+
+    public int getBadQueryDefaultAlertingSeconds() {
+        return Integer.parseInt(getOptional("kylin.query.badquery-alerting-seconds", "90"));
+    }
+
+    public double getBadQueryDefaultAlertingCoefficient() {
+        return Double.parseDouble(getOptional("kylin.query.timeout-seconds-coefficient", "0.5"));
+    }
+
+    public int getBadQueryDefaultDetectIntervalSeconds() {
+        int time = (int) (getQueryTimeoutSeconds() * getBadQueryDefaultAlertingCoefficient()); // half of query timeout
+        if (time == 0) {
+            time = 60; // 60 sec
+        }
+        return time;
+    }
+
+    public boolean getBadQueryPersistentEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.query.badquery-persistent-enabled", "true"));
+    }
+
+    public String[] getQueryTransformers() {
+        return getOptionalStringArray("kylin.query.transformers", new String[0]);
+    }
+
+    public String[] getQueryInterceptors() {
+        return getOptionalStringArray("kylin.query.interceptors", new String[0]);
+    }
+
+    public long getQueryDurationCacheThreshold() {
+        return Long.parseLong(this.getOptional("kylin.query.cache-threshold-duration", String.valueOf(2000)));
+    }
+
+    public long getQueryScanCountCacheThreshold() {
+        return Long.parseLong(this.getOptional("kylin.query.cache-threshold-scan-count", String.valueOf(10 * 1024)));
+    }
+
+    public long getQueryScanBytesCacheThreshold() {
+        return Long.parseLong(this.getOptional("kylin.query.cache-threshold-scan-bytes", String.valueOf(1024 * 1024)));
+    }
+
+    public boolean isQuerySecureEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.query.security-enabled", "true"));
+    }
+
+    public boolean isQueryCacheEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.query.cache-enabled", "true"));
+    }
+
+    public boolean isQueryIgnoreUnknownFunction() {
+        return Boolean.parseBoolean(this.getOptional("kylin.query.ignore-unknown-function", "false"));
+    }
+
+    public String getQueryAccessController() {
+        return getOptional("kylin.query.access-controller", null);
+    }
+
+    public int getQueryMaxCacheStatementNum() {
+        return Integer.parseInt(this.getOptional("kylin.query.statement-cache-max-num", String.valueOf(50000)));
+    }
+
+    public int getQueryMaxCacheStatementInstancePerKey() {
+        return Integer.parseInt(this.getOptional("kylin.query.statement-cache-max-num-per-key", String.valueOf(50)));
+    }
+
+    public int getDimCountDistinctMaxCardinality() {
+        return Integer.parseInt(getOptional("kylin.query.max-dimension-count-distinct", "5000000"));
+    }
+
+    public Map<String, String> getUDFs() {
+        Map<String, String> udfMap = Maps.newLinkedHashMap();
+        udfMap.put("version", "org.apache.kylin.query.udf.VersionUDF");
+        udfMap.put("concat", "org.apache.kylin.query.udf.ConcatUDF");
+        udfMap.put("massin", "org.apache.kylin.query.udf.MassInUDF");
+        Map<String, String> overrideUdfMap = getPropertiesByPrefix("kylin.query.udf.");
+        udfMap.putAll(overrideUdfMap);
+        return udfMap;
+    }
+
+    public int getQueryTimeoutSeconds() {
+        int time = Integer.parseInt(this.getOptional("kylin.query.timeout-seconds", "0"));
+        if (time != 0 && time <= 60) {
+            logger.warn("query timeout seconds less than 60 sec, set to 60 sec.");
+            time = 60;
+        }
+        return time;
+    }
+
+    public boolean isPushDownEnabled() {
+        return StringUtils.isNotEmpty(getPushDownRunnerClassName());
+    }
+
+    public boolean isPushDownUpdateEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.query.pushdown.update-enabled", "false"));
+    }
+
+    public String getSchemaFactory() {
+        return this.getOptional("kylin.query.schema-factory", "org.apache.kylin.query.schema.OLAPSchemaFactory");
+    }
+
+    public String getPushDownRunnerClassName() {
+        return getOptional("kylin.query.pushdown.runner-class-name", "");
+    }
+
+    public String[] getPushDownConverterClassNames() {
+        return getOptionalStringArray("kylin.query.pushdown.converter-class-names",
+                new String[] { "org.apache.kylin.source.adhocquery.HivePushDownConverter" });
+    }
+
+    public boolean isPushdownQueryCacheEnabled() {
+        return Boolean.parseBoolean(this.getOptional("kylin.query.pushdown.cache-enabled", "false"));
+    }
+
+    public String getJdbcUrl() {
+        return getOptional("kylin.query.pushdown.jdbc.url", "");
+    }
+
+    public String getJdbcDriverClass() {
+        return getOptional("kylin.query.pushdown.jdbc.driver", "");
+    }
+
+    public String getJdbcUsername() {
+        return getOptional("kylin.query.pushdown.jdbc.username", "");
+    }
+
+    public String getJdbcPassword() {
+        return getOptional("kylin.query.pushdown.jdbc.password", "");
+    }
+
+    public int getPoolMaxTotal() {
+        return Integer.parseInt(this.getOptional("kylin.query.pushdown.jdbc.pool-max-total", "8"));
+    }
+
+    public int getPoolMaxIdle() {
+        return Integer.parseInt(this.getOptional("kylin.query.pushdown.jdbc.pool-max-idle", "8"));
+    }
+
+    public int getPoolMinIdle() {
+        return Integer.parseInt(this.getOptional("kylin.query.pushdown.jdbc.pool-min-idle", "0"));
+    }
+
+    public boolean isTableACLEnabled() {
+        return Boolean.valueOf(this.getOptional("kylin.query.security.table-acl-enabled", "true"));
+    }
+
+    public boolean isEscapeDefaultKeywordEnabled() {
+        return Boolean.valueOf(this.getOptional("kylin.query.escape-default-keyword", "false"));
+    }
+
+    public String getQueryRealizationFilter() {
+        return getOptional("kylin.query.realization-filter", null);
+    }
+
+    // ============================================================================
+    // SERVER
+    // ============================================================================
+
+    public String getServerMode() {
+        return this.getOptional("kylin.server.mode", "all");
+    }
+
+    public String[] getRestServers() {
+        return getOptionalStringArray("kylin.server.cluster-servers", new String[0]);
+    }
+
+    public String getClusterName() {
+        return this.getOptional("kylin.server.cluster-name", getMetadataUrlPrefix());
+    }
+
+    public String getInitTasks() {
+        return getOptional("kylin.server.init-tasks");
+    }
+
+    public int getWorkersPerServer() {
+        //for sequence sql use
+        return Integer.parseInt(getOptional("kylin.server.sequence-sql.workers-per-server", "1"));
+    }
+
+    public long getSequenceExpireTime() {
+        return Long.valueOf(this.getOptional("kylin.server.sequence-sql.expire-time", "86400000"));//default a day
+    }
+
+    public boolean getQueryMetricsEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.server.query-metrics-enabled", "false"));
+    }
+
+    public boolean getQueryMetrics2Enabled() {
+        return Boolean.parseBoolean(getOptional("kylin.server.query-metrics2-enabled", "false"));
+    }
+
+    public int[] getQueryMetricsPercentilesIntervals() {
+        String[] dft = { "60", "300", "3600" };
+        return getOptionalIntArray("kylin.server.query-metrics-percentiles-intervals", dft);
+    }
+
+    public int getServerUserCacheExpireSeconds() {
+        return Integer.valueOf(this.getOptional("kylin.server.auth-user-cache.expire-seconds", "300"));
+    }
+
+    public int getServerUserCacheMaxEntries() {
+        return Integer.valueOf(this.getOptional("kylin.server.auth-user-cache.max-entries", "100"));
+    }
+
+    public String getExternalAclProvider() {
+        return getOptional("kylin.server.external-acl-provider", "");
+    }
+
+    public String getLDAPUserSearchBase() {
+        return getOptional("kylin.security.ldap.user-search-base", "");
+    }
+
+    public String getLDAPGroupSearchBase() {
+        return getOptional("kylin.security.ldap.user-group-search-base", "");
+    }
+
+    public String getLDAPAdminRole() {
+        return getOptional("kylin.security.acl.admin-role", "");
+    }
+
+    // ============================================================================
+    // WEB
+    // ============================================================================
+
+    public String getTimeZone() {
+        String timezone = getOptional("kylin.web.timezone");
+        if (StringUtils.isBlank(timezone)) {
+            timezone = TimeZone.getDefault().getID();
+        }
+        return timezone;
+    }
+
+    public boolean isWebCrossDomainEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.web.cross-domain-enabled", "true"));
+    }
+
+    public boolean isAdminUserExportAllowed() {
+        return Boolean.parseBoolean(getOptional("kylin.web.export-allow-admin", "true"));
+    }
+
+    public boolean isNoneAdminUserExportAllowed() {
+        return Boolean.parseBoolean(getOptional("kylin.web.export-allow-other", "true"));
+    }
+
+    public boolean isWebDashboardEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.web.dashboard-enabled", "false"));
+    }
+
+    public String getPropertiesWhiteList() {
+        return getOptional("kylin.web.properties.whitelist", "kylin.web.timezone,kylin.query.cache-enabled,kylin.env,"
+                + "kylin.web.hive-limit,kylin.storage.default,"
+                + "kylin.engine.default,kylin.web.link-hadoop,kylin.web.link-diagnostic,"
+                + "kylin.web.contact-mail,kylin.web.help.length,kylin.web.help.0,kylin.web.help.1,kylin.web.help.2,"
+                + "kylin.web.help.3,"
+                + "kylin.web.help,kylin.web.hide-measures,kylin.web.link-streaming-guide,kylin.server.external-acl-provider,"
+                + "kylin.security.profile,"
+                + "kylin.htrace.show-gui-trace-toggle,kylin.web.export-allow-admin,kylin.web.export-allow-other,"
+                + "kylin.cube.cubeplanner.enabled,kylin.web.dashboard-enabled,kylin.tool.auto-migrate-cube.enabled");
+    }
+
+    // ============================================================================
+    // RESTCLIENT
+    // ============================================================================
+
+    public int getRestClientDefaultMaxPerRoute() {
+        return Integer.valueOf(this.getOptional("kylin.restclient.connection.default-max-per-route", "20"));
+    }
+
+    public int getRestClientMaxTotal() {
+        return Integer.valueOf(this.getOptional("kylin.restclient.connection.max-total", "200"));
+    }
+
+    // ============================================================================
+    // Metrics
+    // ============================================================================
+
+    public String getCoadhaleMetricsReportClassesNames() {
+        return getOptional("kylin.metrics.reporter-classes",
+                "org.apache.kylin.common.metrics.metrics2.JsonFileMetricsReporter,org.apache.kylin.common.metrics.metrics2.JmxMetricsReporter");
+    }
+
+    public String getMetricsFileLocation() {
+        return getOptional("kylin.metrics.file-location", "/tmp/report.json");
+    }
+
+    public Long getMetricsReporterFrequency() {
+        return Long.parseLong(getOptional("kylin.metrics.file-frequency", "5000"));
+    }
+
+    public String getPerfLoggerClassName() {
+        return getOptional("kylin.metrics.perflogger-class", "org.apache.kylin.common.metrics.perflog.PerfLogger");
+    }
+
+    public boolean isShowingGuiTraceToggle() {
+        return Boolean.valueOf(getOptional("kylin.htrace.show-gui-trace-toggle", "false"));
+    }
+
+    public boolean isHtraceTracingEveryQuery() {
+        return Boolean.valueOf(getOptional("kylin.htrace.trace-every-query", "false"));
+    }
+
+    public boolean isKylinMetricsMonitorEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.metrics.monitor-enabled", "false"));
+    }
+
+    public boolean isKylinMetricsReporterForQueryEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.metrics.reporter-query-enabled", "false"));
+    }
+
+    public boolean isKylinMetricsReporterForJobEnabled() {
+        return Boolean.parseBoolean(getOptional("kylin.metrics.reporter-job-enabled", "false"));
+    }
+
+    public String getKylinMetricsPrefix() {
+        return getOptional("kylin.metrics.prefix", "KYLIN").toUpperCase(Locale.ROOT);
+    }
+
+    public String getKylinMetricsActiveReservoirDefaultClass() {
+        return getOptional("kylin.metrics.active-reservoir-default-class",
+                "org.apache.kylin.metrics.lib.impl.StubReservoir");
+    }
+
+    public String getKylinSystemCubeSinkDefaultClass() {
+        return getOptional("kylin.metrics.system-cube-sink-default-class",
+                "org.apache.kylin.metrics.lib.impl.hive.HiveSink");
+    }
+
+    public String getKylinMetricsSubjectSuffix() {
+        return getOptional("kylin.metric.subject-suffix", getDeployEnv());
+    }
+
+    public String getKylinMetricsSubjectJob() {
+        return getOptional("kylin.metrics.subject-job", "METRICS_JOB") + "_" + getKylinMetricsSubjectSuffix();
+    }
+
+    public String getKylinMetricsSubjectJobException() {
+        return getOptional("kylin.metrics.subject-job-exception", "METRICS_JOB_EXCEPTION") + "_"
+                + getKylinMetricsSubjectSuffix();
+    }
+
+    public String getKylinMetricsSubjectQuery() {
+        return getOptional("kylin.metrics.subject-query", "METRICS_QUERY") + "_" + getKylinMetricsSubjectSuffix();
+    }
+
+    public String getKylinMetricsSubjectQueryCube() {
+        return getOptional("kylin.metrics.subject-query-cube", "METRICS_QUERY_CUBE") + "_"
+                + getKylinMetricsSubjectSuffix();
+    }
+
+    public String getKylinMetricsSubjectQueryRpcCall() {
+        return getOptional("kylin.metrics.subject-query-rpc", "METRICS_QUERY_RPC") + "_"
+                + getKylinMetricsSubjectSuffix();
+    }
+
+    // ============================================================================
+    // tool
+    // ============================================================================
+    public boolean isAllowAutoMigrateCube() {
+        return Boolean.parseBoolean(getOptional("kylin.tool.auto-migrate-cube.enabled", "false"));
+    }
+
+    public boolean isAutoMigrateCubeCopyAcl() {
+        return Boolean.parseBoolean(getOptional("kylin.tool.auto-migrate-cube.copy-acl", "true"));
+    }
+
+    public boolean isAutoMigrateCubePurge() {
+        return Boolean.parseBoolean(getOptional("kylin.tool.auto-migrate-cube.purge-src-cube", "true"));
+    }
+
+    public String getAutoMigrateCubeSrcConfig() {
+        return getOptional("kylin.tool.auto-migrate-cube.src-config", "");
+    }
+
+    public String getAutoMigrateCubeDestConfig() {
+        return getOptional("kylin.tool.auto-migrate-cube.dest-config", "");
+    }
+
+    // ============================================================================
+    // jdbc metadata resource store
+    // ============================================================================
+
+    public String getMetadataDialect() {
+        return getOptional("kylin.metadata.jdbc.dialect", "mysql");
+    }
+
+    public boolean isJsonAlwaysSmallCell() {
+        return Boolean.valueOf(getOptional("kylin.metadata.jdbc.json-always-small-cell", "true"));
+    }
+
+    public int getSmallCellMetadataWarningThreshold() {
+        return Integer.parseInt(getOptional("kylin.metadata.jdbc.small-cell-meta-size-warning-threshold",
+                String.valueOf(100 << 20))); //100mb
+    }
+
+    public int getSmallCellMetadataErrorThreshold() {
+        return Integer.parseInt(getOptional("kylin.metadata.jdbc.small-cell-meta-size-error-threshold", String.valueOf(1 << 30))); // 1gb
+    }
+
+    public int getJdbcResourceStoreMaxCellSize() {
+        return Integer.parseInt(getOptional("kylin.metadata.jdbc.max-cell-size", "1048576")); // 1mb
+    }
 }

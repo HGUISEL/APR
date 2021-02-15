@@ -1,378 +1,236 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.hama.graph;
+package org.jsoup.helper;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.DataInput;
-import java.io.DataInputStream;
-import java.io.DataOutput;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.util.Iterator;
-import java.util.List;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.parser.Parser;
 
-import org.apache.hadoop.io.DataInputBuffer;
-import org.apache.hadoop.io.IntWritable;
-import org.apache.hadoop.io.MapWritable;
-import org.apache.hadoop.io.Writable;
-import org.apache.hadoop.io.WritableComparable;
-import org.apache.hadoop.io.WritableComparator;
-import org.apache.hadoop.util.ReflectionUtils;
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.IllegalCharsetNameException;
+import java.util.Locale;
+import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * A message that is either MapWritable (for meta communication purposes) or a
- * real message (vertex ID and value). It can be extended by adding flags, for
- * example for a graph repair call.
+ * Internal static utilities for handling data.
+ *
  */
-public final class GraphJobMessage implements
-    WritableComparable<GraphJobMessage> {
+public final class DataUtil {
+    private static final Pattern charsetPattern = Pattern.compile("(?i)\\bcharset=\\s*(?:\"|')?([^\\s,;\"']*)");
+    static final String defaultCharset = "UTF-8"; // used if not found in header or meta charset
+    private static final int bufferSize = 0x20000; // ~130K.
+    private static final int UNICODE_BOM = 0xFEFF;
+    private static final char[] mimeBoundaryChars =
+            "-_1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
+    static final int boundaryLength = 32;
 
-  public static final int MAP_FLAG = 0x01;
-  public static final int VERTEX_FLAG = 0x02;
-  public static final int VERTICES_SIZE_FLAG = 0x04;
-  public static final int PARTITION_FLAG = 0x08;
+    private DataUtil() {}
 
-  // default flag to -1 "unknown"
-  private int flag = -1;
-  private MapWritable map;
-  @SuppressWarnings("rawtypes")
-  private WritableComparable vertexId;
-  private IntWritable integerMessage;
-  private static GraphJobMessageComparator comparator;
-  private Vertex<?, ?, ?> vertex;
-  
-  private int numOfValues = 0;
-
-  private final ByteArrayOutputStream byteBuffer = new ByteArrayOutputStream();
-
-  static {
-    if (comparator == null) {
-      comparator = new GraphJobMessageComparator();
+    /**
+     * Loads a file to a Document.
+     * @param in file to load
+     * @param charsetName character set of input
+     * @param baseUri base URI of document, to resolve relative links against
+     * @return Document
+     * @throws IOException on IO error
+     */
+    public static Document load(File in, String charsetName, String baseUri) throws IOException {
+        ByteBuffer byteData = readFileToByteBuffer(in);
+        return parseByteData(byteData, charsetName, baseUri, Parser.htmlParser());
     }
 
-    WritableComparator.define(GraphJobMessage.class, comparator);
-  }
-
-  public GraphJobMessage() {
-  }
-
-  public GraphJobMessage(MapWritable map) {
-    this.flag = MAP_FLAG;
-    this.map = map;
-  }
-
-  public GraphJobMessage(WritableComparable<?> vertexId, Writable vertexValue) {
-    this.flag = VERTEX_FLAG;
-    this.vertexId = vertexId;
-
-    add(vertexValue);
-  }
-
-  public GraphJobMessage(WritableComparable<?> vertexId, List<Writable> values) {
-    this.flag = VERTEX_FLAG;
-    this.vertexId = vertexId;
-
-    addAll(values);
-  }
-
-  public GraphJobMessage(WritableComparable<?> vertexID, byte[] valuesBytes,
-      int numOfValues) {
-    this.flag = VERTEX_FLAG;
-    this.vertexId = vertexID;
-    try {
-      this.byteBuffer.write(valuesBytes);
-    } catch (IOException e) {
-      e.printStackTrace();
+    /**
+     * Parses a Document from an input steam.
+     * @param in input stream to parse. You will need to close it.
+     * @param charsetName character set of input
+     * @param baseUri base URI of document, to resolve relative links against
+     * @return Document
+     * @throws IOException on IO error
+     */
+    public static Document load(InputStream in, String charsetName, String baseUri) throws IOException {
+        ByteBuffer byteData = readToByteBuffer(in);
+        return parseByteData(byteData, charsetName, baseUri, Parser.htmlParser());
     }
 
-    this.numOfValues = numOfValues;
-  }
-
-  public MapWritable getMap() {
-    return map;
-  }
-
-  public Vertex<?, ?, ?> getVertex() {
-    return vertex;
-  }
-  
-  public WritableComparable<?> getVertexId() {
-    return vertexId;
-  }
-
-  public byte[] getValuesBytes() {
-    return byteBuffer.toByteArray();
-  }
-
-  public void addValuesBytes(byte[] values, int numOfValues) {
-    try {
-      byteBuffer.write(values);
-      this.numOfValues += numOfValues;
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
-  }
-
-  public void add(Writable value) {
-    try {
-      ByteArrayOutputStream a = new ByteArrayOutputStream();
-      DataOutputStream b = new DataOutputStream(a);
-      value.write(b);
-      byteBuffer.write(a.toByteArray());
-      numOfValues++;
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
-  }
-
-  public void addAll(List<Writable> values) {
-    ByteArrayOutputStream a = new ByteArrayOutputStream();
-    DataOutputStream b = new DataOutputStream(a);
-    try {
-      for (Writable v : values) {
-        v.write(b);
-      }
-
-      byteBuffer.write(a.toByteArray());
-      numOfValues += values.size();
-    } catch (IOException e) {
-      e.printStackTrace();
-    }
-  }
-
-  public int getNumOfValues() {
-    return this.numOfValues;
-  }
-
-  public GraphJobMessage(IntWritable size) {
-    this.flag = VERTICES_SIZE_FLAG;
-    this.integerMessage = size;
-  }
-
-  public GraphJobMessage(Vertex<?, ?, ?> vertex) {
-    this.flag = PARTITION_FLAG;
-    this.vertex = vertex;
-  }
-
-  @Override
-  public void write(DataOutput out) throws IOException {
-    out.writeByte(this.flag);
-    if (isVertexMessage()) {
-      // we don't need to write the classes because the other side has the same
-      // classes for the two entities.
-      vertexId.write(out);
-
-      out.writeInt(numOfValues);
-      out.writeInt(byteBuffer.size());
-      out.write(byteBuffer.toByteArray());
-    } else if (isMapMessage()) {
-      map.write(out);
-    } else if (isVerticesSizeMessage()) {
-      integerMessage.write(out);
-    } else if (isPartitioningMessage()) {
-      vertex.write(out);
-    } else {
-      vertexId.write(out);
-    }
-  }
-
-  public void fastReadFields(DataInput in) throws IOException {
-    flag = in.readByte();
-    if (isVertexMessage()) {
-      vertexId = GraphJobRunner.createVertexIDObject();
-      vertexId.readFields(in);
-      /*
-       * vertexValue = GraphJobRunner.createVertexValue();
-       * vertexValue.readFields(in);
-       */
-    } else if (isMapMessage()) {
-      map = new MapWritable();
-      map.readFields(in);
-    } else if (isVerticesSizeMessage()) {
-      integerMessage = new IntWritable();
-      integerMessage.readFields(in);
-    } else {
-      vertexId = ReflectionUtils.newInstance(GraphJobRunner.VERTEX_ID_CLASS,
-          null);
-      vertexId.readFields(in);
-    }
-  }
-
-  @Override
-  public void readFields(DataInput in) throws IOException {
-    flag = in.readByte();
-    if (isVertexMessage()) {
-      vertexId = GraphJobRunner.createVertexIDObject();
-      vertexId.readFields(in);
-
-      this.numOfValues = in.readInt();
-      int bytesLength = in.readInt();
-      byte[] temp = new byte[bytesLength];
-      in.readFully(temp);
-      byteBuffer.write(temp);
-    } else if (isMapMessage()) {
-      map = new MapWritable();
-      map.readFields(in);
-    } else if (isVerticesSizeMessage()) {
-      integerMessage = new IntWritable();
-      integerMessage.readFields(in);
-    } else if (isPartitioningMessage()) {
-      vertex = (Vertex<?, ?, ?>) ReflectionUtils.newInstance(GraphJobRunner.VERTEX_CLASS, null);
-      vertex.readFields(in);
-    } else {
-      vertexId = ReflectionUtils.newInstance(GraphJobRunner.VERTEX_ID_CLASS,
-          null);
-      vertexId.readFields(in);
-    }
-  }
-
-  @SuppressWarnings("unchecked")
-  @Override
-  public int compareTo(GraphJobMessage that) {
-    if (this.flag != that.flag) {
-      return (this.flag - that.flag);
-    } else {
-      if (this.isVertexMessage()) {
-        return this.vertexId.compareTo(that.vertexId);
-      } else if (this.isMapMessage()) {
-        return Integer.MIN_VALUE;
-      }
-    }
-    return 0;
-  }
-
-  /**
-   * @return the number of values
-   */
-  public int size() {
-    return this.numOfValues;
-  }
-
-  public IntWritable getVerticesSize() {
-    return integerMessage;
-  }
-
-  public boolean isMapMessage() {
-    return flag == MAP_FLAG;
-  }
-
-  public boolean isVertexMessage() {
-    return flag == VERTEX_FLAG;
-  }
-
-  public boolean isVerticesSizeMessage() {
-    return flag == VERTICES_SIZE_FLAG;
-  }
-
-  public boolean isPartitioningMessage() {
-    return flag == PARTITION_FLAG;
-  }
-  
-  @Override
-  public String toString() {
-    if (isVertexMessage()) {
-      return "ID: " + vertexId + " Val: " + numOfValues;
-    } else if (isMapMessage()) {
-      return "Map: " + map;
-    } else if (isVerticesSizeMessage()) {
-      return "#Vertices: " + integerMessage;
-    } else {
-      return "GraphJobMessage [flag=" + flag + ", map=" + map + ", vertexId="
-          + vertexId + ", vertexValue=" + numOfValues + ", " + vertex.toString() + "]";
-    }
-  }
-
-  public static class GraphJobMessageComparator extends WritableComparator {
-    private final DataInputBuffer buffer;
-    private final GraphJobMessage key1;
-    private final GraphJobMessage key2;
-
-    public GraphJobMessageComparator() {
-      this(GraphJobMessage.class);
+    /**
+     * Parses a Document from an input steam, using the provided Parser.
+     * @param in input stream to parse. You will need to close it.
+     * @param charsetName character set of input
+     * @param baseUri base URI of document, to resolve relative links against
+     * @param parser alternate {@link Parser#xmlParser() parser} to use.
+     * @return Document
+     * @throws IOException on IO error
+     */
+    public static Document load(InputStream in, String charsetName, String baseUri, Parser parser) throws IOException {
+        ByteBuffer byteData = readToByteBuffer(in);
+        return parseByteData(byteData, charsetName, baseUri, parser);
     }
 
-    protected GraphJobMessageComparator(
-        Class<? extends WritableComparable<?>> keyClass) {
-      this(keyClass, false);
+    /**
+     * Writes the input stream to the output stream. Doesn't close them.
+     * @param in input stream to read from
+     * @param out output stream to write to
+     * @throws IOException on IO error
+     */
+    static void crossStreams(final InputStream in, final OutputStream out) throws IOException {
+        final byte[] buffer = new byte[bufferSize];
+        int len;
+        while ((len = in.read(buffer)) != -1) {
+            out.write(buffer, 0, len);
+        }
     }
 
-    protected GraphJobMessageComparator(
-        Class<? extends WritableComparable<?>> keyClass, boolean createInstances) {
-      super(keyClass, createInstances);
-      key1 = new GraphJobMessage();
-      key2 = new GraphJobMessage();
-      buffer = new DataInputBuffer();
-    }
+    // reads bytes first into a buffer, then decodes with the appropriate charset. done this way to support
+    // switching the chartset midstream when a meta http-equiv tag defines the charset.
+    // todo - this is getting gnarly. needs a rewrite.
+    static Document parseByteData(ByteBuffer byteData, String charsetName, String baseUri, Parser parser) {
+        String docData;
+        Document doc = null;
 
-    @Override
-    public synchronized int compare(byte[] b1, int s1, int l1, byte[] b2,
-        int s2, int l2) {
-      try {
-        buffer.reset(b1, s1, l1); // parse key1
-        key1.fastReadFields(buffer);
+        // look for BOM - overrides any other header or input
+        byteData.mark();
+        byte[] bom = new byte[4];
+        if (byteData.remaining() >= bom.length) {
+            byteData.get(bom);
+            byteData.rewind();
+        }
+        if (bom[0] == 0x00 && bom[1] == 0x00 && bom[2] == (byte) 0xFE && bom[3] == (byte) 0xFF || // BE
+                bom[0] == (byte) 0xFF && bom[1] == (byte) 0xFE && bom[2] == 0x00 && bom[3] == 0x00) { // LE
+            charsetName = "UTF-32"; // and I hope it's on your system
+        } else if (bom[0] == (byte) 0xFE && bom[1] == (byte) 0xFF || // BE
+                bom[0] == (byte) 0xFF && bom[1] == (byte) 0xFE) {
+            charsetName = "UTF-16"; // in all Javas
+        } else if (bom[0] == (byte) 0xEF && bom[1] == (byte) 0xBB && bom[2] == (byte) 0xBF) {
+            charsetName = "UTF-8"; // in all Javas
+            byteData.position(3); // 16 and 32 decoders consume the BOM to determine be/le; utf-8 should be consumed
+        }
 
-        buffer.reset(b2, s2, l2); // parse key2
-        key2.fastReadFields(buffer);
-      } catch (IOException e) {
-        throw new RuntimeException(e);
-      }
+        if (charsetName == null) { // determine from meta. safe parse as UTF-8
+            // look for <meta http-equiv="Content-Type" content="text/html;charset=gb2312"> or HTML5 <meta charset="gb2312">
+            docData = Charset.forName(defaultCharset).decode(byteData).toString();
+            doc = parser.parseInput(docData, baseUri);
+            Element meta = doc.select("meta[http-equiv=content-type], meta[charset]").first();
+            if (meta != null) { // if not found, will keep utf-8 as best attempt
+                String foundCharset = null;
+                if (meta.hasAttr("http-equiv")) {
+                    foundCharset = getCharsetFromContentType(meta.attr("content"));
+                }
+                if (foundCharset == null && meta.hasAttr("charset")) {
+                    try {
+                        if (Charset.isSupported(meta.attr("charset"))) {
+                            foundCharset = meta.attr("charset");
+                        }
+                    } catch (IllegalCharsetNameException e) {
+                        foundCharset = null;
+                    }
+                }
 
-      return compare(key1, key2); // compare them
-    }
-  }
-
-  public Iterable<Writable> getIterableMessages() {
-
-    return new Iterable<Writable>() {
-      @Override
-      public Iterator<Writable> iterator() {
-        return new Iterator<Writable>() {
-          ByteArrayInputStream bis = new ByteArrayInputStream(
-              byteBuffer.toByteArray());
-          DataInputStream dis = new DataInputStream(bis);
-          int index = 0;
-
-          @Override
-          public boolean hasNext() {
-            return (index < numOfValues) ? true : false;
-          }
-
-          @Override
-          public Writable next() {
-            Writable v = GraphJobRunner.createVertexValue();
-            try {
-              v.readFields(dis);
-            } catch (IOException e) {
-              e.printStackTrace();
+                if (foundCharset != null && foundCharset.length() != 0 && !foundCharset.equals(defaultCharset)) { // need to re-decode
+                    foundCharset = foundCharset.trim().replaceAll("[\"']", "");
+                    charsetName = foundCharset;
+                    byteData.rewind();
+                    docData = Charset.forName(foundCharset).decode(byteData).toString();
+                    doc = null;
+                }
             }
-            index++;
-            return v;
-          }
+        } else { // specified by content type header (or by user on file load)
+            Validate.notEmpty(charsetName, "Must set charset arg to character set of file to parse. Set to null to attempt to detect from HTML");
+            docData = Charset.forName(charsetName).decode(byteData).toString();
+        }
+        if (doc == null) {
+            doc = parser.parseInput(docData, baseUri);
+            doc.outputSettings().charset(charsetName);
+        }
+        return doc;
+    }
 
-          @Override
-          public void remove() {
-          }
-        };
-      }
-    };
-  }
+    /**
+     * Read the input stream into a byte buffer.
+     * @param inStream the input stream to read from
+     * @param maxSize the maximum size in bytes to read from the stream. Set to 0 to be unlimited.
+     * @return the filled byte buffer
+     * @throws IOException if an exception occurs whilst reading from the input stream.
+     */
+    static ByteBuffer readToByteBuffer(InputStream inStream, int maxSize) throws IOException {
+        Validate.isTrue(maxSize >= 0, "maxSize must be 0 (unlimited) or larger");
+        final boolean capped = maxSize > 0;
+        byte[] buffer = new byte[bufferSize];
+        ByteArrayOutputStream outStream = new ByteArrayOutputStream(bufferSize);
+        int read;
+        int remaining = maxSize;
 
+        while (true) {
+            read = inStream.read(buffer);
+            if (read == -1) break;
+            if (capped) {
+                if (read > remaining) {
+                    outStream.write(buffer, 0, remaining);
+                    break;
+                }
+                remaining -= read;
+            }
+            outStream.write(buffer, 0, read);
+        }
+        return ByteBuffer.wrap(outStream.toByteArray());
+    }
+
+    static ByteBuffer readToByteBuffer(InputStream inStream) throws IOException {
+        return readToByteBuffer(inStream, 0);
+    }
+
+    static ByteBuffer readFileToByteBuffer(File file) throws IOException {
+        RandomAccessFile randomAccessFile = null;
+        try {
+            randomAccessFile = new RandomAccessFile(file, "r");
+            byte[] bytes = new byte[(int) randomAccessFile.length()];
+            randomAccessFile.readFully(bytes);
+            return ByteBuffer.wrap(bytes);
+        } finally {
+            if (randomAccessFile != null)
+                randomAccessFile.close();
+        }
+    }
+
+    static ByteBuffer emptyByteBuffer() {
+        return ByteBuffer.allocate(0);
+    }
+
+    /**
+     * Parse out a charset from a content type header. If the charset is not supported, returns null (so the default
+     * will kick in.)
+     * @param contentType e.g. "text/html; charset=EUC-JP"
+     * @return "EUC-JP", or null if not found. Charset is trimmed and uppercased.
+     */
+    static String getCharsetFromContentType(String contentType) {
+        if (contentType == null) return null;
+        Matcher m = charsetPattern.matcher(contentType);
+        if (m.find()) {
+            String charset = m.group(1).trim();
+            charset = charset.replace("charset=", "");
+            if (charset.length() == 0) return null;
+            try {
+                if (Charset.isSupported(charset)) return charset;
+                charset = charset.toUpperCase(Locale.ENGLISH);
+                if (Charset.isSupported(charset)) return charset;
+            } catch (IllegalCharsetNameException e) {
+                // if our advanced charset matching fails.... we just take the default
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Creates a random string, suitable for use as a mime boundary
+     */
+    static String mimeBoundary() {
+        final StringBuilder mime = new StringBuilder(boundaryLength);
+        final Random rand = new Random();
+        for (int i = 0; i < boundaryLength; i++) {
+            mime.append(mimeBoundaryChars[rand.nextInt(mimeBoundaryChars.length)]);
+        }
+        return mime.toString();
+    }
 }

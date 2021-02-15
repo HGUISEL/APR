@@ -1,411 +1,314 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//cli/src/java/org/apache/commons/cli/PosixParser.java,v 1.11 2002/09/19 22:59:43 jkeyes Exp $
+ * $Revision: 1.11 $
+ * $Date: 2002/09/19 22:59:43 $
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
  */
+package org.apache.commons.cli;
 
-package org.apache.flink.runtime.jobmanager;
-
-import org.apache.curator.framework.CuratorFramework;
-import org.apache.curator.framework.recipes.cache.PathChildrenCache;
-import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
-import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
-import org.apache.curator.utils.ZKPaths;
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.runtime.state.RetrievableStateHandle;
-import org.apache.flink.runtime.zookeeper.RetrievableStateStorageHelper;
-import org.apache.flink.runtime.zookeeper.ZooKeeperStateHandleStore;
-import org.apache.zookeeper.KeeperException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.Executor;
-
-import static org.apache.flink.util.Preconditions.checkNotNull;
-import static org.apache.flink.util.Preconditions.checkState;
+import java.util.Iterator;
+import java.util.Map;
 
 /**
- * {@link SubmittedJobGraph} instances for JobManagers running in {@link HighAvailabilityMode#ZOOKEEPER}.
+ * The class PosixParser provides an implementation of the 
+ * {@link Parser#flatten(Options,String[],boolean) flatten} method.
  *
- * <p>Each job graph creates ZNode:
- * <pre>
- * +----O /flink/jobgraphs/&lt;job-id&gt; 1 [persistent]
- * .
- * .
- * .
- * +----O /flink/jobgraphs/&lt;job-id&gt; N [persistent]
- * </pre>
- *
- * <p>The root path is watched to detect concurrent modifications in corner situations where
- * multiple instances operate concurrently. The job manager acts as a {@link SubmittedJobGraphListener}
- * to react to such situations.
+ * @author John Keyes (john at integralsource.com)
+ * @see Parser
+ * @version $Revision: 1.11 $
  */
-public class ZooKeeperSubmittedJobGraphStore implements SubmittedJobGraphStore {
-
-	private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperSubmittedJobGraphStore.class);
-
-	/** Lock to synchronize with the {@link SubmittedJobGraphListener}. */
-	private final Object cacheLock = new Object();
-
-	/** Client (not a namespace facade) */
-	private final CuratorFramework client;
-
-	/** The set of IDs of all added job graphs. */
-	private final Set<JobID> addedJobGraphs = new HashSet<>();
-
-	/** Completed checkpoints in ZooKeeper */
-	private final ZooKeeperStateHandleStore<SubmittedJobGraph> jobGraphsInZooKeeper;
-
-	/**
-	 * Cache to monitor all children. This is used to detect races with other instances working
-	 * on the same state.
-	 */
-	private final PathChildrenCache pathCache;
-
-	/** The full configured base path including the namespace. */
-	private final String zooKeeperFullBasePath;
-
-	/** The external listener to be notified on races. */
-	private SubmittedJobGraphListener jobGraphListener;
-
-	/** Flag indicating whether this instance is running. */
-	private boolean isRunning;
-
-	/**
-	 * Submitted job graph store backed by ZooKeeper
-	 *
-	 * @param client ZooKeeper client
-	 * @param currentJobsPath ZooKeeper path for current job graphs
-	 * @param stateStorage State storage used to persist the submitted jobs
-	 * @param executor to give to the ZooKeeperStateHandleStore to run ZooKeeper callbacks
-	 * @throws Exception
-	 */
-	public ZooKeeperSubmittedJobGraphStore(
-			CuratorFramework client,
-			String currentJobsPath,
-			RetrievableStateStorageHelper<SubmittedJobGraph> stateStorage,
-			Executor executor) throws Exception {
-
-		checkNotNull(currentJobsPath, "Current jobs path");
-		checkNotNull(stateStorage, "State storage");
-
-		// Keep a reference to the original client and not the namespace facade. The namespace
-		// facade cannot be closed.
-		this.client = checkNotNull(client, "Curator client");
-
-		// Ensure that the job graphs path exists
-		client.newNamespaceAwareEnsurePath(currentJobsPath)
-				.ensure(client.getZookeeperClient());
-
-		// All operations will have the path as root
-		CuratorFramework facade = client.usingNamespace(client.getNamespace() + currentJobsPath);
-
-		this.zooKeeperFullBasePath = client.getNamespace() + currentJobsPath;
-		this.jobGraphsInZooKeeper = new ZooKeeperStateHandleStore<>(facade, stateStorage, executor);
-
-		this.pathCache = new PathChildrenCache(facade, "/", false);
-		pathCache.getListenable().addListener(new SubmittedJobGraphsPathCacheListener());
-	}
-
-	@Override
-	public void start(SubmittedJobGraphListener jobGraphListener) throws Exception {
-		synchronized (cacheLock) {
-			if (!isRunning) {
-				this.jobGraphListener = jobGraphListener;
-
-				pathCache.start();
-
-				isRunning = true;
-			}
-		}
-	}
-
-	@Override
-	public void stop() throws Exception {
-		synchronized (cacheLock) {
-			if (isRunning) {
-				jobGraphListener = null;
-
-				pathCache.close();
-
-				client.close();
-
-				isRunning = false;
-			}
-		}
-	}
-
-	@Override
-	public SubmittedJobGraph recoverJobGraph(JobID jobId) throws Exception {
-		checkNotNull(jobId, "Job ID");
-		String path = getPathForJob(jobId);
-
-		LOG.debug("Recovering job graph {} from {}{}.", jobId, zooKeeperFullBasePath, path);
-
-		synchronized (cacheLock) {
-			verifyIsRunning();
-
-			RetrievableStateHandle<SubmittedJobGraph> jobGraphRetrievableStateHandle;
-
-			try {
-				jobGraphRetrievableStateHandle = jobGraphsInZooKeeper.get(path);
-			} catch (KeeperException.NoNodeException ignored) {
-				return null;
-			} catch (Exception e) {
-				throw new Exception("Could not retrieve the submitted job graph state handle " +
-					"for " + path + "from the submitted job graph store.", e);
-			}
-			SubmittedJobGraph jobGraph;
-
-			try {
-				jobGraph = jobGraphRetrievableStateHandle.retrieveState();
-			} catch (Exception e) {
-				throw new Exception("Failed to retrieve the submitted job graph from state handle.", e);
-			}
-
-			addedJobGraphs.add(jobGraph.getJobId());
-
-			LOG.info("Recovered {}.", jobGraph);
-
-			return jobGraph;
-		}
-	}
-
-	@Override
-	public void putJobGraph(SubmittedJobGraph jobGraph) throws Exception {
-		checkNotNull(jobGraph, "Job graph");
-		String path = getPathForJob(jobGraph.getJobId());
-
-		LOG.debug("Adding job graph {} to {}{}.", jobGraph.getJobId(), zooKeeperFullBasePath, path);
-
-		boolean success = false;
-
-		while (!success) {
-			synchronized (cacheLock) {
-				verifyIsRunning();
-
-				int currentVersion = jobGraphsInZooKeeper.exists(path);
-
-				if (currentVersion == -1) {
-					try {
-						jobGraphsInZooKeeper.add(path, jobGraph);
-
-						addedJobGraphs.add(jobGraph.getJobId());
-
-						success = true;
-					}
-					catch (KeeperException.NodeExistsException ignored) {
-					}
-				}
-				else if (addedJobGraphs.contains(jobGraph.getJobId())) {
-					try {
-						jobGraphsInZooKeeper.replace(path, currentVersion, jobGraph);
-						LOG.info("Updated {} in ZooKeeper.", jobGraph);
-
-						success = true;
-					}
-					catch (KeeperException.NoNodeException ignored) {
-					}
-				}
-				else {
-					throw new IllegalStateException("Oh, no. Trying to update a graph you didn't " +
-							"#getAllSubmittedJobGraphs() or #putJobGraph() yourself before.");
-				}
-			}
-		}
-
-		LOG.info("Added {} to ZooKeeper.", jobGraph);
-	}
-
-	@Override
-	public void removeJobGraph(JobID jobId) throws Exception {
-		checkNotNull(jobId, "Job ID");
-		String path = getPathForJob(jobId);
-
-		LOG.debug("Removing job graph {} from {}{}.", jobId, zooKeeperFullBasePath, path);
-
-		synchronized (cacheLock) {
-			if (addedJobGraphs.contains(jobId)) {
-				jobGraphsInZooKeeper.removeAndDiscardState(path);
-
-				addedJobGraphs.remove(jobId);
-			}
-		}
-
-		LOG.info("Removed job graph {} from ZooKeeper.", jobId);
-	}
-
-	@Override
-	public Collection<JobID> getJobIds() throws Exception {
-		Collection<String> paths;
-
-		LOG.debug("Retrieving all stored job ids from ZooKeeper under {}.", zooKeeperFullBasePath);
-
-		try {
-			paths = jobGraphsInZooKeeper.getAllPaths();
-		} catch (Exception e) {
-			throw new Exception("Failed to retrieve entry paths from ZooKeeperStateHandleStore.", e);
-		}
-
-		List<JobID> jobIds = new ArrayList<>(paths.size());
-
-		for (String path : paths) {
-			try {
-				jobIds.add(jobIdfromPath(path));
-			} catch (Exception exception) {
-				LOG.warn("Could not parse job id from {}. This indicates a malformed path.", path, exception);
-			}
-		}
-
-		return jobIds;
-	}
-
-	/**
-	 * Monitors ZooKeeper for changes.
-	 *
-	 * <p>Detects modifications from other job managers in corner situations. The event
-	 * notifications fire for changes from this job manager as well.
-	 */
-	private final class SubmittedJobGraphsPathCacheListener implements PathChildrenCacheListener {
-
-		@Override
-		public void childEvent(CuratorFramework client, PathChildrenCacheEvent event)
-				throws Exception {
-
-			if (LOG.isDebugEnabled()) {
-				if (event.getData() != null) {
-					LOG.debug("Received {} event (path: {})", event.getType(), event.getData().getPath());
-				}
-				else {
-					LOG.debug("Received {} event", event.getType());
-				}
-			}
-
-			switch (event.getType()) {
-				case CHILD_ADDED: {
-					JobID jobId = fromEvent(event);
-
-					LOG.debug("Received CHILD_ADDED event notification for job {}", jobId);
-
-					synchronized (cacheLock) {
-						try {
-							if (jobGraphListener != null && !addedJobGraphs.contains(jobId)) {
-								try {
-									// Whoa! This has been added by someone else. Or we were fast
-									// to remove it (false positive).
-									jobGraphListener.onAddedJobGraph(jobId);
-								} catch (Throwable t) {
-									LOG.error("Error in callback", t);
-								}
-							}
-						} catch (Exception e) {
-							LOG.error("Error in SubmittedJobGraphsPathCacheListener", e);
-						}
-					}
-				}
-				break;
-
-				case CHILD_UPDATED: {
-					// Nothing to do
-				}
-				break;
-
-				case CHILD_REMOVED: {
-					JobID jobId = fromEvent(event);
-
-					LOG.debug("Received CHILD_REMOVED event notification for job {}", jobId);
-
-					synchronized (cacheLock) {
-						try {
-							if (jobGraphListener != null && addedJobGraphs.contains(jobId)) {
-								try {
-									// Oh oh. Someone else removed one of our job graphs. Mean!
-									jobGraphListener.onRemovedJobGraph(jobId);
-								} catch (Throwable t) {
-									LOG.error("Error in callback", t);
-								}
-							}
-
-							break;
-						} catch (Exception e) {
-							LOG.error("Error in SubmittedJobGraphsPathCacheListener", e);
-						}
-					}
-				}
-				break;
-
-				case CONNECTION_SUSPENDED: {
-					LOG.warn("ZooKeeper connection SUSPENDED. Changes to the submitted job " +
-						"graphs are not monitored (temporarily).");
-				}
-				break;
-
-				case CONNECTION_LOST: {
-					LOG.warn("ZooKeeper connection LOST. Changes to the submitted job " +
-						"graphs are not monitored (permanently).");
-				}
-				break;
-
-				case CONNECTION_RECONNECTED: {
-					LOG.info("ZooKeeper connection RECONNECTED. Changes to the submitted job " +
-						"graphs are monitored again.");
-				}
-				break;
-
-				case INITIALIZED: {
-					LOG.info("SubmittedJobGraphsPathCacheListener initialized");
-				}
-				break;
-			}
-		}
-
-		/**
-		 * Returns a JobID for the event's path.
-		 */
-		private JobID fromEvent(PathChildrenCacheEvent event) {
-			return JobID.fromHexString(ZKPaths.getNodeFromPath(event.getData().getPath()));
-		}
-	}
-
-	/**
-	 * Verifies that the state is running.
-	 */
-	private void verifyIsRunning() {
-		checkState(isRunning, "Not running. Forgot to call start()?");
-	}
-
-	/**
-	 * Returns the JobID as a String (with leading slash).
-	 */
-	public static String getPathForJob(JobID jobId) {
-		checkNotNull(jobId, "Job ID");
-		return String.format("/%s", jobId);
-	}
-
-	/**
-	 * Returns the JobID from the given path in ZooKeeper.
-	 *
-	 * @param path in ZooKeeper
-	 * @return JobID associated with the given path
-	 */
-	public static JobID jobIdfromPath(final String path) {
-		return JobID.fromHexString(path);
-	}
+public class PosixParser extends Parser {
+
+    /** holder for flattened tokens */
+    private ArrayList tokens = new ArrayList();
+    /** specifies if bursting should continue */
+    private boolean eatTheRest;
+    /** holder for the current option */
+    private Option currentOption;
+    /** the command line Options */
+    private Options options;
+
+    /**
+     * <p>Resets the members to their original state i.e. remove
+     * all of <code>tokens</code> entries, set <code>eatTheRest</code>
+     * to false and set <code>currentOption</code> to null.</p>
+     */
+    private void init() {
+        eatTheRest = false;
+        tokens.clear();
+        currentOption = null;
+    }
+
+    /**
+     * <p>An implementation of {@link Parser}'s abstract
+     * {@link Parser#flatten(Options,String[],boolean) flatten} method.</p>
+     *
+     * <p>The following are the rules used by this flatten method.
+     * <ol>
+     *  <li>if <code>stopAtNonOption</code> is <b>true</b> then do not
+     *  burst anymore of <code>arguments</code> entries, just add each
+     *  successive entry without further processing.  Otherwise, ignore
+     *  <code>stopAtNonOption</code>.</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>--</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is "<b>-</b>"
+     *  just add the entry to the list of processed tokens</li>
+     *  <li>if the current <code>arguments</code> entry is two characters
+     *  in length and the first character is "<b>-</b>" then check if this
+     *  is a valid {@link Option} id.  If it is a valid id, then add the
+     *  entry to the list of processed tokens and set the current {@link Option}
+     *  member.  If it is not a valid id and <code>stopAtNonOption</code>
+     *  is true, then the remaining entries are copied to the list of 
+     *  processed tokens.  Otherwise, the current entry is ignored.</li>
+     *  <li>if the current <code>arguments</code> entry is more than two
+     *  characters in length and the first character is "<b>-</b>" then
+     *  we need to burst the entry to determine its constituents.  For more
+     *  information on the bursting algorithm see 
+     *  {@link PosixParser#burstToken( String, boolean) burstToken}.</li>
+     *  <li>if the current <code>arguments</code> entry is not handled 
+     *  by any of the previous rules, then the entry is added to the list
+     *  of processed tokens.</li>
+     * </ol>
+     * </p>
+     *
+     * @param options The command line {@link Options}
+     * @param arguments The command line arguments to be parsed
+     * @param stopAtNonOption Specifies whether to stop flattening
+     * when an non option is found.
+     * @return The flattened <code>arguments</code> String array.
+     */
+    protected String[] flatten( Options options, 
+                                String[] arguments, 
+                                boolean stopAtNonOption )
+    {
+        init();
+        this.options = options;
+
+        // an iterator for the command line tokens
+        Iterator iter = Arrays.asList( arguments ).iterator();
+        String token = null;
+        
+        // process each command line token
+        while ( iter.hasNext() ) {
+
+            // get the next command line token
+            token = (String) iter.next();
+
+            // handle SPECIAL TOKEN
+            if( token.startsWith( "--" ) ) {
+                if( token.indexOf( '=' ) != -1 ) {
+                    tokens.add( token.substring( 0, token.indexOf( '=' ) ) );
+                    tokens.add( token.substring( token.indexOf( '=' ) + 1,
+                                                 token.length() ) );
+                }
+                else {
+                    tokens.add( token );
+                }	
+            }
+            // single hyphen
+            else if( "-".equals( token ) ) {
+                processSingleHyphen( token );
+            }
+            else if( token.startsWith( "-" ) ) {
+                int tokenLength = token.length();
+                if( tokenLength == 2 ) {
+                    processOptionToken( token, stopAtNonOption );
+                }
+                // requires bursting
+                else {
+                    burstToken( token, stopAtNonOption );
+                }
+            }
+            else {
+                if( stopAtNonOption ) {
+                    process( token );
+                }
+                else {
+                    tokens.add( token );
+                }
+            }
+
+            gobble( iter );
+        }
+
+        return (String[])tokens.toArray( new String[] {} );
+    }
+
+    /**
+     * <p>Adds the remaining tokens to the processed tokens list.</p>
+     *
+     * @param iter An iterator over the remaining tokens
+     */
+    private void gobble( Iterator iter ) {
+        if( eatTheRest ) {
+            while( iter.hasNext() ) {
+                tokens.add( iter.next() );
+            }
+        }
+    }
+
+    /**
+     * <p>If there is a current option and it can have an argument
+     * value then add the token to the processed tokens list and 
+     * set the current option to null.</p>
+     * <p>If there is a current option and it can have argument
+     * values then add the token to the processed tokens list.</p>
+     * <p>If there is not a current option add the special token
+     * "<b>--</b>" and the current <code>value</code> to the processed
+     * tokens list.  The add all the remaining <code>argument</code>
+     * values to the processed tokens list.</p>
+     *
+     * @param value The current token
+     */
+    private void process( String value ) {
+        if( currentOption != null && currentOption.hasArg() ) {
+            if( currentOption.hasArg() ) {
+                tokens.add( value );
+                currentOption = null;
+            }
+            else if (currentOption.hasArgs() ) {
+                tokens.add( value );
+            }
+        }
+        else {
+            eatTheRest = true;
+            tokens.add( "--" );
+            tokens.add( value );
+        }
+    }
+
+    /**
+     * <p>If it is a hyphen then add the hyphen directly to
+     * the processed tokens list.</p>
+     *
+     * @param hyphen The hyphen token
+     */
+    private void processSingleHyphen( String hyphen ) {
+        tokens.add( hyphen );
+    }
+
+    /**
+     * <p>If an {@link Option} exists for <code>token</code> then
+     * set the current option and add the token to the processed 
+     * list.</p>
+     * <p>If an {@link Option} does not exist and <code>stopAtNonOption</code>
+     * is set then ignore the current token and add the remaining tokens
+     * to the processed tokens list directly.</p>
+     *
+     * @param token The current option token
+     * @param stopAtNonOption Specifies whether flattening should halt
+     * at the first non option.
+     */
+    private void processOptionToken( String token, boolean stopAtNonOption ) {
+        if( this.options.hasOption( token ) ) {
+            currentOption = this.options.getOption( token );
+            tokens.add( token );
+        }
+        else if( stopAtNonOption ) {
+            eatTheRest = true;
+        }
+    }
+
+    /**
+     * <p>Breaks <code>token</code> into its constituent parts
+     * using the following algorithm.
+     * <ul>
+     *  <li>ignore the first character ("<b>-</b>" )</li>
+     *  <li>foreach remaining character check if an {@link Option}
+     *  exists with that id.</li>
+     *  <li>if an {@link Option} does exist then add that character
+     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
+     *  <li>if the {@link Option} can have an argument value and there 
+     *  are remaining characters in the token then add the remaining 
+     *  characters as a token to the list of processed tokens.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b> 
+     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
+     *  "<b>--</b>" followed by the remaining characters and also 
+     *  the remaining tokens directly to the processed tokens list.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
+     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
+     *  character prepended with "<b>-</b>".</li>
+     * </ul>
+     * </p>
+     */
+    protected void burstToken( String token, boolean stopAtNonOption ) {
+        int tokenLength = token.length();
+
+        for( int i = 1; i < tokenLength; i++) {
+            String ch = String.valueOf( token.charAt( i ) );
+            boolean hasOption = options.hasOption( ch );
+
+            if( hasOption ) {
+                tokens.add( "-" + ch );
+                currentOption = options.getOption( ch );
+                if( currentOption.hasArg() && token.length()!=i+1 ) {
+                    tokens.add( token.substring( i+1 ) );
+                    break;
+                }
+            }
+            else if( stopAtNonOption ) {
+                process( token.substring( i ) );
+            }
+            else {
+                tokens.add( "-" + ch );
+            }
+        }
+    }
 }

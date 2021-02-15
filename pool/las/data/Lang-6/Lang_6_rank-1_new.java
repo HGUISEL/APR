@@ -1,407 +1,782 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package com.fasterxml.jackson.databind.deser;
 
-package org.apache.mahout.utils.vectors.lucene;
-
-import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.Map.Entry;
+import java.lang.annotation.Annotation;
 
-import org.apache.commons.cli2.CommandLine;
-import org.apache.commons.cli2.Group;
-import org.apache.commons.cli2.Option;
-import org.apache.commons.cli2.OptionException;
-import org.apache.commons.cli2.builder.ArgumentBuilder;
-import org.apache.commons.cli2.builder.DefaultOptionBuilder;
-import org.apache.commons.cli2.builder.GroupBuilder;
-import org.apache.commons.cli2.commandline.Parser;
-import org.apache.lucene.document.FieldSelector;
-import org.apache.lucene.document.SetBasedFieldSelector;
-import org.apache.lucene.index.CorruptIndexException;
-import org.apache.lucene.index.IndexReader;
-import org.apache.lucene.index.Term;
-import org.apache.lucene.index.TermDocs;
-import org.apache.lucene.index.TermEnum;
-import org.apache.lucene.store.Directory;
-import org.apache.lucene.store.FSDirectory;
-import org.apache.lucene.util.OpenBitSet;
-import org.apache.mahout.clustering.WeightedVectorWritable;
-import org.apache.mahout.common.CommandLineUtil;
-import org.apache.mahout.math.NamedVector;
-import org.apache.mahout.math.Vector;
-import org.apache.mahout.math.stats.LogLikelihood;
-import org.apache.mahout.utils.clustering.ClusterDumper;
-import org.apache.mahout.utils.vectors.TermEntry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.core.*;
+
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.deser.impl.FailingDeserializer;
+import com.fasterxml.jackson.databind.deser.impl.NullsConstantProvider;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonObjectFormatVisitor;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.util.Annotations;
+import com.fasterxml.jackson.databind.util.ClassUtil;
+import com.fasterxml.jackson.databind.util.ViewMatcher;
 
 /**
- * Get labels for the cluster using Log Likelihood Ratio (LLR).
- * <p/>
- *"The most useful way to think of this (LLR) is as the percentage of in-cluster documents that have the
- * feature (term) versus the percentage out, keeping in mind that both percentages are uncertain since we have
- * only a sample of all possible documents." - Ted Dunning
- * <p/>
- * More about LLR can be found at : http://tdunning.blogspot.com/2008/03/surprise-and-coincidence.html
+ * Base class for deserializable properties of a bean: contains
+ * both type and name definitions, and reflection-based set functionality.
+ * Concrete sub-classes implement details, so that field- and
+ * setter-backed properties, as well as a few more esoteric variations,
+ * can be handled.
  */
-public class ClusterLabels {
+@SuppressWarnings("serial")
+public abstract class SettableBeanProperty
+    extends ConcreteBeanPropertyBase
+    implements java.io.Serializable
+{
+    /**
+     * To avoid nasty NPEs, let's use a placeholder for _valueDeserializer,
+     * if real deserializer is not (yet) available.
+     * 
+     * @since 2.2
+     */
+    protected static final JsonDeserializer<Object> MISSING_VALUE_DESERIALIZER = new FailingDeserializer(
+            "No _valueDeserializer assigned");
 
-  class TermInfoClusterInOut implements Comparable<TermInfoClusterInOut> {
-    private final String term;
+    /**
+     * Logical name of the property (often but not always derived
+     * from the setter method name)
+     */
+    protected final PropertyName _propName;
 
-    private final int inClusterDF;
+    /**
+     * Base type for property; may be a supertype of actual value.
+     */
+    protected final JavaType _type;
 
-    private final int outClusterDF;
+    /**
+     * @since 2.2
+     */
+    protected final PropertyName _wrapperName;
 
-    private double logLikelihoodRatio;
+    /**
+     * Class that contains this property (either class that declares
+     * the property or one of its subclasses), class that is
+     * deserialized using deserializer that contains this property.
+     */
+    protected final transient Annotations _contextAnnotations;
 
-    TermInfoClusterInOut(String term, int inClusterDF, int outClusterDF) {
-      this.term = term;
-      this.inClusterDF = inClusterDF;
-      this.outClusterDF = outClusterDF;
+    /**
+     * Deserializer used for handling property value.
+     *<p>
+     * NOTE: has been immutable since 2.3
+     */
+    protected final JsonDeserializer<Object> _valueDeserializer;
+
+    /**
+     * If value will contain type information (to support
+     * polymorphic handling), this is the type deserializer
+     * used to handle type resolution.
+     */
+    protected final TypeDeserializer _valueTypeDeserializer;
+
+    /**
+     * Entity used for possible translation from `null` into non-null
+     * value of type of this property.
+     * Often same as <code>_valueDeserializer</code>, but not always.
+     *
+     * @since 2.9
+     */
+    protected final NullValueProvider _nullProvider;
+
+    /*
+    /**********************************************************
+    /* Configuration that is not yet immutable; generally assigned
+    /* during initialization process but cannot be passed to
+    /* constructor.
+    /**********************************************************
+     */
+
+    /**
+     * If property represents a managed (forward) reference, we will need
+     * the name of reference for later linking.
+     *<p>
+     * TODO: should try to make immutable.
+     */
+    protected String _managedReferenceName;
+
+    /**
+     * This is the information for object identity associated with the property.
+     * <p>
+     * TODO: should try to make immutable.
+     */
+    protected ObjectIdInfo _objectIdInfo;
+
+    /**
+     * Helper object used for checking whether this property is to
+     * be included in the active view, if property is view-specific;
+     * null otherwise.
+     *<p>
+     * TODO: should try to make immutable.
+     */
+    protected ViewMatcher _viewMatcher;
+
+    /**
+     * Index of property (within all property of a bean); assigned
+     * when all properties have been collected. Order of entries
+     * is arbitrary, but once indexes are assigned they are not
+     * changed.
+     *<p>
+     * TODO: should try to make immutable if at all possible
+     */
+    protected int _propertyIndex = -1;
+
+    /*
+    /**********************************************************
+    /* Life-cycle (construct & configure)
+    /**********************************************************
+     */
+
+    protected SettableBeanProperty(BeanPropertyDefinition propDef,
+            JavaType type, TypeDeserializer typeDeser, Annotations contextAnnotations)
+    {
+        this(propDef.getFullName(), type, propDef.getWrapperName(), typeDeser,
+                contextAnnotations, propDef.getMetadata());
+    }
+
+    protected SettableBeanProperty(PropertyName propName, JavaType type, PropertyName wrapper,
+            TypeDeserializer typeDeser, Annotations contextAnnotations,
+            PropertyMetadata metadata)
+    {
+        super(metadata);
+        // 09-Jan-2009, tatu: Intern()ing makes sense since Jackson parsed
+        //  field names are (usually) interned too, hence lookups will be faster.
+        // 23-Oct-2009, tatu: should this be disabled wrt [JACKSON-180]?
+        //   Probably need not, given that namespace of field/method names
+        //   is not unbounded, unlike potential JSON names.
+        if (propName == null) {
+            _propName = PropertyName.NO_NAME;
+        } else {
+            _propName = propName.internSimpleName();
+        }
+        _type = type;
+        _wrapperName = wrapper;
+        _contextAnnotations = contextAnnotations;
+        _viewMatcher = null;
+
+        // 30-Jan-2012, tatu: Important: contextualize TypeDeserializer now...
+        if (typeDeser != null) {
+            typeDeser = typeDeser.forProperty(this);
+        }
+        _valueTypeDeserializer = typeDeser;
+        _valueDeserializer = MISSING_VALUE_DESERIALIZER;
+        _nullProvider = MISSING_VALUE_DESERIALIZER;
+    }
+
+    /**
+     * Constructor only used by {@link com.fasterxml.jackson.databind.deser.impl.ObjectIdValueProperty}.
+     * 
+     * @since 2.3
+     */
+    protected SettableBeanProperty(PropertyName propName, JavaType type, 
+            PropertyMetadata metadata, JsonDeserializer<Object> valueDeser)
+    {
+        super(metadata);
+        // as with above ctor, intern()ing probably fine
+        if (propName == null) {
+            _propName = PropertyName.NO_NAME;
+        } else {
+            _propName = propName.internSimpleName();
+        }
+        _type = type;
+        _wrapperName = null;
+        _contextAnnotations = null;
+        _viewMatcher = null;
+        _valueTypeDeserializer = null;
+        _valueDeserializer = valueDeser;
+        // 29-Jan-2017, tatu: Presumed to be irrelevant for ObjectId values...
+        _nullProvider = valueDeser;
+    }
+
+    /**
+     * Basic copy-constructor for sub-classes to use.
+     */
+    protected SettableBeanProperty(SettableBeanProperty src)
+    {
+        super(src);
+        _propName = src._propName;
+        _type = src._type;
+        _wrapperName = src._wrapperName;
+        _contextAnnotations = src._contextAnnotations;
+        _valueDeserializer = src._valueDeserializer;
+        _valueTypeDeserializer = src._valueTypeDeserializer;
+        _managedReferenceName = src._managedReferenceName;
+        _propertyIndex = src._propertyIndex;
+        _viewMatcher = src._viewMatcher;
+        _nullProvider = src._nullProvider;
+    }
+
+    /**
+     * Copy-with-deserializer-change constructor for sub-classes to use.
+     */
+    @SuppressWarnings("unchecked")
+    protected SettableBeanProperty(SettableBeanProperty src,
+            JsonDeserializer<?> deser, NullValueProvider nuller)
+    {
+        super(src);
+        _propName = src._propName;
+        _type = src._type;
+        _wrapperName = src._wrapperName;
+        _contextAnnotations = src._contextAnnotations;
+        _valueTypeDeserializer = src._valueTypeDeserializer;
+        _managedReferenceName = src._managedReferenceName;
+        _propertyIndex = src._propertyIndex;
+
+        if (deser == null) {
+            _valueDeserializer = MISSING_VALUE_DESERIALIZER;
+        } else {
+            _valueDeserializer = (JsonDeserializer<Object>) deser;
+        }
+        _viewMatcher = src._viewMatcher;
+        // 29-Jan-2017, tatu: Bit messy, but for now has to do...
+        if (nuller == MISSING_VALUE_DESERIALIZER) {
+            nuller = _valueDeserializer;
+        }
+        _nullProvider = nuller;
+    }
+
+    /**
+     * Copy-with-deserializer-change constructor for sub-classes to use.
+     */
+    protected SettableBeanProperty(SettableBeanProperty src, PropertyName newName)
+    {
+        super(src);
+        _propName = newName;
+        _type = src._type;
+        _wrapperName = src._wrapperName;
+        _contextAnnotations = src._contextAnnotations;
+        _valueDeserializer = src._valueDeserializer;
+        _valueTypeDeserializer = src._valueTypeDeserializer;
+        _managedReferenceName = src._managedReferenceName;
+        _propertyIndex = src._propertyIndex;
+        _viewMatcher = src._viewMatcher;
+        _nullProvider = src._nullProvider;
+    }
+
+    /**
+     * Fluent factory method for constructing and returning a new instance
+     * with specified value deserializer.
+     * Note that this method should NOT change configuration of this instance.
+     * 
+     * @param deser Deserializer to assign to the new property instance
+     * 
+     * @return Newly constructed instance, if value deserializer differs from the
+     *   one used for this instance; or 'this' if not.
+     */
+    public abstract SettableBeanProperty withValueDeserializer(JsonDeserializer<?> deser);
+
+    /**
+     * Fluent factory method for constructing and returning a new instance
+     * with specified property name.
+     * Note that this method should NOT change configuration of this instance.
+     * 
+     * @param newName Name to use for the new instance.
+     * 
+     * @return Newly constructed instance, if property name differs from the
+     *   one used for this instance; or 'this' if not.
+     */
+    public abstract SettableBeanProperty withName(PropertyName newName);
+
+    /**
+     * @since 2.3
+     */
+    public SettableBeanProperty withSimpleName(String simpleName) {
+        PropertyName n = (_propName == null)
+                ? new PropertyName(simpleName) : _propName.withSimpleName(simpleName);
+        return (n == _propName) ? this : withName(n);
+    }
+
+    /**
+     * @since 2.9
+     */
+    public abstract SettableBeanProperty withNullProvider(NullValueProvider nva);
+
+    public void setManagedReferenceName(String n) {
+        _managedReferenceName = n;
+    }
+
+    public void setObjectIdInfo(ObjectIdInfo objectIdInfo) {
+        _objectIdInfo = objectIdInfo;
+    }
+
+    public void setViews(Class<?>[] views) {
+        if (views == null) {
+            _viewMatcher = null;
+        } else {
+            _viewMatcher = ViewMatcher.construct(views);
+        }
+    }
+
+    /**
+     * Method used to assign index for property.
+     */
+    public void assignIndex(int index) {
+        if (_propertyIndex != -1) {
+            throw new IllegalStateException("Property '"+getName()+"' already had index ("+_propertyIndex+"), trying to assign "+index);
+        }
+        _propertyIndex = index;
+    }
+
+    /**
+     * Method called to ensure that the mutator has proper access rights to
+     * be called, as per configuration. Overridden by implementations that
+     * have mutators that require access, fields and setters.
+     *
+     * @since 2.8.3
+     */
+    public void fixAccess(DeserializationConfig config) {
+        ;
+    }
+
+    /**
+     * @since 2.9.4
+     */
+    public void markAsIgnorable() { }
+
+    /**
+     * @since 2.9.4
+     */
+    public boolean isIgnorable() { return false; }
+
+    /*
+    /**********************************************************
+    /* BeanProperty impl
+    /**********************************************************
+     */
+    
+    @Override
+    public final String getName() {
+        return _propName.getSimpleName();
     }
 
     @Override
-    public int compareTo(TermInfoClusterInOut that) {
-      int res = -Double.compare(logLikelihoodRatio, that.logLikelihoodRatio);
-      if (res == 0) {
-        res = term.compareTo(that.term);
-      }
-      return res;
+    public PropertyName getFullName() {
+        return _propName;
     }
 
-    public int getInClusterDiff() {
-      return this.inClusterDF - this.outClusterDF;
+    @Override
+    public JavaType getType() { return _type; }
+
+    @Override
+    public PropertyName getWrapperName() {
+        return _wrapperName;
     }
-  }
+    
+    @Override
+    public abstract AnnotatedMember getMember();
 
-  private static final Logger log = LoggerFactory.getLogger(ClusterLabels.class);
+    @Override
+    public abstract <A extends Annotation> A getAnnotation(Class<A> acls);
 
-  public static final int DEFAULT_MIN_IDS = 50;
-
-  public static final int DEFAULT_MAX_LABELS = 25;
-
-  private final String seqFileDir;
-
-  private final String pointsDir;
-
-  private final String indexDir;
-
-  private final String contentField;
-
-  private String idField;
-
-  private Map<Integer, List<WeightedVectorWritable>> clusterIdToPoints = null;
-
-  private String output;
-
-  private int minNumIds = DEFAULT_MIN_IDS;
-
-  private int maxLabels = DEFAULT_MAX_LABELS;
-
-  public ClusterLabels(String seqFileDir, String pointsDir, String indexDir, String contentField, int minNumIds, int maxLabels)
-      throws IOException {
-    this.seqFileDir = seqFileDir;
-    this.pointsDir = pointsDir;
-    this.indexDir = indexDir;
-    this.contentField = contentField;
-    this.minNumIds = minNumIds;
-    this.maxLabels = maxLabels;
-    init();
-  }
-
-  private void init() throws IOException {
-    ClusterDumper clusterDumper = new ClusterDumper(seqFileDir, pointsDir);
-    this.clusterIdToPoints = clusterDumper.getClusterIdToPoints();
-  }
-
-  public void getLabels() throws IOException {
-
-    Writer writer;
-    if (this.output != null) {
-      writer = new FileWriter(this.output);
-    } else {
-      writer = new OutputStreamWriter(System.out);
+    @Override
+    public <A extends Annotation> A getContextAnnotation(Class<A> acls) {
+        return _contextAnnotations.get(acls);
     }
 
-    for (Entry<Integer, List<WeightedVectorWritable>> integerListEntry : clusterIdToPoints.entrySet()) {
-      List<WeightedVectorWritable> wvws = integerListEntry.getValue();
-      List<TermInfoClusterInOut> termInfos = getClusterLabels(integerListEntry.getKey(), wvws);
-      if (termInfos != null) {
-        writer.write('\n');
-        writer.write("Top labels for Cluster " + integerListEntry.getKey() + " containing " + wvws.size() + " vectors");
-        writer.write('\n');
-        writer.write("Term \t\t LLR \t\t In-ClusterDF \t\t Out-ClusterDF ");
-        writer.write('\n');
-        for (TermInfoClusterInOut termInfo : termInfos) {
-          writer.write(termInfo.term + "\t\t" + termInfo.logLikelihoodRatio + "\t\t" + termInfo.inClusterDF + "\t\t"
-              + termInfo.outClusterDF);
-          writer.write('\n');
+    @Override
+    public void depositSchemaProperty(JsonObjectFormatVisitor objectVisitor,
+            SerializerProvider provider)
+        throws JsonMappingException
+    {
+        if (isRequired()) {
+            objectVisitor.property(this); 
+        } else {
+            objectVisitor.optionalProperty(this);
         }
-      }
-    }
-    writer.flush();
-    if (this.output != null) {
-      writer.close();
-    }
-  }
-
-  /**
-   * Get the list of labels, sorted by best score.
-   * 
-   * @param integer
-   * @param wvws
-   * @return
-   * @throws CorruptIndexException
-   * @throws IOException
-   */
-  protected List<TermInfoClusterInOut> getClusterLabels(Integer integer, List<WeightedVectorWritable> wvws) throws IOException {
-
-    if (wvws.size() < minNumIds) {
-      log.info("Skipping small cluster {} with size: {}", integer, wvws.size());
-      return null;
     }
 
-    log.info("Processing Cluster {} with {} documents", integer, wvws.size());
-    Directory dir = FSDirectory.open(new File(this.indexDir));
-    IndexReader reader = IndexReader.open(dir, false);
-
-    log.info("# of documents in the index {}", reader.numDocs());
-
-    Set<String> idSet = new HashSet<String>();
-    for (WeightedVectorWritable wvw : wvws) {
-      Vector vector = wvw.getVector().get();
-      if (vector instanceof NamedVector) {
-        idSet.add(((NamedVector) vector).getName());
-      }
-    }
-
-    int numDocs = reader.numDocs();
-
-    OpenBitSet clusterDocBitset = getClusterDocBitset(reader, idSet, this.idField);
-
-    log.info("Populating term infos from the index");
-
-    /**
-     * This code is as that of CachedTermInfo, with one major change, which is to get the document frequency.
-     * 
-     * Since we have deleted the documents out of the cluster, the document frequency for a term should only
-     * include the in-cluster documents. The document frequency obtained from TermEnum reflects the frequency
-     * in the entire index. To get the in-cluster frequency, we need to query the index to get the term
-     * frequencies in each document. The number of results of this call will be the in-cluster document
-     * frequency.
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
      */
 
-    TermEnum te = reader.terms(new Term(contentField, ""));
-    int count = 0;
-
-    Map<String, TermEntry> termEntryMap = new LinkedHashMap<String, TermEntry>();
-    do {
-      Term term = te.term();
-      if (term == null || term.field().equals(contentField) == false) {
-        break;
-      }
-      OpenBitSet termBitset = new OpenBitSet(reader.maxDoc());
-
-      // Generate bitset for the term
-      TermDocs termDocs = reader.termDocs(term);
-
-      while (termDocs.next()) {
-        termBitset.set(termDocs.doc());
-      }
-
-      // AND the term's bitset with cluster doc bitset to get the term's in-cluster frequency.
-      // This modifies the termBitset, but that's fine as we are not using it anywhere else.
-      termBitset.and(clusterDocBitset);
-      int inclusterDF = (int) termBitset.cardinality();
-
-      TermEntry entry = new TermEntry(term.text(), count++, inclusterDF);
-      termEntryMap.put(entry.term, entry);
-    } while (te.next());
-    te.close();
-
-    List<TermInfoClusterInOut> clusteredTermInfo = new LinkedList<TermInfoClusterInOut>();
-
-    int clusterSize = wvws.size();
-
-    for (TermEntry termEntry : termEntryMap.values()) {
-      int corpusDF = reader.terms(new Term(this.contentField, termEntry.term)).docFreq();
-      int outDF = corpusDF - termEntry.docFreq;
-      int inDF = termEntry.docFreq;
-      TermInfoClusterInOut termInfoCluster = new TermInfoClusterInOut(termEntry.term, inDF, outDF);
-      termInfoCluster.logLikelihoodRatio = scoreDocumentFrequencies(inDF, outDF, clusterSize, numDocs);
-      clusteredTermInfo.add(termInfoCluster);
+    protected Class<?> getDeclaringClass() {
+        return getMember().getDeclaringClass();
     }
 
-    Collections.sort(clusteredTermInfo);
-    // Cleanup
-    reader.close();
-    termEntryMap.clear();
+    public String getManagedReferenceName() { return _managedReferenceName; }
 
-    return clusteredTermInfo.subList(0, Math.min(clusteredTermInfo.size(), maxLabels));
-  }
+    public ObjectIdInfo getObjectIdInfo() { return _objectIdInfo; }
 
-  private static OpenBitSet getClusterDocBitset(IndexReader reader, Set<String> idSet, String idField) throws IOException {
-    int numDocs = reader.numDocs();
-
-    OpenBitSet bitset = new OpenBitSet(numDocs);
-
-    FieldSelector idFieldSelector = new SetBasedFieldSelector(Collections.singleton(idField), Collections.emptySet());
-
-    for (int i = 0; i < numDocs; i++) {
-      String id = null;
-      // Use Lucene's internal ID if idField is not specified. Else, get it from the document.
-      if (idField == null) {
-        id = Integer.toString(i);
-      } else {
-        id = reader.document(i, idFieldSelector).get(idField);
-      }
-      if (idSet.contains(id)) {
-        bitset.set(i);
-      }
+    public boolean hasValueDeserializer() {
+        return (_valueDeserializer != null) && (_valueDeserializer != MISSING_VALUE_DESERIALIZER);
     }
-    log.info("Created bitset for in-cluster documents : {}", bitset.cardinality());
-    return bitset;
-  }
 
-  private static double scoreDocumentFrequencies(int inDF, int outDF, int clusterSize, int corpusSize) {
-    int k12 = clusterSize - inDF;
-    int k22 = corpusSize - clusterSize - outDF;
+    public boolean hasValueTypeDeserializer() { return (_valueTypeDeserializer != null); }
 
-    return LogLikelihood.logLikelihoodRatio(inDF, k12, outDF, k22);
-  }
-
-  public String getIdField() {
-    return idField;
-  }
-
-  public void setIdField(String idField) {
-    this.idField = idField;
-  }
-
-  public String getOutput() {
-    return output;
-  }
-
-  public void setOutput(String output) {
-    this.output = output;
-  }
-
-  public static void main(String[] args) {
-
-    DefaultOptionBuilder obuilder = new DefaultOptionBuilder();
-    ArgumentBuilder abuilder = new ArgumentBuilder();
-    GroupBuilder gbuilder = new GroupBuilder();
-
-    Option indexOpt = obuilder.withLongName("dir").withRequired(true).withArgument(
-        abuilder.withName("dir").withMinimum(1).withMaximum(1).create()).withDescription("The Lucene index directory")
-        .withShortName("d").create();
-
-    Option outputOpt = obuilder.withLongName("output").withRequired(false).withArgument(
-        abuilder.withName("output").withMinimum(1).withMaximum(1).create()).withDescription(
-        "The output file. If not specified, the result is printed on console.").withShortName("o").create();
-
-    Option fieldOpt = obuilder.withLongName("field").withRequired(true).withArgument(
-        abuilder.withName("field").withMinimum(1).withMaximum(1).create()).withDescription("The content field in the index")
-        .withShortName("f").create();
-
-    Option idFieldOpt = obuilder.withLongName("idField").withRequired(false).withArgument(
-        abuilder.withName("idField").withMinimum(1).withMaximum(1).create()).withDescription(
-        "The field for the document ID in the index.  If null, then the Lucene internal doc "
-            + "id is used which is prone to error if the underlying index changes").withShortName("i").create();
-
-    Option seqOpt = obuilder.withLongName("seqFileDir").withRequired(true).withArgument(
-        abuilder.withName("seqFileDir").withMinimum(1).withMaximum(1).create()).withDescription(
-        "The directory containing Sequence Files for the Clusters").withShortName("s").create();
-
-    Option pointsOpt = obuilder.withLongName("pointsDir").withRequired(true).withArgument(
-        abuilder.withName("pointsDir").withMinimum(1).withMaximum(1).create()).withDescription(
-        "The directory containing points sequence files mapping input vectors to their cluster.  ").withShortName("p").create();
-    Option minClusterSizeOpt = obuilder.withLongName("minClusterSize").withRequired(false).withArgument(
-        abuilder.withName("minClusterSize").withMinimum(1).withMaximum(1).create()).withDescription(
-        "The minimum number of points required in a cluster to print the labels for").withShortName("m").create();
-    Option maxLabelsOpt = obuilder.withLongName("maxLabels").withRequired(false).withArgument(
-        abuilder.withName("maxLabels").withMinimum(1).withMaximum(1).create()).withDescription(
-        "The maximum number of labels to print per cluster").withShortName("x").create();
-    Option helpOpt = obuilder.withLongName("help").withDescription("Print out help").withShortName("h").create();
-
-    Group group = gbuilder.withName("Options").withOption(indexOpt).withOption(idFieldOpt).withOption(outputOpt).withOption(
-        fieldOpt).withOption(seqOpt).withOption(pointsOpt).withOption(helpOpt).withOption(maxLabelsOpt).withOption(
-        minClusterSizeOpt).create();
-
-    try {
-      Parser parser = new Parser();
-      parser.setGroup(group);
-      CommandLine cmdLine = parser.parse(args);
-
-      if (cmdLine.hasOption(helpOpt)) {
-        CommandLineUtil.printHelp(group);
-        return;
-      }
-
-      String seqFileDir = cmdLine.getValue(seqOpt).toString();
-      String pointsDir = cmdLine.getValue(pointsOpt).toString();
-      String indexDir = cmdLine.getValue(indexOpt).toString();
-      String contentField = cmdLine.getValue(fieldOpt).toString();
-
-      String idField = null;
-
-      if (cmdLine.hasOption(idFieldOpt)) {
-        idField = cmdLine.getValue(idFieldOpt).toString();
-      }
-      String output = null;
-      if (cmdLine.hasOption(outputOpt)) {
-        output = cmdLine.getValue(outputOpt).toString();
-      }
-      int maxLabels = DEFAULT_MAX_LABELS;
-      if (cmdLine.hasOption(maxLabelsOpt)) {
-        maxLabels = Integer.parseInt(cmdLine.getValue(maxLabelsOpt).toString());
-      }
-      int minSize = DEFAULT_MIN_IDS;
-      if (cmdLine.hasOption(minClusterSizeOpt)) {
-        minSize = Integer.parseInt(cmdLine.getValue(minClusterSizeOpt).toString());
-      }
-      ClusterLabels clusterLabel = new ClusterLabels(seqFileDir, pointsDir, indexDir, contentField, minSize, maxLabels);
-
-      if (idField != null) {
-        clusterLabel.setIdField(idField);
-      }
-      if (output != null) {
-        clusterLabel.setOutput(output);
-      }
-
-      clusterLabel.getLabels();
-
-    } catch (OptionException e) {
-      log.error("Exception", e);
-      CommandLineUtil.printHelp(group);
-    } catch (IOException e) {
-      log.error("Exception", e);
+    public JsonDeserializer<Object> getValueDeserializer() {
+        JsonDeserializer<Object> deser = _valueDeserializer;
+        if (deser == MISSING_VALUE_DESERIALIZER) {
+            return null;
+        }
+        return deser;
     }
-  }
 
+    public TypeDeserializer getValueTypeDeserializer() { return _valueTypeDeserializer; }
+
+    /**
+     * @since 2.9
+     */
+    public NullValueProvider getNullValueProvider() { return _nullProvider; }
+
+    public boolean visibleInView(Class<?> activeView) {
+        return (_viewMatcher == null) || _viewMatcher.isVisibleForView(activeView);
+    }
+
+    public boolean hasViews() { return _viewMatcher != null; }
+    
+    /**
+     * Method for accessing unique index of this property; indexes are
+     * assigned once all properties of a {@link BeanDeserializer} have
+     * been collected.
+     * 
+     * @return Index of this property
+     */
+    public int getPropertyIndex() { return _propertyIndex; }
+
+    /**
+     * Method for accessing index of the creator property: for other
+     * types of properties will simply return -1.
+     * 
+     * @since 2.1
+     */
+    public int getCreatorIndex() {
+        // changed from 'return -1' in 2.7.9 / 2.8.7
+        throw new IllegalStateException(String.format(
+                "Internal error: no creator index for property '%s' (of type %s)",
+                this.getName(), getClass().getName()));
+    }
+
+    /**
+     * Accessor for id of injectable value, if this bean property supports
+     * value injection.
+     */
+    public Object getInjectableValueId() { return null; }
+    
+    /*
+    /**********************************************************
+    /* Public API
+    /**********************************************************
+     */
+
+    /**
+     * Method called to deserialize appropriate value, given parser (and
+     * context), and set it using appropriate mechanism.
+     * Pre-condition is that passed parser must point to the first token
+     * that should be consumed to produce the value (the only value for
+     * scalars, multiple for Objects and Arrays).
+     */
+    public abstract void deserializeAndSet(JsonParser p,
+    		DeserializationContext ctxt, Object instance) throws IOException;
+
+	/**
+	 * Alternative to {@link #deserializeAndSet} that returns
+	 * either return value of setter method called (if one is),
+	 * or null to indicate that no return value is available.
+	 * Mostly used to support Builder style deserialization.
+	 *
+	 * @since 2.0
+	 */
+    public abstract Object deserializeSetAndReturn(JsonParser p,
+    		DeserializationContext ctxt, Object instance) throws IOException;
+
+    /**
+     * Method called to assign given value to this property, on
+     * specified Object.
+     *<p>
+     * Note: this is an optional operation, not supported by all
+     * implementations, creator-backed properties for example do not
+     * support this method.
+     */
+    public abstract void set(Object instance, Object value) throws IOException;
+
+    /**
+     * Method called to assign given value to this property, on
+     * specified Object, and return whatever delegating accessor
+     * returned (if anything)
+     *<p>
+     * Note: this is an optional operation, not supported by all
+     * implementations, creator-backed properties for example do not
+     * support this method.
+     */
+    public abstract Object setAndReturn(Object instance, Object value) throws IOException;
+    
+    /**
+     * This method is needed by some specialized bean deserializers,
+     * and also called by some {@link #deserializeAndSet} implementations.
+     *<p>
+     * Pre-condition is that passed parser must point to the first token
+     * that should be consumed to produce the value (the only value for
+     * scalars, multiple for Objects and Arrays).
+     *<p> 
+     * Note that this method is final for performance reasons: to override
+     * functionality you must override other methods that call this method;
+     * this method should also not be called directly unless you really know
+     * what you are doing (and probably not even then).
+     */
+    public final Object deserialize(JsonParser p, DeserializationContext ctxt) throws IOException
+    {
+        if (p.hasToken(JsonToken.VALUE_NULL)) {
+            return _nullProvider.getNullValue(ctxt);
+        }
+        if (_valueTypeDeserializer != null) {
+            return _valueDeserializer.deserializeWithType(p, ctxt, _valueTypeDeserializer);
+        }
+        // 04-May-2018, tatu: [databind#2023] Coercion from String (mostly) can give null
+        Object value =  _valueDeserializer.deserialize(p, ctxt);
+        if (value == null) {
+            value = _nullProvider.getNullValue(ctxt);
+        }
+        return value;
+    }
+
+    /**
+     * @since 2.9
+     */
+    public final Object deserializeWith(JsonParser p, DeserializationContext ctxt,
+            Object toUpdate) throws IOException
+    {
+        // 20-Oct-2016, tatu: Not 100% sure what to do; probably best to simply return
+        //   null value and let caller decide what to do.
+        if (p.hasToken(JsonToken.VALUE_NULL)) {
+            // ... except for "skip nulls" case which should just do that:
+            if (NullsConstantProvider.isSkipper(_nullProvider)) {
+                return toUpdate;
+            }
+            return _nullProvider.getNullValue(ctxt);
+        }
+        // 20-Oct-2016, tatu: Also tricky -- for now, report an error
+        if (_valueTypeDeserializer != null) {
+            ctxt.reportBadDefinition(getType(),
+                    String.format("Cannot merge polymorphic property '%s'",
+                            getName()));
+//            return _valueDeserializer.deserializeWithType(p, ctxt, _valueTypeDeserializer);
+        }
+        // 04-May-2018, tatu: [databind#2023] Coercion from String (mostly) can give null
+        Object value = _valueDeserializer.deserialize(p, ctxt, toUpdate);
+        if (value == null) {
+            if (NullsConstantProvider.isSkipper(_nullProvider)) {
+                return toUpdate;
+            }
+            value = _nullProvider.getNullValue(ctxt);
+        }
+        return value;
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+
+    /**
+     * Method that takes in exception of any type, and casts or wraps it
+     * to an IOException or its subclass.
+     */
+    protected void _throwAsIOE(JsonParser p, Exception e, Object value) throws IOException
+    {
+        if (e instanceof IllegalArgumentException) {
+            String actType = ClassUtil.classNameOf(value);
+            StringBuilder msg = new StringBuilder("Problem deserializing property '")
+                    .append(getName())
+                    .append("' (expected type: ")
+                    .append(getType())
+                    .append("; actual type: ")
+                    .append(actType).append(")");
+            String origMsg = e.getMessage();
+            if (origMsg != null) {
+                msg.append(", problem: ")
+                    .append(origMsg);
+            } else {
+                msg.append(" (no error message provided)");
+            }
+            throw JsonMappingException.from(p, msg.toString(), e);
+        }
+        _throwAsIOE(p, e);
+    }
+    
+    /**
+     * @since 2.7
+     */
+    protected IOException _throwAsIOE(JsonParser p, Exception e) throws IOException
+    {
+        ClassUtil.throwIfIOE(e);
+        ClassUtil.throwIfRTE(e);
+        // let's wrap the innermost problem
+        Throwable th = ClassUtil.getRootCause(e);
+        throw JsonMappingException.from(p, th.getMessage(), th);
+    }
+
+    @Deprecated // since 2.7
+    protected IOException _throwAsIOE(Exception e) throws IOException {
+        return _throwAsIOE((JsonParser) null, e);
+    }
+
+    // 10-Oct-2015, tatu: _Should_ be deprecated, too, but its remaining
+    //   callers cannot actually provide a JsonParser
+    protected void _throwAsIOE(Exception e, Object value) throws IOException {
+        _throwAsIOE((JsonParser) null, e, value);
+    }
+
+    @Override public String toString() { return "[property '"+getName()+"']"; }
+
+    /*
+    /**********************************************************
+    /* Helper classes
+    /**********************************************************
+     */
+
+    /**
+     * Helper class that is designed to both make it easier to sub-class
+     * delegating subtypes and to reduce likelihood of breakage when
+     * new methods are added.
+     *<p>
+     * Class was specifically added to help with {@code Afterburner}
+     * module, but its use is not limited to only support it.
+     *
+     * @since 2.9
+     */
+    public static abstract class Delegating
+        extends SettableBeanProperty
+    {
+        protected final SettableBeanProperty delegate;
+
+        protected Delegating(SettableBeanProperty d) {
+            super(d);
+            delegate = d;
+        }
+
+        /**
+         * Method sub-classes must implement, to construct a new instance
+         * with given delegate.
+         */
+        protected abstract SettableBeanProperty withDelegate(SettableBeanProperty d);
+
+        protected SettableBeanProperty _with(SettableBeanProperty newDelegate) {
+            if (newDelegate == delegate) {
+                return this;
+            }
+            return withDelegate(newDelegate);
+        }
+        
+        @Override
+        public SettableBeanProperty withValueDeserializer(JsonDeserializer<?> deser) {
+            return _with(delegate.withValueDeserializer(deser));
+        }
+
+        @Override
+        public SettableBeanProperty withName(PropertyName newName) {
+            return _with(delegate.withName(newName));
+        }
+
+        @Override
+        public SettableBeanProperty withNullProvider(NullValueProvider nva) {
+            return _with(delegate.withNullProvider(nva));
+        }
+
+        @Override
+        public void assignIndex(int index) {
+            delegate.assignIndex(index);
+        }
+
+        @Override
+        public void fixAccess(DeserializationConfig config) {
+            delegate.fixAccess(config);
+        }
+
+        /*
+        /**********************************************************
+        /* Accessors
+        /**********************************************************
+         */
+
+        @Override
+        protected Class<?> getDeclaringClass() { return delegate.getDeclaringClass(); }
+
+        @Override
+        public String getManagedReferenceName() { return delegate.getManagedReferenceName(); }
+
+        @Override
+        public ObjectIdInfo getObjectIdInfo() { return delegate.getObjectIdInfo(); }
+
+        @Override
+        public boolean hasValueDeserializer() { return delegate.hasValueDeserializer(); }
+
+        @Override
+        public boolean hasValueTypeDeserializer() { return delegate.hasValueTypeDeserializer(); }
+        
+        @Override
+        public JsonDeserializer<Object> getValueDeserializer() { return delegate.getValueDeserializer(); }
+
+        @Override
+        public TypeDeserializer getValueTypeDeserializer() { return delegate.getValueTypeDeserializer(); }
+
+        @Override
+        public boolean visibleInView(Class<?> activeView) { return delegate.visibleInView(activeView); }
+
+        @Override
+        public boolean hasViews() { return delegate.hasViews(); }
+
+        @Override
+        public int getPropertyIndex() { return delegate.getPropertyIndex(); }
+
+        @Override
+        public int getCreatorIndex() { return delegate.getCreatorIndex(); }
+
+        @Override
+        public Object getInjectableValueId() { return delegate.getInjectableValueId(); }
+
+        @Override
+        public AnnotatedMember getMember() {
+            return delegate.getMember();
+        }
+
+        @Override
+        public <A extends Annotation> A getAnnotation(Class<A> acls) {
+            return delegate.getAnnotation(acls);
+        }
+
+        /*
+        /**********************************************************
+        /* Extended API
+        /**********************************************************
+         */
+
+        public SettableBeanProperty getDelegate() {
+            return delegate;
+        }
+
+        /*
+        /**********************************************************
+        /* Actual mutators
+        /**********************************************************
+         */
+
+        @Override
+        public void deserializeAndSet(JsonParser p, DeserializationContext ctxt,
+                Object instance) throws IOException {
+            delegate.deserializeAndSet(p, ctxt, instance);
+        }
+
+        @Override
+        public Object deserializeSetAndReturn(JsonParser p,
+                DeserializationContext ctxt, Object instance) throws IOException
+        {
+            return delegate.deserializeSetAndReturn(p, ctxt, instance);
+        }
+
+        @Override
+        public void set(Object instance, Object value) throws IOException {
+            delegate.set(instance, value);
+        }
+
+        @Override
+        public Object setAndReturn(Object instance, Object value) throws IOException {
+            return delegate.setAndReturn(instance, value);
+        }
+    }
 }

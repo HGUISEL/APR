@@ -1,706 +1,329 @@
-/*
- * Copyright 2003-2012 the original author or authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.codehaus.groovy.runtime;
+package com.fasterxml.jackson.databind.ser;
 
-import groovy.lang.Closure;
-import groovy.lang.GroovyRuntimeException;
-
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.io.Writer;
-import java.util.List;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
+import com.fasterxml.jackson.databind.util.*;
 
 /**
- * This class defines new groovy methods which appear on normal JDK
- * classes related to process management.
- * <p/>
- * Static methods are used with the first parameter being the destination class,
- * i.e. <code>public static String reverse(String self)</code>
- * provides a <code>reverse()</code> method for <code>String</code>.
- * <p>
- * NOTE: While this class contains many 'public' static methods, it is
- * primarily regarded as an internal class (its internal package name
- * suggests this also). We value backwards compatibility of these
- * methods when used within Groovy but value less backwards compatibility
- * at the Java method call level. I.e. future versions of Groovy may
- * remove or move a method call in this file but would normally
- * aim to keep the method available from within Groovy.
+ * Helper class for {@link BeanSerializerFactory} that is used to
+ * construct {@link BeanPropertyWriter} instances. Can be sub-classed
+ * to change behavior.
  */
-public class ProcessGroovyMethods extends DefaultGroovyMethodsSupport {
+public class PropertyBuilder
+{
+    // @since 2.7
+    private final static Object NO_DEFAULT_MARKER = Boolean.FALSE;
+    
+    final protected SerializationConfig _config;
+    final protected BeanDescription _beanDesc;
 
     /**
-     * An alias method so that a process appears similar to System.out, System.in, System.err;
-     * you can use process.in, process.out, process.err in a similar fashion.
-     *
-     * @param self a Process instance
-     * @return the InputStream for the process
-     * @since 1.0
+     * Default inclusion mode for properties of the POJO for which
+     * properties are collected; possibly overridden on
+     * per-property basis.
      */
-    public static InputStream getIn(Process self) {
-        return self.getInputStream();
+    final protected JsonInclude.Value _defaultInclusion;
+
+    final protected AnnotationIntrospector _annotationIntrospector;
+
+    /**
+     * If a property has serialization inclusion value of
+     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT},
+     * we may need to know the default value of the bean, to know if property value
+     * equals default one.
+     *<p>
+     * NOTE: only used if enclosing class defines NON_DEFAULT, but NOT if it is the
+     * global default OR per-property override.
+     */
+    protected Object _defaultBean;
+
+    public PropertyBuilder(SerializationConfig config, BeanDescription beanDesc)
+    {
+        _config = config;
+        _beanDesc = beanDesc;
+        _defaultInclusion = beanDesc.findPropertyInclusion(
+                config.getDefaultPropertyInclusion(beanDesc.getBeanClass()));
+        _annotationIntrospector = _config.getAnnotationIntrospector();
+    }
+
+    /*
+    /**********************************************************
+    /* Public API
+    /**********************************************************
+     */
+
+    public Annotations getClassAnnotations() {
+        return _beanDesc.getClassAnnotations();
     }
 
     /**
-     * Read the text of the output stream of the Process.
-     *
-     * @param self a Process instance
-     * @return the text of the output
-     * @throws java.io.IOException if an IOException occurs.
-     * @since 1.0
+     * @param contentTypeSer Optional explicit type information serializer
+     *    to use for contained values (only used for properties that are
+     *    of container type)
      */
-    public static String getText(Process self) throws IOException {
-        return IOGroovyMethods.getText(new BufferedReader(new InputStreamReader(self.getInputStream())));
-    }
+    @SuppressWarnings("deprecation")
+    protected BeanPropertyWriter buildWriter(SerializerProvider prov,
+            BeanPropertyDefinition propDef, JavaType declaredType, JsonSerializer<?> ser,
+            TypeSerializer typeSer, TypeSerializer contentTypeSer,
+            AnnotatedMember am, boolean defaultUseStaticTyping)
+        throws JsonMappingException
+    {
+        // do we have annotation that forces type to use (to declared type or its super type)?
+        JavaType serializationType = findSerializationType(am, defaultUseStaticTyping, declaredType);
 
-    /**
-     * An alias method so that a process appears similar to System.out, System.in, System.err;
-     * you can use process.in, process.out, process.err in a similar fashion.
-     *
-     * @param self a Process instance
-     * @return the error InputStream for the process
-     * @since 1.0
-     */
-    public static InputStream getErr(Process self) {
-        return self.getErrorStream();
-    }
+        // Container types can have separate type serializers for content (value / element) type
+        if (contentTypeSer != null) {
+            /* 04-Feb-2010, tatu: Let's force static typing for collection, if there is
+             *    type information for contents. Should work well (for JAXB case); can be
+             *    revisited if this causes problems.
+             */
+            if (serializationType == null) {
+//                serializationType = TypeFactory.type(am.getGenericType(), _beanDesc.getType());
+                serializationType = declaredType;
+            }
+            JavaType ct = serializationType.getContentType();
+            // Not exactly sure why, but this used to occur; better check explicitly:
+            if (ct == null) {
+                throw new IllegalStateException("Problem trying to create BeanPropertyWriter for property '"
+                        +propDef.getName()+"' (of type "+_beanDesc.getType()+"); serialization type "+serializationType+" has no content");
+            }
+            serializationType = serializationType.withContentTypeHandler(contentTypeSer);
+            ct = serializationType.getContentType();
+        }
+        
+        Object valueToSuppress = null;
+        boolean suppressNulls = false;
 
-    /**
-     * An alias method so that a process appears similar to System.out, System.in, System.err;
-     * you can use process.in, process.out, process.err in a similar fashion.
-     *
-     * @param self a Process instance
-     * @return the OutputStream for the process
-     * @since 1.0
-     */
-    public static OutputStream getOut(Process self) {
-        return self.getOutputStream();
-    }
+        JsonInclude.Value inclV = _defaultInclusion.withOverrides(propDef.findInclusion());
+        JsonInclude.Include inclusion = inclV.getValueInclusion();
+        if (inclusion == JsonInclude.Include.USE_DEFAULTS) { // should not occur but...
+            inclusion = JsonInclude.Include.ALWAYS;
+        }
 
-    /**
-     * Overloads the left shift operator (&lt;&lt;) to provide an append mechanism
-     * to pipe data to a Process.
-     *
-     * @param self  a Process instance
-     * @param value a value to append
-     * @return a Writer
-     * @throws java.io.IOException if an IOException occurs.
-     * @since 1.0
-     */
-    public static Writer leftShift(Process self, Object value) throws IOException {
-        return IOGroovyMethods.leftShift(self.getOutputStream(), value);
-    }
-
-    /**
-     * Overloads the left shift operator to provide an append mechanism
-     * to pipe into a Process
-     *
-     * @param self  a Process instance
-     * @param value data to append
-     * @return an OutputStream
-     * @throws java.io.IOException if an IOException occurs.
-     * @since 1.0
-     */
-    public static OutputStream leftShift(Process self, byte[] value) throws IOException {
-        return IOGroovyMethods.leftShift(self.getOutputStream(), value);
-    }
-
-    /**
-     * Wait for the process to finish during a certain amount of time, otherwise stops the process.
-     *
-     * @param self           a Process
-     * @param numberOfMillis the number of milliseconds to wait before stopping the process
-     * @since 1.0
-     */
-    public static void waitForOrKill(Process self, long numberOfMillis) {
-        ProcessRunner runnable = new ProcessRunner(self);
-        Thread thread = new Thread(runnable);
-        thread.start();
-        runnable.waitForOrKill(numberOfMillis);
-    }
-
-    /**
-     * Gets the output and error streams from a process and reads them
-     * to keep the process from blocking due to a full output buffer.
-     * The stream data is thrown away but blocking due to a full output buffer is avoided.
-     * Use this method if you don't care about the standard or error output and just
-     * want the process to run silently - use carefully however, because since the stream
-     * data is thrown away, it might be difficult to track down when something goes wrong.
-     * For this, two Threads are started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @since 1.0
-     */
-    public static void consumeProcessOutput(Process self) {
-        consumeProcessOutput(self, (OutputStream)null, (OutputStream)null);
-    }
-
-    /**
-     * Gets the output and error streams from a process and reads them
-     * to keep the process from blocking due to a full output buffer.
-     * The processed stream data is appended to the supplied Appendable.
-     * For this, two Threads are started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param output an Appendable to capture the process stdout
-     * @param error an Appendable to capture the process stderr
-     * @since 1.7.5
-     */
-    public static void consumeProcessOutput(Process self, Appendable output, Appendable error) {
-        consumeProcessOutputStream(self, output);
-        consumeProcessErrorStream(self, error);
-    }
-
-    /**
-     * Gets the output and error streams from a process and reads them
-     * to keep the process from blocking due to a full output buffer.
-     * The processed stream data is appended to the supplied OutputStream.
-     * For this, two Threads are started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param output an OutputStream to capture the process stdout
-     * @param error an OutputStream to capture the process stderr
-     * @since 1.5.2
-     */
-    public static void consumeProcessOutput(Process self, OutputStream output, OutputStream error) {
-        consumeProcessOutputStream(self, output);
-        consumeProcessErrorStream(self, error);
-    }
-
-    /**
-     * Gets the output and error streams from a process and reads them
-     * to keep the process from blocking due to a full output buffer.
-     * The stream data is thrown away but blocking due to a full output buffer is avoided.
-     * Use this method if you don't care about the standard or error output and just
-     * want the process to run silently - use carefully however, because since the stream
-     * data is thrown away, it might be difficult to track down when something goes wrong.
-     * For this, two Threads are started, but join()ed, so we wait.
-     * As implied by the waitFor... name, we also wait until we finish
-     * as well. Finally, the output and error streams are closed.
-     *
-     * @param self a Process
-     * @since 1.6.5
-     */
-    public static void waitForProcessOutput(Process self) {
-        waitForProcessOutput(self, (OutputStream)null, (OutputStream)null);
-    }
-
-    /**
-     * Gets the output and error streams from a process and reads them
-     * to keep the process from blocking due to a full output buffer.
-     * The processed stream data is appended to the supplied Appendable.
-     * For this, two Threads are started, but join()ed, so we wait.
-     * As implied by the waitFor... name, we also wait until we finish
-     * as well. Finally, the output and error streams are closed.
-     *
-     * @param self a Process
-     * @param output an Appendable to capture the process stdout
-     * @param error an Appendable to capture the process stderr
-     * @since 1.7.5
-     */
-    public static void waitForProcessOutput(Process self, Appendable output, Appendable error) {
-        Thread tout = consumeProcessOutputStream(self, output);
-        Thread terr = consumeProcessErrorStream(self, error);
-        try { tout.join(); } catch (InterruptedException ignore) {}
-        try { terr.join(); } catch (InterruptedException ignore) {}
-        try { self.waitFor(); } catch (InterruptedException ignore) {}
-        try { self.getErrorStream().close(); } catch (IOException ignore) {}
-        try { self.getInputStream().close(); } catch (IOException ignore) {}
-    }
-
-    /**
-     * Gets the output and error streams from a process and reads them
-     * to keep the process from blocking due to a full output buffer.
-     * The processed stream data is appended to the supplied OutputStream.
-     * For this, two Threads are started, but join()ed, so we wait.
-     * As implied by the waitFor... name, we also wait until we finish
-     * as well. Finally, the output and error streams are closed.
-     *
-     * @param self a Process
-     * @param output an OutputStream to capture the process stdout
-     * @param error an OutputStream to capture the process stderr
-     * @since 1.6.5
-     */
-    public static void waitForProcessOutput(Process self, OutputStream output, OutputStream error) {
-        Thread tout = consumeProcessOutputStream(self, output);
-        Thread terr = consumeProcessErrorStream(self, error);
-        try { tout.join(); } catch (InterruptedException ignore) {}
-        try { terr.join(); } catch (InterruptedException ignore) {}
-        try { self.waitFor(); } catch (InterruptedException ignore) {}
-        try { self.getErrorStream().close(); } catch (IOException ignore) {}
-        try { self.getInputStream().close(); } catch (IOException ignore) {}
-    }
-
-    /**
-     * Gets the error stream from a process and reads it
-     * to keep the process from blocking due to a full buffer.
-     * The processed stream data is appended to the supplied OutputStream.
-     * A new Thread is started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param err an OutputStream to capture the process stderr
-     * @return the Thread
-     * @since 1.5.2
-     */
-    public static Thread consumeProcessErrorStream(Process self, OutputStream err) {
-        Thread thread = new Thread(new ByteDumper(self.getErrorStream(), err));
-        thread.start();
-        return thread;
-    }
-
-    /**
-     * Gets the error stream from a process and reads it
-     * to keep the process from blocking due to a full buffer.
-     * The processed stream data is appended to the supplied Appendable.
-     * A new Thread is started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param error an Appendable to capture the process stderr
-     * @return the Thread
-     * @since 1.7.5
-     */
-    public static Thread consumeProcessErrorStream(Process self, Appendable error) {
-        Thread thread = new Thread(new TextDumper(self.getErrorStream(), error));
-        thread.start();
-        return thread;
-    }
-
-    /**
-     * Gets the output stream from a process and reads it
-     * to keep the process from blocking due to a full output buffer.
-     * The processed stream data is appended to the supplied Appendable.
-     * A new Thread is started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param output an Appendable to capture the process stdout
-     * @return the Thread
-     * @since 1.7.5
-     */
-    public static Thread consumeProcessOutputStream(Process self, Appendable output) {
-        Thread thread = new Thread(new TextDumper(self.getInputStream(), output));
-        thread.start();
-        return thread;
-    }
-
-    /**
-     * Gets the output stream from a process and reads it
-     * to keep the process from blocking due to a full output buffer.
-     * The processed stream data is appended to the supplied OutputStream.
-     * A new Thread is started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param output an OutputStream to capture the process stdout
-     * @return the Thread
-     * @since 1.5.2
-     */
-    public static Thread consumeProcessOutputStream(Process self, OutputStream output) {
-        Thread thread = new Thread(new ByteDumper(self.getInputStream(), output));
-        thread.start();
-        return thread;
-    }
-
-    /**
-     * Creates a new BufferedWriter as stdin for this process,
-     * passes it to the closure, and ensures the stream is flushed
-     * and closed after the closure returns.
-     * A new Thread is started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param closure a closure
-     * @since 1.5.2
-     */
-    public static void withWriter(final Process self, final Closure closure) {
-        new Thread(new Runnable() {
-            public void run() {
-                try {
-                    IOGroovyMethods.withWriter(new BufferedOutputStream(getOut(self)), closure);
-                } catch (IOException e) {
-                    throw new GroovyRuntimeException("exception while reading process stream", e);
+        switch (inclusion) {
+        case NON_DEFAULT:
+            // 11-Nov-2015, tatu: This is tricky because semantics differ between cases,
+            //    so that if enclosing class has this, we may need to values of property,
+            //    whereas for global defaults OR per-property overrides, we have more
+            //    static definition. Sigh.
+            // First: case of class specifying it; try to find POJO property defaults
+            JavaType t = (serializationType == null) ? declaredType : serializationType;
+            if (_defaultInclusion.getValueInclusion() == JsonInclude.Include.NON_DEFAULT) {
+                valueToSuppress = getPropertyDefaultValue(propDef.getName(), am, t);
+            } else {
+                valueToSuppress = getDefaultValue(t);
+            }
+            if (valueToSuppress == null) {
+                suppressNulls = true;
+            } else {
+                if (valueToSuppress.getClass().isArray()) {
+                    valueToSuppress = ArrayBuilders.getArrayComparator(valueToSuppress);
                 }
             }
-        }).start();
+
+            break;
+        case NON_ABSENT: // new with 2.6, to support Guava/JDK8 Optionals
+            // always suppress nulls
+            suppressNulls = true;
+            // and for referential types, also "empty", which in their case means "absent"
+            if (declaredType.isReferenceType()) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
+        case NON_EMPTY:
+            // always suppress nulls
+            suppressNulls = true;
+            // but possibly also 'empty' values:
+            valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            break;
+        case NON_NULL:
+            suppressNulls = true;
+            // fall through
+        case ALWAYS: // default
+        default:
+            // we may still want to suppress empty collections, as per [JACKSON-254]:
+            if (declaredType.isContainerType()
+                    && !_config.isEnabled(SerializationFeature.WRITE_EMPTY_JSON_ARRAYS)) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
+        }
+        BeanPropertyWriter bpw = new BeanPropertyWriter(propDef,
+                am, _beanDesc.getClassAnnotations(), declaredType,
+                ser, typeSer, serializationType, suppressNulls, valueToSuppress);
+
+        // How about custom null serializer?
+        Object serDef = _annotationIntrospector.findNullSerializer(am);
+        if (serDef != null) {
+            bpw.assignNullSerializer(prov.serializerInstance(am, serDef));
+        }
+        // And then, handling of unwrapping
+        NameTransformer unwrapper = _annotationIntrospector.findUnwrappingNameTransformer(am);
+        if (unwrapper != null) {
+            bpw = bpw.unwrappingWriter(unwrapper);
+        }
+        return bpw;
     }
 
-    /**
-     * Creates a new buffered OutputStream as stdin for this process,
-     * passes it to the closure, and ensures the stream is flushed
-     * and closed after the closure returns.
-     * A new Thread is started, so this method will return immediately.
-     *
-     * @param self a Process
-     * @param closure a closure
-     * @since 1.5.2
+    /*
+    /**********************************************************
+    /* Helper methods; annotation access
+    /**********************************************************
      */
-    public static void withOutputStream(final Process self, final Closure closure) {
-        new Thread(new Runnable() {
-            public void run() {
-                try {
-                    IOGroovyMethods.withStream(new BufferedOutputStream(getOut(self)), closure);
-                } catch (IOException e) {
-                    throw new GroovyRuntimeException("exception while reading process stream", e);
+
+    /**
+     * Method that will try to determine statically defined type of property
+     * being serialized, based on annotations (for overrides), and alternatively
+     * declared type (if static typing for serialization is enabled).
+     * If neither can be used (no annotations, dynamic typing), returns null.
+     */
+    protected JavaType findSerializationType(Annotated a, boolean useStaticTyping, JavaType declaredType)
+        throws JsonMappingException
+    {
+        JavaType secondary = _annotationIntrospector.refineSerializationType(_config, a, declaredType);
+        // 11-Oct-2015, tatu: As of 2.7, not 100% sure following checks are needed. But keeping
+        //    for now, just in case
+        if (secondary != declaredType) {
+            Class<?> serClass = secondary.getRawClass();
+            // Must be a super type to be usable
+            Class<?> rawDeclared = declaredType.getRawClass();
+            if (serClass.isAssignableFrom(rawDeclared)) {
+                ; // fine as is
+            } else {
+                /* 18-Nov-2010, tatu: Related to fixing [JACKSON-416], an issue with such
+                 *   check is that for deserialization more specific type makes sense;
+                 *   and for serialization more generic. But alas JAXB uses but a single
+                 *   annotation to do both... Hence, we must just discard type, as long as
+                 *   types are related
+                 */
+                if (!rawDeclared.isAssignableFrom(serClass)) {
+                    throw new IllegalArgumentException("Illegal concrete-type annotation for method '"+a.getName()+"': class "+serClass.getName()+" not a super-type of (declared) class "+rawDeclared.getName());
                 }
+                /* 03-Dec-2010, tatu: Actually, ugh, we may need to further relax this
+                 *   and actually accept subtypes too for serialization. Bit dangerous in theory
+                 *   but need to trust user here...
+                 */
             }
-        }).start();
+            useStaticTyping = true;
+            declaredType = secondary;
+        }
+        // If using static typing, declared type is known to be the type...
+        JsonSerialize.Typing typing = _annotationIntrospector.findSerializationTyping(a);
+        if ((typing != null) && (typing != JsonSerialize.Typing.DEFAULT_TYPING)) {
+            useStaticTyping = (typing == JsonSerialize.Typing.STATIC);
+        }
+        if (useStaticTyping) {
+            // 11-Oct-2015, tatu: Make sure JavaType also "knows" static-ness...
+            return declaredType.withStaticTyping();
+            
+        }
+        return null;
     }
 
-    /**
-     * Allows one Process to asynchronously pipe data to another Process.
-     *
-     * @param left  a Process instance
-     * @param right a Process to pipe output to
-     * @return the second Process to allow chaining
-     * @throws java.io.IOException if an IOException occurs.
-     * @since 1.5.2
+    /*
+    /**********************************************************
+    /* Helper methods for default value handling
+    /**********************************************************
      */
-    public static Process pipeTo(final Process left, final Process right) throws IOException {
-        new Thread(new Runnable() {
-            public void run() {
-                InputStream in = new BufferedInputStream(getIn(left));
-                OutputStream out = new BufferedOutputStream(getOut(right));
-                byte[] buf = new byte[8192];
-                int next;
-                try {
-                    while ((next = in.read(buf)) != -1) {
-                        out.write(buf, 0, next);
-                    }
-                } catch (IOException e) {
-                    throw new GroovyRuntimeException("exception while reading process stream", e);
-                } finally {
-                    closeWithWarning(out);
-                }
+
+    protected Object getDefaultBean()
+    {
+        Object def = _defaultBean;
+        if (def == null) {
+            /* If we can fix access rights, we should; otherwise non-public
+             * classes or default constructor will prevent instantiation
+             */
+            def = _beanDesc.instantiateBean(_config.canOverrideAccessModifiers());
+            if (def == null) {
+                // 06-Nov-2015, tatu: As per [databind#998], do not fail.
+                /*
+                Class<?> cls = _beanDesc.getClassInfo().getAnnotated();
+                throw new IllegalArgumentException("Class "+cls.getName()+" has no default constructor; can not instantiate default bean value to support 'properties=JsonSerialize.Inclusion.NON_DEFAULT' annotation");
+                 */
+
+                // And use a marker
+                def = NO_DEFAULT_MARKER;
             }
-        }).start();
-        return right;
+            _defaultBean = def;
+        }
+        return (def == NO_DEFAULT_MARKER) ? null : _defaultBean;
     }
 
     /**
-     * Overrides the or operator to allow one Process to asynchronously
-     * pipe data to another Process.
+     * Accessor used to find out "default value" for given property, to use for
+     * comparing values to serialize, to determine whether to exclude value from serialization with
+     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_EMPTY}.
+     * This method is called when we specifically want to know default value within context
+     * of a POJO, when annotation is within containing class, and not for property or
+     * defined as global baseline.
+     *<p>
+     * Note that returning of pseudo-type 
      *
-     * @param left  a Process instance
-     * @param right a Process to pipe output to
-     * @return the second Process to allow chaining
-     * @throws java.io.IOException if an IOException occurs.
-     * @since 1.5.1
+     * @since 2.7
      */
-    public static Process or(final Process left, final Process right) throws IOException {
-        return pipeTo(left, right);
-    }
-
-    /**
-     * A Runnable which waits for a process to complete together with a notification scheme
-     * allowing another thread to wait a maximum number of seconds for the process to complete
-     * before killing it.
-     *
-     * @since 1.0
-     */
-    protected static class ProcessRunner implements Runnable {
-        Process process;
-        private boolean finished;
-
-        public ProcessRunner(Process process) {
-            this.process = process;
+    protected Object getPropertyDefaultValue(String name, AnnotatedMember member,
+            JavaType type)
+    {
+        Object defaultBean = getDefaultBean();
+        if (defaultBean == null) {
+            return getDefaultValue(type);
         }
-
-        private void doProcessWait() {
-            try {
-                process.waitFor();
-            } catch (InterruptedException e) {
-                // Ignore
-            }
-        }
-
-        public void run() {
-            doProcessWait();
-            synchronized (this) {
-                notifyAll();
-                finished = true;
-            }
-        }
-
-        public synchronized void waitForOrKill(long millis) {
-            if (!finished) {
-                try {
-                    wait(millis);
-                } catch (InterruptedException e) {
-                    // Ignore
-                }
-                if (!finished) {
-                    process.destroy();
-                    doProcessWait();
-                }
-            }
-        }
-    }
-
-    private static class TextDumper implements Runnable {
-        InputStream in;
-        Appendable app;
-
-        public TextDumper(InputStream in, Appendable app) {
-            this.in = in;
-            this.app = app;
-        }
-
-        public void run() {
-            InputStreamReader isr = new InputStreamReader(in);
-            BufferedReader br = new BufferedReader(isr);
-            String next;
-            try {
-                while ((next = br.readLine()) != null) {
-                    if (app != null) {
-                        app.append(next);
-                        app.append("\n");
-                    }
-                }
-            } catch (IOException e) {
-                throw new GroovyRuntimeException("exception while reading process stream", e);
-            }
-        }
-    }
-
-    private static class ByteDumper implements Runnable {
-        InputStream in;
-        OutputStream out;
-
-        public ByteDumper(InputStream in, OutputStream out) {
-            this.in = new BufferedInputStream(in);
-            this.out = out;
-        }
-
-        public void run() {
-            byte[] buf = new byte[8192];
-            int next;
-            try {
-                while ((next = in.read(buf)) != -1) {
-                    if (out != null) out.write(buf, 0, next);
-                }
-            } catch (IOException e) {
-                throw new GroovyRuntimeException("exception while dumping process stream", e);
-            }
+        try {
+            return member.getValue(defaultBean);
+        } catch (Exception e) {
+            return _throwWrapped(e, name, defaultBean);
         }
     }
 
     /**
-     * Executes the command specified by <code>self</code> as a command-line process.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
+     * Accessor used to find out "default value" to use for comparing values to
+     * serialize, to determine whether to exclude value from serialization with
+     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}.
+     *<p>
+     * Default logic is such that for primitives and wrapper types for primitives, expected
+     * defaults (0 for `int` and `java.lang.Integer`) are returned; for Strings, empty String,
+     * and for structured (Maps, Collections, arrays) and reference types, criteria
+     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}
+     * is used.
      *
-     * @param self a command line String
-     * @return the Process which has just started for this command line representation
-     * @throws IOException if an IOException occurs.
-     * @since 1.0
+     * @since 2.7
      */
-    public static Process execute(final String self) throws IOException {
-        return Runtime.getRuntime().exec(self);
-    }
+    protected Object getDefaultValue(JavaType type)
+    {
+        // 06-Nov-2015, tatu: Returning null is fine for Object types; but need special
+        //   handling for primitives since they are never passed as nulls.
+        Class<?> cls = type.getRawClass();
 
-    /**
-     * Executes the command specified by <code>self</code> with environment defined by <code>envp</code>
-     * and under the working directory <code>dir</code>.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param self a command line String to be executed.
-     * @param envp an array of Strings, each element of which
-     *             has environment variable settings in the format
-     *             <i>name</i>=<i>value</i>, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the environment of the current process.
-     * @param dir  the working directory of the subprocess, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the working directory of the current process.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.0
-     */
-    public static Process execute(final String self, final String[] envp, final File dir) throws IOException {
-        return Runtime.getRuntime().exec(self, envp, dir);
-    }
-
-    /**
-     * Executes the command specified by <code>self</code> with environment defined
-     * by <code>envp</code> and under the working directory <code>dir</code>.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param self a command line String to be executed.
-     * @param envp a List of Objects (converted to Strings using toString), each member of which
-     *             has environment variable settings in the format
-     *             <i>name</i>=<i>value</i>, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the environment of the current process.
-     * @param dir  the working directory of the subprocess, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the working directory of the current process.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.0
-     */
-    public static Process execute(final String self, final List envp, final File dir) throws IOException {
-        return execute(self, stringify(envp), dir);
-    }
-
-    /**
-     * Executes the command specified by the given <code>String</code> array.
-     * The first item in the array is the command; the others are the parameters.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param commandArray an array of <code>String</code> containing the command name and
-     *                     parameters as separate items in the array.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.0
-     */
-    public static Process execute(final String[] commandArray) throws IOException {
-        return Runtime.getRuntime().exec(commandArray);
-    }
-
-    /**
-     * Executes the command specified by the <code>String</code> array given in the first parameter,
-     * with the environment defined by <code>envp</code> and under the working directory <code>dir</code>.
-     * The first item in the array is the command; the others are the parameters.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param commandArray an array of <code>String</code> containing the command name and
-     *                     parameters as separate items in the array.
-     * @param envp an array of Strings, each member of which
-     *             has environment variable settings in the format
-     *             <i>name</i>=<i>value</i>, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the environment of the current process.
-     * @param dir  the working directory of the subprocess, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the working directory of the current process.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.7.1
-     */
-    public static Process execute(final String[] commandArray, final String[] envp, final File dir) throws IOException {
-        return Runtime.getRuntime().exec(commandArray, envp, dir);
-    }
-
-    /**
-     * Executes the command specified by the <code>String</code> array given in the first parameter,
-     * with the environment defined by <code>envp</code> and under the working directory <code>dir</code>.
-     * The first item in the array is the command; the others are the parameters.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param commandArray an array of <code>String</code> containing the command name and
-     *                     parameters as separate items in the array.
-     * @param envp a List of Objects (converted to Strings using toString), each member of which
-     *             has environment variable settings in the format
-     *             <i>name</i>=<i>value</i>, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the environment of the current process.
-     * @param dir  the working directory of the subprocess, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the working directory of the current process.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.7.1
-     */
-    public static Process execute(final String[] commandArray, final List envp, final File dir) throws IOException {
-        return Runtime.getRuntime().exec(commandArray, stringify(envp), dir);
-    }
-
-    /**
-     * Executes the command specified by the given list. The toString() method is called
-     * for each item in the list to convert into a resulting String.
-     * The first item in the list is the command the others are the parameters.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param commands a list containing the command name and
-     *                    parameters as separate items in the list.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.0
-     */
-    public static Process execute(final List commands) throws IOException {
-        return execute(stringify(commands));
-    }
-
-    /**
-     * Executes the command specified by the given list,
-     * with the environment defined by <code>envp</code> and under the working directory <code>dir</code>.
-     * The first item in the list is the command; the others are the parameters. The toString()
-     * method is called on items in the list to convert them to Strings.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param commands a List containing the command name and
-     *                     parameters as separate items in the list.
-     * @param envp an array of Strings, each member of which
-     *             has environment variable settings in the format
-     *             <i>name</i>=<i>value</i>, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the environment of the current process.
-     * @param dir  the working directory of the subprocess, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the working directory of the current process.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.7.1
-     */
-    public static Process execute(final List commands, final String[] envp, final File dir) throws IOException {
-        return Runtime.getRuntime().exec(stringify(commands), envp, dir);
-    }
-
-    /**
-     * Executes the command specified by the given list,
-     * with the environment defined by <code>envp</code> and under the working directory <code>dir</code>.
-     * The first item in the list is the command; the others are the parameters. The toString()
-     * method is called on items in the list to convert them to Strings.
-     * <p>For more control over Process construction you can use
-     * <code>java.lang.ProcessBuilder</code> (JDK 1.5+).</p>
-     *
-     * @param commands a List containing the command name and
-     *                     parameters as separate items in the list.
-     * @param envp a List of Objects (converted to Strings using toString), each member of which
-     *             has environment variable settings in the format
-     *             <i>name</i>=<i>value</i>, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the environment of the current process.
-     * @param dir  the working directory of the subprocess, or
-     *             <tt>null</tt> if the subprocess should inherit
-     *             the working directory of the current process.
-     * @return the Process which has just started for this command line representation.
-     * @throws IOException if an IOException occurs.
-     * @since 1.7.1
-     */
-    public static Process execute(final List commands, final List envp, final File dir) throws IOException {
-        return Runtime.getRuntime().exec(stringify(commands), stringify(envp), dir);
-    }
-
-    private static String[] stringify(final List orig) {
-        if (orig == null) return null;
-        String[] result = new String[orig.size()];
-        for (int i = 0; i < orig.size(); i++) {
-            result[i] = orig.get(i).toString();
+        Class<?> prim = ClassUtil.primitiveType(cls);
+        if (prim != null) {
+            return ClassUtil.defaultValue(prim);
         }
-        return result;
+        if (type.isContainerType() || type.isReferenceType()) {
+            return JsonInclude.Include.NON_EMPTY;
+        }
+        if (cls == String.class) {
+            return "";
+        }
+        return null;
     }
-
+    
+    /*
+    /**********************************************************
+    /* Helper methods for exception handling
+    /**********************************************************
+     */
+    
+    protected Object _throwWrapped(Exception e, String propName, Object defaultBean)
+    {
+        Throwable t = e;
+        while (t.getCause() != null) {
+            t = t.getCause();
+        }
+        if (t instanceof Error) throw (Error) t;
+        if (t instanceof RuntimeException) throw (RuntimeException) t;
+        throw new IllegalArgumentException("Failed to get property '"+propName+"' of default "+defaultBean.getClass().getName()+" instance");
+    }
 }

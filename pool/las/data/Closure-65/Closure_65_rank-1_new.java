@@ -1,103 +1,110 @@
-package org.apache.solr.common.cloud;
-
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright (c) 2007 Mockito contributors
+ * This program is made available under the terms of the MIT License.
  */
 
-import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.net.SocketAddress;
-import java.util.Set;
-import java.util.concurrent.CopyOnWriteArraySet;
+package org.mockito.internal.util;
 
-import org.apache.zookeeper.ClientCnxn;
-import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.ZooKeeper;
+import org.mockito.cglib.proxy.Callback;
+import org.mockito.cglib.proxy.Factory;
+import org.mockito.exceptions.misusing.NotAMockException;
+import org.mockito.internal.InvocationNotifierHandler;
+import org.mockito.internal.MockHandler;
+import org.mockito.internal.MockHandlerInterface;
+import org.mockito.internal.creation.MethodInterceptorFilter;
+import org.mockito.internal.creation.MockSettingsImpl;
+import org.mockito.internal.creation.jmock.ClassImposterizer;
+import org.mockito.internal.util.reflection.LenientCopyTool;
 
-// we use this class to expose nasty stuff for tests
-public class SolrZooKeeper extends ZooKeeper {
-  final Set<Thread> spawnedThreads = new CopyOnWriteArraySet<>();
-  
-  // for test debug
-  //static Map<SolrZooKeeper,Exception> clients = new ConcurrentHashMap<SolrZooKeeper,Exception>();
+import java.io.Serializable;
 
-  public SolrZooKeeper(String connectString, int sessionTimeout,
-      Watcher watcher) throws IOException {
-    super(connectString, sessionTimeout, watcher);
-    //clients.put(this, new RuntimeException());
-  }
-  
-  public ClientCnxn getConnection() {
-    return cnxn;
-  }
-  
-  public SocketAddress getSocketAddress() {
-    return testableLocalSocketAddress();
-  }
-  
-  public void closeCnxn() {
-    final Thread t = new Thread() {
-      @Override
-      public void run() {
-        try {
-          final ClientCnxn cnxn = getConnection();
-          synchronized (cnxn) {
-            try {
-              final Field sendThreadFld = cnxn.getClass().getDeclaredField("sendThread");
-              sendThreadFld.setAccessible(true);
-              Object sendThread = sendThreadFld.get(cnxn);
-              if (sendThread != null) {
-                Method method = sendThread.getClass().getDeclaredMethod("testableCloseSocket");
-                method.setAccessible(true);
-                try {
-                  method.invoke(sendThread);
-                } catch (InvocationTargetException e) {
-                  // is fine
-                }
-              }
-            } catch (Exception e) {
-              throw new RuntimeException("Closing Zookeeper send channel failed.", e);
-            }
-          }
-        } finally {
-          spawnedThreads.remove(this);
-        }
-      }
-    };
-    spawnedThreads.add(t);
-    t.start();
-  }
+import static org.mockito.Mockito.RETURNS_DEFAULTS;
+import static org.mockito.Mockito.withSettings;
 
-  @Override
-  public synchronized void close() throws InterruptedException {
-    for (Thread t : spawnedThreads) {
-      if (t.isAlive()) t.interrupt();
+@SuppressWarnings("unchecked")
+public class MockUtil {
+    
+    private final MockCreationValidator creationValidator;
+
+    public MockUtil(MockCreationValidator creationValidator) {
+        this.creationValidator = creationValidator;
     }
-    super.close();
-  }
-  
-//  public static void assertCloses() {
-//    if (clients.size() > 0) {
-//      Iterator<Exception> stacktraces = clients.values().iterator();
-//      Exception cause = null;
-//      cause = stacktraces.next();
-//      throw new RuntimeException("Found a bad one!", cause);
-//    }
-//  }
-  
+    
+    public MockUtil() {
+        this(new MockCreationValidator());
+    }
+
+    public <T> T createMock(Class<T> classToMock, MockSettingsImpl settings) {
+        creationValidator.validateType(classToMock);
+        creationValidator.validateExtraInterfaces(classToMock, settings.getExtraInterfaces());
+        creationValidator.validateMockedType(classToMock, settings.getSpiedInstance());
+
+        settings.initiateMockName(classToMock);
+
+        MockHandler<T> mockHandler = new MockHandler<T>(settings);
+        InvocationNotifierHandler<T> invocationNotifierHandler = new InvocationNotifierHandler<T>(mockHandler, settings);
+        MethodInterceptorFilter filter = new MethodInterceptorFilter(invocationNotifierHandler, settings);
+        Class<?>[] interfaces = settings.getExtraInterfaces();
+
+        Class<?>[] ancillaryTypes;
+        if (settings.isSerializable()) {
+            ancillaryTypes = interfaces == null ? new Class<?>[] {Serializable.class} : new ArrayUtils().concat(interfaces, Serializable.class);
+        } else {
+            ancillaryTypes = interfaces == null ? new Class<?>[0] : interfaces;
+        }
+
+        Object spiedInstance = settings.getSpiedInstance();
+        
+        T mock = ClassImposterizer.INSTANCE.imposterise(filter, classToMock, ancillaryTypes);
+        
+        if (spiedInstance != null) {
+            new LenientCopyTool().copyToMock(spiedInstance, mock);
+        }
+        
+        return mock;
+    }
+
+    public <T> void resetMock(T mock) {
+        MockHandlerInterface<T> oldMockHandler = getMockHandler(mock);
+        MockHandler<T> newMockHandler = new MockHandler<T>(oldMockHandler);
+        MethodInterceptorFilter newFilter = new MethodInterceptorFilter(newMockHandler, 
+                        (MockSettingsImpl) withSettings().defaultAnswer(RETURNS_DEFAULTS));
+        ((Factory) mock).setCallback(0, newFilter);
+    }
+
+    public <T> MockHandlerInterface<T> getMockHandler(T mock) {
+        if (mock == null) {
+            throw new NotAMockException("Argument should be a mock, but is null!");
+        }
+
+        if (isMockitoMock(mock)) {
+            return (MockHandlerInterface) getInterceptor(mock).getHandler();
+        } else {
+            throw new NotAMockException("Argument should be a mock, but is: " + mock.getClass());
+        }
+    }
+
+    private <T> boolean isMockitoMock(T mock) {
+        return getInterceptor(mock) != null;
+    }
+
+    public boolean isMock(Object mock) {
+        return mock != null && isMockitoMock(mock);
+    }
+
+    private <T> MethodInterceptorFilter getInterceptor(T mock) {
+        if (!(mock instanceof Factory)) {
+            return null;
+        }
+        Factory factory = (Factory) mock;
+        Callback callback = factory.getCallback(0);
+        if (callback instanceof MethodInterceptorFilter) {
+            return (MethodInterceptorFilter) callback;
+        }
+        return null;
+    }
+
+    public MockName getMockName(Object mock) {
+        return getMockHandler(mock).getMockSettings().getMockName();
+    }
 }

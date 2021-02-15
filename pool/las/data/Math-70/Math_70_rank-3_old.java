@@ -1,153 +1,85 @@
-/*
- * $Id$
+/**
+ * Copyright 2007 The Apache Software Foundation
  *
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *  http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.struts2.config;
+package org.apache.hadoop.hbase;
 
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Set;
-
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.Text;
 
 /**
- * A Settings implementation which stores an internal list of settings objects. Each time
- * a config method is called (get, set, list, etc..) this class will go through the list of settingss
- * and call the method until successful.
- *
+ * HConstants holds a bunch of HBase-related constants
  */
-class DelegatingSettings extends Settings {
+public interface HConstants {
+  
+  // Configuration parameters
+  
+  // TODO: URL for hbase master like hdfs URLs with host and port.
+  // Like jdbc URLs?  URLs could be used to refer to table cells?
+  // jdbc:mysql://[host][,failoverhost...][:port]/[database]
+  // jdbc:mysql://[host][,failoverhost...][:port]/[database][?propertyName1][=propertyValue1][&propertyName2][=propertyValue2]...
+  
+  // Key into HBaseConfiguration for the hbase.master address.
+  // TODO: Support 'local': i.e. default of all running in single
+  // process.  Same for regionserver. TODO: Is having HBase homed
+  // on port 60k OK?
+  static final String MASTER_ADDRESS = "hbase.master";
+  static final String DEFAULT_MASTER_ADDRESS = "localhost:60000";
 
-    Settings[] configList;
+  // Key for hbase.regionserver address.
+  static final String REGIONSERVER_ADDRESS = "hbase.regionserver";
+  static final String DEFAULT_REGIONSERVER_ADDRESS = "localhost:60010";
 
+  static final String THREAD_WAKE_FREQUENCY = "hbase.server.thread.wakefrequency";
+  static final String HREGION_DIR = "hbase.regiondir";
+  static final String DEFAULT_HREGION_DIR = "/hbase";
+  static final String HREGIONDIR_PREFIX = "hregion_";
+  
+  // TODO: Someone may try to name a column family 'log'.  If they
+  // do, it will clash with the HREGION log dir subdirectory. FIX.
+  static final String HREGION_LOGDIR_NAME = "log";
+  
+  static final long DEFAULT_MAX_FILE_SIZE = 128 * 1024 * 1024;        // 128MB
 
-    /**
-     * Creates a new DelegatingSettings object given a list of {@link Settings} implementations.
-     *
-     * @param aConfigList a list of Settings implementations.
-     */
-    public DelegatingSettings(Settings[] aConfigList) {
-        configList = aConfigList;
-    }
+  // Always store the location of the root table's HRegion.
+  // This HRegion is never split.
 
+  // region name = table + startkey + regionid. This is the row key.
+  // each row in the root and meta tables describes exactly 1 region
+  // Do we ever need to know all the information that we are storing?
 
-    /**
-     * Sets the given property - calls setImpl(String, Object) method on config objects in the config
-     * list until successful.
-     *
-     * @see #set(String, String)
-     */
-    public void setImpl(String name, String value) throws IllegalArgumentException, UnsupportedOperationException {
-        // Determine which config to use by using get
-        // Delegate to the other settingss
-        IllegalArgumentException e = null;
+  // The root tables' name.
+  static final Text ROOT_TABLE_NAME = new Text("--ROOT--");
 
-        for (int i = 0; i < configList.length; i++) {
-            try {
-                configList[i].getImpl(name);
+  // The META tables' name.
+  static final Text META_TABLE_NAME = new Text("--META--");
 
-                // Found it, now try setting
-                configList[i].setImpl(name, value);
+  // Defines for the column names used in both ROOT and META HBase 'meta'
+  // tables.
+  static final Text COLUMN_FAMILY = new Text("info:");
+  static final Text COL_REGIONINFO = new Text(COLUMN_FAMILY + "regioninfo");
+  static final Text COL_SERVER = new Text(COLUMN_FAMILY + "server");
+  static final Text COL_STARTCODE = new Text(COLUMN_FAMILY + "serverstartcode");
 
-                // Worked, now return
-                return;
-            } catch (IllegalArgumentException ex) {
-                e = ex;
+  // Other constants
+  
+  static final String UTF8_ENCODING = "UTF-8";
+  
+  static final BytesWritable DELETE_BYTES = 
+    new BytesWritable("HBASE::DELETEVAL".getBytes());
+  
+  static final BytesWritable COMPLETE_CACHEFLUSH =
+    new BytesWritable("HBASE::CACHEFLUSH".getBytes());
 
-                // Try next config
-            }
-        }
-
-        throw e;
-    }
-
-    /**
-     * Gets the specified property - calls getImpl(String) method on config objects in config list
-     * until successful.
-     *
-     * @see #get(String)
-     */
-    public String getImpl(String name) throws IllegalArgumentException {
-        // Delegate to the other settings
-        IllegalArgumentException e = null;
-
-        for (int i = 0; i < configList.length; i++) {
-            try {
-                return configList[i].getImpl(name);
-            } catch (IllegalArgumentException ex) {
-                e = ex;
-
-                // Try next config
-            }
-        }
-
-        throw e;
-    }
-
-    /**
-     * Determines if a paramter has been set - calls the isSetImpl(String) method on each config object
-     * in config list. Returns <tt>true</tt> when one of the config implementations returns true. Returns
-     * <tt>false</tt> otherwise.
-     *
-     * @see #isSet(String)
-     */
-    public boolean isSetImpl(String aName) {
-        for (int i = 0; i < configList.length; i++) {
-            if (configList[i].isSetImpl(aName)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Returns a list of all property names - returns a list of all property names in all config
-     * objects in config list.
-     *
-     * @see #list()
-     */
-    public Iterator listImpl() {
-        boolean workedAtAll = false;
-
-        Set<Object> settingList = new HashSet<Object>();
-        UnsupportedOperationException e = null;
-
-        for (int i = 0; i < configList.length; i++) {
-            try {
-                Iterator list = configList[i].listImpl();
-
-                while (list.hasNext()) {
-                    settingList.add(list.next());
-                }
-
-                workedAtAll = true;
-            } catch (UnsupportedOperationException ex) {
-                e = ex;
-
-                // Try next config
-            }
-        }
-
-        if (!workedAtAll) {
-            throw (e == null) ? new UnsupportedOperationException() : e;
-        } else {
-            return settingList.iterator();
-        }
-    }
 }

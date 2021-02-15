@@ -1,11 +1,10 @@
 /**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -15,620 +14,668 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.hadoop.hive.shims;
 
-import java.io.DataInput;
-import java.io.DataOutput;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.nio.ByteBuffer;
-import java.security.PrivilegedExceptionAction;
-import java.util.Comparator;
+package org.apache.commons.cli;
+
+import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-
-import javax.security.auth.login.LoginException;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
-import org.apache.hadoop.io.LongWritable;
-import org.apache.hadoop.mapred.ClusterStatus;
-import org.apache.hadoop.mapred.InputSplit;
-import org.apache.hadoop.mapred.JobConf;
-import org.apache.hadoop.mapred.JobProfile;
-import org.apache.hadoop.mapred.JobStatus;
-import org.apache.hadoop.mapred.RecordReader;
-import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapreduce.Job;
-import org.apache.hadoop.mapreduce.JobContext;
-import org.apache.hadoop.mapreduce.JobID;
-import org.apache.hadoop.mapreduce.OutputFormat;
-import org.apache.hadoop.mapreduce.TaskAttemptContext;
-import org.apache.hadoop.mapreduce.TaskAttemptID;
-import org.apache.hadoop.mapreduce.TaskID;
-import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hadoop.util.Progressable;
+import java.util.Properties;
 
 /**
- * In order to be compatible with multiple versions of Hadoop, all parts
- * of the Hadoop interface that are not cross-version compatible are
- * encapsulated in an implementation of this class. Users should use
- * the ShimLoader class as a factory to obtain an implementation of
- * HadoopShims corresponding to the version of Hadoop currently on the
- * classpath.
+ * Default parser.
+ * 
+ * @author Emmanuel Bourg
+ * @version $Revision$, $Date$
+ * @since 1.3
  */
-public interface HadoopShims {
-
-  static final Log LOG = LogFactory.getLog(HadoopShims.class);
-
-  /**
-   * Constructs and Returns TaskAttempt Log Url
-   * or null if the TaskLogServlet is not available
-   *
-   *  @return TaskAttempt Log Url
-   */
-  String getTaskAttemptLogUrl(JobConf conf,
-      String taskTrackerHttpAddress,
-      String taskAttemptId)
-          throws MalformedURLException;
-
-  /**
-   * Returns a shim to wrap MiniMrCluster
-   */
-  public MiniMrShim getMiniMrCluster(Configuration conf, int numberOfTaskTrackers,
-      String nameNode, int numDir) throws IOException;
-
-  public MiniMrShim getMiniTezCluster(Configuration conf, int numberOfTaskTrackers,
-                                     String nameNode, int numDir) throws IOException;
-
-  /**
-   * Shim for MiniMrCluster
-   */
-  public interface MiniMrShim {
-    public int getJobTrackerPort() throws UnsupportedOperationException;
-    public void shutdown() throws IOException;
-    public void setupConfiguration(Configuration conf);
-  }
-
-  /**
-   * Returns a shim to wrap MiniDFSCluster. This is necessary since this class
-   * was moved from org.apache.hadoop.dfs to org.apache.hadoop.hdfs
-   */
-  MiniDFSShim getMiniDfs(Configuration conf,
-      int numDataNodes,
-      boolean format,
-      String[] racks) throws IOException;
-
-  /**
-   * Shim around the functions in MiniDFSCluster that Hive uses.
-   */
-  public interface MiniDFSShim {
-    FileSystem getFileSystem() throws IOException;
-
-    void shutdown() throws IOException;
-  }
-
-  CombineFileInputFormatShim getCombineFileInputFormat();
-
-  String getInputFormatClassName();
-
-  int createHadoopArchive(Configuration conf, Path parentDir, Path destDir,
-      String archiveName) throws Exception;
-
-  public URI getHarUri(URI original, URI base, URI originalBase)
-      throws URISyntaxException;
-  /**
-   * Hive uses side effect files exclusively for it's output. It also manages
-   * the setup/cleanup/commit of output from the hive client. As a result it does
-   * not need support for the same inside the MR framework
-   *
-   * This routine sets the appropriate options related to bypass setup/cleanup/commit
-   * support in the MR framework, but does not set the OutputFormat class.
-   */
-  void prepareJobOutput(JobConf conf);
-
-  /**
-   * Used by TaskLogProcessor to Remove HTML quoting from a string
-   * @param item the string to unquote
-   * @return the unquoted string
-   *
-   */
-  public String unquoteHtmlChars(String item);
-
-
-
-  public void closeAllForUGI(UserGroupInformation ugi);
-
-  /**
-   * Get the UGI that the given job configuration will run as.
-   *
-   * In secure versions of Hadoop, this simply returns the current
-   * access control context's user, ignoring the configuration.
-   */
-  public UserGroupInformation getUGIForConf(Configuration conf) throws LoginException, IOException;
-
-  /**
-   * Used by metastore server to perform requested rpc in client context.
-   * @param <T>
-   * @param ugi
-   * @param pvea
-   * @throws IOException
-   * @throws InterruptedException
-   */
-  public <T> T doAs(UserGroupInformation ugi, PrivilegedExceptionAction<T> pvea) throws
-  IOException, InterruptedException;
-
-  /**
-   * Once a delegation token is stored in a file, the location is specified
-   * for a child process that runs hadoop operations, using an environment
-   * variable .
-   * @return Return the name of environment variable used by hadoop to find
-   *  location of token file
-   */
-  public String getTokenFileLocEnvName();
-
-
-  /**
-   * Get delegation token from filesystem and write the token along with
-   * metastore tokens into a file
-   * @param conf
-   * @return Path of the file with token credential
-   * @throws IOException
-   */
-  public Path createDelegationTokenFile(final Configuration conf) throws IOException;
-
-
-  /**
-   * Used to creates UGI object for a remote user.
-   * @param userName remote User Name
-   * @param groupNames group names associated with remote user name
-   * @return UGI created for the remote user.
-   */
-  public UserGroupInformation createRemoteUser(String userName, List<String> groupNames);
-
-  /**
-   * Get the short name corresponding to the subject in the passed UGI
-   *
-   * In secure versions of Hadoop, this returns the short name (after
-   * undergoing the translation in the kerberos name rule mapping).
-   * In unsecure versions of Hadoop, this returns the name of the subject
-   */
-  public String getShortUserName(UserGroupInformation ugi);
-
-  /**
-   * Return true if the Shim is based on Hadoop Security APIs.
-   */
-  public boolean isSecureShimImpl();
-
-  /**
-   * Return true if the hadoop configuration has security enabled
-   * @return
-   */
-  public boolean isSecurityEnabled();
-
-  /**
-   * Get the string form of the token given a token signature.
-   * The signature is used as the value of the "service" field in the token for lookup.
-   * Ref: AbstractDelegationTokenSelector in Hadoop. If there exists such a token
-   * in the token cache (credential store) of the job, the lookup returns that.
-   * This is relevant only when running against a "secure" hadoop release
-   * The method gets hold of the tokens if they are set up by hadoop - this should
-   * happen on the map/reduce tasks if the client added the tokens into hadoop's
-   * credential store in the front end during job submission. The method will
-   * select the hive delegation token among the set of tokens and return the string
-   * form of it
-   * @param tokenSignature
-   * @return the string form of the token found
-   * @throws IOException
-   */
-  public String getTokenStrForm(String tokenSignature) throws IOException;
-
-  /**
-   * Add a delegation token to the given ugi
-   * @param ugi
-   * @param tokenStr
-   * @param tokenService
-   * @throws IOException
-   */
-  public void setTokenStr(UserGroupInformation ugi, String tokenStr, String tokenService)
-      throws IOException;
-
-  /**
-   * Add given service to the string format token
-   * @param tokenStr
-   * @param tokenService
-   * @return
-   * @throws IOException
-   */
-  public String addServiceToToken(String tokenStr, String tokenService)
-      throws IOException;
-
-  enum JobTrackerState { INITIALIZING, RUNNING };
-
-  /**
-   * Convert the ClusterStatus to its Thrift equivalent: JobTrackerState.
-   * See MAPREDUCE-2455 for why this is a part of the shim.
-   * @param clusterStatus
-   * @return the matching JobTrackerState
-   * @throws Exception if no equivalent JobTrackerState exists
-   */
-  public JobTrackerState getJobTrackerState(ClusterStatus clusterStatus) throws Exception;
-
-  public TaskAttemptContext newTaskAttemptContext(Configuration conf, final Progressable progressable);
-
-  public TaskAttemptID newTaskAttemptID(JobID jobId, boolean isMap, int taskId, int id);
-
-  public JobContext newJobContext(Job job);
-
-  /**
-   * Check wether MR is configured to run in local-mode
-   * @param conf
-   * @return
-   */
-  public boolean isLocalMode(Configuration conf);
-
-  /**
-   * All retrieval of jobtracker/resource manager rpc address
-   * in the configuration should be done through this shim
-   * @param conf
-   * @return
-   */
-  public String getJobLauncherRpcAddress(Configuration conf);
-
-  /**
-   * All updates to jobtracker/resource manager rpc address
-   * in the configuration should be done through this shim
-   * @param conf
-   * @return
-   */
-  public void setJobLauncherRpcAddress(Configuration conf, String val);
-
-  /**
-   * All references to jobtracker/resource manager http address
-   * in the configuration should be done through this shim
-   * @param conf
-   * @return
-   */
-  public String getJobLauncherHttpAddress(Configuration conf);
-
-
-  /**
-   *  Perform kerberos login using the given principal and keytab
-   * @throws IOException
-   */
-  public void loginUserFromKeytab(String principal, String keytabFile) throws IOException;
-
-  /**
-   *  Perform kerberos login using the given principal and keytab,
-   *  and return the UGI object
-   * @throws IOException
-   */
-  public UserGroupInformation loginUserFromKeytabAndReturnUGI(String principal,
-      String keytabFile) throws IOException;
-
-  /**
-   * Perform kerberos re-login using the given principal and keytab, to renew
-   * the credentials
-   * @throws IOException
-   */
-  public void reLoginUserFromKeytab() throws IOException;
-
-  /***
-   * Check if the current UGI is keytab based
-   * @return
-   * @throws IOException
-   */
-  public boolean isLoginKeytabBased() throws IOException;
-
-  /**
-   * Move the directory/file to trash. In case of the symlinks or mount points, the file is
-   * moved to the trashbin in the actual volume of the path p being deleted
-   * @param fs
-   * @param path
-   * @param conf
-   * @return false if the item is already in the trash or trash is disabled
-   * @throws IOException
-   */
-  public boolean moveToAppropriateTrash(FileSystem fs, Path path, Configuration conf)
-      throws IOException;
-
-  /**
-   * Get the default block size for the path. FileSystem alone is not sufficient to
-   * determine the same, as in case of CSMT the underlying file system determines that.
-   * @param fs
-   * @param path
-   * @return
-   */
-  public long getDefaultBlockSize(FileSystem fs, Path path);
-
-  /**
-   * Get the default replication for a path. In case of CSMT the given path will be used to
-   * locate the actual filesystem.
-   * @param fs
-   * @param path
-   * @return
-   */
-  public short getDefaultReplication(FileSystem fs, Path path);
-
-  /**
-   * Create the proxy ugi for the given userid
-   * @param userName
-   * @return
-   */
-  public UserGroupInformation createProxyUser(String userName) throws IOException;
-
-  /**
-   * Verify proxy access to given UGI for given user
-   * @param ugi
-   */
-  public void authorizeProxyAccess(String proxyUser, UserGroupInformation realUserUgi,
-      String ipAddress, Configuration conf) throws IOException;
-
-  /**
-   * The method sets to set the partition file has a different signature between
-   * hadoop versions.
-   * @param jobConf
-   * @param partition
-   */
-  void setTotalOrderPartitionFile(JobConf jobConf, Path partition);
-
-  Comparator<LongWritable> getLongComparator();
-
-  /**
-   * InputSplitShim.
-   *
-   */
-  public interface InputSplitShim extends InputSplit {
-    JobConf getJob();
-
-    @Override
-    long getLength();
-
-    /** Returns an array containing the startoffsets of the files in the split. */
-    long[] getStartOffsets();
-
-    /** Returns an array containing the lengths of the files in the split. */
-    long[] getLengths();
-
-    /** Returns the start offset of the i<sup>th</sup> Path. */
-    long getOffset(int i);
-
-    /** Returns the length of the i<sup>th</sup> Path. */
-    long getLength(int i);
-
-    /** Returns the number of Paths in the split. */
-    int getNumPaths();
-
-    /** Returns the i<sup>th</sup> Path. */
-    Path getPath(int i);
-
-    /** Returns all the Paths in the split. */
-    Path[] getPaths();
-
-    /** Returns all the Paths where this input-split resides. */
-    @Override
-    String[] getLocations() throws IOException;
-
-    void shrinkSplit(long length);
-
-    @Override
-    String toString();
-
-    @Override
-    void readFields(DataInput in) throws IOException;
-
-    @Override
-    void write(DataOutput out) throws IOException;
-  }
-
-  /**
-   * CombineFileInputFormatShim.
-   *
-   * @param <K>
-   * @param <V>
-   */
-  interface CombineFileInputFormatShim<K, V> {
-    Path[] getInputPathsShim(JobConf conf);
-
-    void createPool(JobConf conf, PathFilter... filters);
-
-    InputSplitShim[] getSplits(JobConf job, int numSplits) throws IOException;
-
-    InputSplitShim getInputSplitShim() throws IOException;
-
-    RecordReader getRecordReader(JobConf job, InputSplitShim split, Reporter reporter,
-        Class<RecordReader<K, V>> rrClass) throws IOException;
-  }
-
-  /**
-   * Get the block locations for the given directory.
-   * @param fs the file system
-   * @param path the directory name to get the status and block locations
-   * @param filter a filter that needs to accept the file (or null)
-   * @return an list for the located file status objects
-   * @throws IOException
-   */
-  List<FileStatus> listLocatedStatus(FileSystem fs, Path path,
-                                     PathFilter filter) throws IOException;
-
-  /**
-   * For file status returned by listLocatedStatus, convert them into a list
-   * of block locations.
-   * @param fs the file system
-   * @param status the file information
-   * @return the block locations of the file
-   * @throws IOException
-   */
-  BlockLocation[] getLocations(FileSystem fs,
-      FileStatus status) throws IOException;
-
-  /**
-   * Flush and make visible to other users the changes to the given stream.
-   * @param stream the stream to hflush.
-   * @throws IOException
-   */
-  public void hflush(FSDataOutputStream stream) throws IOException;
-
-  public HCatHadoopShims getHCatShim();
-  public interface HCatHadoopShims {
-
-    enum PropertyName {CACHE_ARCHIVES, CACHE_FILES, CACHE_SYMLINK}
-
-    public TaskID createTaskID();
-
-    public TaskAttemptID createTaskAttemptID();
-
-    public org.apache.hadoop.mapreduce.TaskAttemptContext createTaskAttemptContext(Configuration conf,
-        TaskAttemptID taskId);
-
-    public org.apache.hadoop.mapred.TaskAttemptContext createTaskAttemptContext(JobConf conf,
-        org.apache.hadoop.mapred.TaskAttemptID taskId, Progressable progressable);
-
-    public JobContext createJobContext(Configuration conf, JobID jobId);
-
-    public org.apache.hadoop.mapred.JobContext createJobContext(JobConf conf, JobID jobId, Progressable progressable);
-
-    public void commitJob(OutputFormat outputFormat, Job job) throws IOException;
-
-    public void abortJob(OutputFormat outputFormat, Job job) throws IOException;
-
-    /* Referring to job tracker in 0.20 and resource manager in 0.23 */
-    public InetSocketAddress getResourceManagerAddress(Configuration conf);
-
-    public String getPropertyName(PropertyName name);
+public class DefaultParser implements CommandLineParser
+{    
+    protected CommandLine cmd;
+    protected Options options;
+
+    /** 
+     * Flag indicating how unrecognized tokens are handled. <tt>true</tt> to stop
+     * the parsing and add the remaining tokens to the args list.
+     * <tt>false</tt> to throw an exception. 
+     */
+    protected boolean stopAtNonOption;
+
+    /** The token currently processed. */
+    protected String currentToken;
+    
+    /** The last option parsed. */
+    protected Option currentOption;
+    
+    /** Flag indicating if tokens should no longer be analysed and simply added as arguments of the command line. */
+    protected boolean skipParsing;
+    
+    /** The required options expected to be found when parsing the command line. */
+    protected List expectedOpts;
+    
+    public CommandLine parse(Options options, String[] arguments) throws ParseException
+    {
+        return parse(options, arguments, null);
+    }
 
     /**
-     * Checks if file is in HDFS filesystem.
+     * Parse the arguments according to the specified options and properties.
      *
-     * @param fs
-     * @param path
-     * @return true if the file is in HDFS, false if the file is in other file systems.
-     */
-    public boolean isFileInHDFS(FileSystem fs, Path path) throws IOException;
-  }
-  /**
-   * Provides a Hadoop JobTracker shim.
-   * @param conf not {@code null}
-   */
-  public WebHCatJTShim getWebHCatShim(Configuration conf, UserGroupInformation ugi) throws IOException;
-  public interface WebHCatJTShim {
-    /**
-     * Grab a handle to a job that is already known to the JobTracker.
+     * @param options    the specified Options
+     * @param arguments  the command line arguments
+     * @param properties command line option name-value pairs
+     * @return the list of atomic option and value tokens
      *
-     * @return Profile of the job, or null if not found.
+     * @throws ParseException if there are any problems encountered
+     * while parsing the command line tokens.
      */
-    public JobProfile getJobProfile(org.apache.hadoop.mapred.JobID jobid) throws IOException;
+    public CommandLine parse(Options options, String[] arguments, Properties properties) throws ParseException
+    {
+        return parse(options, arguments, properties, false);
+    }
+
+    public CommandLine parse(Options options, String[] arguments, boolean stopAtNonOption) throws ParseException
+    {
+        return parse(options, arguments, null, stopAtNonOption);
+    }
+
     /**
-     * Grab a handle to a job that is already known to the JobTracker.
+     * Parse the arguments according to the specified options and properties.
      *
-     * @return Status of the job, or null if not found.
-     */
-    public JobStatus getJobStatus(org.apache.hadoop.mapred.JobID jobid) throws IOException;
-    /**
-     * Kill a job.
-     */
-    public void killJob(org.apache.hadoop.mapred.JobID jobid) throws IOException;
-    /**
-     * Get all the jobs submitted.
-     */
-    public JobStatus[] getAllJobs() throws IOException;
-    /**
-     * Close the connection to the Job Tracker.
-     */
-    public void close();
-    /**
-     * Does exactly what org.apache.hadoop.mapreduce.Job#addCacheFile(URI) in Hadoop 2.
-     * Assumes that both parameters are not {@code null}.
-     */
-    public void addCacheFile(URI uri, Job job);
-  }
-
-  /**
-   * Create a proxy file system that can serve a given scheme/authority using some
-   * other file system.
-   */
-  public FileSystem createProxyFileSystem(FileSystem fs, URI uri);
-
-  public Map<String, String> getHadoopConfNames();
-
-  /**
-   * a hadoop.io ByteBufferPool shim.
-   */
-  public interface ByteBufferPoolShim {
-    /**
-     * Get a new ByteBuffer from the pool.  The pool can provide this from
-     * removing a buffer from its internal cache, or by allocating a
-     * new buffer.
+     * @param options         the specified Options
+     * @param arguments       the command line arguments
+     * @param properties      command line option name-value pairs
+     * @param stopAtNonOption if <tt>true</tt> an unrecognized argument stops
+     *     the parsing and the remaining arguments are added to the 
+     *     {@link CommandLine}s args list. If <tt>false</tt> an unrecognized
+     *     argument triggers a ParseException.
      *
-     * @param direct     Whether the buffer should be direct.
-     * @param length     The minimum length the buffer will have.
-     * @return           A new ByteBuffer. Its capacity can be less
-     *                   than what was requested, but must be at
-     *                   least 1 byte.
+     * @return the list of atomic option and value tokens
+     * @throws ParseException if there are any problems encountered
+     * while parsing the command line tokens.
      */
-    ByteBuffer getBuffer(boolean direct, int length);
+    public CommandLine parse(Options options, String[] arguments, Properties properties, boolean stopAtNonOption) throws ParseException
+    {
+        this.options = options;
+        this.stopAtNonOption = stopAtNonOption;
+        skipParsing = false;
+        currentOption = null;
+        expectedOpts = new ArrayList(options.getRequiredOptions());
+        
+        // clear the data from the groups
+        for (Iterator it = options.getOptionGroups().iterator(); it.hasNext();)
+        {
+            OptionGroup group = (OptionGroup) it.next();
+            group.setSelected(null);
+        }
+        
+        cmd = new CommandLine();
+
+        if (arguments != null)
+        {
+            for (int i = 0; i < arguments.length; i++)
+            {
+                handleToken(arguments[i]);
+            }
+        }
+        
+        // check the arguments of the last option
+        checkRequiredArgs();
+        
+        // add the default options
+        handleProperties(properties);
+        
+        checkRequiredOptions();
+        
+        return cmd;
+    }
 
     /**
-     * Release a buffer back to the pool.
-     * The pool may choose to put this buffer into its cache/free it.
+     * Sets the values of Options using the values in <code>properties</code>.
      *
-     * @param buffer    a direct bytebuffer
+     * @param properties The value properties to be processed.
      */
-    void putBuffer(ByteBuffer buffer);
-  }
+    private void handleProperties(Properties properties) throws ParseException
+    {
+        if (properties == null)
+        {
+            return;
+        }
+        
+        for (Enumeration e = properties.propertyNames(); e.hasMoreElements();)
+        {
+            String option = e.nextElement().toString();
+            
+            if (!cmd.hasOption(option))
+            {
+                Option opt = options.getOption(option);
+                
+                // get the value from the properties
+                String value = properties.getProperty(option);
+                
+                if (opt.hasArg())
+                {
+                    if (opt.getValues() == null || opt.getValues().length == 0)
+                    {
+                        opt.addValueForProcessing(value);
+                    }
+                }
+                else if (!("yes".equalsIgnoreCase(value)
+                        || "true".equalsIgnoreCase(value)
+                        || "1".equalsIgnoreCase(value)))
+                {
+                    // if the value is not yes, true or 1 then don't add the option to the CommandLine
+                    continue;
+                }
+                
+                handleOption(opt);
+                currentOption = null;
+            }
+        }
+    }
 
-  /**
-   * Provides an HDFS ZeroCopyReader shim.
-   * @param in FSDataInputStream to read from (where the cached/mmap buffers are tied to)
-   * @param in ByteBufferPoolShim to allocate fallback buffers with
-   *
-   * @return returns null if not supported
-   */
-  public ZeroCopyReaderShim getZeroCopyReader(FSDataInputStream in, ByteBufferPoolShim pool) throws IOException;
-
-  public interface ZeroCopyReaderShim {
     /**
-     * Get a ByteBuffer from the FSDataInputStream - this can be either a HeapByteBuffer or an MappedByteBuffer.
-     * Also move the in stream by that amount. The data read can be small than maxLength.
+     * Throws a {@link MissingOptionException} if all of the required options
+     * are not present.
      *
-     * @return ByteBuffer read from the stream,
+     * @throws MissingOptionException if any of the required Options
+     * are not present.
      */
-    public ByteBuffer readBuffer(int maxLength, boolean verifyChecksums) throws IOException;
+    private void checkRequiredOptions() throws MissingOptionException
+    {       
+        // if there are required options that have not been processsed
+        if (!expectedOpts.isEmpty())
+        {
+            throw new MissingOptionException(expectedOpts);
+        }
+    }
+
     /**
-     * Release a ByteBuffer obtained from a read on the
-     * Also move the in stream by that amount. The data read can be small than maxLength.
-     *
+     * Throw a {@link MissingArgumentException} if the current option
+     * didn't receive the number of arguments expected.
      */
-    public void releaseBuffer(ByteBuffer buffer);
-  }
+    private void checkRequiredArgs() throws ParseException
+    {
+        if (currentOption != null && currentOption.requiresArg())
+        {
+            throw new MissingArgumentException(currentOption);
+        }
+    }
 
-  public enum DirectCompressionType {
-    NONE,
-    ZLIB_NOHEADER,
-    ZLIB,
-    SNAPPY,
-  };
+    /**
+     * Handle any command line token.
+     * 
+     * @param token the command line token to handle
+     * @throws ParseException
+     */
+    private void handleToken(String token) throws ParseException
+    {
+        currentToken = token;
+        
+        if (skipParsing)
+        {
+            cmd.addArg(token);
+        }
+        else if ("--".equals(token))
+        {
+            skipParsing = true;
+        }
+        else if (currentOption != null && currentOption.acceptsArg() && isArgument(token))
+        {
+            currentOption.addValueForProcessing(Util.stripLeadingAndTrailingQuotes(token));
+        }
+        else if (token.startsWith("--"))
+        {
+            handleLongOption(token);
+        }
+        else if (token.startsWith("-") && !"-".equals(token))
+        {
+            handleShortAndLongOption(token);
+        }
+        else
+        {
+            handleUnknownToken(token);
+        }
+        
+        if (currentOption != null && !currentOption.acceptsArg())
+        {
+            currentOption = null;
+        }
+    }
 
-  public interface DirectDecompressorShim {
-    public void decompress(ByteBuffer src, ByteBuffer dst) throws IOException;
-  }
+    /**
+     * Returns true is the token is a valid argument.
+     * 
+     * @param token
+     */
+    private boolean isArgument(String token)
+    {
+        return !isOption(token) || isNegativeNumber(token);
+    }
 
-  public DirectDecompressorShim getDirectDecompressor(DirectCompressionType codec);
+    /**
+     * Check if the token is a negative number.
+     * 
+     * @param token
+     */
+    private boolean isNegativeNumber(String token)
+    {
+        try
+        {
+            Double.parseDouble(token);
+            return true;
+        }
+        catch (NumberFormatException e)
+        {
+            return false;
+        }
+    }
 
-  /**
-   * Get configuration from JobContext
-   */
-  public Configuration getConfiguration(JobContext context);
+    /**
+     * Tells if the token looks like an option.
+     * 
+     * @param token
+     */
+    private boolean isOption(String token)
+    {
+        return isLongOption(token) || isShortOption(token);
+    }
+
+    /**
+     * Tells if the token looks like a short option.
+     * 
+     * @param token
+     */
+    private boolean isShortOption(String token)
+    {
+        // short options (-S, -SV, -S=V, -SV1=V2, -S1S2)
+        return token.startsWith("-") && token.length() >= 2 && options.hasShortOption(token.substring(1, 2));
+    }
+
+    /**
+     * Tells if the token looks like a long option.
+     * 
+     * @param token
+     */
+    private boolean isLongOption(String token)
+    {
+        if (!token.startsWith("-") || token.length() == 1)
+        {
+            return false;
+        }
+
+        int pos = token.indexOf("=");
+        String t = pos == -1 ? token : token.substring(0, pos);
+        
+        if (!options.getMatchingOptions(t).isEmpty())
+        {
+            // long or partial long options (--L, -L, --L=V, -L=V, --l, --l=V)
+            return true;
+        }
+        else if (getLongPrefix(token) != null && !token.startsWith("--"))
+        {
+            // -LV
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Handles an unknown token. If the token starts with a dash an 
+     * UnrecognizedOptionException is thrown. Otherwise the token is added 
+     * to the arguments of the command line. If the stopAtNonOption flag 
+     * is set, this stops the parsing and the remaining tokens are added 
+     * as-is in the arguments of the command line.
+     * 
+     * @param token the command line token to handle
+     */
+    private void handleUnknownToken(String token) throws ParseException
+    {
+        if (token.startsWith("-") && token.length() > 1 && !stopAtNonOption)
+        {
+            throw new UnrecognizedOptionException("Unrecognized option: " + token, token);
+        }
+        
+        cmd.addArg(token);
+        if (stopAtNonOption)
+        {
+            skipParsing = true;
+        }
+    }
+
+    /**
+     * Handles the following tokens:
+     * 
+     * --L
+     * --L=V
+     * --L V
+     * --l
+     * 
+     * @param token the command line token to handle
+     */
+    private void handleLongOption(String token) throws ParseException
+    {
+        if (token.indexOf('=') == -1)
+        {
+            handleLongOptionWithoutEqual(token);
+        }
+        else
+        {
+            handleLongOptionWithEqual(token);                                   
+        }
+    }
+
+    /**
+     * Handles the following tokens:
+     * 
+     * --L
+     * -L
+     * --l
+     * -l
+     * 
+     * @param token the command line token to handle
+     */
+    private void handleLongOptionWithoutEqual(String token) throws ParseException
+    {
+        List matchingOpts = options.getMatchingOptions(token);
+        if (matchingOpts.isEmpty())
+        {
+            handleUnknownToken(currentToken);
+        }
+        else if (matchingOpts.size() > 1)
+        {
+            throw new AmbiguousOptionException(token, matchingOpts);
+        }
+        else
+        {
+            handleOption(options.getOption((String) matchingOpts.get(0)));
+        }
+    }
+
+    /**
+     * Handles the following tokens:
+     * 
+     * --L=V
+     * -L=V
+     * --l=V
+     * -l=V
+     * 
+     * @param token the command line token to handle
+     */
+    private void handleLongOptionWithEqual(String token) throws ParseException
+    {
+        int pos = token.indexOf('=');
+
+        String value = token.substring(pos + 1);
+        
+        String opt = token.substring(0, pos);
+        
+        List matchingOpts = options.getMatchingOptions(opt);
+        if (matchingOpts.isEmpty())
+        {
+            handleUnknownToken(currentToken);
+        }
+        else if (matchingOpts.size() > 1)
+        {
+            throw new AmbiguousOptionException(opt, matchingOpts);
+        }
+        else
+        {
+            Option option = options.getOption((String) matchingOpts.get(0));
+            
+            if (option.acceptsArg())
+            {
+                handleOption(option);
+                currentOption.addValueForProcessing(value);
+                currentOption = null;
+            }
+            else
+            {
+                handleUnknownToken(currentToken);
+            }
+        }
+    }
+
+    /**
+     * Handles the following tokens:
+     * 
+     * -S
+     * -SV
+     * -S V
+     * -S=V
+     * -S1S2
+     * -S1S2 V
+     * -SV1=V2
+     * 
+     * -L
+     * -LV
+     * -L V
+     * -L=V
+     * -l
+     * 
+     * @param token the command line token to handle
+     */
+    private void handleShortAndLongOption(String token) throws ParseException
+    {
+        String t = Util.stripLeadingHyphens(token);
+        
+        int pos = t.indexOf('=');
+        
+        if (t.length() == 1)
+        {
+            // -S
+            if (options.hasShortOption(t))
+            {
+                handleOption(options.getOption(t));
+            }
+            else
+            {
+                handleUnknownToken(token);
+            }
+        }
+        else if (pos == -1)
+        {
+            if (options.hasShortOption(t))
+            {
+                handleOption(options.getOption(t));
+            }
+            else if (!options.getMatchingOptions(t).isEmpty())
+            {
+                // -L or -l
+                handleLongOptionWithoutEqual(token);
+            }
+            else
+            {
+                // look for a long prefix (-Xmx512m)
+                String opt = getLongPrefix(t);
+                
+                if (opt != null && options.getOption(opt).acceptsArg())
+                {
+                    handleOption(options.getOption(opt));
+                    currentOption.addValueForProcessing(t.substring(opt.length()));
+                    currentOption = null;
+                }
+                else if (isJavaProperty(t))
+                {
+                    // -SV1 (-Dflag)
+                    handleOption(options.getOption(t.substring(0, 1)));
+                    currentOption.addValueForProcessing(t.substring(1));
+                    currentOption = null;
+                }
+                else
+                {
+                    // -S1S2S3 or -S1S2V
+                    handleConcatenatedOptions(token);
+                }
+            }
+        }
+        else
+        {
+            String opt = t.substring(0, pos);
+            String value = t.substring(pos + 1);
+            
+            if (opt.length() == 1)
+            {
+                // -S=V
+                Option option = options.getOption(opt);
+                if (option != null && option.acceptsArg())
+                {
+                    handleOption(option);
+                    currentOption.addValueForProcessing(value);
+                    currentOption = null;
+                }
+                else
+                {
+                    handleUnknownToken(token);
+                }
+            }
+            else if (isJavaProperty(opt))
+            {
+                // -SV1=V2 (-Dkey=value)
+                handleOption(options.getOption(opt.substring(0, 1)));
+                currentOption.addValueForProcessing(opt.substring(1));
+                currentOption.addValueForProcessing(value);
+                currentOption = null;
+            }
+            else
+            {
+                // -L=V or -l=V
+                handleLongOptionWithEqual(token);
+            }
+        }
+    }
+
+    /**
+     * Search for a prefix that is the long name of an option (-Xmx512m)
+     * 
+     * @param token
+     */
+    private String getLongPrefix(String token)
+    {
+        String t = Util.stripLeadingHyphens(token);
+        
+        int i;
+        String opt = null;
+        for (i = t.length() - 2; i > 1; i--)
+        {
+            String prefix = t.substring(0, i);
+            if (options.hasLongOption(prefix))
+            {
+                opt = prefix;
+                break;
+            }
+        }
+        
+        return opt;
+    }
+
+    /**
+     * Check if the specified token is a Java-like property (-Dkey=value).
+     */
+    private boolean isJavaProperty(String token)
+    {
+        String opt = token.substring(0, 1);
+        Option option = options.getOption(opt);
+        
+        return option != null && (option.getArgs() >= 2 || option.getArgs() == Option.UNLIMITED_VALUES);
+    }
+
+    private void handleOption(Option option) throws ParseException
+    {
+        // check the previous option before handling the next one
+        checkRequiredArgs();
+        
+        option = (Option) option.clone();
+        
+        updateRequiredOptions(option);
+        
+        cmd.addOption(option);
+        
+        if (option.hasArg())
+        {
+            currentOption = option;            
+        }
+        else
+        {
+            currentOption = null;
+        }
+    }
+
+    /**
+     * Removes the option or its group from the list of expected elements.
+     * 
+     * @param option
+     */
+    private void updateRequiredOptions(Option option) throws AlreadySelectedException
+    {
+        if (option.isRequired())
+        {
+            expectedOpts.remove(option.getKey());
+        }
+
+        // if the option is in an OptionGroup make that option the selected option of the group
+        if (options.getOptionGroup(option) != null)
+        {
+            OptionGroup group = options.getOptionGroup(option);
+
+            if (group.isRequired())
+            {
+                expectedOpts.remove(group);
+            }
+
+            group.setSelected(option);
+        }
+    }
+
+    /**
+     * Breaks <code>token</code> into its constituent parts
+     * using the following algorithm.
+     *
+     * <ul>
+     *  <li>ignore the first character ("<b>-</b>")</li>
+     *  <li>foreach remaining character check if an {@link Option}
+     *  exists with that id.</li>
+     *  <li>if an {@link Option} does exist then add that character
+     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
+     *  <li>if the {@link Option} can have an argument value and there
+     *  are remaining characters in the token then add the remaining
+     *  characters as a token to the list of processed tokens.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
+     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
+     *  "<b>--</b>" followed by the remaining characters and also
+     *  the remaining tokens directly to the processed tokens list.</li>
+     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
+     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
+     *  character prepended with "<b>-</b>".</li>
+     * </ul>
+     *
+     * @param token The current token to be <b>burst</b>
+     * at the first non-Option encountered.
+     */
+    protected void handleConcatenatedOptions(String token) throws ParseException
+    {
+        for (int i = 1; i < token.length(); i++)
+        {
+            String ch = String.valueOf(token.charAt(i));
+
+            if (options.hasOption(ch))
+            {
+                handleOption(options.getOption(ch));
+                
+                if (currentOption != null && (token.length() != (i + 1)))
+                {
+                    // add the trail as an argument of the option
+                    currentOption.addValueForProcessing(token.substring(i + 1));
+                    break;
+                }
+            }
+            else
+            {                
+                handleUnknownToken(stopAtNonOption && i > 1 ? token.substring(i) : token);
+                break;
+            }
+        }
+    }
 }

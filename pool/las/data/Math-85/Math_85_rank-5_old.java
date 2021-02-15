@@ -1,305 +1,226 @@
-/*****************************************************************
- *   Licensed to the Apache Software Foundation (ASF) under one
- *  or more contributor license agreements.  See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership.  The ASF licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License.  You may obtain a copy of the License at
+/*
+ * ====================================================================
+ * 
+ * The Apache Software License, Version 1.1
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * Copyright (c) 2001-2003 The Apache Software Foundation.  All rights
+ * reserved.
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied.  See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
- ****************************************************************/
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer. 
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution,
+ *    if any, must include the following acknowledgement:  
+ *       "This product includes software developed by the 
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowledgement may appear in the software itself,
+ *    if and wherever such third-party acknowledgements normally appear.
+ *
+ * 4. The names "Apache", "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written 
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache",
+ *    "Apache" nor may "Apache" appear in their name without prior 
+ *    written permission of the Apache Software Foundation.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
+ */ 
 
-package org.apache.cayenne.access;
+package org.apache.commons.codec.language;
 
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import org.apache.cayenne.CayenneRuntimeException;
-import org.apache.cayenne.DataRow;
-import org.apache.cayenne.Persistent;
-import org.apache.cayenne.query.PrefetchProcessor;
-import org.apache.cayenne.query.PrefetchTreeNode;
-import org.apache.cayenne.query.QueryMetadata;
-import org.apache.cayenne.reflect.ClassDescriptor;
+import org.apache.commons.codec.EncoderException;
+import org.apache.commons.codec.StringEncoder;
 
 /**
- * Processes a number of DataRow sets corresponding to a given prefetch tree, resolving
- * DataRows to an object tree. Can process any combination of joint and disjoint sets, per
- * prefetch tree.
+ * Encodes a string into a soundex value.  Soundex is an encoding used to
+ * relate similar names, but can also be used as a general purpose
+ * scheme to find word with similar phonemes. 
+ * 
+ * @author bayard@generationjava.com
+ * @author Tim O'Brien
+ * @author Gary Gregory
+ * @version $Id: Soundex.java,v 1.10 2003/11/04 02:43:09 ggregory Exp $
  */
-class HierarchicalObjectResolver {
+public class Soundex implements StringEncoder {
 
-    DataContext context;
-    QueryMetadata queryMetadata;
-    DataRowStore cache;
-    ClassDescriptor descriptor;
-    boolean needToSaveDuplicates;
+    /**
+     * This static variable contains an instance of the
+     * Soundex using the US_ENGLISH mapping.
+     */
+    public static final Soundex US_ENGLISH = new Soundex();
 
-    HierarchicalObjectResolver(DataContext context, QueryMetadata queryMetadata) {
-        this.queryMetadata = queryMetadata;
-        this.context = context;
-        this.cache = context.getObjectStore().getDataRowCache();
-    }
+    /**
+     * This is a default mapping of the 26 letters used
+     * in US english.
+     */
+    public static final char[] US_ENGLISH_MAPPING =
+        "01230120022455012623010202".toCharArray();
 
-    HierarchicalObjectResolver(DataContext context, QueryMetadata metadata,
-            ClassDescriptor descriptor, boolean needToSaveDuplicates) {
-        this(context, metadata);
-        this.descriptor = descriptor;
-        this.needToSaveDuplicates = needToSaveDuplicates;
+    /**
+     * The maximum length of a Soundex code - Soundex codes are
+     * only four characters by definition.
+     */
+    private int maxLength = 4;
+    
+    /**
+     * Every letter of the alphabet is "mapped" to a numerical 
+     * value.  This char array holds the values to which each
+     * letter is mapped.  This implementation contains a default
+     * map for US_ENGLISH
+     */
+    private char[] soundexMapping;
+
+    /**
+     * Creates an instance of the Soundex object using the default
+     * US_ENGLISH mapping.
+     */
+    public Soundex() {
+        this(US_ENGLISH_MAPPING);
     }
 
     /**
-     * Properly synchronized version of 'resolveObjectTree'.
+     * Creates a soundex instance using a custom mapping.  This
+     * constructor can be used to customize the mapping, and/or possibly
+     * provide an internationalized mapping for a non-Western character
+     * set.
+     *
+     * @param mapping Mapping array to use when finding the corresponding
+     *                code for a given character
      */
-    PrefetchProcessorNode synchronizedRootResultNodeFromDataRows(
-            PrefetchTreeNode tree,
-            List mainResultRows,
-            Map extraResultsByPath) {
+    public Soundex(char[] mapping) {
+        this.setSoundexMapping(mapping);
+    }
 
-        synchronized (context.getObjectStore()) {
-            return resolveObjectTree(tree, mainResultRows, extraResultsByPath);
+    /**
+     * Encodes an Object using the soundex algorithm.  This method
+     * is provided in order to satisfy the requirements of the
+     * Encoder interface, and will throw an EncoderException if the
+     * supplied object is not of type java.lang.String.
+     *
+     * @param pObject Object to encode
+     * @return An object (or type java.lang.String) containing the 
+     *         soundex code which corresponds to the String supplied.
+     * @throws EncoderException if the parameter supplied is not
+     *                          of type java.lang.String
+     */
+    public Object encode(Object pObject) throws EncoderException {
+
+        Object result;
+
+        if (!(pObject instanceof java.lang.String)) {
+            throw new EncoderException("Parameter supplied to Soundex encode is not of type java.lang.String"); 
+        } else {
+            result = soundex((String) pObject);
+        }
+
+        return result;
+
+    }
+
+    /**
+     * Encodes a String using the soundex algorithm. 
+     *
+     * @param pString A String object to encode
+     * @return A Soundex code corresponding to the String supplied
+     */
+    public String encode(String pString) {
+        return (soundex(pString));   
+    }
+
+    /**
+     * Used internally by the SoundEx algorithm.
+     *
+     * @param c character to use to retrieve mapping code
+     * @return Mapping code for a particular character
+     */
+    private char getMappingCode(char c) {
+        if (!Character.isLetter(c)) {
+            return 0;
+        } else {
+            return this.getSoundexMapping()[Character.toUpperCase(c) - 'A'];
         }
     }
 
-    private PrefetchProcessorNode resolveObjectTree(
-            PrefetchTreeNode tree,
-            List mainResultRows,
-            Map extraResultsByPath) {
-
-        // create a copy of the tree using DecoratedPrefetchNodes and then traverse it
-        // resolving objects...
-        PrefetchProcessorNode decoratedTree = new PrefetchProcessorTreeBuilder(
-                this,
-                mainResultRows,
-                extraResultsByPath).buildTree(tree);
-
-        // do a single path for disjoint prefetches, joint subtrees will be processed at
-        // each disjoint node that is a parent of joint prefetches.
-        decoratedTree.traverse(new DisjointProcessor());
-
-        // connect related objects
-        decoratedTree.traverse(new PostProcessor());
-
-        return decoratedTree;
+    /**
+     * Returns the maxLength.  Standard Soundex
+     * @return int
+     */
+    public int getMaxLength() {
+        return this.maxLength;
     }
 
-    final class DisjointProcessor implements PrefetchProcessor {
-
-        public boolean startDisjointPrefetch(PrefetchTreeNode node) {
-
-            PrefetchProcessorNode processorNode = (PrefetchProcessorNode) node;
-
-            // this means something bad happened during fetch
-            if (processorNode.getDataRows() == null) {
-                return false;
-            }
-
-            // ... continue with processing even if the objects list is empty to handle
-            // multi-step prefetches.
-            if (processorNode.getDataRows().isEmpty()) {
-                return true;
-            }
-
-            List objects = processorNode.getResolver().objectsFromDataRows(
-                    processorNode.getDataRows());
-            processorNode.setObjects(objects);
-
-            return true;
-        }
-
-        public boolean startJointPrefetch(PrefetchTreeNode node) {
-
-            // delegate processing of the top level joint prefetch to a joint processor,
-            // skip non-top joint nodes
-
-            if (node.getParent() != null && !node.getParent().isJointPrefetch()) {
-
-                PrefetchProcessorJointNode processorNode = (PrefetchProcessorJointNode) node;
-
-                JointProcessor subprocessor = new JointProcessor(processorNode);
-
-                PrefetchProcessorNode parent = (PrefetchProcessorNode) processorNode
-                        .getParent();
-
-                while (parent != null && parent.isPhantom()) {
-                    parent = (PrefetchProcessorNode) parent.getParent();
-                }
-
-                if (parent == null) {
-                    return false;
-                }
-
-                List parentRows = parent.getDataRows();
-
-                // phantom node?
-                if (parentRows == null || parentRows.size() == 0) {
-                    return false;
-                }
-
-                List parentObjects = parent.getObjects();
-                int size = parentRows.size();
-
-                for (int i = 0; i < size; i++) {
-                    subprocessor.setCurrentFlatRow((DataRow) parentRows.get(i));
-                    parent.setLastResolved((Persistent) parentObjects.get(i));
-                    processorNode.traverse(subprocessor);
-                }
-
-                List objects = processorNode.getObjects();
-
-                cache.snapshotsUpdatedForObjects(
-                        objects,
-                        processorNode.getResolvedRows(),
-                        queryMetadata.isRefreshingObjects());
-
-            }
-            return true;
-        }
-
-        public boolean startPhantomPrefetch(PrefetchTreeNode node) {
-            return true;
-        }
-
-        public boolean startUnknownPrefetch(PrefetchTreeNode node) {
-            throw new CayenneRuntimeException("Unknown prefetch node: " + node);
-        }
-
-        public void finishPrefetch(PrefetchTreeNode node) {
-            // now that all the children are processed, we can clear the dupes
-
-            // TODO: see TODO in ObjectResolver.relatedObjectsFromDataRows
-
-            if (node.isDisjointPrefetch() && !needToSaveDuplicates) {
-                PrefetchProcessorNode processorNode = (PrefetchProcessorNode) node;
-                if (processorNode.isJointChildren()) {
-                    List<Persistent> objects = processorNode.getObjects();
-
-                    if (objects != null && objects.size() > 1) {
-
-                        Set<Persistent> seen = new HashSet<Persistent>(objects.size());
-                        Iterator<Persistent> it = objects.iterator();
-                        while (it.hasNext()) {
-                            if (!seen.add(it.next())) {
-                                it.remove();
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    /**
+     * @return Returns the soundexMapping.
+     */
+    private char[] getSoundexMapping() {
+        return this.soundexMapping;
     }
 
-    // a processor of a single joint result set that walks a subtree of prefetch nodes
-    // that use this result set.
-    final class JointProcessor implements PrefetchProcessor {
+    /**
+     * Sets the maxLength.
+     * @param maxLength The maxLength to set
+     */
+    public void setMaxLength(int maxLength) {
+        this.maxLength = maxLength;
+    }
 
-        DataRow currentFlatRow;
-        PrefetchProcessorNode rootNode;
+    /**
+     * @param soundexMapping The soundexMapping to set.
+     */
+    private void setSoundexMapping(char[] soundexMapping) {
+        this.soundexMapping = soundexMapping;
+    }
 
-        JointProcessor(PrefetchProcessorJointNode rootNode) {
-            this.rootNode = rootNode;
-        }
-
-        void setCurrentFlatRow(DataRow currentFlatRow) {
-            this.currentFlatRow = currentFlatRow;
-        }
-
-        public boolean startDisjointPrefetch(PrefetchTreeNode node) {
-            // disjoint prefetch that is not the root terminates the walk...
-            // don't process the root node itself..
-            return node == rootNode;
-        }
-
-        public boolean startJointPrefetch(PrefetchTreeNode node) {
-            PrefetchProcessorJointNode processorNode = (PrefetchProcessorJointNode) node;
-
-            Persistent object = null;
-
-            // find existing object, if found skip further processing
-            Map id = processorNode.idFromFlatRow(currentFlatRow);
-            object = processorNode.getResolved(id);
-            DataRow row = null;
-            if (object == null) {
-
-                row = processorNode.rowFromFlatRow(currentFlatRow);
-                object = processorNode.getResolver().objectFromDataRow(row);
-
-                // LEFT OUTER JOIN produced no matches...
-                if (object == null) {
-                    return false;
+    /**
+     * Retreives the Soundex code for a given String object.
+     *
+     * @param str String to encode using the Soundex algorithm
+     * @return A soundex code for the String supplied
+     */
+    public String soundex(String str) {
+        if (null == str || str.length() == 0) { return str; }
+        
+        char out[] = { '0', '0', '0', '0' };
+        char last, mapped;
+        int incount = 1, count = 1;
+        out[0] = Character.toUpperCase(str.charAt(0));
+        last = getMappingCode(str.charAt(0));
+        while ((incount < str.length()) && (mapped = getMappingCode(str.charAt(incount++))) != 0 && (count < this.getMaxLength())) {
+                if ((mapped != '0') && (mapped != last)) {
+                    out[count++] = mapped;
                 }
-
-                processorNode.putResolved(id, object);
-                processorNode.addObject(object, row);
+                last = mapped;
             }
-
-            // linking by parent needed even if an object is already there
-            // (many-to-many case)
-
-            processorNode.getParentAttachmentStrategy().linkToParent(row, object);
-
-            processorNode.setLastResolved(object);
-            return processorNode.isJointChildren();
-        }
-
-        public boolean startPhantomPrefetch(PrefetchTreeNode node) {
-            return ((PrefetchProcessorNode) node).isJointChildren();
-        }
-
-        public boolean startUnknownPrefetch(PrefetchTreeNode node) {
-            throw new CayenneRuntimeException("Unknown prefetch node: " + node);
-        }
-
-        public void finishPrefetch(PrefetchTreeNode node) {
-            // noop
-        }
+        return new String(out);
     }
 
-    // processor that converts temporary associations between DataObjects to Cayenne
-    // relationships and also fires snapshot update events
-    final class PostProcessor implements PrefetchProcessor {
-
-        public void finishPrefetch(PrefetchTreeNode node) {
-        }
-
-        public boolean startDisjointPrefetch(PrefetchTreeNode node) {
-            ((PrefetchProcessorNode) node).connectToParents();
-            return true;
-        }
-
-        public boolean startJointPrefetch(PrefetchTreeNode node) {
-            PrefetchProcessorJointNode processorNode = (PrefetchProcessorJointNode) node;
-
-            if (!processorNode.getObjects().isEmpty()) {
-                cache.snapshotsUpdatedForObjects(
-                        processorNode.getObjects(),
-                        processorNode.getResolvedRows(),
-                        queryMetadata.isRefreshingObjects());
-            }
-
-            // run 'connectToParents' even if the object list is empty. This is needed to
-            // refresh stale relationships e.g. when some related objects got deleted.
-            processorNode.connectToParents();
-            return true;
-        }
-
-        public boolean startPhantomPrefetch(PrefetchTreeNode node) {
-            return true;
-        }
-
-        public boolean startUnknownPrefetch(PrefetchTreeNode node) {
-            throw new CayenneRuntimeException("Unknown prefetch node: " + node);
-        }
-    }
 }

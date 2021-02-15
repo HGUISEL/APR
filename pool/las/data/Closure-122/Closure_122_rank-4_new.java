@@ -1,11 +1,10 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -15,149 +14,35 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.io.gcp.spanner;
+package org.apache.commons.jxpath.ri.compiler;
 
-import com.google.auto.value.AutoValue;
-import com.google.cloud.spanner.Type;
-import com.google.common.base.Objects;
-import com.google.common.collect.ArrayListMultimap;
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
+import org.apache.commons.jxpath.ri.EvalContext;
 
 /**
- * Encapsulates Cloud Spanner Schema.
+ * Implementation of Expression for the operation "!=".
+ *
+ * @author Dmitri Plotnikov
+ * @version $Revision$ $Date$
  */
-class SpannerSchema implements Serializable {
-  private final List<String> tables;
-  private final ArrayListMultimap<String, Column> columns;
-  private final ArrayListMultimap<String, KeyPart> keyParts;
+public class CoreOperationNotEqual extends CoreOperationCompare {
 
-  public static Builder builder() {
-    return new Builder();
-  }
-
-  /**
-   * Builder for {@link SpannerSchema}.
-   */
-  static class Builder {
-    private final ArrayListMultimap<String, Column> columns = ArrayListMultimap.create();
-    private final ArrayListMultimap<String, KeyPart> keyParts = ArrayListMultimap.create();
-
-    public Builder addColumn(String table, String name, String type) {
-      addColumn(table, Column.create(name.toLowerCase(), type));
-      return this;
+    public CoreOperationNotEqual(Expression arg1, Expression arg2) {
+        super(arg1, arg2);
     }
 
-    private Builder addColumn(String table, Column column) {
-      columns.put(table.toLowerCase(), column);
-      return this;
+    public Object computeValue(EvalContext context) {
+        return equal(context, args[0], args[1]) ? Boolean.FALSE : Boolean.TRUE;
+    }
+    
+    protected int getPrecedence() {
+        return 2;
     }
 
-    public Builder addKeyPart(String table, String column, boolean desc) {
-      keyParts.put(table.toLowerCase(), KeyPart.create(column.toLowerCase(), desc));
-      return this;
+    protected boolean isSymmetric() {
+        return true;
     }
-
-    public SpannerSchema build() {
-      return new SpannerSchema(columns, keyParts);
+    
+    public String getSymbol() {
+        return "!=";
     }
-  }
-
-  private SpannerSchema(ArrayListMultimap<String, Column> columns,
-      ArrayListMultimap<String, KeyPart> keyParts) {
-    this.columns = columns;
-    this.keyParts = keyParts;
-    tables = new ArrayList<>(columns.keySet());
-  }
-
-  public List<String> getTables() {
-    return tables;
-  }
-
-  public List<Column> getColumns(String table) {
-    return columns.get(table.toLowerCase());
-  }
-
-  public List<KeyPart> getKeyParts(String table) {
-    return keyParts.get(table.toLowerCase());
-  }
-
-  @AutoValue
-  abstract static class KeyPart implements Serializable {
-    static KeyPart create(String field, boolean desc) {
-      return new AutoValue_SpannerSchema_KeyPart(field, desc);
-    }
-
-    abstract String getField();
-
-    abstract boolean isDesc();
-  }
-
-  @AutoValue
-  abstract static class Column implements Serializable {
-
-    static Column create(String name, Type type) {
-      return new AutoValue_SpannerSchema_Column(name, type);
-    }
-
-    static Column create(String name, String spannerType) {
-      return create(name, parseSpannerType(spannerType));
-    }
-
-    public abstract String getName();
-
-    public abstract Type getType();
-
-    private static Type parseSpannerType(String spannerType) {
-      spannerType = spannerType.toUpperCase();
-      if ("BOOL".equals(spannerType)) {
-        return Type.bool();
-      }
-      if ("INT64".equals(spannerType)) {
-        return Type.int64();
-      }
-      if ("FLOAT64".equals(spannerType)) {
-        return Type.float64();
-      }
-      if (spannerType.startsWith("STRING")) {
-        return Type.string();
-      }
-      if (spannerType.startsWith("BYTES")) {
-        return Type.bytes();
-      }
-      if ("TIMESTAMP".equals(spannerType)) {
-        return Type.timestamp();
-      }
-      if ("DATE".equals(spannerType)) {
-        return Type.date();
-      }
-
-      if (spannerType.startsWith("ARRAY")) {
-        // Substring "ARRAY<xxx>"
-        String spannerArrayType = spannerType.substring(6, spannerType.length() - 1);
-        Type itemType = parseSpannerType(spannerArrayType);
-        return Type.array(itemType);
-      }
-      throw new IllegalArgumentException("Unknown spanner type " + spannerType);
-    }
-  }
-
-  @Override
-  public boolean equals(Object o) {
-    if (this == o) {
-      return true;
-    }
-    if (o == null || getClass() != o.getClass()) {
-      return false;
-    }
-    SpannerSchema that = (SpannerSchema) o;
-    return Objects.equal(tables, that.tables) && Objects.equal(columns, that.columns) && Objects
-        .equal(keyParts, that.keyParts);
-  }
-
-  @Override
-  public int hashCode() {
-    return Objects.hashCode(tables, columns, keyParts);
-  }
 }

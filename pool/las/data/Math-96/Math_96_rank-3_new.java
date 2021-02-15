@@ -1,317 +1,568 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- * <p/>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p/>
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+/*
+ * $Source: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//dbcp/src/java/org/apache/commons/dbcp/DelegatingCallableStatement.java,v $
+ * $Revision: 1.13 $
+ * $Date: 2003/12/26 15:16:28 $
+ *
+ * ====================================================================
+ *
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2003 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowledgement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation - http://www.apache.org/"
+ *    Alternately, this acknowledgement may appear in the software itself,
+ *    if and wherever such third-party acknowledgements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Software Foundation.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * http://www.apache.org/
+ *
  */
 
-package org.apache.atlas.repository.audit;
+package org.apache.commons.dbcp;
 
-import org.apache.atlas.AtlasException;
-import org.apache.atlas.EntityAuditEvent;
-import org.apache.atlas.EntityAuditEvent.EntityAuditAction;
-import org.apache.atlas.RequestContextV1;
-import org.apache.atlas.listener.EntityChangeListener;
-import org.apache.atlas.v1.model.instance.Referenceable;
-import org.apache.atlas.v1.model.instance.Struct;
-import org.apache.atlas.type.AtlasEntityType;
-import org.apache.atlas.type.AtlasStructType;
-import org.apache.atlas.type.AtlasType;
-import org.apache.atlas.type.AtlasTypeRegistry;
-import org.apache.commons.collections.CollectionUtils;
-import org.apache.commons.collections.MapUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-
-import javax.inject.Inject;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
+import java.net.URL;
+import java.sql.CallableStatement;
+import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.util.Map;
+import java.sql.Ref;
+import java.sql.Blob;
+import java.sql.Clob;
+import java.sql.Array;
+import java.util.Calendar;
+import java.sql.ResultSet;
+import java.io.InputStream;
+import java.io.Reader;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLWarning;
+import java.sql.SQLException;
+
+import java.util.List;
 
 /**
- * Listener on entity create/update/delete, tag add/delete. Adds the corresponding audit event to the audit repository.
+ * A base delegating implementation of {@link CallableStatement}.
+ * <p>
+ * All of the methods from the {@link CallableStatement} interface
+ * simply call the corresponding method on the "delegate"
+ * provided in my constructor.
+ * <p>
+ * Extends AbandonedTrace to implement Statement tracking and
+ * logging of code which created the Statement. Tracking the
+ * Statement ensures that the Connection which created it can
+ * close any open Statement's on Connection close.
+ *
+ * @author Glenn L. Nielsen
+ * @author James House (<a href="mailto:james@interobjective.com">james@interobjective.com</a>)
+ * @author Dirk Verbeeck
+ * @version $Revision: 1.13 $ $Date: 2003/12/26 15:16:28 $
  */
-@Component
-public class EntityAuditListener implements EntityChangeListener {
-    private static final Logger LOG = LoggerFactory.getLogger(EntityAuditListener.class);
+public class DelegatingCallableStatement extends DelegatingPreparedStatement
+        implements CallableStatement {
 
-    private final EntityAuditRepository auditRepository;
-    private final AtlasTypeRegistry     typeRegistry;
+    /** My delegate. */
+    protected CallableStatement _stmt = null;
 
-    @Inject
-    public EntityAuditListener(EntityAuditRepository auditRepository, AtlasTypeRegistry typeRegistry) {
-        this.auditRepository = auditRepository;
-        this.typeRegistry    = typeRegistry;
+    /**
+     * Create a wrapper for the Statement which traces this
+     * Statement to the Connection which created it and the
+     * code which created it.
+     *
+     * @param cs the {@link CallableStatement} to delegate all calls to.
+     */
+    public DelegatingCallableStatement(DelegatingConnection c,
+                                       CallableStatement s) {
+        super(c, s);
+        _stmt = s;
     }
 
-    @Override
-    public void onEntitiesAdded(Collection<Referenceable> entities, boolean isImport) throws AtlasException {
-        List<EntityAuditEvent> events = new ArrayList<>();
-        for (Referenceable entity : entities) {
-            EntityAuditEvent event = createEvent(entity, isImport ? EntityAuditAction.ENTITY_IMPORT_CREATE : EntityAuditAction.ENTITY_CREATE);
-            events.add(event);
+    public boolean equals(Object obj) {
+        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
+        if (delegate == null) {
+            return false;
+        }
+        if (obj instanceof DelegatingCallableStatement) {
+            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
+    }
+
+    /** Sets my delegate. */
+    public void setDelegate(CallableStatement s) {
+        super.setDelegate(s);
+        _stmt = s;
+    }
+
+    /**
+     * Close this DelegatingCallableStatement, and close
+     * any ResultSets that were not explicitly closed.
+     */
+    public void close() throws SQLException {
+        if(_conn != null) {
+           _conn.removeTrace(this);
+           _conn = null;
         }
 
-        auditRepository.putEvents(events);
-    }
-
-    @Override
-    public void onEntitiesUpdated(Collection<Referenceable> entities, boolean isImport) throws AtlasException {
-        List<EntityAuditEvent> events = new ArrayList<>();
-        for (Referenceable entity : entities) {
-            EntityAuditEvent event = createEvent(entity, isImport ? EntityAuditAction.ENTITY_IMPORT_UPDATE : EntityAuditAction.ENTITY_UPDATE);
-            events.add(event);
-        }
-
-        auditRepository.putEvents(events);
-    }
-
-    @Override
-    public void onTraitsAdded(Referenceable entity, Collection<? extends Struct> traits) throws AtlasException {
-        if (traits != null) {
-            for (Struct trait : traits) {
-                EntityAuditEvent event = createEvent(entity, EntityAuditAction.TAG_ADD,
-                                                     "Added trait: " + AtlasType.toV1Json(trait));
-
-                auditRepository.putEvents(event);
+        // The JDBC spec requires that a statement close any open
+        // ResultSet's when it is closed.
+        List resultSets = getTrace();
+        if( resultSets != null) {
+            ResultSet[] set = new ResultSet[resultSets.size()];
+            resultSets.toArray(set);
+            for (int i = 0; i < set.length; i++) {
+                set[i].close();
             }
-        }
-    }
-
-    @Override
-    public void onTraitsDeleted(Referenceable entity, Collection<String> traitNames) throws AtlasException {
-        if (traitNames != null) {
-            for (String traitName : traitNames) {
-                EntityAuditEvent event = createEvent(entity, EntityAuditAction.TAG_DELETE, "Deleted trait: " + traitName);
-
-                auditRepository.putEvents(event);
-            }
-        }
-    }
-
-    @Override
-    public void onTraitsUpdated(Referenceable entity, Collection<? extends Struct> traits) throws AtlasException {
-        if (traits != null) {
-            for (Struct trait : traits) {
-                EntityAuditEvent event = createEvent(entity, EntityAuditAction.TAG_UPDATE,
-                                                     "Updated trait: " + AtlasType.toV1Json(trait));
-
-                auditRepository.putEvents(event);
-            }
-        }
-    }
-
-    @Override
-    public void onEntitiesDeleted(Collection<Referenceable> entities, boolean isImport) throws AtlasException {
-        List<EntityAuditEvent> events = new ArrayList<>();
-        for (Referenceable entity : entities) {
-            EntityAuditEvent event = createEvent(entity, isImport ? EntityAuditAction.ENTITY_IMPORT_DELETE : EntityAuditAction.ENTITY_DELETE, "Deleted entity");
-            events.add(event);
+            clearTrace();
         }
 
-        auditRepository.putEvents(events);
+        _stmt.close();
     }
 
-    public List<EntityAuditEvent> getAuditEvents(String guid) throws AtlasException{
-        return auditRepository.listEvents(guid, null, (short) 10);
+    public ResultSet executeQuery() throws SQLException {
+        return DelegatingResultSet.wrapResultSet(this,_stmt.executeQuery());
     }
 
-    private EntityAuditEvent createEvent(Referenceable entity, EntityAuditAction action)
-            throws AtlasException {
-        String detail = getAuditEventDetail(entity, action);
-
-        return createEvent(entity, action, detail);
+    public ResultSet getResultSet() throws SQLException {
+        return DelegatingResultSet.wrapResultSet(this,_stmt.getResultSet());
     }
 
-    private EntityAuditEvent createEvent(Referenceable entity, EntityAuditAction action, String details)
-            throws AtlasException {
-        return new EntityAuditEvent(entity.getId()._getId(), RequestContextV1.get().getRequestTime(), RequestContextV1.get().getUser(), action, details, entity);
+    public ResultSet executeQuery(String sql) throws SQLException {
+        return DelegatingResultSet.wrapResultSet(this,_stmt.executeQuery(sql));
     }
 
-    private String getAuditEventDetail(Referenceable entity, EntityAuditAction action) throws AtlasException {
-        Map<String, Object> prunedAttributes = pruneEntityAttributesForAudit(entity);
+    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException { _stmt.registerOutParameter( parameterIndex,  sqlType);  }
+    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException { _stmt.registerOutParameter( parameterIndex,  sqlType,  scale);  }
+    public boolean wasNull() throws SQLException { return _stmt.wasNull();  }
+    public String getString(int parameterIndex) throws SQLException { return _stmt.getString( parameterIndex);  }
+    public boolean getBoolean(int parameterIndex) throws SQLException { return _stmt.getBoolean( parameterIndex);  }
+    public byte getByte(int parameterIndex) throws SQLException { return _stmt.getByte( parameterIndex);  }
+    public short getShort(int parameterIndex) throws SQLException { return _stmt.getShort( parameterIndex);  }
+    public int getInt(int parameterIndex) throws SQLException { return _stmt.getInt( parameterIndex);  }
+    public long getLong(int parameterIndex) throws SQLException { return _stmt.getLong( parameterIndex);  }
+    public float getFloat(int parameterIndex) throws SQLException { return _stmt.getFloat( parameterIndex);  }
+    public double getDouble(int parameterIndex) throws SQLException { return _stmt.getDouble( parameterIndex);  }
+    /** @deprecated */
+    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException { return _stmt.getBigDecimal( parameterIndex,  scale);  }
+    public byte[] getBytes(int parameterIndex) throws SQLException { return _stmt.getBytes( parameterIndex);  }
+    public Date getDate(int parameterIndex) throws SQLException { return _stmt.getDate( parameterIndex);  }
+    public Time getTime(int parameterIndex) throws SQLException { return _stmt.getTime( parameterIndex);  }
+    public Timestamp getTimestamp(int parameterIndex) throws SQLException { return _stmt.getTimestamp( parameterIndex);  }
+    public Object getObject(int parameterIndex) throws SQLException { return _stmt.getObject( parameterIndex);  }
+    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException { return _stmt.getBigDecimal( parameterIndex);  }
+    public Object getObject(int i, Map map) throws SQLException { return _stmt.getObject( i, map);  }
+    public Ref getRef(int i) throws SQLException { return _stmt.getRef( i);  }
+    public Blob getBlob(int i) throws SQLException { return _stmt.getBlob( i);  }
+    public Clob getClob(int i) throws SQLException { return _stmt.getClob( i);  }
+    public Array getArray(int i) throws SQLException { return _stmt.getArray( i);  }
+    public Date getDate(int parameterIndex, Calendar cal) throws SQLException { return _stmt.getDate( parameterIndex,  cal);  }
+    public Time getTime(int parameterIndex, Calendar cal) throws SQLException { return _stmt.getTime( parameterIndex,  cal);  }
+    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException { return _stmt.getTimestamp( parameterIndex,  cal);  }
+    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException { _stmt.registerOutParameter( paramIndex,  sqlType,  typeName);  }
+    public int executeUpdate() throws SQLException { return _stmt.executeUpdate();  }
+    public void setNull(int parameterIndex, int sqlType) throws SQLException { _stmt.setNull( parameterIndex,  sqlType);  }
+    public void setBoolean(int parameterIndex, boolean x) throws SQLException { _stmt.setBoolean( parameterIndex,  x);  }
+    public void setByte(int parameterIndex, byte x) throws SQLException { _stmt.setByte( parameterIndex,  x);  }
+    public void setShort(int parameterIndex, short x) throws SQLException { _stmt.setShort( parameterIndex,  x);  }
+    public void setInt(int parameterIndex, int x) throws SQLException { _stmt.setInt( parameterIndex,  x);  }
+    public void setLong(int parameterIndex, long x) throws SQLException { _stmt.setLong( parameterIndex,  x);  }
+    public void setFloat(int parameterIndex, float x) throws SQLException { _stmt.setFloat( parameterIndex,  x);  }
+    public void setDouble(int parameterIndex, double x) throws SQLException { _stmt.setDouble( parameterIndex,  x);  }
+    public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException { _stmt.setBigDecimal( parameterIndex,  x);  }
+    public void setString(int parameterIndex, String x) throws SQLException { _stmt.setString( parameterIndex,  x);  }
+    public void setBytes(int parameterIndex, byte[] x) throws SQLException { _stmt.setBytes( parameterIndex,  x);  }
+    public void setDate(int parameterIndex, Date x) throws SQLException { _stmt.setDate( parameterIndex,  x);  }
+    public void setTime(int parameterIndex, Time x) throws SQLException { _stmt.setTime( parameterIndex,  x);  }
+    public void setTimestamp(int parameterIndex, Timestamp x) throws SQLException { _stmt.setTimestamp( parameterIndex,  x);  }
+    public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException { _stmt.setAsciiStream( parameterIndex,  x,  length);  }
+    /** @deprecated */
+    public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException { _stmt.setUnicodeStream( parameterIndex,  x,  length);  }
+    public void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException { _stmt.setBinaryStream( parameterIndex,  x,  length);  }
+    public void clearParameters() throws SQLException { _stmt.clearParameters();  }
+    public void setObject(int parameterIndex, Object x, int targetSqlType, int scale) throws SQLException { _stmt.setObject( parameterIndex,  x,  targetSqlType,  scale);  }
+    public void setObject(int parameterIndex, Object x, int targetSqlType) throws SQLException { _stmt.setObject( parameterIndex,  x,  targetSqlType);  }
+    public void setObject(int parameterIndex, Object x) throws SQLException { _stmt.setObject( parameterIndex,  x);  }
+    public boolean execute() throws SQLException { return _stmt.execute();  }
+    public void addBatch() throws SQLException { _stmt.addBatch();  }
+    public void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException { _stmt.setCharacterStream( parameterIndex,  reader,  length);  }
+    public void setRef(int i, Ref x) throws SQLException { _stmt.setRef( i,  x);  }
+    public void setBlob(int i, Blob x) throws SQLException { _stmt.setBlob( i,  x);  }
+    public void setClob(int i, Clob x) throws SQLException { _stmt.setClob( i,  x);  }
+    public void setArray(int i, Array x) throws SQLException { _stmt.setArray( i,  x);  }
+    public ResultSetMetaData getMetaData() throws SQLException { return _stmt.getMetaData();  }
+    public void setDate(int parameterIndex, Date x, Calendar cal) throws SQLException { _stmt.setDate( parameterIndex,  x,  cal);  }
+    public void setTime(int parameterIndex, Time x, Calendar cal) throws SQLException { _stmt.setTime( parameterIndex,  x,  cal);  }
+    public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) throws SQLException { _stmt.setTimestamp( parameterIndex,  x,  cal);  }
+    public void setNull(int paramIndex, int sqlType, String typeName) throws SQLException { _stmt.setNull( paramIndex,  sqlType,  typeName);  }
 
-        String auditPrefix  = getAuditPrefix(action);
-        String auditString  = auditPrefix + AtlasType.toV1Json(entity);
-        byte[] auditBytes   = auditString.getBytes(StandardCharsets.UTF_8);
-        long   auditSize    = auditBytes != null ? auditBytes.length : 0;
-        long   auditMaxSize = auditRepository.repositoryMaxSize();
+    public int executeUpdate(String sql) throws SQLException { return _stmt.executeUpdate( sql);  }
+    public int getMaxFieldSize() throws SQLException { return _stmt.getMaxFieldSize();  }
+    public void setMaxFieldSize(int max) throws SQLException { _stmt.setMaxFieldSize( max);  }
+    public int getMaxRows() throws SQLException { return _stmt.getMaxRows();  }
+    public void setMaxRows(int max) throws SQLException { _stmt.setMaxRows( max);  }
+    public void setEscapeProcessing(boolean enable) throws SQLException { _stmt.setEscapeProcessing( enable);  }
+    public int getQueryTimeout() throws SQLException { return _stmt.getQueryTimeout();  }
+    public void setQueryTimeout(int seconds) throws SQLException { _stmt.setQueryTimeout( seconds);  }
+    public void cancel() throws SQLException { _stmt.cancel();  }
+    public SQLWarning getWarnings() throws SQLException { return _stmt.getWarnings();  }
+    public void clearWarnings() throws SQLException { _stmt.clearWarnings();  }
+    public void setCursorName(String name) throws SQLException { _stmt.setCursorName( name);  }
+    public boolean execute(String sql) throws SQLException { return _stmt.execute( sql);  }
 
-        if (auditMaxSize >= 0 && auditSize > auditMaxSize) { // don't store attributes in audit
-            LOG.warn("audit record too long: entityType={}, guid={}, size={}; maxSize={}. entity attribute values not stored in audit",
-                    entity.getTypeName(), entity.getId()._getId(), auditSize, auditMaxSize);
+    public int getUpdateCount() throws SQLException { return _stmt.getUpdateCount();  }
+    public boolean getMoreResults() throws SQLException { return _stmt.getMoreResults();  }
+    public void setFetchDirection(int direction) throws SQLException { _stmt.setFetchDirection( direction);  }
+    public int getFetchDirection() throws SQLException { return _stmt.getFetchDirection();  }
+    public void setFetchSize(int rows) throws SQLException { _stmt.setFetchSize( rows);  }
+    public int getFetchSize() throws SQLException { return _stmt.getFetchSize();  }
+    public int getResultSetConcurrency() throws SQLException { return _stmt.getResultSetConcurrency();  }
+    public int getResultSetType() throws SQLException { return _stmt.getResultSetType();  }
+    public void addBatch(String sql) throws SQLException { _stmt.addBatch( sql);  }
+    public void clearBatch() throws SQLException { _stmt.clearBatch();  }
+    public int[] executeBatch() throws SQLException { return _stmt.executeBatch();  }
 
-            Map<String, Object> attrValues = entity.getValuesMap();
+    // ------------------- JDBC 3.0 -----------------------------------------
+    // Will be commented by the build process on a JDBC 2.0 system
 
-            clearAttributeValues(entity);
+/* JDBC_3_ANT_KEY_BEGIN */
 
-            auditString = auditPrefix + AtlasType.toV1Json(entity);
-
-            addAttributeValues(entity, attrValues);
-        }
-
-        restoreEntityAttributes(entity, prunedAttributes);
-
-        return auditString;
+    public boolean getMoreResults(int current) throws SQLException {
+        return _stmt.getMoreResults(current);
     }
 
-    private void clearAttributeValues(Referenceable entity) throws AtlasException {
-        Map<String, Object> attributesMap = entity.getValuesMap();
-
-        if (MapUtils.isNotEmpty(attributesMap)) {
-            for (String attribute : attributesMap.keySet()) {
-                entity.setNull(attribute);
-            }
-        }
+    public ResultSet getGeneratedKeys() throws SQLException {
+        return _stmt.getGeneratedKeys();
     }
 
-    private void addAttributeValues(Referenceable entity, Map<String, Object> attributesMap) throws AtlasException {
-        if (MapUtils.isNotEmpty(attributesMap)) {
-            for (String attr : attributesMap.keySet()) {
-                entity.set(attr, attributesMap.get(attr));
-            }
-        }
+    public int executeUpdate(String sql, int autoGeneratedKeys)
+        throws SQLException {
+        return _stmt.executeUpdate(sql, autoGeneratedKeys);
     }
 
-    private Map<String, Object> pruneEntityAttributesForAudit(Referenceable entity) throws AtlasException {
-        Map<String, Object> ret               = null;
-        Map<String, Object> entityAttributes  = entity.getValuesMap();
-        List<String>        excludeAttributes = auditRepository.getAuditExcludeAttributes(entity.getTypeName());
-        AtlasEntityType     entityType        = typeRegistry.getEntityTypeByName(entity.getTypeName());
-
-        if (CollectionUtils.isNotEmpty(excludeAttributes) && MapUtils.isNotEmpty(entityAttributes) && entityType != null) {
-            for (AtlasStructType.AtlasAttribute attribute : entityType.getAllAttributes().values()) {
-                String        attrName  = attribute.getName();
-                Object        attrValue = entityAttributes.get(attrName);
-
-                if (excludeAttributes.contains(attrName)) {
-                    if (ret == null) {
-                        ret = new HashMap<>();
-                    }
-
-                    ret.put(attrName, attrValue);
-                    entity.setNull(attrName);
-                } else if (attribute.isOwnedRef()) {
-                    if (attrValue instanceof Collection) {
-                        for (Object arrElem : (Collection) attrValue) {
-                            if (arrElem instanceof Referenceable) {
-                                ret = pruneAttributes(ret, (Referenceable) arrElem);
-                            }
-                        }
-                    } else if (attrValue instanceof Referenceable) {
-                        ret = pruneAttributes(ret, (Referenceable) attrValue);
-                    }
-                }
-            }
-        }
-
-        return ret;
+    public int executeUpdate(String sql, int columnIndexes[])
+        throws SQLException {
+        return _stmt.executeUpdate(sql, columnIndexes);
     }
 
-    private Map<String, Object> pruneAttributes(Map<String, Object> ret, Referenceable attribute) throws AtlasException {
-        Referenceable       attrInstance = attribute;
-        Map<String, Object> prunedAttrs  = pruneEntityAttributesForAudit(attrInstance);
-
-        if (MapUtils.isNotEmpty(prunedAttrs)) {
-            if (ret == null) {
-                ret = new HashMap<>();
-            }
-
-            ret.put(attrInstance.getId()._getId(), prunedAttrs);
-        }
-
-        return ret;
+    public int executeUpdate(String sql, String columnNames[])
+        throws SQLException {
+        return _stmt.executeUpdate(sql, columnNames);
     }
 
-    private void restoreEntityAttributes(Referenceable entity, Map<String, Object> prunedAttributes) throws AtlasException {
-        if (MapUtils.isEmpty(prunedAttributes)) {
-            return;
-        }
-
-        AtlasEntityType     entityType       = typeRegistry.getEntityTypeByName(entity.getTypeName());
-
-        if (entityType != null && MapUtils.isNotEmpty(entityType.getAllAttributes())) {
-            Map<String, Object> entityAttributes = entity.getValuesMap();
-
-            for (AtlasStructType.AtlasAttribute attribute : entityType.getAllAttributes().values()) {
-                String attrName  = attribute.getName();
-                Object attrValue = entityAttributes.get(attrName);
-
-                if (prunedAttributes.containsKey(attrName)) {
-                    entity.set(attrName, prunedAttributes.get(attrName));
-                } else if (attribute.isOwnedRef()) {
-                    if (attrValue instanceof Collection) {
-                        for (Object arrElem : (Collection) attrValue) {
-                            if (arrElem instanceof Referenceable) {
-                                restoreAttributes(prunedAttributes, (Referenceable) arrElem);
-                            }
-                        }
-                    } else if (attrValue instanceof Referenceable) {
-                        restoreAttributes(prunedAttributes, (Referenceable) attrValue);
-                    }
-                }
-            }
-        }
+    public boolean execute(String sql, int autoGeneratedKeys)
+        throws SQLException {
+        return _stmt.execute(sql, autoGeneratedKeys);
     }
 
-    private void restoreAttributes(Map<String, Object> prunedAttributes, Referenceable attributeEntity) throws AtlasException {
-        Object                      obj          = prunedAttributes.get(attributeEntity.getId()._getId());
-
-        if (obj instanceof Map) {
-            restoreEntityAttributes(attributeEntity, (Map) obj);
-        }
+    public boolean execute(String sql, int columnIndexes[])
+        throws SQLException {
+        return _stmt.execute(sql, columnIndexes);
     }
 
-    private String getAuditPrefix(EntityAuditAction action) {
-        final String ret;
-
-        switch (action) {
-            case ENTITY_CREATE:
-                ret = "Created: ";
-                break;
-            case ENTITY_UPDATE:
-                ret = "Updated: ";
-                break;
-            case ENTITY_DELETE:
-                ret = "Deleted: ";
-                break;
-            case TAG_ADD:
-                ret = "Added trait: ";
-                break;
-            case TAG_DELETE:
-                ret = "Deleted trait: ";
-                break;
-            case TAG_UPDATE:
-                ret = "Updated trait: ";
-                break;
-            case ENTITY_IMPORT_CREATE:
-                ret = "Created by import: ";
-                break;
-            case ENTITY_IMPORT_UPDATE:
-                ret = "Updated by import: ";
-                break;
-            case ENTITY_IMPORT_DELETE:
-                ret = "Deleted by import: ";
-                break;
-            default:
-                ret = "Unknown: ";
-        }
-
-        return ret;
+    public boolean execute(String sql, String columnNames[])
+        throws SQLException {
+        return _stmt.execute(sql, columnNames);
     }
+
+    public int getResultSetHoldability() throws SQLException {
+        return _stmt.getResultSetHoldability();
+    }
+
+    public void setURL(int parameterIndex, URL x) throws SQLException {
+        _stmt.setURL(parameterIndex, x);
+    }
+
+    public java.sql.ParameterMetaData getParameterMetaData()
+        throws SQLException {
+        return _stmt.getParameterMetaData();
+    }
+
+    public void registerOutParameter(String parameterName, int sqlType)
+        throws SQLException {
+        _stmt.registerOutParameter(parameterName, sqlType);
+    }
+
+    public void registerOutParameter(String parameterName,
+        int sqlType, int scale) throws SQLException {
+        _stmt.registerOutParameter(parameterName, sqlType, scale);
+    }
+
+    public void registerOutParameter(String parameterName,
+        int sqlType, String typeName) throws SQLException {
+        _stmt.registerOutParameter(parameterName, sqlType, typeName);
+    }
+
+    public URL getURL(int parameterIndex) throws SQLException {
+        return _stmt.getURL(parameterIndex);
+    }
+
+    public void setURL(String parameterName, URL val) throws SQLException {
+        _stmt.setURL(parameterName, val);
+    }
+
+    public void setNull(String parameterName, int sqlType)
+        throws SQLException {
+        _stmt.setNull(parameterName, sqlType);
+    }
+
+    public void setBoolean(String parameterName, boolean x)
+        throws SQLException {
+        _stmt.setBoolean(parameterName, x);
+    }
+
+    public void setByte(String parameterName, byte x)
+        throws SQLException {
+        _stmt.setByte(parameterName, x);
+    }
+
+    public void setShort(String parameterName, short x)
+        throws SQLException {
+        _stmt.setShort(parameterName, x);
+    }
+
+    public void setInt(String parameterName, int x)
+        throws SQLException {
+        _stmt.setInt(parameterName, x);
+    }
+
+    public void setLong(String parameterName, long x)
+        throws SQLException {
+        _stmt.setLong(parameterName, x);
+    }
+
+    public void setFloat(String parameterName, float x)
+        throws SQLException {
+        _stmt.setFloat(parameterName, x);
+    }
+
+    public void setDouble(String parameterName, double x)
+        throws SQLException {
+        _stmt.setDouble(parameterName, x);
+    }
+
+    public void setBigDecimal(String parameterName, BigDecimal x)
+        throws SQLException {
+        _stmt.setBigDecimal(parameterName, x);
+    }
+
+    public void setString(String parameterName, String x)
+        throws SQLException {
+        _stmt.setString(parameterName, x);
+    }
+
+    public void setBytes(String parameterName, byte [] x)
+        throws SQLException {
+        _stmt.setBytes(parameterName, x);
+    }
+
+    public void setDate(String parameterName, Date x)
+        throws SQLException {
+        _stmt.setDate(parameterName, x);
+    }
+
+    public void setTime(String parameterName, Time x)
+        throws SQLException {
+        _stmt.setTime(parameterName, x);
+    }
+
+    public void setTimestamp(String parameterName, Timestamp x)
+        throws SQLException {
+        _stmt.setTimestamp(parameterName, x);
+    }
+
+    public void setAsciiStream(String parameterName,
+        InputStream x, int length)
+        throws SQLException {
+        _stmt.setAsciiStream(parameterName, x, length);
+    }
+
+    public void setBinaryStream(String parameterName,
+        InputStream x, int length)
+        throws SQLException {
+        _stmt.setBinaryStream(parameterName, x, length);
+    }
+
+    public void setObject(String parameterName,
+        Object x, int targetSqlType, int scale)
+        throws SQLException {
+        _stmt.setObject(parameterName, x, targetSqlType, scale);
+    }
+
+    public void setObject(String parameterName,
+        Object x, int targetSqlType)
+        throws SQLException {
+        _stmt.setObject(parameterName, x, targetSqlType);
+    }
+
+    public void setObject(String parameterName, Object x)
+        throws SQLException {
+        _stmt.setObject(parameterName, x);
+    }
+
+    public void setCharacterStream(String parameterName,
+        Reader reader, int length) throws SQLException {
+        _stmt.setCharacterStream(parameterName, reader, length);
+    }
+
+    public void setDate(String parameterName,
+        Date x, Calendar cal) throws SQLException {
+        _stmt.setDate(parameterName, x, cal);
+    }
+
+    public void setTime(String parameterName,
+        Time x, Calendar cal) throws SQLException {
+        _stmt.setTime(parameterName, x, cal);
+    }
+
+    public void setTimestamp(String parameterName,
+        Timestamp x, Calendar cal) throws SQLException {
+        _stmt.setTimestamp(parameterName, x, cal);
+    }
+
+    public void setNull(String parameterName,
+        int sqlType, String typeName) throws SQLException {
+        _stmt.setNull(parameterName, sqlType, typeName);
+    }
+
+    public String getString(String parameterName) throws SQLException {
+        return _stmt.getString(parameterName);
+    }
+
+    public boolean getBoolean(String parameterName) throws SQLException {
+        return _stmt.getBoolean(parameterName);
+    }
+
+    public byte getByte(String parameterName) throws SQLException {
+        return _stmt.getByte(parameterName);
+    }
+
+    public short getShort(String parameterName) throws SQLException {
+        return _stmt.getShort(parameterName);
+    }
+
+    public int getInt(String parameterName) throws SQLException {
+        return _stmt.getInt(parameterName);
+    }
+
+    public long getLong(String parameterName) throws SQLException {
+        return _stmt.getLong(parameterName);
+    }
+
+    public float getFloat(String parameterName) throws SQLException {
+        return _stmt.getFloat(parameterName);
+    }
+
+    public double getDouble(String parameterName) throws SQLException {
+        return _stmt.getDouble(parameterName);
+    }
+
+    public byte [] getBytes(String parameterName) throws SQLException {
+        return _stmt.getBytes(parameterName);
+    }
+
+    public Date getDate(String parameterName) throws SQLException {
+        return _stmt.getDate(parameterName);
+    }
+
+    public Time getTime(String parameterName) throws SQLException {
+        return _stmt.getTime(parameterName);
+    }
+
+    public Timestamp getTimestamp(String parameterName) throws SQLException {
+        return _stmt.getTimestamp(parameterName);
+    }
+
+    public Object getObject(String parameterName) throws SQLException {
+        return _stmt.getObject(parameterName);
+    }
+
+    public BigDecimal getBigDecimal(String parameterName) throws SQLException {
+        return _stmt.getBigDecimal(parameterName);
+    }
+
+    public Object getObject(String parameterName, Map map)
+        throws SQLException {
+        return _stmt.getObject(parameterName, map);
+    }
+
+    public Ref getRef(String parameterName) throws SQLException {
+        return _stmt.getRef(parameterName);
+    }
+
+    public Blob getBlob(String parameterName) throws SQLException {
+        return _stmt.getBlob(parameterName);
+    }
+
+    public Clob getClob(String parameterName) throws SQLException {
+        return _stmt.getClob(parameterName);
+    }
+
+    public Array getArray(String parameterName) throws SQLException {
+        return _stmt.getArray(parameterName);
+    }
+
+    public Date getDate(String parameterName, Calendar cal)
+        throws SQLException {
+        return _stmt.getDate(parameterName, cal);
+    }
+
+    public Time getTime(String parameterName, Calendar cal)
+        throws SQLException {
+        return _stmt.getTime(parameterName, cal);
+    }
+
+    public Timestamp getTimestamp(String parameterName, Calendar cal)
+        throws SQLException {
+        return _stmt.getTimestamp(parameterName, cal);
+    }
+
+    public URL getURL(String parameterName) throws SQLException {
+        return _stmt.getURL(parameterName);
+    }
+
+/* JDBC_3_ANT_KEY_END */
 }

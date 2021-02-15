@@ -1,13 +1,13 @@
-package org.apache.maven.continuum.project.builder.maven;
-
 /*
- * Copyright 2004-2005 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,117 +16,110 @@ package org.apache.maven.continuum.project.builder.maven;
  * limitations under the License.
  */
 
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.Iterator;
-import java.util.List;
+package tdb.bulkloader2;
 
-import org.apache.maven.continuum.execution.maven.m2.MavenBuilderHelper;
-import org.apache.maven.continuum.execution.maven.m2.MavenBuilderHelperException;
-import org.apache.maven.continuum.execution.maven.m2.MavenTwoBuildExecutor;
-import org.apache.maven.continuum.project.MavenTwoProject;
-import org.apache.maven.continuum.project.builder.AbstractContinuumProjectBuilder;
-import org.apache.maven.continuum.project.builder.ContinuumProjectBuilder;
-import org.apache.maven.continuum.project.builder.ContinuumProjectBuilderException;
-import org.apache.maven.continuum.project.builder.ContinuumProjectBuildingResult;
-import org.apache.maven.project.MavenProject;
+import java.util.Arrays ;
+import java.util.List ;
+import java.util.Objects ;
 
-/**
- * @author <a href="mailto:trygvis@inamo.no">Trygve Laugst&oslash;l</a>
- * @version $Id$
- */
-public class MavenTwoContinuumProjectBuilder
-    extends AbstractContinuumProjectBuilder
-    implements ContinuumProjectBuilder
+import jena.cmd.ArgDecl;
+import jena.cmd.CmdException;
+import jena.cmd.CmdGeneral;
+import org.apache.jena.atlas.lib.FileOps ;
+import org.apache.jena.atlas.logging.LogCtl ;
+import org.apache.jena.riot.Lang ;
+import org.apache.jena.riot.RDFLanguages ;
+import org.apache.jena.sys.JenaSystem ;
+import org.apache.jena.tdb.base.file.Location ;
+import org.apache.jena.tdb.setup.DatasetBuilderStd ;
+import org.apache.jena.tdb.store.bulkloader2.ProcNodeTableBuilder ;
+import tdb.cmdline.CmdTDB ;
+
+/** Build node table - write triples/quads as text file */
+public class CmdNodeTableBuilder extends CmdGeneral
 {
-    public static final String ID = "maven-two-builder";
-
-    private static final String POM_PART = "/pom.xml";
-
-    /** @requirement */
-    private MavenBuilderHelper builderHelper;
-
-    /** @configuration */
-    private List excludedPackagingTypes;
-
-    // ----------------------------------------------------------------------
-    // ProjectCreator Implementation
-    // ----------------------------------------------------------------------
-
-    public ContinuumProjectBuildingResult createProjectsFromMetadata( URL url )
-        throws ContinuumProjectBuilderException
-    {
-        // ----------------------------------------------------------------------
-        // We need to roll the project data into a file so that we can use it
-        // ----------------------------------------------------------------------
-
-        ContinuumProjectBuildingResult result = new ContinuumProjectBuildingResult();
-
-        try
-        {
-            readModules( url, result );
-        }
-        catch ( MalformedURLException e )
-        {
-            throw new ContinuumProjectBuilderException( "Error while building Maven project.", e );
-        }
-
-        return result;
+    static {
+        LogCtl.setLog4j();
+        JenaSystem.init();
     }
 
-    // ----------------------------------------------------------------------
-    //
-    // ----------------------------------------------------------------------
+    private static ArgDecl argLocation   = new ArgDecl(ArgDecl.HasValue, "loc", "location");
+    private static ArgDecl argTriplesOut = new ArgDecl(ArgDecl.HasValue, "triples");
+    private static ArgDecl argQuadsOut   = new ArgDecl(ArgDecl.HasValue, "quads");
+    private static ArgDecl argNoStats    = new ArgDecl(ArgDecl.NoValue, "nostats");
 
-    private void readModules( URL url, ContinuumProjectBuildingResult result )
-        throws MalformedURLException, ContinuumProjectBuilderException
-    {
-        MavenProject mavenProject;
+    private String         locationString;
+    private String         dataFileTriples;
+    private String         dataFileQuads;
+    private List<String>   datafiles;
+    private Location       location;
+    private boolean        collectStats  = true;
 
-        try
-        {
-            mavenProject = builderHelper.getMavenProject( createMetadataFile( url ) );
+    public static void main(String... argv) {
+        CmdTDB.init();
+        DatasetBuilderStd.setOptimizerWarningFlag(false);
+        new CmdNodeTableBuilder(argv).mainRun();
+    }
+
+    public CmdNodeTableBuilder(String... argv) {
+        super(argv);
+        super.add(argLocation, "--loc", "Location");
+        super.add(argTriplesOut, "--triples", "Output file for triples");
+        super.add(argQuadsOut, "--quads", "Output file for quads");
+        super.add(argNoStats, "--nostats", "Don't collect stats");
+    }
+        
+    @Override
+    protected void processModulesAndArgs() {
+        if ( !super.contains(argLocation) ) throw new CmdException("Required: --loc DIR") ;
+//        if ( !super.contains(argTriplesOut) ) throw new CmdException("Required: --triples FILE") ;
+//        if ( !super.contains(argQuadsOut) ) throw new CmdException("Required: --quads FILE") ;
+        
+        locationString   = super.getValue(argLocation) ;
+        location = Location.create(locationString) ;
+
+        dataFileTriples  = super.getValue(argTriplesOut) ;
+        if ( dataFileTriples == null )
+            dataFileTriples = location.getPath("triples", "tmp") ;
+        
+        dataFileQuads    = super.getValue(argQuadsOut) ;
+        if ( dataFileQuads == null )
+            dataFileQuads = location.getPath("quads", "tmp") ;
+        
+        if ( Objects.equals(dataFileTriples, dataFileQuads) )
+            cmdError("Triples and Quads work files are the same") ;
+        
+        if ( super.contains(argNoStats) )
+            collectStats = false ;
+        
+        //datafiles  = getPositionalOrStdin() ;
+        datafiles  = getPositional() ;
+        if ( datafiles.isEmpty() )
+            datafiles = Arrays.asList("-") ;
+        
+        // ---- Checking.
+        for ( String filename : datafiles ) {
+            Lang lang = RDFLanguages.filenameToLang(filename, RDFLanguages.NQUADS);
+            if ( lang == null )
+                               // Does not happen due to default above.
+                               cmdError("File suffix not recognized: " + filename);
+            if ( !filename.equals("-") && !FileOps.exists(filename) )
+                cmdError("File does not exist: " + filename);
         }
-        catch ( MavenBuilderHelperException e )
-        {
-            throw new ContinuumProjectBuilderException( "Error while building Maven project.", e );
-        }
+    }
 
-        if ( !excludedPackagingTypes.contains( mavenProject.getPackaging() ) )
-        {
-            MavenTwoProject continuumProject = new MavenTwoProject();
+    @Override
+    protected void exec() {
+        ProcNodeTableBuilder.exec(location, dataFileTriples, dataFileQuads, datafiles, collectStats);
+    }
 
-            builderHelper.mapMavenProjectToContinuumProject( mavenProject, continuumProject );
+    @Override
+    protected String getSummary() {
+        return getCommandName() + " --loc=DIR [--triples=tmpFile1] [--quads=tmpFile2] FILE ...";
+    }
 
-            result.addProject( continuumProject, MavenTwoBuildExecutor.ID );
-        }
-
-        List modules = mavenProject.getModules();
-
-        String prefix = url.toExternalForm();
-
-        String suffix = "";
-
-        int i = prefix.indexOf( '?' );
-
-        if ( i != -1 )
-        {
-            suffix = prefix.substring( i );
-
-            prefix = prefix.substring( 0, i - POM_PART.length() );
-        }
-        else
-        {
-            prefix = prefix.substring( 0, prefix.length() - POM_PART.length() );
-        }
-
-        for ( Iterator it = modules.iterator(); it.hasNext(); )
-        {
-            String module = (String) it.next();
-
-            URL moduleUrl = new URL( prefix + "/" + module + POM_PART + suffix );
-
-            readModules( moduleUrl, result );
-        }
+    @Override
+    protected String getCommandName() {
+        return this.getClass().getName();
     }
 }

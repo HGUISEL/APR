@@ -1,254 +1,292 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
- * agreements. See the NOTICE file distributed with this work for additional information regarding
- * copyright ownership. The ASF licenses this file to You under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
- */
-package org.apache.geode.internal.cache;
+package com.fasterxml.jackson.databind;
 
-import java.io.ByteArrayInputStream;
+import java.io.Closeable;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Properties;
-import java.util.Set;
+import java.util.*;
 
-import org.apache.geode.internal.ClassPathLoader;
-import org.apache.logging.log4j.Logger;
+import com.fasterxml.jackson.core.*;
 
-import org.apache.geode.UnmodifiableException;
-import org.apache.geode.cache.Cache;
-import org.apache.geode.distributed.internal.DistributionConfig;
-import org.apache.geode.distributed.internal.ClusterConfigurationService;
-import org.apache.geode.distributed.internal.tcpserver.TcpClient;
-import org.apache.geode.internal.ConfigSource;
-import org.apache.geode.internal.DeployedJar;
-import org.apache.geode.internal.JarDeployer;
-import org.apache.geode.internal.admin.remote.DistributionLocatorId;
-import org.apache.geode.internal.i18n.LocalizedStrings;
-import org.apache.geode.internal.lang.StringUtils;
-import org.apache.geode.internal.logging.LogService;
-import org.apache.geode.internal.process.ClusterConfigurationNotAvailableException;
-import org.apache.geode.management.internal.configuration.domain.Configuration;
-import org.apache.geode.management.internal.configuration.messages.ConfigurationRequest;
-import org.apache.geode.management.internal.configuration.messages.ConfigurationResponse;
+/**
+ * Iterator exposed by {@link ObjectMapper} when binding sequence of
+ * objects. Extension is done to allow more convenient exposing of
+ * {@link IOException} (which basic {@link Iterator} does not expose)
+ */
+public class MappingIterator<T> implements Iterator<T>, Closeable
+{
+    protected final static MappingIterator<?> EMPTY_ITERATOR =
+        new MappingIterator<Object>(null, null, null, null, false, null);
+    
+    protected final JavaType _type;
 
-public class ClusterConfigurationLoader {
+    protected final DeserializationContext _context;
+    
+    protected final JsonDeserializer<T> _deserializer;
 
-  private static final Logger logger = LogService.getLogger();
+    protected JsonParser _parser;
 
-  /**
-   * Deploys the jars received from shared configuration, it undeploys any other jars that were not
-   * part of shared configuration
-   * 
-   * @param cache Cache of this member
-   * @param response {@link ConfigurationResponse} received from the locators
-   */
-  public static void deployJarsReceivedFromClusterConfiguration(Cache cache,
-      ConfigurationResponse response) throws IOException, ClassNotFoundException {
-    if (response == null) {
-      return;
-    }
+    /**
+     * If not null, "value to update" instead of creating a new instance
+     * for each call.
+     */
+    protected final T _updatedValue;
+    
+    /**
+     * Flag that indicates whether input {@link JsonParser} should be closed
+     * when we are done or not; generally only called when caller did not
+     * pass JsonParser.
+     */
+    protected final boolean _closeParser;
 
-    String[] jarFileNames = response.getJarNames();
-    byte[][] jarBytes = response.getJars();
+    /**
+     * Flag that is set when we have determined what {@link #hasNextValue()}
+     * should value; reset when {@link #nextValue} is called
+     */
+    protected boolean _hasNextChecked;
 
-    if (jarFileNames != null && jarBytes != null) {
-      List<DeployedJar> deployedJars =
-          ClassPathLoader.getLatest().getJarDeployer().deploy(jarFileNames, jarBytes);
-
-      deployedJars.stream().filter(Objects::nonNull)
-          .forEach((jar) -> logger.info("Deployed " + (jar.getFile().getAbsolutePath())));
-    }
-    // TODO: Jared - Does this need to actually undeploy extra jars like the javadoc says?
-  }
-
-  /***
-   * Apply the cache-xml cluster configuration on this member
-   *
-   * @param cache Cache created for this member
-   * @param response {@link ConfigurationResponse} containing the requested {@link Configuration}
-   * @param config this member's config.
-   */
-  public static void applyClusterXmlConfiguration(Cache cache, ConfigurationResponse response,
-      DistributionConfig config) {
-    if (response == null || response.getRequestedConfiguration().isEmpty()) {
-      return;
-    }
-
-    List<String> groups = getGroups(config);
-    Map<String, Configuration> requestedConfiguration = response.getRequestedConfiguration();
-
-    List<String> cacheXmlContentList = new LinkedList<String>();
-
-    // apply the cluster config first
-    Configuration clusterConfiguration =
-        requestedConfiguration.get(ClusterConfigurationService.CLUSTER_CONFIG);
-    if (clusterConfiguration != null) {
-      String cacheXmlContent = clusterConfiguration.getCacheXmlContent();
-      if (!StringUtils.isBlank(cacheXmlContent)) {
-        cacheXmlContentList.add(cacheXmlContent);
-      }
-    }
-
-    // then apply the groups config
-    for (String group : groups) {
-      Configuration groupConfiguration = requestedConfiguration.get(group);
-      if (groupConfiguration != null) {
-        String cacheXmlContent = groupConfiguration.getCacheXmlContent();
-        if (!StringUtils.isBlank(cacheXmlContent)) {
-          cacheXmlContentList.add(cacheXmlContent);
+    /**
+     * @param managedParser Whether we "own" the {@link JsonParser} passed or not:
+     *   if true, it was created by {@link ObjectReader} and code here needs to
+     *   close it; if false, it was passed by calling code and should not be
+     *   closed by iterator.
+     */
+    @SuppressWarnings("unchecked")
+    protected MappingIterator(JavaType type, JsonParser jp, DeserializationContext ctxt,
+            JsonDeserializer<?> deser,
+            boolean managedParser, Object valueToUpdate)
+    {
+        _type = type;
+        _parser = jp;
+        _context = ctxt;
+        _deserializer = (JsonDeserializer<T>) deser;
+        _closeParser = managedParser;
+        if (valueToUpdate == null) {
+            _updatedValue = null;
+        } else {
+            _updatedValue = (T) valueToUpdate;
         }
-      }
+
+        /* Ok: one more thing; we may have to skip START_ARRAY, assuming
+         * "wrapped" sequence; but this is ONLY done for 'managed' parsers
+         * and never if JsonParser was directly passed by caller (if it
+         * was, caller must have either positioned it over first token of
+         * the first element, or cleared the START_ARRAY token explicitly).
+         * Note, however, that we do not try to guess whether this could be
+         * an unwrapped sequence of arrays/Lists: we just assume it is wrapped;
+         * and if not, caller needs to hand us JsonParser instead, pointing to
+         * the first token of the first element.
+         */
+        if (managedParser && (jp != null) && jp.isExpectedStartArrayToken()) {
+            jp.clearCurrentToken();
+        }
     }
 
-    // apply the requested cache xml
-    for (String cacheXmlContent : cacheXmlContentList) {
-      InputStream is = new ByteArrayInputStream(cacheXmlContent.getBytes());
-      try {
-        cache.loadCacheXml(is);
-      } finally {
+    @SuppressWarnings("unchecked")
+    protected static <T> MappingIterator<T> emptyIterator() {
+        return (MappingIterator<T>) EMPTY_ITERATOR;
+    }
+    
+    /*
+    /**********************************************************
+    /* Basic iterator impl
+    /**********************************************************
+     */
+
+    @Override
+    public boolean hasNext()
+    {
         try {
-          is.close();
+            return hasNextValue();
+        } catch (JsonMappingException e) {
+            return (Boolean) _handleMappingException(e);
         } catch (IOException e) {
+            return (Boolean) _handleIOException(e);
         }
-      }
     }
-  }
-
-  /***
-   * Apply the gemfire properties cluster configuration on this member
-   *
-   * @param cache Cache created for this member
-   * @param response {@link ConfigurationResponse} containing the requested {@link Configuration}
-   * @param config this member's config
-   */
-  public static void applyClusterPropertiesConfiguration(Cache cache,
-      ConfigurationResponse response, DistributionConfig config) {
-    if (response == null || response.getRequestedConfiguration().isEmpty()) {
-      return;
+    
+    @Override
+    public T next()
+    {
+        try {
+            return nextValue();
+        } catch (JsonMappingException e) {
+            throw new RuntimeJsonMappingException(e.getMessage(), e);
+        } catch (IOException e) {
+            throw new RuntimeException(e.getMessage(), e);
+        }
     }
 
-    List<String> groups = getGroups(config);
-    Map<String, Configuration> requestedConfiguration = response.getRequestedConfiguration();
-
-    final Properties runtimeProps = new Properties();
-
-    // apply the cluster config first
-    Configuration clusterConfiguration =
-        requestedConfiguration.get(ClusterConfigurationService.CLUSTER_CONFIG);
-    if (clusterConfiguration != null) {
-      runtimeProps.putAll(clusterConfiguration.getGemfireProperties());
+    @Override
+    public void remove() {
+        throw new UnsupportedOperationException();
+    }
+    
+    @Override
+    public void close() throws IOException{
+        if (_parser != null) {
+            _parser.close();
+        }
     }
 
-    // then apply the group config
-    for (String group : groups) {
-      Configuration groupConfiguration = requestedConfiguration.get(group);
-      if (groupConfiguration != null) {
-        runtimeProps.putAll(groupConfiguration.getGemfireProperties());
-      }
+    /*
+    /**********************************************************
+    /* Extended API, iteration
+    /**********************************************************
+     */
+
+    /**
+     * Equivalent of {@link #next} but one that may throw checked
+     * exceptions from Jackson due to invalid input.
+     */
+    public boolean hasNextValue() throws IOException
+    {
+        if (_parser == null) {
+            return false;
+        }
+        if (!_hasNextChecked) {
+            JsonToken t = _parser.getCurrentToken();
+            _hasNextChecked = true;
+            if (t == null) { // un-initialized or cleared; find next
+                t = _parser.nextToken();
+                // If EOF, no more, or if we hit END_ARRAY (although we don't clear the token).
+                if (t == null || t == JsonToken.END_ARRAY) {
+                    JsonParser jp = _parser;
+                    _parser = null;
+                    if (_closeParser) {
+                        jp.close();
+                    }
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    
+    public T nextValue() throws IOException
+    {
+        // caller should always call 'hasNext[Value]' first; but let's ensure:
+        if (!_hasNextChecked) {
+            if (!hasNextValue()) {
+                return _throwNoSuchElement();
+            }
+        }
+        if (_parser == null) {
+            return _throwNoSuchElement();
+        }
+        _hasNextChecked = false;
+
+        try {
+            if (_updatedValue == null) {
+                return _deserializer.deserialize(_parser, _context);
+            } else{
+                _deserializer.deserialize(_parser, _context, _updatedValue);
+                return _updatedValue;
+            }
+        } finally {
+            /* 24-Mar-2015, tatu: As per [#733], need to mark token consumed no
+             *   matter what, to avoid infinite loop for certain failure cases.
+             *   For 2.6 need to improve further.
+             */
+            _parser.clearCurrentToken();
+        }
     }
 
-    Set<Object> attNames = runtimeProps.keySet();
-    for (Object attNameObj : attNames) {
-      String attName = (String) attNameObj;
-      String attValue = runtimeProps.getProperty(attName);
-      try {
-        config.setAttribute(attName, attValue, ConfigSource.runtime());
-      } catch (IllegalArgumentException e) {
-        logger.info(e.getMessage());
-      } catch (UnmodifiableException e) {
-        logger.info(e.getMessage());
-      }
-    }
-  }
-
-  /**
-   * Request the shared configuration for group(s) from locator(s) this member is bootstrapped with.
-   *
-   * This will request the group config this server belongs plus the "cluster" config
-   * 
-   * @param config this member's configuration.
-   * @return {@link ConfigurationResponse}
-   */
-  public static ConfigurationResponse requestConfigurationFromLocators(DistributionConfig config,
-      List<String> locatorList)
-      throws ClusterConfigurationNotAvailableException, UnknownHostException {
-    List<String> groups = ClusterConfigurationLoader.getGroups(config);
-    ConfigurationRequest request = new ConfigurationRequest();
-
-    request.addGroups(ClusterConfigurationService.CLUSTER_CONFIG);
-    for (String group : groups) {
-      request.addGroups(group);
+    /**
+     * Convenience method for reading all entries accessible via
+     * this iterator; resulting container will be a {@link java.util.ArrayList}.
+     * 
+     * @return List of entries read
+     * 
+     * @since 2.2
+     */
+    public List<T> readAll() throws IOException {
+        return readAll(new ArrayList<T>());
     }
 
-    request.setNumAttempts(10);
-
-    ConfigurationResponse response = null;
-    // Try talking to all the locators in the list
-    // to get the shared configuration.
-
-    TcpClient client = new TcpClient();
-
-    for (String locatorInfo : locatorList) {
-      DistributionLocatorId dlId = new DistributionLocatorId(locatorInfo);
-      String ipaddress = dlId.getBindAddress();
-      InetAddress locatorInetAddress = null;
-
-      if (!StringUtils.isBlank(ipaddress)) {
-        locatorInetAddress = InetAddress.getByName(ipaddress);
-      } else {
-        locatorInetAddress = dlId.getHost();
-      }
-
-      int port = dlId.getPort();
-
-      try {
-        response = (ConfigurationResponse) client.requestToServer(locatorInetAddress, port, request,
-            10000);
-      } catch (UnknownHostException e) {
-        e.printStackTrace();
-      } catch (IOException e) {
-        // TODO Log
-        e.printStackTrace();
-      } catch (ClassNotFoundException e) {
-        e.printStackTrace();
-      }
-    }
-    // if the response is null , that means Shared Configuration service is not installed on the
-    // locator
-    // and hence it returns null
-
-    if (response == null || response.failedToGetSharedConfig()) {
-      throw new ClusterConfigurationNotAvailableException(
-          LocalizedStrings.Launcher_Command_FAILED_TO_GET_SHARED_CONFIGURATION.toLocalizedString());
+    /**
+     * Convenience method for reading all entries accessible via
+     * this iterator
+     * 
+     * @return List of entries read (same as passed-in argument)
+     * 
+     * @since 2.2
+     */
+    public <L extends List<? super T>> L readAll(L resultList) throws IOException
+    {
+        while (hasNextValue()) {
+            resultList.add(nextValue());
+        }
+        return resultList;
     }
 
-    return response;
-  }
-
-  private static List<String> getGroups(DistributionConfig config) {
-    String groupString = config.getGroups();
-    List<String> groups = new ArrayList<String>();
-    if (!StringUtils.isBlank(groupString)) {
-      groups.addAll((Arrays.asList(groupString.split(","))));
+    /**
+     * Convenience method for reading all entries accessible via
+     * this iterator
+     * 
+     * @since 2.5
+     */
+    public <C extends Collection<? super T>> C readAll(C results) throws IOException
+    {
+        while (hasNextValue()) {
+            results.add(nextValue());
+        }
+        return results;
     }
-    return groups;
-  }
+    
+    /*
+    /**********************************************************
+    /* Extended API, accessors
+    /**********************************************************
+     */
 
+    /**
+     * Accessor for getting underlying parser this iterator uses.
+     * 
+     * @since 2.2
+     */
+    public JsonParser getParser() {
+        return _parser;
+    }
+
+    /**
+     * Accessor for accessing {@link FormatSchema} that the underlying parser
+     * (as per {@link #getParser}) is using, if any; only parser of schema-aware
+     * formats use schemas.
+     * 
+     * @since 2.2
+     */
+    public FormatSchema getParserSchema() {
+    	return _parser.getSchema();
+    }
+
+    /**
+     * Convenience method, functionally equivalent to:
+     *<code>
+     *   iterator.getParser().getCurrentLocation()
+     *</code>
+     * 
+     * @return Location of the input stream of the underlying parser
+     * 
+     * @since 2.2.1
+     */
+    public JsonLocation getCurrentLocation() {
+        return _parser.getCurrentLocation();
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+
+    protected <R> R _throwNoSuchElement() {
+        throw new NoSuchElementException();
+    }
+    
+    protected <R> R _handleMappingException(JsonMappingException e) {
+        throw new RuntimeJsonMappingException(e.getMessage(), e);
+    }
+
+    protected <R> R _handleIOException(IOException e) {
+        throw new RuntimeException(e.getMessage(), e);
+    }
 }

@@ -1,586 +1,554 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * $Header: /home/cvs/jakarta-commons-sandbox/cli/src/java/org/apache/commons/cli/Option.java,v 1.6 2002/06/06 22:50:14 bayard Exp $
+ * $Revision: 1.6 $
+ * $Date: 2002/06/06 22:50:14 $
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ * ====================================================================
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * The Apache Software License, Version 1.1
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation.  For more
+ * information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
+ *
  */
+package org.apache.commons.cli;
 
-package org.apache.ignite.internal.portable;
+import java.util.ArrayList;
 
-import org.apache.ignite.IgniteCheckedException;
-import org.apache.ignite.internal.GridDirectTransient;
-import org.apache.ignite.internal.IgniteCodeGeneratingFail;
-import org.apache.ignite.internal.portable.streams.PortableHeapInputStream;
-import org.apache.ignite.internal.processors.cache.CacheObject;
-import org.apache.ignite.internal.processors.cache.CacheObjectContext;
-import org.apache.ignite.internal.processors.cache.KeyCacheObject;
-import org.apache.ignite.internal.processors.cache.portable.CacheObjectPortableProcessorImpl;
-import org.apache.ignite.internal.util.typedef.internal.A;
-import org.apache.ignite.internal.util.typedef.internal.U;
-import org.apache.ignite.plugin.extensions.communication.Message;
-import org.apache.ignite.plugin.extensions.communication.MessageReader;
-import org.apache.ignite.plugin.extensions.communication.MessageWriter;
-import org.apache.ignite.portable.PortableException;
-import org.apache.ignite.portable.PortableField;
-import org.apache.ignite.portable.PortableMetadata;
-import org.apache.ignite.portable.PortableObject;
-import org.jetbrains.annotations.Nullable;
-
-import java.io.Externalizable;
-import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.math.BigDecimal;
-import java.math.BigInteger;
-import java.nio.ByteBuffer;
-import java.sql.Timestamp;
-import java.util.Date;
-import java.util.UUID;
-
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.BOOLEAN;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.BYTE;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.CHAR;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.DATE;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.DECIMAL;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.DOUBLE;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.FLOAT;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.INT;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.LONG;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.NULL;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.SHORT;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.STRING;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.TIMESTAMP;
-import static org.apache.ignite.internal.portable.GridPortableMarshaller.UUID;
-
-/**
- * Portable object implementation.
+/** <p>Describes a single command-line option.  It maintains
+ * information regarding the short-name of the option, the long-name,
+ * if any exists, a flag indicating if an argument is required for
+ * this option, and a self-documenting description of the option.</p>
+ *
+ * <p>An Option is not created independantly, but is create through
+ * an instance of {@link Options}.<p>
+ *
+ * @see org.apache.commons.cli.Options
+ * @see org.apache.commons.cli.CommandLine
+ *
+ * @author bob mcwhirter (bob @ werken.com)
+ * @author <a href="mailto:jstrachan@apache.org">James Strachan</a>
+ * @version $Revision: 1.6 $
  */
-@IgniteCodeGeneratingFail // Fields arr and start should not be generated by MessageCodeGenerator.
-public final class PortableObjectImpl extends PortableObjectEx implements Externalizable,
-    Message, CacheObject, KeyCacheObject {
-    /** */
-    public static final byte TYPE_PORTABLE = 100;
+public class Option implements Cloneable {
 
-    /** */
-    private static final long serialVersionUID = 0L;
+    /** constant that specifies the number of argument values has not been specified */
+    public final static int UNINITIALIZED = -1;
+    
+    /** constant that specifies the number of argument values is infinite */
+    public final static int UNLIMITED_VALUES = -2;
+    
+    /** opt the name of the option */
+    private String opt;
 
-    /** */
-    @GridDirectTransient
-    private PortableContext ctx;
+    /** longOpt is the long representation of the option */
+    private String longOpt;
 
-    /** */
-    private byte[] arr;
+    /** hasArg specifies whether this option has an associated argument */
+    private boolean hasArg;
 
-    /** */
-    private int start;
+    /** argName specifies the name of the argument for this option */
+    private String argName = "arg";
 
-    /** */
-    @GridDirectTransient
-    private Object obj;
+    /** description of the option */
+    private String description;
 
-    /** */
-    @GridDirectTransient
-    private boolean detachAllowed;
+    /** required specifies whether this option is required to be present */
+    private boolean required;
+
+    /** specifies whether the argument value of this Option is optional */
+    private boolean optionalArg;
+
+    /** 
+     * numberOfArgs specifies the number of argument values this option 
+     * can have 
+     */
+    private int numberOfArgs = UNINITIALIZED;   
+
+    /** the type of this Option */
+    private Object type;
+
+    /** the list of argument values **/
+    private ArrayList values = new ArrayList();
+    
+    /** the character that is the value separator */
+    private char valuesep;
 
     /**
-     * For {@link Externalizable}.
+     * Creates an Option using the specified parameters.
+     *
+     * @param opt short representation of the option
+     * @param hasArg specifies whether the Option takes an argument or not
+     * @param description describes the function of the option
      */
-    public PortableObjectImpl() {
-        // No-op.
-    }
-
-    /**
-     * @param ctx Context.
-     * @param arr Array.
-     * @param start Start.
-     */
-    public PortableObjectImpl(PortableContext ctx, byte[] arr, int start) {
-        assert ctx != null;
-        assert arr != null;
-
-        this.ctx = ctx;
-        this.arr = arr;
-        this.start = start;
-    }
-
-    /** {@inheritDoc} */
-    @Override public byte type() {
-        return TYPE_PORTABLE;
-    }
-
-    /** {@inheritDoc} */
-    @Override public boolean internal() {
-        return false;
-    }
-
-    /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
-    @Nullable @Override public <T> T value(CacheObjectContext ctx, boolean cpy) {
-        return (T)this;
-    }
-
-    /** {@inheritDoc} */
-    @Override public byte[] valueBytes(CacheObjectContext ctx) throws IgniteCheckedException {
-        if (detached())
-            return array();
-
-        int len = length();
-
-        byte[] arr0 = new byte[len];
-
-        U.arrayCopy(arr, start, arr0, 0, len);
-
-        return arr0;
-    }
-
-    /** {@inheritDoc} */
-    @Override public CacheObject prepareForCache(CacheObjectContext ctx) {
-        if (detached())
-            return this;
-
-        return (PortableObjectImpl)detach();
-    }
-
-    /** {@inheritDoc} */
-    @Override public void finishUnmarshal(CacheObjectContext ctx, ClassLoader ldr) throws IgniteCheckedException {
-        this.ctx = ((CacheObjectPortableProcessorImpl)ctx.processor()).portableContext();
-    }
-
-    /** {@inheritDoc} */
-    @Override public void prepareMarshal(CacheObjectContext ctx) throws IgniteCheckedException {
-        // No-op.
-    }
-
-    /** {@inheritDoc} */
-    @Override public int length() {
-        return PortablePrimitives.readInt(arr, start + GridPortableMarshaller.TOTAL_LEN_POS);
+    public Option( String opt, String description ) 
+    throws IllegalArgumentException
+    {
+        this( opt, null, false, description );
     }
 
     /**
-     * @return Detached portable object.
+     * Creates an Option using the specified parameters.
+     *
+     * @param opt short representation of the option
+     * @param hasArg specifies whether the Option takes an argument or not
+     * @param description describes the function of the option
      */
-    public PortableObject detach() {
-        if (!detachAllowed || detached())
-            return this;
+    public Option( String opt, boolean hasArg, String description ) 
+    throws IllegalArgumentException
+    {
+        this( opt, null, hasArg, description );
+    }
+    
+    /**
+     * <p>Creates an Option using the specified parameters.</p>
+     *
+     * @param opt short representation of the option
+     * @param longOpt the long representation of the option
+     * @param hasArg specifies whether the Option takes an argument or not
+     * @param description describes the function of the option
+     */
+    public Option( String opt, String longOpt, boolean hasArg, String description ) 
+    throws IllegalArgumentException
+    {
+        // ensure that the option is valid
+        OptionValidator.validateOption( opt );
 
-        int len = length();
+        this.opt          = opt;
+        this.longOpt      = longOpt;
 
-        byte[] arr0 = new byte[len];
+        // if hasArg is set then the number of arguments is 1
+        if( hasArg ) {
+            this.numberOfArgs = 1;
+        }
 
-        U.arrayCopy(arr, start, arr0, 0, len);
-
-        return new PortableObjectImpl(ctx, arr0, 0);
+        this.hasArg       = hasArg;
+        this.description  = description;
+    }
+    
+    /**
+     * <p>Returns the id of this Option.  This is only set when the
+     * Option shortOpt is a single character.  This is used for switch
+     * statements.</p>
+     *
+     * @return the id of this Option
+     */
+    public int getId( ) {
+        return getKey().charAt( 0 );
     }
 
     /**
-     * @return Detached or not.
+     * <p>Returns the 'unique' Option identifier.</p>
+     * 
+     * @return the 'unique' Option identifier
      */
-    public boolean detached() {
-        return start == 0 && length() == arr.length;
+    String getKey() {
+        // if 'opt' is null, then it is a 'long' option
+        if( opt == null ) {
+            return this.longOpt;
+        }
+        return this.opt;
+    }
+
+    /** <p>Retrieve the name of this Option.</p>
+     *
+     * <p>It is this String which can be used with
+     * {@link CommandLine#hasOption(String opt)} and
+     * {@link CommandLine#getOptionValue(String opt)} to check
+     * for existence and argument.<p>
+     *
+     * @return The name of this option
+     */
+    public String getOpt() {
+        return this.opt;
     }
 
     /**
-     * @param detachAllowed Detach allowed flag.
+     * <p>Retrieve the type of this Option.</p>
+     * 
+     * @return The type of this option
      */
-    public void detachAllowed(boolean detachAllowed) {
-        this.detachAllowed = detachAllowed;
+    public Object getType() {
+        return this.type;
     }
 
     /**
-     * @return Context.
+     * <p>Sets the type of this Option.</p>
+     *
+     * @param type the type of this Option
      */
-    public PortableContext context() {
-        return ctx;
+    public void setType( Object type ) {
+        this.type = type;
+    }
+    
+    /** 
+     * <p>Retrieve the long name of this Option.</p>
+     *
+     * @return Long name of this option, or null, if there is no long name
+     */
+    public String getLongOpt() {
+        return this.longOpt;
     }
 
     /**
-     * @param ctx Context.
+     * <p>Sets the long name of this Option.</p>
+     *
+     * @param longOpt the long name of this Option
      */
-    public void context(PortableContext ctx) {
-        this.ctx = ctx;
+    public void setLongOpt( String longOpt ) {
+        this.longOpt = longOpt;
     }
 
-    /** {@inheritDoc} */
-    @Override public byte[] array() {
-        return arr;
+    /**
+     * <p>Sets whether this Option can have an optional argument.</p>
+     *
+     * @param optionalArg specifies whether the Option can have
+     * an optional argument.
+     */
+    public void setOptionalArg( boolean optionalArg ) {
+        this.optionalArg = optionalArg;
     }
 
-    /** {@inheritDoc} */
-    @Override public int start() {
-        return start;
+    /**
+     * @return whether this Option can have an optional argument
+     */
+    public boolean hasOptionalArg( ) {
+        return this.optionalArg;
+    }
+    
+    /** <p>Query to see if this Option has a long name</p>
+     *
+     * @return boolean flag indicating existence of a long name
+     */
+    public boolean hasLongOpt() {
+        return ( this.longOpt != null );
+    }
+    
+    /** <p>Query to see if this Option requires an argument</p>
+     *
+     * @return boolean flag indicating if an argument is required
+     */
+    public boolean hasArg() {
+        return this.numberOfArgs > 0 || numberOfArgs == UNLIMITED_VALUES;
+    }
+    
+    /** <p>Retrieve the self-documenting description of this Option</p>
+     *
+     * @return The string description of this option
+     */
+    public String getDescription() {
+        return this.description;
     }
 
-    /** {@inheritDoc} */
-    @Override public long offheapAddress() {
-        return 0;
+    /** 
+     * <p>Query to see if this Option requires an argument</p>
+     *
+     * @return boolean flag indicating if an argument is required
+     */
+    public boolean isRequired() {
+        return this.required;
     }
 
-    /** {@inheritDoc} */
-    @Override protected boolean hasArray() {
-        return true;
+    /**
+     * <p>Sets whether this Option is mandatory.</p>
+     *
+     * @param required specifies whether this Option is mandatory
+     */
+    public void setRequired( boolean required ) {
+        this.required = required;
     }
 
-    /** {@inheritDoc} */
-    @Override public int typeId() {
-        return PortablePrimitives.readInt(arr, start + GridPortableMarshaller.TYPE_ID_POS);
+    /**
+     * <p>Sets the display name for the argument value.</p>
+     *
+     * @param argName the display name for the argument value.
+     */
+    public void setArgName( String argName ) {
+        this.argName = argName;
     }
 
-    /** {@inheritDoc} */
-    @Nullable @Override public PortableMetadata metaData() throws PortableException {
-        if (ctx == null)
-            throw new PortableException("PortableContext is not set for the object.");
-
-        return ctx.metaData(typeId());
+    /**
+     * <p>Gets the display name for the argument value.</p>
+     *
+     * @return the display name for the argument value.
+     */
+    public String getArgName() {
+        return this.argName;
     }
 
-    /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
-    @Nullable @Override public <F> F field(String fieldName) throws PortableException {
-        PortableReaderExImpl reader = new PortableReaderExImpl(ctx, arr, start, null);
-
-        return (F)reader.unmarshalField(fieldName);
+    /**
+     * <p>Returns whether the display name for the argument value
+     * has been set.</p>
+     *
+     * @return if the display name for the argument value has been
+     * set.
+     */
+    public boolean hasArgName() {
+        return (this.argName != null && this.argName.length() > 0 );
     }
 
-    /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
-    @Nullable @Override public <F> F field(int fieldId) throws PortableException {
-        PortableReaderExImpl reader = new PortableReaderExImpl(ctx, arr, start, null);
-
-        return (F)reader.unmarshalField(fieldId);
+    /** 
+     * <p>Query to see if this Option can take many values</p>
+     *
+     * @return boolean flag indicating if multiple values are allowed
+     */
+    public boolean hasArgs() {
+        return this.numberOfArgs > 1 || this.numberOfArgs == UNLIMITED_VALUES;
     }
 
-    /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
-    @Nullable @Override protected <F> F fieldByOrder(int order) {
-        Object val;
+    /** 
+     * <p>Sets the number of argument values this Option can take.</p>
+     *
+     * @param num the number of argument values
+     */
+    public void setArgs( int num ) {
+        this.numberOfArgs = num;
+    }
 
-        // Calculate field position.
-        int schemaOffset = PortablePrimitives.readInt(arr, start + GridPortableMarshaller.SCHEMA_OR_RAW_OFF_POS);
+    /**
+     * <p>Sets the value separator.  For example if the argument value
+     * was a Java property, the value separator would be '='.</p>
+     *
+     * @param sep The value separator.
+     */
+    public void setValueSeparator( char sep ) {
+        this.valuesep = sep;
+    }
 
-        short flags = PortablePrimitives.readShort(arr, start + GridPortableMarshaller.FLAGS_POS);
-        int fieldOffsetSize = PortableUtils.fieldOffsetSize(flags);
+    /**
+     * <p>Returns the value separator character.</p>
+     *
+     * @return the value separator character.
+     */
+    public char getValueSeparator() {
+        return this.valuesep;
+    }
 
-        int fieldOffsetPos = start + schemaOffset + order * (4 + fieldOffsetSize) + 4;
+    /**
+     * ...
+     */
+    public boolean hasValueSeparator() {
+        return ( this.valuesep > 0 );
+    }
 
-        int fieldPos;
+    /** 
+     * <p>Returns the number of argument values this Option can take.</p>
+     *
+     * @return num the number of argument values
+     */
+    public int getArgs( ) {
+        return this.numberOfArgs;
+    }
 
-        if (fieldOffsetSize == PortableUtils.OFFSET_1)
-            fieldPos = start + ((int)PortablePrimitives.readByte(arr, fieldOffsetPos) & 0xFF);
-        else if (fieldOffsetSize == PortableUtils.OFFSET_2)
-            fieldPos = start + ((int)PortablePrimitives.readShort(arr, fieldOffsetPos) & 0xFFFF);
-        else
-            fieldPos = start + PortablePrimitives.readInt(arr, fieldOffsetPos);
+    /**
+     * <p>Adds the specified value to this Option.</p>
+     * 
+     * @param value is a/the value of this Option
+     */
+    void addValue( String value )
+    {
+        switch( numberOfArgs ) {
+            case UNINITIALIZED:
+                throw new RuntimeException( "Cannot add value, no arguments allowed." );
+            default:
+                processValue( value );
+        }
+    }
 
-        // Read header and try performing fast lookup for well-known types (the most common types go first).
-        byte hdr = PortablePrimitives.readByte(arr, fieldPos);
+    /**
+     * <p>Processes the value.  If this Option has a value separator
+     * the value will have to be parsed into individual tokens.  When
+     * n-1 tokens have been processed and there are more value separators
+     * in the value, parsing is ceased and the remaining characters are
+     * added as a single token.</p>
+     *
+     * @since 1.0.1
+     */
+    private void processValue( String value ) {
 
-        switch (hdr) {
-            case INT:
-                val = PortablePrimitives.readInt(arr, fieldPos + 1);
+        // this Option has a separator character
+        if( hasValueSeparator() ) {
 
-                break;
+            // get the separator character
+            char sep = getValueSeparator();
 
-            case LONG:
-                val = PortablePrimitives.readLong(arr, fieldPos + 1);
+            // store the index for the value separator
+            int index = value.indexOf( sep );
 
-                break;
+            // while there are more value separators
+            while( index != -1 ) {
 
-            case BOOLEAN:
-                val = PortablePrimitives.readBoolean(arr, fieldPos + 1);
+                // next value to be added 
+                if( values.size() == numberOfArgs-1 ) {
+                    break;
+                } 
 
-                break;
+                // store
+                add( value.substring( 0, index ) );
 
-            case SHORT:
-                val = PortablePrimitives.readShort(arr, fieldPos + 1);
+                // parse
+                value = value.substring( index+1 );
 
-                break;
-
-            case BYTE:
-                val = PortablePrimitives.readByte(arr, fieldPos + 1);
-
-                break;
-
-            case CHAR:
-                val = PortablePrimitives.readChar(arr, fieldPos + 1);
-
-                break;
-
-            case FLOAT:
-                val = PortablePrimitives.readFloat(arr, fieldPos + 1);
-
-                break;
-
-            case DOUBLE:
-                val = PortablePrimitives.readDouble(arr, fieldPos + 1);
-
-                break;
-
-            case STRING: {
-                boolean utf = PortablePrimitives.readBoolean(arr, fieldPos + 1);
-
-                if (utf) {
-                    int dataLen = PortablePrimitives.readInt(arr, fieldPos + 2);
-
-                    val = new String(arr, fieldPos + 6, dataLen, UTF_8);
-                }
-                else {
-                    int dataLen = PortablePrimitives.readInt(arr, fieldPos + 2);
-                    char[] data = PortablePrimitives.readCharArray(arr, fieldPos + 6, dataLen);
-
-                    val = String.valueOf(data);
-                }
-
-                break;
+                // get new index
+                index = value.indexOf( sep );
             }
-
-            case DATE: {
-                long time = PortablePrimitives.readLong(arr, fieldPos + 1);
-
-                val = new Date(time);
-
-                break;
-            }
-
-            case TIMESTAMP: {
-                long time = PortablePrimitives.readLong(arr, fieldPos + 1);
-                int nanos = PortablePrimitives.readInt(arr, fieldPos + 1 + 8);
-
-                Timestamp ts = new Timestamp(time);
-
-                ts.setNanos(ts.getNanos() + nanos);
-
-                val = ts;
-
-                break;
-            }
-
-            case UUID: {
-                long most = PortablePrimitives.readLong(arr, fieldPos + 1);
-                long least = PortablePrimitives.readLong(arr, fieldPos + 1 + 8);
-
-                val = new UUID(most, least);
-
-                break;
-            }
-
-            case DECIMAL: {
-                int scale = PortablePrimitives.readInt(arr, fieldPos + 1);
-
-                int dataLen = PortablePrimitives.readInt(arr, fieldPos + 5);
-                byte[] data = PortablePrimitives.readByteArray(arr, fieldPos + 9, dataLen);
-
-                BigInteger intVal = new BigInteger(data);
-
-                if (scale < 0) {
-                    scale &= 0x7FFFFFFF;
-
-                    intVal = intVal.negate();
-                }
-
-                val = new BigDecimal(intVal, scale);
-
-                break;
-            }
-
-            case NULL:
-                val = null;
-
-                break;
-
-            default: {
-                PortableReaderExImpl reader = new PortableReaderExImpl(ctx, arr, start, null);
-
-                val = reader.unmarshalFieldByAbsolutePosition(fieldPos);
-            }
         }
 
-        return (F)val;
+        // store the actual value or the last value that has been parsed
+        add( value );
     }
 
-    /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
-    @Nullable @Override protected <F> F field(PortableReaderContext rCtx, String fieldName) {
-        PortableReaderExImpl reader = new PortableReaderExImpl(ctx,
-            new PortableHeapInputStream(arr),
-            start,
-            null,
-            rCtx);
-
-        return (F)reader.unmarshalField(fieldName);
+    /**
+     * <p>Add the value to this Option.  If the number of arguments
+     * is greater than zero and there is enough space in the list then
+     * add the value.  Otherwise, throw a runtime exception.
+     * </p>
+     *
+     * @since 1.0.1
+     */
+    private void add( String value ) {
+        if( numberOfArgs > 0 && values.size() > numberOfArgs-1 ) {
+            throw new RuntimeException( "Cannot add value, list full." );
+        }
+        // store value
+        this.values.add( value );
     }
 
-    /** {@inheritDoc} */
-    @Override public boolean hasField(String fieldName) {
-        PortableReaderExImpl reader = new PortableReaderExImpl(ctx, arr, start, null);
-
-        return reader.hasField(fieldName);
+    /**
+     * @return the value/first value of this Option or 
+     * <code>null</code> if there are no values.
+     */
+    public String getValue() {
+        return this.values.size()==0 ? null : (String)this.values.get( 0 );
     }
 
-    /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
-    @Nullable @Override public <T> T deserialize() throws PortableException {
-        Object obj0 = obj;
+    /**
+     * @return the specified value of this Option or 
+     * <code>null</code> if there are no values.
+     */
+    public String getValue( int index ) 
+    throws IndexOutOfBoundsException
+    {
+        return ( this.values.size()==0 ) ? null : (String)this.values.get( index );
+    }
 
-        if (obj0 == null) {
-            // TODO: IGNITE-1272 - Deserialize with proper class loader.
-            PortableReaderExImpl reader = new PortableReaderExImpl(ctx, arr, start, null);
+    /**
+     * @return the value/first value of this Option or the 
+     * <code>defaultValue</code> if there are no values.
+     */
+    public String getValue( String defaultValue ) {
+        String value = getValue( );
+        return ( value != null ) ? value : defaultValue;
+    }
 
-            obj0 = reader.deserialize();
+    /**
+     * @return the values of this Option as a String array 
+     * or null if there are no values
+     */
+    public String[] getValues() {
+        return this.values.size()==0 ? null : (String[])this.values.toArray(new String[]{});
+    }
 
-            PortableClassDescriptor desc = reader.descriptor();
+    /**
+     * @return the values of this Option as a List
+     * or null if there are no values
+     */
+    public java.util.List getValuesList() {
+        return this.values;
+    }
 
-            assert desc != null;
+    /**
+     * @return a copy of this Option
+     */
+    public Object clone() {
+        Option option = new Option( getOpt(), getDescription() );
+        option.setArgs( getArgs() );
+        option.setOptionalArg( hasOptionalArg() );
+        option.setRequired( isRequired() );
+        option.setLongOpt( getLongOpt() );
+        option.setType( getType() );
+        option.setValueSeparator( getValueSeparator() );
+        return option;
+    }
 
-            if (desc.keepDeserialized())
-                obj = obj0;
+    /** 
+     * <p>Dump state, suitable for debugging.</p>
+     *
+     * @return Stringified form of this object
+     */
+    public String toString() {
+        StringBuffer buf = new StringBuffer().append("[ option: ");
+        
+        buf.append( this.opt );
+        
+        if ( this.longOpt != null ) {
+            buf.append(" ")
+            .append(this.longOpt);
+        }
+        
+        buf.append(" ");
+        
+        if ( hasArg ) {
+            buf.append( "+ARG" );
+        }
+        
+        buf.append(" :: ")
+        .append( this.description );
+        
+        if ( this.type != null ) {
+            buf.append(" :: ")
+            .append( this.type );
         }
 
-        return (T)obj0;
+        buf.append(" ]");
+        return buf.toString();
     }
 
-    /** {@inheritDoc} */
-    @Override public PortableObject clone() throws CloneNotSupportedException {
-        return super.clone();
-    }
-
-    /** {@inheritDoc} */
-    @Override public int hashCode() {
-        return PortablePrimitives.readInt(arr, start + GridPortableMarshaller.HASH_CODE_POS);
-    }
-
-    /** {@inheritDoc} */
-    @Override protected int schemaId() {
-        return PortablePrimitives.readInt(arr, start + GridPortableMarshaller.SCHEMA_ID_POS);
-    }
-
-    /** {@inheritDoc} */
-    @Override protected PortableSchema createSchema() {
-        PortableReaderExImpl reader = new PortableReaderExImpl(ctx, arr, start, null);
-
-        return reader.createSchema();
-    }
-
-    /** {@inheritDoc} */
-    @Override public PortableField fieldDescriptor(String fieldName) throws PortableException {
-        A.notNull(fieldName, "fieldName");
-
-        int typeId = typeId();
-
-        PortableSchemaRegistry schemaReg = ctx.schemaRegistry(typeId);
-
-        int fieldId = ctx.userTypeIdMapper(typeId).fieldId(typeId, fieldName);
-
-        return new PortableFieldImpl(schemaReg, fieldName, fieldId);
-    }
-
-    /** {@inheritDoc} */
-    @Override public void writeExternal(ObjectOutput out) throws IOException {
-        out.writeObject(ctx);
-
-        if (detachAllowed) {
-            int len = length();
-
-            out.writeInt(len);
-            out.write(arr, start, len);
-            out.writeInt(0);
-        }
-        else {
-            out.writeInt(arr.length);
-            out.write(arr);
-            out.writeInt(start);
-        }
-    }
-
-    /** {@inheritDoc} */
-    @Override public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
-        ctx = (PortableContext)in.readObject();
-
-        arr = new byte[in.readInt()];
-
-        in.readFully(arr);
-
-        start = in.readInt();
-    }
-
-    /** {@inheritDoc} */
-    @Override public boolean writeTo(ByteBuffer buf, MessageWriter writer) {
-        writer.setBuffer(buf);
-
-        if (!writer.isHeaderWritten()) {
-            if (!writer.writeHeader(directType(), fieldsCount()))
-                return false;
-
-            writer.onHeaderWritten();
-        }
-
-        switch (writer.state()) {
-            case 0:
-                if (!writer.writeByteArray("arr",
-                    arr,
-                    detachAllowed ? start : 0,
-                    detachAllowed ? length() : arr.length))
-                    return false;
-
-                writer.incrementState();
-
-            case 1:
-                if (!writer.writeInt("start", detachAllowed ? 0 : start))
-                    return false;
-
-                writer.incrementState();
-
-        }
-
-        return true;
-    }
-
-    /** {@inheritDoc} */
-    @Override public boolean readFrom(ByteBuffer buf, MessageReader reader) {
-        reader.setBuffer(buf);
-
-        if (!reader.beforeMessageRead())
-            return false;
-
-        switch (reader.state()) {
-            case 0:
-                arr = reader.readByteArray("arr");
-
-                if (!reader.isLastRead())
-                    return false;
-
-                reader.incrementState();
-
-            case 1:
-                start = reader.readInt("start");
-
-                if (!reader.isLastRead())
-                    return false;
-
-                reader.incrementState();
-
-        }
-
-        return true;
-    }
-
-    /** {@inheritDoc} */
-    @Override public byte directType() {
-        return 113;
-    }
-
-    /** {@inheritDoc} */
-    @Override public byte fieldsCount() {
-        return 3;
-    }
 }

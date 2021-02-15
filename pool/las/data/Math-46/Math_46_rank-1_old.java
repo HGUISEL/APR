@@ -1,1096 +1,1063 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.phoenix.iterate;
+package com.fasterxml.jackson.databind.deser;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_ACTUAL_START_ROW;
-import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_START_ROW_SUFFIX;
-import static org.apache.phoenix.coprocessor.BaseScannerRegionObserver.SCAN_STOP_ROW_SUFFIX;
-import static org.apache.phoenix.monitoring.GlobalClientMetrics.GLOBAL_FAILED_QUERY_COUNTER;
-import static org.apache.phoenix.monitoring.GlobalClientMetrics.GLOBAL_QUERY_TIMEOUT_COUNTER;
-import static org.apache.phoenix.query.QueryServices.USE_STATS_FOR_PARALLELIZATION;
-import static org.apache.phoenix.query.QueryServicesOptions.DEFAULT_USE_STATS_FOR_PARALLELIZATION;
-import static org.apache.phoenix.schema.PTable.IndexType.LOCAL;
-import static org.apache.phoenix.schema.PTableType.INDEX;
-import static org.apache.phoenix.util.ByteUtil.EMPTY_BYTE_ARRAY;
-import static org.apache.phoenix.util.EncodedColumnsUtil.isPossibleToUseEncodedCQFilter;
-import static org.apache.phoenix.util.ScanUtil.hasDynamicColumns;
+import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.*;
 
-import java.io.ByteArrayInputStream;
-import java.io.DataInput;
-import java.io.DataInputStream;
-import java.io.EOFException;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.NavigableSet;
-import java.util.Queue;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.ObjectIdGenerator;
+import com.fasterxml.jackson.annotation.ObjectIdGenerators;
 
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.TableNotEnabledException;
-import org.apache.hadoop.hbase.client.HBaseAdmin;
-import org.apache.hadoop.hbase.client.Scan;
-import org.apache.hadoop.hbase.filter.FirstKeyOnlyFilter;
-import org.apache.hadoop.hbase.filter.PageFilter;
-import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.Pair;
-import org.apache.phoenix.compile.QueryPlan;
-import org.apache.phoenix.compile.RowProjector;
-import org.apache.phoenix.compile.ScanRanges;
-import org.apache.phoenix.compile.StatementContext;
-import org.apache.phoenix.coprocessor.BaseScannerRegionObserver;
-import org.apache.phoenix.coprocessor.UngroupedAggregateRegionObserver;
-import org.apache.phoenix.exception.SQLExceptionCode;
-import org.apache.phoenix.exception.SQLExceptionInfo;
-import org.apache.phoenix.execute.MutationState;
-import org.apache.phoenix.filter.ColumnProjectionFilter;
-import org.apache.phoenix.filter.DistinctPrefixFilter;
-import org.apache.phoenix.filter.EncodedQualifiersColumnProjectionFilter;
-import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
-import org.apache.phoenix.hbase.index.util.VersionUtil;
-import org.apache.phoenix.parse.FilterableStatement;
-import org.apache.phoenix.parse.HintNode;
-import org.apache.phoenix.parse.HintNode.Hint;
-import org.apache.phoenix.query.ConnectionQueryServices;
-import org.apache.phoenix.query.KeyRange;
-import org.apache.phoenix.query.QueryServices;
-import org.apache.phoenix.query.QueryServicesOptions;
-import org.apache.phoenix.schema.PColumnFamily;
-import org.apache.phoenix.schema.PTable;
-import org.apache.phoenix.schema.PTable.ImmutableStorageScheme;
-import org.apache.phoenix.schema.PTable.IndexType;
-import org.apache.phoenix.schema.PTable.QualifierEncodingScheme;
-import org.apache.phoenix.schema.PTable.ViewType;
-import org.apache.phoenix.schema.StaleRegionBoundaryCacheException;
-import org.apache.phoenix.schema.TableRef;
-import org.apache.phoenix.schema.stats.GuidePostsInfo;
-import org.apache.phoenix.schema.stats.GuidePostsKey;
-import org.apache.phoenix.schema.stats.StatisticsUtil;
-import org.apache.phoenix.util.ByteUtil;
-import org.apache.phoenix.util.Closeables;
-import org.apache.phoenix.util.EncodedColumnsUtil;
-import org.apache.phoenix.util.IndexUtil;
-import org.apache.phoenix.util.LogUtil;
-import org.apache.phoenix.util.PrefixByteCodec;
-import org.apache.phoenix.util.PrefixByteDecoder;
-import org.apache.phoenix.util.QueryUtil;
-import org.apache.phoenix.util.SQLCloseables;
-import org.apache.phoenix.util.ScanUtil;
-import org.apache.phoenix.util.SchemaUtil;
-import org.apache.phoenix.util.ServerUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.google.common.base.Function;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
-
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.deser.impl.*;
+import com.fasterxml.jackson.databind.deser.std.ContainerDeserializerBase;
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.type.ClassKey;
+import com.fasterxml.jackson.databind.util.*;
 
 /**
- *
- * Class that parallelizes the scan over a table using the ExecutorService provided.  Each region of the table will be scanned in parallel with
- * the results accessible through {@link #getIterators()}
- *
- * 
- * @since 0.1
+ * Base class for <code>BeanDeserializer</code>.
  */
-public abstract class BaseResultIterators extends ExplainTable implements ResultIterators {
-	private static final Logger logger = LoggerFactory.getLogger(BaseResultIterators.class);
-    private static final int ESTIMATED_GUIDEPOSTS_PER_REGION = 20;
-    private static final int MIN_SEEK_TO_COLUMN_VERSION = VersionUtil.encodeVersion("0", "98", "12");
+public abstract class BeanDeserializerBase
+    extends StdDeserializer<Object>
+    implements ContextualDeserializer, ResolvableDeserializer,
+        java.io.Serializable // since 2.1
+{
+    private static final long serialVersionUID = -2038793552422727904L;
 
-    private final List<List<Scan>> scans;
-    private final List<KeyRange> splits;
-    private final byte[] physicalTableName;
-    protected final QueryPlan plan;
-    protected final String scanId;
-    protected final MutationState mutationState;
-    protected final ParallelScanGrouper scanGrouper;
-    // TODO: too much nesting here - breakup into new classes.
-    private final List<List<List<Pair<Scan,Future<PeekingResultIterator>>>>> allFutures;
-    private Long estimatedRows;
-    private Long estimatedSize;
-    private boolean hasGuidePosts;
-    private Scan scan;
-    private boolean useStatsForParallelization;
+    /*
+    /**********************************************************
+    /* Information regarding type being deserialized
+    /**********************************************************
+     */
+
+    /**
+     * Annotations from the bean class: used for accessing
+     * annotations during resolution
+     * (see {@link #resolve}) and
+     * contextualization (see {@link #createContextual})
+     *<p> 
+     * Transient since annotations only used during construction.
+     */
+    final private transient Annotations _classAnnotations;
+
+    /**
+     * Declared type of the bean this deserializer handles.
+     */
+    final protected JavaType _beanType;
+
+    /**
+     * Requested shape from bean class annotations.
+     */
+    final protected JsonFormat.Shape _serializationShape;
     
-    static final Function<HRegionLocation, KeyRange> TO_KEY_RANGE = new Function<HRegionLocation, KeyRange>() {
-        @Override
-        public KeyRange apply(HRegionLocation region) {
-            return KeyRange.getKeyRange(region.getRegionInfo().getStartKey(), region.getRegionInfo().getEndKey());
-        }
-    };
+    /*
+    /**********************************************************
+    /* Configuration for creating value instance
+    /**********************************************************
+     */
 
-    private PTable getTable() {
-        return plan.getTableRef().getTable();
+    /**
+     * Object that handles details of constructing initial 
+     * bean value (to which bind data to), unless instance
+     * is passed (via updateValue())
+     */
+    protected final ValueInstantiator _valueInstantiator;
+    
+    /**
+     * Deserializer that is used iff delegate-based creator is
+     * to be used for deserializing from JSON Object.
+     */
+    protected JsonDeserializer<Object> _delegateDeserializer;
+    
+    /**
+     * If the bean needs to be instantiated using constructor
+     * or factory method
+     * that takes one or more named properties as argument(s),
+     * this creator is used for instantiation.
+     * This value gets resolved during general resolution.
+     */
+    protected PropertyBasedCreator _propertyBasedCreator;
+
+    /**
+     * Flag that is set to mark "non-standard" cases; where either
+     * we use one of non-default creators, or there are unwrapped
+     * values to consider.
+     */
+    protected boolean _nonStandardCreation;
+
+    /**
+     * Flag that indicates that no "special features" whatsoever
+     * are enabled, so the simplest processing is possible.
+     */
+    protected boolean _vanillaProcessing;
+
+    /*
+    /**********************************************************
+    /* Property information, setters
+    /**********************************************************
+     */
+
+    /**
+     * Mapping of property names to properties, built when all properties
+     * to use have been successfully resolved.
+     */
+    final protected BeanPropertyMap _beanProperties;
+    
+    /**
+     * List of {@link ValueInjector}s, if any injectable values are
+     * expected by the bean; otherwise null.
+     * This includes injectors used for injecting values via setters
+     * and fields, but not ones passed through constructor parameters.
+     */
+    final protected ValueInjector[] _injectables;
+    
+    /**
+     * Fallback setter used for handling any properties that are not
+     * mapped to regular setters. If setter is not null, it will be
+     * called once for each such property.
+     */
+    protected SettableAnyProperty _anySetter;
+
+    /**
+     * In addition to properties that are set, we will also keep
+     * track of recognized but ignorable properties: these will
+     * be skipped without errors or warnings.
+     */
+    final protected HashSet<String> _ignorableProps;
+
+    /**
+     * Flag that can be set to ignore and skip unknown properties.
+     * If set, will not throw an exception for unknown properties.
+     */
+    final protected boolean _ignoreAllUnknown;
+
+    /**
+     * Flag that indicates that some aspect of deserialization depends
+     * on active view used (if any)
+     */
+    final protected boolean _needViewProcesing;
+    
+    /**
+     * We may also have one or more back reference fields (usually
+     * zero or one).
+     */
+    final protected Map<String, SettableBeanProperty> _backRefs;
+    
+    /*
+    /**********************************************************
+    /* Related handlers
+    /**********************************************************
+     */
+
+    /**
+     * Lazily constructed map used to contain deserializers needed
+     * for polymorphic subtypes.
+     * Note that this is <b>only needed</b> for polymorphic types,
+     * that is, when the actual type is not statically known.
+     * For other types this remains null.
+     */
+    protected transient HashMap<ClassKey, JsonDeserializer<Object>> _subDeserializers;
+
+    /**
+     * If one of properties has "unwrapped" value, we need separate
+     * helper object
+     */
+    protected UnwrappedPropertyHandler _unwrappedPropertyHandler;
+
+    /**
+     * Handler that we need iff any of properties uses external
+     * type id.
+     */
+    protected ExternalTypeHandler _externalTypeIdHandler;
+
+    /**
+     * If an Object Id is to be used for value handled by this
+     * deserializer, this reader is used for handling.
+     */
+    protected final ObjectIdReader _objectIdReader;
+
+    /*
+    /**********************************************************
+    /* Life-cycle, construction, initialization
+    /**********************************************************
+     */
+
+    /**
+     * Constructor used when initially building a deserializer
+     * instance, given a {@link BeanDeserializerBuilder} that
+     * contains configuration.
+     */
+    protected BeanDeserializerBase(BeanDeserializerBuilder builder,
+            BeanDescription beanDesc,
+            BeanPropertyMap properties, Map<String, SettableBeanProperty> backRefs,
+            HashSet<String> ignorableProps, boolean ignoreAllUnknown,
+            boolean hasViews)
+    {
+        super(beanDesc.getType());
+
+        AnnotatedClass ac = beanDesc.getClassInfo();
+        _classAnnotations = ac.getAnnotations();       
+        _beanType = beanDesc.getType();
+        _valueInstantiator = builder.getValueInstantiator();
+        
+        _beanProperties = properties;
+        _backRefs = backRefs;
+        _ignorableProps = ignorableProps;
+        _ignoreAllUnknown = ignoreAllUnknown;
+
+        _anySetter = builder.getAnySetter();
+        List<ValueInjector> injectables = builder.getInjectables();
+        _injectables = (injectables == null || injectables.isEmpty()) ? null
+                : injectables.toArray(new ValueInjector[injectables.size()]);
+        _objectIdReader = builder.getObjectIdReader();
+        _nonStandardCreation = (_unwrappedPropertyHandler != null)
+            || _valueInstantiator.canCreateUsingDelegate()
+            || _valueInstantiator.canCreateFromObjectWith()
+            || !_valueInstantiator.canCreateUsingDefault()
+            ;
+
+        // Any transformation we may need to apply?
+        JsonFormat.Value format = beanDesc.findExpectedFormat(null);
+        _serializationShape = (format == null) ? null : format.getShape();
+
+        _needViewProcesing = hasViews;
+        _vanillaProcessing = !_nonStandardCreation
+                && (_injectables == null)
+                && !_needViewProcesing
+                // also, may need to reorder stuff if we expect Object Id:
+                && (_objectIdReader != null)
+                ;
     }
-    
-    protected boolean useStats() {
-        /*
-         * Don't use guide posts:
-         * 1) If we're collecting stats, as in this case we need to scan entire
-         * regions worth of data to track where to put the guide posts.
-         * 2) If the query is going to be executed serially.
-         */
-        if (ScanUtil.isAnalyzeTable(scan)) {
-            return false;
-        }
-        return true;
-    }
-    
-    private static void initializeScan(QueryPlan plan, Integer perScanLimit, Integer offset, Scan scan) throws SQLException {
-        StatementContext context = plan.getContext();
-        TableRef tableRef = plan.getTableRef();
-        PTable table = tableRef.getTable();
 
-        Map<byte [], NavigableSet<byte []>> familyMap = scan.getFamilyMap();
-        // Hack for PHOENIX-2067 to force raw scan over all KeyValues to fix their row keys
-        if (context.getConnection().isDescVarLengthRowKeyUpgrade()) {
-            // We project *all* KeyValues across all column families as we make a pass over
-            // a physical table and we want to make sure we catch all KeyValues that may be
-            // dynamic or part of an updatable view.
-            familyMap.clear();
-            scan.setMaxVersions();
-            scan.setFilter(null); // Remove any filter
-            scan.setRaw(true); // Traverse (and subsequently clone) all KeyValues
-            // Pass over PTable so we can re-write rows according to the row key schema
-            scan.setAttribute(BaseScannerRegionObserver.UPGRADE_DESC_ROW_KEY, UngroupedAggregateRegionObserver.serialize(table));
+    protected BeanDeserializerBase(BeanDeserializerBase src)
+    {
+        this(src, src._ignoreAllUnknown);
+    }
+
+    protected BeanDeserializerBase(BeanDeserializerBase src, boolean ignoreAllUnknown)
+    {
+        super(src._beanType);
+        
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _beanProperties = src._beanProperties;
+        _backRefs = src._backRefs;
+        _ignorableProps = src._ignorableProps;
+        _ignoreAllUnknown = ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        _objectIdReader = src._objectIdReader;
+        
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        _vanillaProcessing = src._vanillaProcessing;
+    }
+ 
+    protected BeanDeserializerBase(BeanDeserializerBase src, NameTransformer unwrapper)
+    {
+        super(src._beanType);
+
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _backRefs = src._backRefs;
+        _ignorableProps = src._ignorableProps;
+        _ignoreAllUnknown = (unwrapper != null) || src._ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        _objectIdReader = src._objectIdReader;
+
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+
+        if (unwrapper != null) {
+            // delegate further unwraps, if any
+            if (_unwrappedPropertyHandler != null) { // got handler, delegate
+                _unwrappedPropertyHandler.renameAll(unwrapper);
+            }
+            // and handle direct unwrapping as well:
+            _beanProperties = src._beanProperties.renameAll(unwrapper);
         } else {
-            FilterableStatement statement = plan.getStatement();
-            RowProjector projector = plan.getProjector();
-            boolean optimizeProjection = false;
-            boolean keyOnlyFilter = familyMap.isEmpty() && context.getWhereConditionColumns().isEmpty();
-            if (!projector.projectEverything()) {
-                // If nothing projected into scan and we only have one column family, just allow everything
-                // to be projected and use a FirstKeyOnlyFilter to skip from row to row. This turns out to
-                // be quite a bit faster.
-                // Where condition columns also will get added into familyMap
-                // When where conditions are present, we cannot add FirstKeyOnlyFilter at beginning.
-                // FIXME: we only enter this if the number of column families is 1 because otherwise
-                // local indexes break because it appears that the column families in the PTable do
-                // not match the actual column families of the table (which is bad).
-                if (keyOnlyFilter && table.getColumnFamilies().size() == 1) {
-                    // Project the one column family. We must project a column family since it's possible
-                    // that there are other non declared column families that we need to ignore.
-                    scan.addFamily(table.getColumnFamilies().get(0).getName().getBytes());
-                } else {
-                    optimizeProjection = true;
-                    if (projector.projectEveryRow()) {
-                        if (table.getViewType() == ViewType.MAPPED) {
-                            // Since we don't have the empty key value in MAPPED tables, 
-                            // we must project all CFs in HRS. However, only the
-                            // selected column values are returned back to client.
-                            context.getWhereConditionColumns().clear();
-                            for (PColumnFamily family : table.getColumnFamilies()) {
-                                context.addWhereCoditionColumn(family.getName().getBytes(), null);
-                            }
-                        } else {
-                            byte[] ecf = SchemaUtil.getEmptyColumnFamily(table);
-                            // Project empty key value unless the column family containing it has
-                            // been projected in its entirety.
-                            if (!familyMap.containsKey(ecf) || familyMap.get(ecf) != null) {
-                                scan.addColumn(ecf, EncodedColumnsUtil.getEmptyKeyValueInfo(table).getFirst());
-                            }
+            _beanProperties = src._beanProperties;
+        }
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        // probably adds a twist, so:
+        _vanillaProcessing = false;
+    }
+
+    public BeanDeserializerBase(BeanDeserializerBase src, ObjectIdReader oir)
+    {
+        super(src._beanType);
+        
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _backRefs = src._backRefs;
+        _ignorableProps = src._ignorableProps;
+        _ignoreAllUnknown = src._ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        _vanillaProcessing = src._vanillaProcessing;
+
+        // then actual changes:
+        _objectIdReader = oir;
+
+        if (oir == null) {
+            _beanProperties = src._beanProperties;
+        } else {
+            _beanProperties = src._beanProperties.withProperty(new ObjectIdValueProperty(oir));
+        }
+    }
+
+    public BeanDeserializerBase(BeanDeserializerBase src, HashSet<String> ignorableProps)
+    {
+        super(src._beanType);
+        
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _backRefs = src._backRefs;
+        _ignorableProps = ignorableProps;
+        _ignoreAllUnknown = src._ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        _vanillaProcessing = src._vanillaProcessing;
+        _objectIdReader = src._objectIdReader;
+        _beanProperties = src._beanProperties;
+    }
+    
+    @Override
+    public abstract JsonDeserializer<Object> unwrappingDeserializer(NameTransformer unwrapper);
+
+    public abstract BeanDeserializerBase withObjectIdReader(ObjectIdReader oir);
+
+    public abstract BeanDeserializerBase withIgnorableProperties(HashSet<String> ignorableProps);
+
+    /**
+     * Fluent factory for creating a variant that can handle
+     * POJO output as a JSON Array. Implementations may ignore this request
+     * if no such input is possible.
+     * 
+     * @since 2.1
+     */
+    protected abstract BeanDeserializerBase asArrayDeserializer();
+    
+    /*
+    /**********************************************************
+    /* Validation, post-processing
+    /**********************************************************
+     */
+
+    /**
+     * Method called to finalize setup of this deserializer,
+     * after deserializer itself has been registered.
+     * This is needed to handle recursive and transitive dependencies.
+     */
+//  @Override
+    public void resolve(DeserializationContext ctxt)
+        throws JsonMappingException
+    {
+        ExternalTypeHandler.Builder extTypes = null;
+        // if ValueInstantiator can use "creator" approach, need to resolve it here...
+        if (_valueInstantiator.canCreateFromObjectWith()) {
+            SettableBeanProperty[] creatorProps = _valueInstantiator.getFromObjectArguments(ctxt.getConfig());
+            _propertyBasedCreator = PropertyBasedCreator.construct(ctxt, _valueInstantiator, creatorProps);
+            // also: need to try to resolve 'external' type ids...
+            for (SettableBeanProperty prop : _propertyBasedCreator.properties()) {
+                if (prop.hasValueTypeDeserializer()) {
+                    TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
+                    if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
+                        if (extTypes == null) {
+                            extTypes = new ExternalTypeHandler.Builder();
                         }
+                        extTypes.addExternal(prop, typeDeser);
                     }
                 }
             }
-            // Add FirstKeyOnlyFilter if there are no references to key value columns
-            if (keyOnlyFilter) {
-                ScanUtil.andFilterAtBeginning(scan, new FirstKeyOnlyFilter());
-            }
+        }
 
-            if (perScanLimit != null) {
-                ScanUtil.andFilterAtEnd(scan, new PageFilter(perScanLimit));
+        UnwrappedPropertyHandler unwrapped = null;
+
+        for (SettableBeanProperty origProp : _beanProperties) {
+            SettableBeanProperty prop = origProp;
+            // May already have deserializer from annotations, if so, skip:
+            if (!prop.hasValueDeserializer()) {
+                prop = prop.withValueDeserializer(findDeserializer(ctxt, prop.getType(), prop));
+            } else { // may need contextual version
+                JsonDeserializer<Object> deser = prop.getValueDeserializer();
+                if (deser instanceof ContextualDeserializer) {
+                    JsonDeserializer<?> cd = ((ContextualDeserializer) deser).createContextual(ctxt, prop);
+                    if (cd != deser) {
+                        prop = prop.withValueDeserializer(cd);
+                    }
+                }
+            }
+            // [JACKSON-235]: need to link managed references with matching back references
+            prop = _resolveManagedReferenceProperty(ctxt, prop);
+            // [JACKSON-132]: support unwrapped values (via @JsonUnwrapped)
+            SettableBeanProperty u = _resolveUnwrappedProperty(ctxt, prop);
+            if (u != null) {
+                prop = u;
+                if (unwrapped == null) {
+                    unwrapped = new UnwrappedPropertyHandler();
+                }
+                unwrapped.addProperty(prop);
+                continue;
+            }
+            // [JACKSON-594]: non-static inner classes too:
+            prop = _resolveInnerClassValuedProperty(ctxt, prop);
+            if (prop != origProp) {
+                _beanProperties.replace(prop);
             }
             
-            if(offset!=null){
-                ScanUtil.addOffsetAttribute(scan, offset);
-            }
-            int cols = plan.getGroupBy().getOrderPreservingColumnCount();
-            if (cols > 0 && keyOnlyFilter &&
-                !plan.getStatement().getHint().hasHint(HintNode.Hint.RANGE_SCAN) &&
-                cols < plan.getTableRef().getTable().getRowKeySchema().getFieldCount() &&
-                plan.getGroupBy().isOrderPreserving() &&
-                (context.getAggregationManager().isEmpty() || plan.getGroupBy().isUngroupedAggregate())) {
-                
-                ScanUtil.andFilterAtEnd(scan,
-                        new DistinctPrefixFilter(plan.getTableRef().getTable().getRowKeySchema(),
-                                cols));
-                if (plan.getLimit() != null) { // We can push the limit to the server
-                    ScanUtil.andFilterAtEnd(scan, new PageFilter(plan.getLimit()));
-                }
-            }
-            scan.setAttribute(BaseScannerRegionObserver.QUALIFIER_ENCODING_SCHEME, new byte[]{table.getEncodingScheme().getSerializedMetadataValue()});
-            scan.setAttribute(BaseScannerRegionObserver.IMMUTABLE_STORAGE_ENCODING_SCHEME, new byte[]{table.getImmutableStorageScheme().getSerializedMetadataValue()});
-            // we use this flag on the server side to determine which value column qualifier to use in the key value we return from server.
-            scan.setAttribute(BaseScannerRegionObserver.USE_NEW_VALUE_COLUMN_QUALIFIER, Bytes.toBytes(true));
-            // When analyzing the table, there is no look up for key values being done.
-            // So there is no point setting the range.
-            if (EncodedColumnsUtil.setQualifierRanges(table) && !ScanUtil.isAnalyzeTable(scan)) {
-                Pair<Integer, Integer> range = getEncodedQualifierRange(scan, context);
-                if (range != null) {
-                    scan.setAttribute(BaseScannerRegionObserver.MIN_QUALIFIER, Bytes.toBytes(range.getFirst()));
-                    scan.setAttribute(BaseScannerRegionObserver.MAX_QUALIFIER, Bytes.toBytes(range.getSecond()));
-                    ScanUtil.setQualifierRangesOnFilter(scan, range);
-                }
-            }
-            if (optimizeProjection) {
-                optimizeProjection(context, scan, table, statement);
-            }
-        }
-    }
-    
-    private static Pair<Integer, Integer> getEncodedQualifierRange(Scan scan, StatementContext context)
-            throws SQLException {
-        PTable table = context.getCurrentTable().getTable();
-        QualifierEncodingScheme encodingScheme = table.getEncodingScheme();
-        checkArgument(encodingScheme != QualifierEncodingScheme.NON_ENCODED_QUALIFIERS,
-            "Method should only be used for tables using encoded column names");
-        Pair<Integer, Integer> minMaxQualifiers = new Pair<>();
-        for (Pair<byte[], byte[]> whereCol : context.getWhereConditionColumns()) {
-            byte[] cq = whereCol.getSecond();
-            if (cq != null) {
-                int qualifier = table.getEncodingScheme().decode(cq);
-                determineQualifierRange(qualifier, minMaxQualifiers);
-            }
-        }
-        Map<byte[], NavigableSet<byte[]>> familyMap = scan.getFamilyMap();
-
-        Map<String, Pair<Integer, Integer>> qualifierRanges = EncodedColumnsUtil.getFamilyQualifierRanges(table);
-        for (Entry<byte[], NavigableSet<byte[]>> entry : familyMap.entrySet()) {
-            if (entry.getValue() != null) {
-                for (byte[] cq : entry.getValue()) {
-                    if (cq != null) {
-                        int qualifier = table.getEncodingScheme().decode(cq);
-                        determineQualifierRange(qualifier, minMaxQualifiers);
+            /* one more thing: if this property uses "external property" type inclusion
+             * (see [JACKSON-453]), it needs different handling altogether
+             */
+            if (prop.hasValueTypeDeserializer()) {
+                TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
+                if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
+                    if (extTypes == null) {
+                        extTypes = new ExternalTypeHandler.Builder();
                     }
-                }
-            } else {
-                /*
-                 * All the columns of the column family are being projected. So we will need to
-                 * consider all the columns in the column family to determine the min-max range.
-                 */
-                String family = Bytes.toString(entry.getKey());
-                if (table.getType() == INDEX && table.getIndexType() == LOCAL && !IndexUtil.isLocalIndexFamily(family)) {
-                    //TODO: samarth confirm with James why do we need this hack here :(
-                    family = IndexUtil.getLocalIndexColumnFamily(family);
-                }
-                Pair<Integer, Integer> range = qualifierRanges.get(family);
-                if (range != null) {
-                    determineQualifierRange(range.getFirst(), minMaxQualifiers);
-                    determineQualifierRange(range.getSecond(), minMaxQualifiers);
-                }
-            }
-        }
-        if (minMaxQualifiers.getFirst() == null) {
-            return null;
-        }
-        return minMaxQualifiers;
-    }
-
-    /**
-     * 
-     * @param cq
-     * @param minMaxQualifiers
-     * @return true if the empty column was projected
-     */
-    private static void determineQualifierRange(Integer qualifier, Pair<Integer, Integer> minMaxQualifiers) {
-        if (minMaxQualifiers.getFirst() == null) {
-            minMaxQualifiers.setFirst(qualifier);
-            minMaxQualifiers.setSecond(qualifier);
-        } else {
-            if (minMaxQualifiers.getFirst() > qualifier) {
-                minMaxQualifiers.setFirst(qualifier);
-            } else if (minMaxQualifiers.getSecond() < qualifier) {
-                minMaxQualifiers.setSecond(qualifier);
-            }
-        }
-    }
-    
-    private static void optimizeProjection(StatementContext context, Scan scan, PTable table, FilterableStatement statement) {
-        Map<byte[], NavigableSet<byte[]>> familyMap = scan.getFamilyMap();
-        // columnsTracker contain cf -> qualifiers which should get returned.
-        Map<ImmutableBytesPtr, NavigableSet<ImmutableBytesPtr>> columnsTracker = 
-                new TreeMap<ImmutableBytesPtr, NavigableSet<ImmutableBytesPtr>>();
-        Set<byte[]> conditionOnlyCfs = new TreeSet<byte[]>(Bytes.BYTES_COMPARATOR);
-        int referencedCfCount = familyMap.size();
-        QualifierEncodingScheme encodingScheme = table.getEncodingScheme();
-        ImmutableStorageScheme storageScheme = table.getImmutableStorageScheme();
-        BitSet trackedColumnsBitset = isPossibleToUseEncodedCQFilter(encodingScheme, storageScheme) && !hasDynamicColumns(table) ? new BitSet(10) : null;
-        boolean filteredColumnNotInProjection = false;
-        for (Pair<byte[], byte[]> whereCol : context.getWhereConditionColumns()) {
-            byte[] filteredFamily = whereCol.getFirst();
-            if (!(familyMap.containsKey(filteredFamily))) {
-                referencedCfCount++;
-                filteredColumnNotInProjection = true;
-            } else if (!filteredColumnNotInProjection) {
-                NavigableSet<byte[]> projectedColumns = familyMap.get(filteredFamily);
-                if (projectedColumns != null) {
-                    byte[] filteredColumn = whereCol.getSecond();
-                    if (filteredColumn == null) {
-                        filteredColumnNotInProjection = true;
-                    } else {
-                        filteredColumnNotInProjection = !projectedColumns.contains(filteredColumn);
-                    }
-                }
-            }
-        }
-        boolean preventSeekToColumn;
-        if (statement.getHint().hasHint(Hint.SEEK_TO_COLUMN)) {
-            // Allow seeking to column during filtering
-            preventSeekToColumn = false;
-        } else if (statement.getHint().hasHint(Hint.NO_SEEK_TO_COLUMN)) {
-            // Prevent seeking to column during filtering
-            preventSeekToColumn = true;
-        } else {
-            int hbaseServerVersion = context.getConnection().getQueryServices().getLowestClusterHBaseVersion();
-            // When only a single column family is referenced, there are no hints, and HBase server version
-            // is less than when the fix for HBASE-13109 went in (0.98.12), then we prevent seeking to a
-            // column.
-            preventSeekToColumn = referencedCfCount == 1 && hbaseServerVersion < MIN_SEEK_TO_COLUMN_VERSION;
-        }
-        for (Entry<byte[], NavigableSet<byte[]>> entry : familyMap.entrySet()) {
-            ImmutableBytesPtr cf = new ImmutableBytesPtr(entry.getKey());
-            NavigableSet<byte[]> qs = entry.getValue();
-            NavigableSet<ImmutableBytesPtr> cols = null;
-            if (qs != null) {
-                cols = new TreeSet<ImmutableBytesPtr>();
-                for (byte[] q : qs) {
-                    cols.add(new ImmutableBytesPtr(q));
-                    if (trackedColumnsBitset != null) {
-                        int qualifier = encodingScheme.decode(q);
-                        trackedColumnsBitset.set(qualifier);
-                    }
-                }
-            }
-            columnsTracker.put(cf, cols);
-        }
-        // Making sure that where condition CFs are getting scanned at HRS.
-        for (Pair<byte[], byte[]> whereCol : context.getWhereConditionColumns()) {
-            byte[] family = whereCol.getFirst();
-            if (preventSeekToColumn) {
-                if (!(familyMap.containsKey(family))) {
-                    conditionOnlyCfs.add(family);
-                }
-                scan.addFamily(family);
-            } else {
-                if (familyMap.containsKey(family)) {
-                    // where column's CF is present. If there are some specific columns added against this CF, we
-                    // need to ensure this where column also getting added in it.
-                    // If the select was like select cf1.*, then that itself will select the whole CF. So no need to
-                    // specifically add the where column. Adding that will remove the cf1.* stuff and only this
-                    // where condition column will get returned!
-                    NavigableSet<byte[]> cols = familyMap.get(family);
-                    // cols is null means the whole CF will get scanned.
-                    if (cols != null) {
-                        if (whereCol.getSecond() == null) {
-                            scan.addFamily(family);                            
-                        } else {
-                            scan.addColumn(family, whereCol.getSecond());
-                        }
-                    }
-                } else if (whereCol.getSecond() == null) {
-                    scan.addFamily(family);
-                } else {
-                    // where column's CF itself is not present in family map. We need to add the column
-                    scan.addColumn(family, whereCol.getSecond());
-                }
-            }
-        }
-        if (!columnsTracker.isEmpty()) {
-            if (preventSeekToColumn) {
-                for (ImmutableBytesPtr f : columnsTracker.keySet()) {
-                    // This addFamily will remove explicit cols in scan familyMap and make it as entire row.
-                    // We don't want the ExplicitColumnTracker to be used. Instead we have the ColumnProjectionFilter
-                    scan.addFamily(f.get());
-                }
-            }
-            // We don't need this filter for aggregates, as we're not returning back what's
-            // in the scan in this case. We still want the other optimization that causes
-            // the ExplicitColumnTracker not to be used, though.
-            if (!statement.isAggregate() && filteredColumnNotInProjection) {
-                ScanUtil.andFilterAtEnd(scan, 
-                        trackedColumnsBitset != null ? new EncodedQualifiersColumnProjectionFilter(SchemaUtil.getEmptyColumnFamily(table), trackedColumnsBitset, conditionOnlyCfs, table.getEncodingScheme()) : new ColumnProjectionFilter(SchemaUtil.getEmptyColumnFamily(table),
-                        columnsTracker, conditionOnlyCfs, EncodedColumnsUtil.usesEncodedColumnNames(table.getEncodingScheme())));
-            }
-        }
-    }
-    
-    public BaseResultIterators(QueryPlan plan, Integer perScanLimit, Integer offset, ParallelScanGrouper scanGrouper, Scan scan) throws SQLException {
-        super(plan.getContext(), plan.getTableRef(), plan.getGroupBy(), plan.getOrderBy(),
-                plan.getStatement().getHint(), QueryUtil.getOffsetLimit(plan.getLimit(), plan.getOffset()), offset);
-        this.plan = plan;
-        this.scan = scan;
-        this.scanGrouper = scanGrouper;
-        StatementContext context = plan.getContext();
-        // Clone MutationState as the one on the connection will change if auto commit is on
-        // yet we need the original one with the original transaction from TableResultIterator.
-        this.mutationState = new MutationState(context.getConnection().getMutationState());
-        TableRef tableRef = plan.getTableRef();
-        PTable table = tableRef.getTable();
-        physicalTableName = table.getPhysicalName().getBytes();
-        Long currentSCN = context.getConnection().getSCN();
-        if (null == currentSCN) {
-          currentSCN = HConstants.LATEST_TIMESTAMP;
-        }
-        // Used to tie all the scans together during logging
-        scanId = new UUID(ThreadLocalRandom.current().nextLong(), ThreadLocalRandom.current().nextLong()).toString();
-        
-        initializeScan(plan, perScanLimit, offset, scan);
-        this.useStatsForParallelization =
-                context.getConnection().getQueryServices().getConfiguration().getBoolean(
-                    USE_STATS_FOR_PARALLELIZATION, DEFAULT_USE_STATS_FOR_PARALLELIZATION);
-        this.scans = getParallelScans();
-        List<KeyRange> splitRanges = Lists.newArrayListWithExpectedSize(scans.size() * ESTIMATED_GUIDEPOSTS_PER_REGION);
-        for (List<Scan> scanList : scans) {
-            for (Scan aScan : scanList) {
-                splitRanges.add(KeyRange.getKeyRange(aScan.getStartRow(), aScan.getStopRow()));
-            }
-        }
-        this.splits = ImmutableList.copyOf(splitRanges);
-        // If split detected, this will be more than one, but that's unlikely
-        this.allFutures = Lists.newArrayListWithExpectedSize(1);
-    }
-
-    @Override
-    public List<KeyRange> getSplits() {
-        if (splits == null)
-            return Collections.emptyList();
-        else
-            return splits;
-    }
-
-    @Override
-    public List<List<Scan>> getScans() {
-        if (scans == null)
-            return Collections.emptyList();
-        else
-            return scans;
-    }
-
-    private static List<byte[]> toBoundaries(List<HRegionLocation> regionLocations) {
-        int nBoundaries = regionLocations.size() - 1;
-        List<byte[]> ranges = Lists.newArrayListWithExpectedSize(nBoundaries);
-        for (int i = 0; i < nBoundaries; i++) {
-            HRegionInfo regionInfo = regionLocations.get(i).getRegionInfo();
-            ranges.add(regionInfo.getEndKey());
-        }
-        return ranges;
-    }
-    
-    private static int getIndexContainingInclusive(List<byte[]> boundaries, byte[] inclusiveKey) {
-        int guideIndex = Collections.binarySearch(boundaries, inclusiveKey, Bytes.BYTES_COMPARATOR);
-        // If we found an exact match, return the index+1, as the inclusiveKey will be contained
-        // in the next region (since we're matching on the end boundary).
-        guideIndex = (guideIndex < 0 ? -(guideIndex + 1) : (guideIndex + 1));
-        return guideIndex;
-    }
-    
-    private static int getIndexContainingExclusive(List<byte[]> boundaries, byte[] exclusiveKey) {
-        int guideIndex = Collections.binarySearch(boundaries, exclusiveKey, Bytes.BYTES_COMPARATOR);
-        // If we found an exact match, return the index we found as the exclusiveKey won't be
-        // contained in the next region as with getIndexContainingInclusive.
-        guideIndex = (guideIndex < 0 ? -(guideIndex + 1) : guideIndex);
-        return guideIndex;
-    }
-
-    private GuidePostsInfo getGuidePosts() throws SQLException {
-        if (!useStats() || !StatisticsUtil.isStatsEnabled(TableName.valueOf(physicalTableName))) {
-            return GuidePostsInfo.NO_GUIDEPOST;
-        }
-
-        TreeSet<byte[]> whereConditions = new TreeSet<byte[]>(Bytes.BYTES_COMPARATOR);
-        for(Pair<byte[], byte[]> where : context.getWhereConditionColumns()) {
-            byte[] cf = where.getFirst();
-            if (cf != null) {
-                whereConditions.add(cf);
-            }
-        }
-        PTable table = getTable();
-        byte[] defaultCF = SchemaUtil.getEmptyColumnFamily(getTable());
-        byte[] cf = null;
-        if ( !table.getColumnFamilies().isEmpty() && !whereConditions.isEmpty() ) {
-            for(Pair<byte[], byte[]> where : context.getWhereConditionColumns()) {
-                byte[] whereCF = where.getFirst();
-                if (Bytes.compareTo(defaultCF, whereCF) == 0) {
-                    cf = defaultCF;
-                    break;
-                }
-            }
-            if (cf == null) {
-                cf = context.getWhereConditionColumns().get(0).getFirst();
-            }
-        }
-        if (cf == null) {
-            cf = defaultCF;
-        }
-        GuidePostsKey key = new GuidePostsKey(physicalTableName, cf);
-        return context.getConnection().getQueryServices().getTableStats(key);
-    }
-
-    private List<Scan> addNewScan(List<List<Scan>> parallelScans, List<Scan> scans, Scan scan, byte[] startKey, boolean crossedRegionBoundary, HRegionLocation regionLocation) {
-        boolean startNewScan = scanGrouper.shouldStartNewScan(plan, scans, startKey, crossedRegionBoundary);
-        if (scan != null) {
-            scan.setAttribute(BaseScannerRegionObserver.SCAN_REGION_SERVER, regionLocation.getServerName().getVersionedBytes());
-        	scans.add(scan);
-        }
-        if (startNewScan && !scans.isEmpty()) {
-            parallelScans.add(scans);
-            scans = Lists.newArrayListWithExpectedSize(1);
-        }
-        return scans;
-    }
-
-    private List<List<Scan>> getParallelScans() throws SQLException {
-        // If the scan boundaries are not matching with scan in context that means we need to get
-        // parallel scans for the chunk after split/merge.
-        if (!ScanUtil.isContextScan(scan, context)) {
-            return getParallelScans(scan);
-        }
-        return getParallelScans(EMPTY_BYTE_ARRAY, EMPTY_BYTE_ARRAY);
-    }
-
-    /**
-     * Get parallel scans of the specified scan boundaries. This can be used for getting parallel
-     * scans when there is split/merges while scanning a chunk. In this case we need not go by all
-     * the regions or guideposts.
-     * @param scan
-     * @return
-     * @throws SQLException
-     */
-    private List<List<Scan>> getParallelScans(Scan scan) throws SQLException {
-        List<HRegionLocation> regionLocations = context.getConnection().getQueryServices()
-                .getAllTableRegions(physicalTableName);
-        List<byte[]> regionBoundaries = toBoundaries(regionLocations);
-        int regionIndex = 0;
-        int stopIndex = regionBoundaries.size();
-        if (scan.getStartRow().length > 0) {
-            regionIndex = getIndexContainingInclusive(regionBoundaries, scan.getStartRow());
-        }
-        if (scan.getStopRow().length > 0) {
-            stopIndex = Math.min(stopIndex, regionIndex + getIndexContainingExclusive(regionBoundaries.subList(regionIndex, stopIndex), scan.getStopRow()));
-        }
-        List<List<Scan>> parallelScans = Lists.newArrayListWithExpectedSize(stopIndex - regionIndex + 1);
-        List<Scan> scans = Lists.newArrayListWithExpectedSize(2);
-        while (regionIndex <= stopIndex) {
-            HRegionLocation regionLocation = regionLocations.get(regionIndex);
-            HRegionInfo regionInfo = regionLocation.getRegionInfo();
-            Scan newScan = ScanUtil.newScan(scan);
-            byte[] endKey;
-            if (regionIndex == stopIndex) {
-                endKey = scan.getStopRow();
-            } else {
-                endKey = regionBoundaries.get(regionIndex);
-            }
-            if(ScanUtil.isLocalIndex(scan)) {
-                ScanUtil.setLocalIndexAttributes(newScan, 0, regionInfo.getStartKey(),
-                    regionInfo.getEndKey(), newScan.getAttribute(SCAN_START_ROW_SUFFIX),
-                    newScan.getAttribute(SCAN_STOP_ROW_SUFFIX));
-            } else {
-                if(Bytes.compareTo(scan.getStartRow(), regionInfo.getStartKey())<=0) {
-                    newScan.setAttribute(SCAN_ACTUAL_START_ROW, regionInfo.getStartKey());
-                    newScan.setStartRow(regionInfo.getStartKey());
-                }
-                if(scan.getStopRow().length == 0 || (regionInfo.getEndKey().length != 0 && Bytes.compareTo(scan.getStopRow(), regionInfo.getEndKey())>0)) {
-                    newScan.setStopRow(regionInfo.getEndKey());
-                }
-            }
-            scans = addNewScan(parallelScans, scans, newScan, endKey, true, regionLocation);
-            regionIndex++;
-        }
-        if (!scans.isEmpty()) { // Add any remaining scans
-            parallelScans.add(scans);
-        }
-        return parallelScans;
-    }
-
-    /**
-     * Compute the list of parallel scans to run for a given query. The inner scans
-     * may be concatenated together directly, while the other ones may need to be
-     * merge sorted, depending on the query.
-     * @return list of parallel scans to run for a given query.
-     * @throws SQLException
-     */
-    private List<List<Scan>> getParallelScans(byte[] startKey, byte[] stopKey) throws SQLException {
-        List<HRegionLocation> regionLocations = context.getConnection().getQueryServices()
-                .getAllTableRegions(physicalTableName);
-        List<byte[]> regionBoundaries = toBoundaries(regionLocations);
-        ScanRanges scanRanges = context.getScanRanges();
-        PTable table = getTable();
-        boolean isSalted = table.getBucketNum() != null;
-        boolean isLocalIndex = table.getIndexType() == IndexType.LOCAL;
-        GuidePostsInfo gps = getGuidePosts();
-        hasGuidePosts = gps != GuidePostsInfo.NO_GUIDEPOST;
-        boolean traverseAllRegions = isSalted || isLocalIndex;
-        if (!traverseAllRegions) {
-            byte[] scanStartRow = scan.getStartRow();
-            if (scanStartRow.length != 0 && Bytes.compareTo(scanStartRow, startKey) > 0) {
-                startKey = scanStartRow;
-            }
-            byte[] scanStopRow = scan.getStopRow();
-            if (stopKey.length == 0
-                    || (scanStopRow.length != 0 && Bytes.compareTo(scanStopRow, stopKey) < 0)) {
-                stopKey = scanStopRow;
-            }
-        }
-        
-        int regionIndex = 0;
-        int stopIndex = regionBoundaries.size();
-        if (startKey.length > 0) {
-            regionIndex = getIndexContainingInclusive(regionBoundaries, startKey);
-        }
-        if (stopKey.length > 0) {
-            stopIndex = Math.min(stopIndex, regionIndex + getIndexContainingExclusive(regionBoundaries.subList(regionIndex, stopIndex), stopKey));
-            if (isLocalIndex) {
-                stopKey = regionLocations.get(stopIndex).getRegionInfo().getEndKey();
-            }
-        }
-        List<List<Scan>> parallelScans = Lists.newArrayListWithExpectedSize(stopIndex - regionIndex + 1);
-        
-        ImmutableBytesWritable currentKey = new ImmutableBytesWritable(startKey);
-        
-        int gpsSize = gps.getGuidePostsCount();
-        int estGuidepostsPerRegion = gpsSize == 0 ? 1 : gpsSize / regionLocations.size() + 1;
-        int keyOffset = 0;
-        ImmutableBytesWritable currentGuidePost = ByteUtil.EMPTY_IMMUTABLE_BYTE_ARRAY;
-        List<Scan> scans = Lists.newArrayListWithExpectedSize(estGuidepostsPerRegion);
-        ImmutableBytesWritable guidePosts = gps.getGuidePosts();
-        ByteArrayInputStream stream = null;
-        DataInput input = null;
-        PrefixByteDecoder decoder = null;
-        int guideIndex = 0;
-        long estimatedRows = 0;
-        long estimatedSize = 0;
-        try {
-            if (gpsSize > 0) {
-                stream = new ByteArrayInputStream(guidePosts.get(), guidePosts.getOffset(), guidePosts.getLength());
-                input = new DataInputStream(stream);
-                decoder = new PrefixByteDecoder(gps.getMaxLength());
-                try {
-                    while (currentKey.compareTo(currentGuidePost = PrefixByteCodec.decode(decoder, input)) >= 0
-                            && currentKey.getLength() != 0) {
-                        guideIndex++;
-                    }
-                } catch (EOFException e) {}
-            }
-            byte[] currentKeyBytes = currentKey.copyBytes();
-            // Merge bisect with guideposts for all but the last region
-            while (regionIndex <= stopIndex) {
-                HRegionLocation regionLocation = regionLocations.get(regionIndex);
-                HRegionInfo regionInfo = regionLocation.getRegionInfo();
-                byte[] currentGuidePostBytes = currentGuidePost.copyBytes();
-                byte[] endKey, endRegionKey = EMPTY_BYTE_ARRAY;
-                if (regionIndex == stopIndex) {
-                    endKey = stopKey;
-                } else {
-                    endKey = regionBoundaries.get(regionIndex);
-                }
-                if (isLocalIndex) {
-                    endRegionKey = regionInfo.getEndKey();
-                    keyOffset = ScanUtil.getRowKeyOffset(regionInfo.getStartKey(), endRegionKey);
-                }
-                try {
-                    while (guideIndex < gpsSize && (endKey.length == 0 || currentGuidePost.compareTo(endKey) <= 0)) {
-                        Scan newScan = scanRanges.intersectScan(scan, currentKeyBytes, currentGuidePostBytes, keyOffset,
-                                false);
-                        if (newScan != null) {
-                            ScanUtil.setLocalIndexAttributes(newScan, keyOffset, regionInfo.getStartKey(),
-                                regionInfo.getEndKey(), newScan.getStartRow(), newScan.getStopRow());
-                            estimatedRows += gps.getRowCounts()[guideIndex];
-                            estimatedSize += gps.getByteCounts()[guideIndex];
-                        }
-                        if (useStatsForParallelization) {
-                            scans = addNewScan(parallelScans, scans, newScan, currentGuidePostBytes, false, regionLocation);
-                        }
-                        currentKeyBytes = currentGuidePostBytes;
-                        currentGuidePost = PrefixByteCodec.decode(decoder, input);
-                        currentGuidePostBytes = currentGuidePost.copyBytes();
-                        guideIndex++;
-                    }
-                } catch (EOFException e) {}
-                Scan newScan = scanRanges.intersectScan(scan, currentKeyBytes, endKey, keyOffset, true);
-                if(newScan != null) {
-                    ScanUtil.setLocalIndexAttributes(newScan, keyOffset, regionInfo.getStartKey(),
-                        regionInfo.getEndKey(), newScan.getStartRow(), newScan.getStopRow());
-                }
-                scans = addNewScan(parallelScans, scans, newScan, endKey, true, regionLocation);
-                currentKeyBytes = endKey;
-                regionIndex++;
-            }
-            if (scanRanges.isPointLookup()) {
-                this.estimatedRows = Long.valueOf(scanRanges.getPointLookupCount());
-                this.estimatedSize = this.estimatedRows * SchemaUtil.estimateRowSize(table);
-            } else if (hasGuidePosts) {
-                this.estimatedRows = estimatedRows;
-                this.estimatedSize = estimatedSize;
-            } else {
-                this.estimatedRows = null;
-                this.estimatedSize = null;
-            }
-            if (!scans.isEmpty()) { // Add any remaining scans
-                parallelScans.add(scans);
-            }
-        } finally {
-            if (stream != null) Closeables.closeQuietly(stream);
-        }
-        return parallelScans;
-    }
-
-   
-    public static <T> List<T> reverseIfNecessary(List<T> list, boolean reverse) {
-        if (!reverse) {
-            return list;
-        }
-        return Lists.reverse(list);
-    }
-    
-    /**
-     * Executes the scan in parallel across all regions, blocking until all scans are complete.
-     * @return the result iterators for the scan of each region
-     */
-    @Override
-    public List<PeekingResultIterator> getIterators() throws SQLException {
-        if (logger.isDebugEnabled()) {
-            logger.debug(LogUtil.addCustomAnnotations("Getting iterators for " + this,
-                    ScanUtil.getCustomAnnotations(scan)));
-        }
-        boolean isReverse = ScanUtil.isReversed(scan);
-        boolean isLocalIndex = getTable().getIndexType() == IndexType.LOCAL;
-        final ConnectionQueryServices services = context.getConnection().getQueryServices();
-        // Get query time out from Statement
-        final long startTime = System.currentTimeMillis();
-        final long maxQueryEndTime = startTime + context.getStatement().getQueryTimeoutInMillis();
-        int numScans = size();
-        // Capture all iterators so that if something goes wrong, we close them all
-        // The iterators list is based on the submission of work, so it may not
-        // contain them all (for example if work was rejected from the queue)
-        Queue<PeekingResultIterator> allIterators = new ConcurrentLinkedQueue<>();
-        List<PeekingResultIterator> iterators = new ArrayList<PeekingResultIterator>(numScans);
-        ScanWrapper previousScan = new ScanWrapper(null);
-        return getIterators(scans, services, isLocalIndex, allIterators, iterators, isReverse, maxQueryEndTime,
-                splits.size(), previousScan);
-    }
-
-    class ScanWrapper {
-        Scan scan;
-
-        public Scan getScan() {
-            return scan;
-        }
-
-        public void setScan(Scan scan) {
-            this.scan = scan;
-        }
-
-        public ScanWrapper(Scan scan) {
-            this.scan = scan;
-        }
-
-    }
-
-    private List<PeekingResultIterator> getIterators(List<List<Scan>> scan, ConnectionQueryServices services,
-            boolean isLocalIndex, Queue<PeekingResultIterator> allIterators, List<PeekingResultIterator> iterators,
-            boolean isReverse, long maxQueryEndTime, int splitSize, ScanWrapper previousScan) throws SQLException {
-        boolean success = false;
-        final List<List<Pair<Scan,Future<PeekingResultIterator>>>> futures = Lists.newArrayListWithExpectedSize(splitSize);
-        allFutures.add(futures);
-        SQLException toThrow = null;
-        int queryTimeOut = context.getStatement().getQueryTimeoutInMillis();
-        try {
-            submitWork(scan, futures, allIterators, splitSize, isReverse, scanGrouper);
-            boolean clearedCache = false;
-            for (List<Pair<Scan,Future<PeekingResultIterator>>> future : reverseIfNecessary(futures,isReverse)) {
-                List<PeekingResultIterator> concatIterators = Lists.newArrayListWithExpectedSize(future.size());
-                Iterator<Pair<Scan, Future<PeekingResultIterator>>> scanPairItr = reverseIfNecessary(future,isReverse).iterator();
-                while (scanPairItr.hasNext()) {
-                    Pair<Scan,Future<PeekingResultIterator>> scanPair = scanPairItr.next();
-                    try {
-                        long timeOutForScan = maxQueryEndTime - System.currentTimeMillis();
-                        if (timeOutForScan < 0) {
-                            throw new SQLExceptionInfo.Builder(SQLExceptionCode.OPERATION_TIMED_OUT).setMessage(". Query couldn't be completed in the alloted time: " + queryTimeOut + " ms").build().buildException(); 
-                        }
-                        if (isLocalIndex && previousScan != null && previousScan.getScan() != null
-                                && (((!isReverse && Bytes.compareTo(scanPair.getFirst().getAttribute(SCAN_ACTUAL_START_ROW),
-                                        previousScan.getScan().getStopRow()) < 0)
-                                || (isReverse && Bytes.compareTo(scanPair.getFirst().getAttribute(SCAN_ACTUAL_START_ROW),
-                                        previousScan.getScan().getStopRow()) > 0)
-                                || (Bytes.compareTo(scanPair.getFirst().getStopRow(), previousScan.getScan().getStopRow()) == 0)) 
-                                    && Bytes.compareTo(scanPair.getFirst().getAttribute(SCAN_START_ROW_SUFFIX), previousScan.getScan().getAttribute(SCAN_START_ROW_SUFFIX))==0)) {
-                            continue;
-                        }
-                        PeekingResultIterator iterator = scanPair.getSecond().get(timeOutForScan, TimeUnit.MILLISECONDS);
-                        concatIterators.add(iterator);
-                        previousScan.setScan(scanPair.getFirst());
-                    } catch (ExecutionException e) {
-                        try { // Rethrow as SQLException
-                            throw ServerUtil.parseServerException(e);
-                        } catch (StaleRegionBoundaryCacheException e2) {
-                           /*
-                            * Note that a StaleRegionBoundaryCacheException could be thrown in multiple scenarios including splits, region
-                            * moves, table disabled, etc. See ServerUtil.parseServerException() for details. 
-                            * Because of HBASE-17122 we need to explicitly check whether this exception is being
-                            * thrown because the table was disabled or because a split happened. This obviously is a HACK.
-                            * With older versions of HBase we were correctly thrown a TableNotEnabledException so this 
-                            * kind of hackery wasn't needed.
-                            * TODO: remove this once HBASE-17122 is fixed.
-                            */
-                            try (HBaseAdmin admin = context.getConnection().getQueryServices().getAdmin()) {
-                                if (admin.isTableDisabled(physicalTableName)) {
-                                    throw new TableNotEnabledException(physicalTableName);
-                                }
-                            }
-                            scanPairItr.remove();
-                            // Catch only to try to recover from region boundary cache being out of date
-                            if (!clearedCache) { // Clear cache once so that we rejigger job based on new boundaries
-                                services.clearTableRegionCache(physicalTableName);
-                                context.getOverallQueryMetrics().cacheRefreshedDueToSplits();
-                            }
-                            // Resubmit just this portion of work again
-                            Scan oldScan = scanPair.getFirst();
-                            byte[] startKey = oldScan.getAttribute(SCAN_ACTUAL_START_ROW);
-                            byte[] endKey = oldScan.getStopRow();
-                            
-                            List<List<Scan>> newNestedScans = this.getParallelScans(startKey, endKey);
-                            // Add any concatIterators that were successful so far
-                            // as we need these to be in order
-                            addIterator(iterators, concatIterators);
-                            concatIterators = Lists.newArrayList();
-                            getIterators(newNestedScans, services, isLocalIndex, allIterators, iterators, isReverse,
-                                    maxQueryEndTime, newNestedScans.size(), previousScan);
-                        }
-                    }
-                }
-                addIterator(iterators, concatIterators);
-            }
-            success = true;
-            return iterators;
-        } catch (TimeoutException e) {
-            context.getOverallQueryMetrics().queryTimedOut();
-            GLOBAL_QUERY_TIMEOUT_COUNTER.increment();
-            // thrown when a thread times out waiting for the future.get() call to return
-            toThrow = new SQLExceptionInfo.Builder(SQLExceptionCode.OPERATION_TIMED_OUT)
-                    .setMessage(". Query couldn't be completed in the alloted time: " + queryTimeOut + " ms")
-                    .setRootCause(e).build().buildException();
-        } catch (SQLException e) {
-            toThrow = e;
-        } catch (Exception e) {
-            toThrow = ServerUtil.parseServerException(e);
-        } finally {
-            try {
-                if (!success) {
-                    try {
-                        close();
-                    } catch (Exception e) {
-                        if (toThrow == null) {
-                            toThrow = ServerUtil.parseServerException(e);
-                        } else {
-                            toThrow.setNextException(ServerUtil.parseServerException(e));
-                        }
-                    } finally {
-                        try {
-                            SQLCloseables.closeAll(allIterators);
-                        } catch (Exception e) {
-                            if (toThrow == null) {
-                                toThrow = ServerUtil.parseServerException(e);
-                            } else {
-                                toThrow.setNextException(ServerUtil.parseServerException(e));
-                            }
-                        }
-                    }
-                }
-            } finally {
-                if (toThrow != null) {
-                    GLOBAL_FAILED_QUERY_COUNTER.increment();
-                    context.getOverallQueryMetrics().queryFailed();
-                    throw toThrow;
-                }
-            }
-        }
-        return null; // Not reachable
-    }
-    
-
-    @Override
-    public void close() throws SQLException {
-        if (allFutures.isEmpty()) {
-            return;
-        }
-        // Don't call cancel on already started work, as it causes the HConnection
-        // to get into a funk. Instead, just cancel queued work.
-        boolean cancelledWork = false;
-        try {
-            List<Future<PeekingResultIterator>> futuresToClose = Lists.newArrayListWithExpectedSize(getSplits().size());
-            for (List<List<Pair<Scan,Future<PeekingResultIterator>>>> futures : allFutures) {
-                for (List<Pair<Scan,Future<PeekingResultIterator>>> futureScans : futures) {
-                    for (Pair<Scan,Future<PeekingResultIterator>> futurePair : futureScans) {
-                        // When work is rejected, we may have null futurePair entries, because
-                        // we randomize these and set them as they're submitted.
-                        if (futurePair != null) {
-                            Future<PeekingResultIterator> future = futurePair.getSecond();
-                            if (future != null) {
-                                if (future.cancel(false)) {
-                                    cancelledWork = true;
-                                } else {
-                                    futuresToClose.add(future);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // Wait for already started tasks to complete as we can't interrupt them without
-            // leaving our HConnection in a funky state.
-            for (Future<PeekingResultIterator> future : futuresToClose) {
-                try {
-                    PeekingResultIterator iterator = future.get();
-                    iterator.close();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException(e);
-                } catch (ExecutionException e) {
-                    logger.info("Failed to execute task during cancel", e);
+                    extTypes.addExternal(prop, typeDeser);
+                    // In fact, remove from list of known properties to simplify later handling
+                    _beanProperties.remove(prop);
                     continue;
                 }
             }
-        } finally {
-            if (cancelledWork) {
-                context.getConnection().getQueryServices().getExecutor().purge();
-            }
-            allFutures.clear();
         }
+
+        // "any setter" may also need to be resolved now
+        if (_anySetter != null && !_anySetter.hasValueDeserializer()) {
+            _anySetter = _anySetter.withValueDeserializer(findDeserializer(ctxt,
+                    _anySetter.getType(), _anySetter.getProperty()));
+        }
+
+        // as well as delegate-based constructor:
+        if (_valueInstantiator.canCreateUsingDelegate()) {
+            JavaType delegateType = _valueInstantiator.getDelegateType(ctxt.getConfig());
+            if (delegateType == null) {
+                throw new IllegalArgumentException("Invalid delegate-creator definition for "+_beanType
+                        +": value instantiator ("+_valueInstantiator.getClass().getName()
+                        +") returned true for 'canCreateUsingDelegate()', but null for 'getDelegateType()'");
+            }
+            AnnotatedWithParams delegateCreator = _valueInstantiator.getDelegateCreator();
+            // Need to create a temporary property to allow contextual deserializers:
+            BeanProperty.Std property = new BeanProperty.Std(null,
+                    delegateType, _classAnnotations, delegateCreator);
+            _delegateDeserializer = findDeserializer(ctxt, delegateType, property);
+        }
+        
+        if (extTypes != null) {
+            _externalTypeIdHandler = extTypes.build();
+            // we consider this non-standard, to offline handling
+            _nonStandardCreation = true;
+        }
+        
+        _unwrappedPropertyHandler = unwrapped;
+        if (unwrapped != null) { // we consider this non-standard, to offline handling
+            _nonStandardCreation = true;
+        }
+
+        // may need to disable vanilla processing, if unwrapped handling was enabled...
+        _vanillaProcessing = _vanillaProcessing && !_nonStandardCreation;
     }
 
-    private void addIterator(List<PeekingResultIterator> parentIterators, List<PeekingResultIterator> childIterators) throws SQLException {
-        if (!childIterators.isEmpty()) {
-            if (plan.useRoundRobinIterator()) {
-                /*
-                 * When using a round robin iterator we shouldn't concatenate the iterators together. This is because a
-                 * round robin iterator should be calling next() on these iterators directly after selecting them in a 
-                 * round robin fashion. This helps take advantage of loading the underlying scanners' caches in parallel
-                 * as well as preventing errors arising out of scanner lease expirations.
-                 */
-                parentIterators.addAll(childIterators);
-            } else {
-                parentIterators.add(ConcatResultIterator.newIterator(childIterators));
+    /**
+     * Although most of post-processing is done in resolve(), we only get
+     * access to referring property's annotations here; and this is needed
+     * to support per-property ObjectIds.
+     * We will also consider Shape transformations (read from Array) at this
+     * point, since it may come from either Class definition or property.
+     */
+//  @Override
+    public JsonDeserializer<?> createContextual(DeserializationContext ctxt,
+            BeanProperty property) throws JsonMappingException
+    {
+        ObjectIdReader oir = _objectIdReader;
+        String[] ignorals = null;
+
+        // First: may have an override for Object Id:
+        final AnnotationIntrospector intr = ctxt.getAnnotationIntrospector();
+        final AnnotatedMember accessor = (property == null || intr == null)
+                ? null : property.getMember();
+        if (property != null && intr != null) {
+            ignorals = intr.findPropertiesToIgnore(accessor);
+            ObjectIdInfo objectIdInfo = intr.findObjectIdInfo(accessor);
+            if (objectIdInfo != null) { // some code duplication here as well (from BeanDeserializerFactory)
+                // 2.1: allow modifications by "id ref" annotations as well:
+                objectIdInfo = intr.findObjectReferenceInfo(accessor, objectIdInfo);
+                
+                Class<?> implClass = objectIdInfo.getGeneratorType();
+                // Property-based generator is trickier
+                JavaType idType;
+                SettableBeanProperty idProp;
+                ObjectIdGenerator<?> idGen;
+                if (implClass == ObjectIdGenerators.PropertyGenerator.class) {
+                    String propName = objectIdInfo.getPropertyName();
+                    idProp = findProperty(propName);
+                    if (idProp == null) {
+                        throw new IllegalArgumentException("Invalid Object Id definition for "
+                                +getBeanClass().getName()+": can not find property with name '"+propName+"'");
+                    }
+                    idType = idProp.getType();
+                    idGen = new PropertyBasedObjectIdGenerator(objectIdInfo.getScope());
+                } else { // other types need to be simpler
+                    JavaType type = ctxt.constructType(implClass);
+                    idType = ctxt.getTypeFactory().findTypeParameters(type, ObjectIdGenerator.class)[0];
+                    idProp = null;
+                    idGen = ctxt.objectIdGeneratorInstance(accessor, objectIdInfo);
+                }
+                JsonDeserializer<?> deser = ctxt.findRootValueDeserializer(idType);
+                oir = ObjectIdReader.construct(idType, objectIdInfo.getPropertyName(),
+                		idGen, deser, idProp);
             }
         }
+        // either way, need to resolve serializer:
+        BeanDeserializerBase contextual = this;
+        if (oir != null && oir != _objectIdReader) {
+            contextual = contextual.withObjectIdReader(oir);
+        }
+        // And possibly add more properties to ignore
+        if (ignorals != null && ignorals.length != 0) {
+            HashSet<String> newIgnored = ArrayBuilders.setAndArray(contextual._ignorableProps, ignorals);
+            contextual = contextual.withIgnorableProperties(newIgnored);
+        }
+
+        // One more thing: are we asked to serialize POJO as array?
+        JsonFormat.Shape shape = null;
+        if (accessor != null) {
+            JsonFormat.Value format = intr.findFormat((Annotated) accessor);
+
+            if (format != null) {
+                shape = format.getShape();
+            }
+        }
+        if (shape == null) {
+            shape = _serializationShape;
+        }
+        if (shape == JsonFormat.Shape.ARRAY) {
+            contextual = contextual.asArrayDeserializer();
+        }
+        return contextual;
     }
 
-    protected static final class ScanLocator {
-    	private final int outerListIndex;
-    	private final int innerListIndex;
-    	private final Scan scan;
-    	private final boolean isFirstScan;
-    	private final boolean isLastScan;
-    	
-    	public ScanLocator(Scan scan, int outerListIndex, int innerListIndex, boolean isFirstScan, boolean isLastScan) {
-    		this.outerListIndex = outerListIndex;
-    		this.innerListIndex = innerListIndex;
-    		this.scan = scan;
-    		this.isFirstScan = isFirstScan;
-    		this.isLastScan = isLastScan;
-    	}
-    	public int getOuterListIndex() {
-    		return outerListIndex;
-    	}
-    	public int getInnerListIndex() {
-    		return innerListIndex;
-    	}
-    	public Scan getScan() {
-    		return scan;
-    	}
-    	public boolean isFirstScan()  {
-    	    return isFirstScan;
-    	}
-    	public boolean isLastScan() {
-    	    return isLastScan;
-    	}
+    
+    /**
+     * Helper method called to see if given property is part of 'managed' property
+     * pair (managed + back reference), and if so, handle resolution details.
+     */
+    protected SettableBeanProperty _resolveManagedReferenceProperty(DeserializationContext ctxt,
+            SettableBeanProperty prop)
+    {
+        String refName = prop.getManagedReferenceName();
+        if (refName == null) {
+            return prop;
+        }
+        JsonDeserializer<?> valueDeser = prop.getValueDeserializer();
+        SettableBeanProperty backProp = null;
+        boolean isContainer = false;
+        if (valueDeser instanceof BeanDeserializerBase) {
+            backProp = ((BeanDeserializerBase) valueDeser).findBackReference(refName);
+        } else if (valueDeser instanceof ContainerDeserializerBase<?>) {
+            JsonDeserializer<?> contentDeser = ((ContainerDeserializerBase<?>) valueDeser).getContentDeserializer();
+            if (!(contentDeser instanceof BeanDeserializerBase)) {
+                String deserName = (contentDeser == null) ? "NULL" : contentDeser.getClass().getName();
+                throw new IllegalArgumentException("Can not handle managed/back reference '"+refName
+                        +"': value deserializer is of type ContainerDeserializerBase, but content type is not handled by a BeanDeserializer "
+                        +" (instead it's of type "+deserName+")");
+            }
+            backProp = ((BeanDeserializerBase) contentDeser).findBackReference(refName);
+            isContainer = true;
+        } else if (valueDeser instanceof AbstractDeserializer) {
+            backProp = ((AbstractDeserializer) valueDeser).findBackReference(refName);
+        } else {
+            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName
+                    +"': type for value deserializer is not BeanDeserializer or ContainerDeserializerBase, but "
+                    +valueDeser.getClass().getName());
+        }
+        if (backProp == null) {
+            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': no back reference property found from type "
+                    +prop.getType());
+        }
+        // also: verify that type is compatible
+        JavaType referredType = _beanType;
+        JavaType backRefType = backProp.getType();
+        if (!backRefType.getRawClass().isAssignableFrom(referredType.getRawClass())) {
+            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': back reference type ("
+                    +backRefType.getRawClass().getName()+") not compatible with managed type ("
+                    +referredType.getRawClass().getName()+")");
+        }
+        return new ManagedReferenceProperty(prop, refName, backProp,
+                _classAnnotations, isContainer);
+    }
+
+    /**
+     * Helper method called to see if given property might be so-called unwrapped
+     * property: these require special handling.
+     */
+    protected SettableBeanProperty _resolveUnwrappedProperty(DeserializationContext ctxt,
+            SettableBeanProperty prop)
+    {
+        AnnotatedMember am = prop.getMember();
+        if (am != null) {
+            NameTransformer unwrapper = ctxt.getAnnotationIntrospector().findUnwrappingNameTransformer(am);
+            if (unwrapper != null) {
+                JsonDeserializer<Object> orig = prop.getValueDeserializer();
+                JsonDeserializer<Object> unwrapping = orig.unwrappingDeserializer(unwrapper);
+                if (unwrapping != orig && unwrapping != null) {
+                    // might be cleaner to create new instance; but difficult to do reliably, so:
+                    return prop.withValueDeserializer(unwrapping);
+                }
+            }
+        }
+        return null;
     }
     
+    /**
+     * Helper method that will handle gruesome details of dealing with properties
+     * that have non-static inner class as value...
+     */
+    protected SettableBeanProperty _resolveInnerClassValuedProperty(DeserializationContext ctxt,
+            SettableBeanProperty prop)
+    {            
+        /* Should we encounter a property that has non-static inner-class
+         * as value, we need to add some more magic to find the "hidden" constructor...
+         */
+        JsonDeserializer<Object> deser = prop.getValueDeserializer();
+        // ideally wouldn't rely on it being BeanDeserializerBase; but for now it'll have to do
+        if (deser instanceof BeanDeserializerBase) {
+            BeanDeserializerBase bd = (BeanDeserializerBase) deser;
+            ValueInstantiator vi = bd.getValueInstantiator();
+            if (!vi.canCreateUsingDefault()) { // no default constructor
+                Class<?> valueClass = prop.getType().getRawClass();
+                Class<?> enclosing = ClassUtil.getOuterClass(valueClass);
+                // and is inner class of the bean class...
+                if (enclosing != null && enclosing == _beanType.getRawClass()) {
+                    for (Constructor<?> ctor : valueClass.getConstructors()) {
+                        Class<?>[] paramTypes = ctor.getParameterTypes();
+                        if (paramTypes.length == 1 && paramTypes[0] == enclosing) {
+                            if (ctxt.getConfig().canOverrideAccessModifiers()) {
+                                ClassUtil.checkAndFixAccess(ctor);
+                            }
+                            return new InnerClassProperty(prop, ctor);
+                        }
+                    }
+                }
+            }
+        }
+        return prop;
+    }
 
-    abstract protected String getName();    
-    abstract protected void submitWork(List<List<Scan>> nestedScans, List<List<Pair<Scan,Future<PeekingResultIterator>>>> nestedFutures,
-            Queue<PeekingResultIterator> allIterators, int estFlattenedSize, boolean isReverse, ParallelScanGrouper scanGrouper) throws SQLException;
+    /*
+    /**********************************************************
+    /* Public accessors
+    /**********************************************************
+     */
+
+    @Override
+    public boolean isCachable() { return true; }
+
+    /**
+     * Overridden to return true for those instances that are
+     * handling value for which Object Identity handling is enabled
+     * (either via value type or referring property).
+     */
+    @Override
+    public ObjectIdReader getObjectIdReader() {
+        return _objectIdReader;
+    }
+    
+    public boolean hasProperty(String propertyName) {
+        return _beanProperties.find(propertyName) != null;
+    }
+
+    public boolean hasViews() {
+        return _needViewProcesing;
+    }
+    
+    /**
+     * Accessor for checking number of deserialized properties.
+     */
+    public int getPropertyCount() { 
+        return _beanProperties.size();
+    }
+
+    @Override
+    public Collection<Object> getKnownPropertyNames() {
+        ArrayList<Object> names = new ArrayList<Object>();
+        for (SettableBeanProperty prop : _beanProperties) {
+            names.add(prop.getName());
+        }
+        return names;
+    }
+    
+    public final Class<?> getBeanClass() { return _beanType.getRawClass(); }
+
+    @Override public JavaType getValueType() { return _beanType; }
+
+    /**
+     * Accessor for iterating over properties this deserializer uses; with
+     * the exception that properties passed via Creator methods
+     * (specifically, "property-based constructor") are not included,
+     * but can be accessed separate by calling
+     * {@link #creatorProperties}
+     */
+    public Iterator<SettableBeanProperty> properties()
+    {
+        if (_beanProperties == null) {
+            throw new IllegalStateException("Can only call after BeanDeserializer has been resolved");
+        }
+        return _beanProperties.iterator();
+    }
+
+    /**
+     * Accessor for finding properties that represents values to pass
+     * through property-based creator method (constructor or
+     * factory method)
+     * 
+     * @since 2.0
+     */
+    public Iterator<SettableBeanProperty> creatorProperties()
+    {
+        if (_propertyBasedCreator == null) {
+            return Collections.<SettableBeanProperty>emptyList().iterator();
+        }
+        return _propertyBasedCreator.properties().iterator();
+    }
+
+    /**
+     * Accessor for finding the property with given name, if POJO
+     * has one. Name used is the external name, i.e. name used
+     * in external data representation (JSON).
+     * 
+     * @since 2.0
+     */
+    public SettableBeanProperty findProperty(String propertyName)
+    {
+        SettableBeanProperty prop = (_beanProperties == null) ?
+                null : _beanProperties.find(propertyName);
+        if (prop == null && _propertyBasedCreator != null) {
+            prop = _propertyBasedCreator.findCreatorProperty(propertyName);
+        }
+        return prop;
+    }
+    
+    /**
+     * Method needed by {@link BeanDeserializerFactory} to properly link
+     * managed- and back-reference pairs.
+     */
+    public SettableBeanProperty findBackReference(String logicalName)
+    {
+        if (_backRefs == null) {
+            return null;
+        }
+        return _backRefs.get(logicalName);
+    }
+
+    public ValueInstantiator getValueInstantiator() {
+        return _valueInstantiator;
+    }
+
+    /*
+    /**********************************************************
+    /* Mutators
+    /**********************************************************
+     */
+
+    /**
+     * Method that can be used to replace an existing property with
+     * a modified one.
+     *<p>
+     * NOTE: only ever use this method if you know what you are doing;
+     * incorrect usage can break deserializer.
+     *
+     * @param original Property to replace
+     * @param replacement Property to replace it with
+     * 
+     * @since 2.1
+     */
+    public void replaceProperty(SettableBeanProperty original,
+            SettableBeanProperty replacement)
+    {
+        _beanProperties.replace(replacement);
+    }
+
+    /*
+    /**********************************************************
+    /* Partial deserializer implementation
+    /**********************************************************
+     */
     
     @Override
-    public int size() {
-        return this.scans.size();
-    }
-
-    @Override
-    public void explain(List<String> planSteps) {
-        boolean displayChunkCount = context.getConnection().getQueryServices().getProps().getBoolean(
-                QueryServices.EXPLAIN_CHUNK_COUNT_ATTRIB,
-                QueryServicesOptions.DEFAULT_EXPLAIN_CHUNK_COUNT);
-        StringBuilder buf = new StringBuilder();
-        buf.append("CLIENT ");
-        if (displayChunkCount) {
-            boolean displayRowCount = context.getConnection().getQueryServices().getProps().getBoolean(
-                    QueryServices.EXPLAIN_ROW_COUNT_ATTRIB,
-                    QueryServicesOptions.DEFAULT_EXPLAIN_ROW_COUNT);
-            buf.append(this.splits.size()).append("-CHUNK ");
-            if (displayRowCount && estimatedRows != null) {
-                buf.append(estimatedRows).append(" ROWS ");
-                buf.append(estimatedSize).append(" BYTES ");
+    public final Object deserializeWithType(JsonParser jp, DeserializationContext ctxt,
+            TypeDeserializer typeDeserializer)
+        throws IOException, JsonProcessingException
+    {
+        /* 16-Feb-2012, tatu: ObjectId may be used as well... need to check
+         *    that first
+         */
+        if (_objectIdReader != null) {
+            JsonToken t = jp.getCurrentToken();
+            // should be good enough check; we only care about Strings, integral numbers:
+            if (t != null && t.isScalarValue()) {
+                return deserializeFromObjectId(jp, ctxt);
             }
         }
-        buf.append(getName()).append(" ").append(size()).append("-WAY ");
-        try {
-            if (plan.useRoundRobinIterator()) {
-                buf.append("ROUND ROBIN ");
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
+        // In future could check current token... for now this should be enough:
+        return typeDeserializer.deserializeTypedFromObject(jp, ctxt);
+    }
+
+    /**
+     * Method called in cases where it looks like we got an Object Id
+     * to parse and use as a reference.
+     */
+    protected Object deserializeFromObjectId(JsonParser jp, DeserializationContext ctxt)
+        throws IOException, JsonProcessingException
+    {
+        Object id = _objectIdReader.deserializer.deserialize(jp, ctxt);
+        ReadableObjectId roid = ctxt.findObjectId(id, _objectIdReader.generator);
+        // do we have it resolved?
+        Object pojo = roid.item;
+        if (pojo == null) { // not yet; should wait...
+            throw new IllegalStateException("Could not resolve Object Id ["+id+"] -- unresolved forward-reference?");
         }
-        explain(buf.toString(),planSteps);
+        return pojo;
     }
+    
+    /*
+    /**********************************************************
+    /* Overridable helper methods
+    /**********************************************************
+     */
 
-    public Long getEstimatedRowCount() {
-        return this.estimatedRows;
+    protected void injectValues(DeserializationContext ctxt, Object bean)
+            throws IOException, JsonProcessingException
+    {
+        for (ValueInjector injector : _injectables) {
+            injector.inject(ctxt, bean);
+        }
     }
     
-    public Long getEstimatedByteCount() {
-        return this.estimatedSize;
-    }
-    
+    /**
+     * Method called when a JSON property is encountered that has not matching
+     * setter, any-setter or field, and thus can not be assigned.
+     */
     @Override
-    public String toString() {
-        return "ResultIterators [name=" + getName() + ",id=" + scanId + ",scans=" + scans + "]";
+    protected void handleUnknownProperty(JsonParser jp, DeserializationContext ctxt,
+            Object beanOrClass, String propName)
+        throws IOException, JsonProcessingException
+    {
+        /* 22-Aug-2010, tatu: Caller now mostly checks for ignorable properties, so
+         *    following should not be necessary. However, "handleUnknownProperties()" seems
+         *    to still possibly need it so it is left for now.
+         */
+        // If registered as ignorable, skip
+        if (_ignoreAllUnknown ||
+            (_ignorableProps != null && _ignorableProps.contains(propName))) {
+            jp.skipChildren();
+            return;
+        }
+        /* Otherwise use default handling (call handler(s); if not
+         * handled, throw exception or skip depending on settings)
+         */
+        super.handleUnknownProperty(jp, ctxt, beanOrClass, propName);
     }
 
+    /**
+     * Method called to handle set of one or more unknown properties,
+     * stored in their entirety in given {@link TokenBuffer}
+     * (as field entries, name and value).
+     */
+    protected Object handleUnknownProperties(DeserializationContext ctxt, Object bean, TokenBuffer unknownTokens)
+        throws IOException, JsonProcessingException
+    {
+        // First: add closing END_OBJECT as marker
+        unknownTokens.writeEndObject();
+        
+        // note: buffer does NOT have starting START_OBJECT
+        JsonParser bufferParser = unknownTokens.asParser();
+        while (bufferParser.nextToken() != JsonToken.END_OBJECT) {
+            String propName = bufferParser.getCurrentName();
+            // Unknown: let's call handler method
+            bufferParser.nextToken();
+            handleUnknownProperty(bufferParser, ctxt, bean, propName);
+        }
+        return bean;
+    }
+    
+    /**
+     * Helper method called to (try to) locate deserializer for given sub-type of
+     * type that this deserializer handles.
+     */
+    protected JsonDeserializer<Object> _findSubclassDeserializer(DeserializationContext ctxt,
+            Object bean, TokenBuffer unknownTokens)
+        throws IOException, JsonProcessingException
+    {  
+        JsonDeserializer<Object> subDeser;
+
+        // First: maybe we have already created sub-type deserializer?
+        synchronized (this) {
+            subDeser = (_subDeserializers == null) ? null : _subDeserializers.get(new ClassKey(bean.getClass()));
+        }
+        if (subDeser != null) {
+            return subDeser;
+        }
+        // If not, maybe we can locate one. First, need provider
+        JavaType type = ctxt.constructType(bean.getClass());
+        /* 30-Jan-2012, tatu: Ideally we would be passing referring
+         *   property; which in theory we could keep track of via
+         *   ResolvableDeserializer (if we absolutely must...).
+         *   But for now, let's not bother.
+         */
+//        subDeser = ctxt.findValueDeserializer(type, _property);
+        subDeser = ctxt.findRootValueDeserializer(type);
+        // Also, need to cache it
+        if (subDeser != null) {
+            synchronized (this) {
+                if (_subDeserializers == null) {
+                    _subDeserializers = new HashMap<ClassKey,JsonDeserializer<Object>>();;
+                }
+                _subDeserializers.put(new ClassKey(bean.getClass()), subDeser);
+            }            
+        }
+        return subDeser;
+    }
+    
+    /*
+    /**********************************************************
+    /* Helper methods for error reporting
+    /**********************************************************
+     */
+
+    /**
+     * Method that will modify caught exception (passed in as argument)
+     * as necessary to include reference information, and to ensure it
+     * is a subtype of {@link IOException}, or an unchecked exception.
+     *<p>
+     * Rules for wrapping and unwrapping are bit complicated; essentially:
+     *<ul>
+     * <li>Errors are to be passed as is (if uncovered via unwrapping)
+     * <li>"Plain" IOExceptions (ones that are not of type
+     *   {@link JsonMappingException} are to be passed as is
+     *</ul>
+     */
+    public void wrapAndThrow(Throwable t, Object bean, String fieldName,
+            DeserializationContext ctxt)
+        throws IOException
+    {
+        /* 05-Mar-2009, tatu: But one nasty edge is when we get
+         *   StackOverflow: usually due to infinite loop. But that
+         *   usually gets hidden within an InvocationTargetException...
+         */
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors and "plain" IOExceptions to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
+        // Ditto for IOExceptions; except we may want to wrap mapping exceptions
+        if (t instanceof IOException) {
+            if (!wrap || !(t instanceof JsonMappingException)) {
+                throw (IOException) t;
+            }
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        // [JACKSON-55] Need to add reference information
+        throw JsonMappingException.wrapWithPath(t, bean, fieldName);
+    }
+
+    public void wrapAndThrow(Throwable t, Object bean, int index, DeserializationContext ctxt)
+        throws IOException
+    {
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors and "plain" IOExceptions to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
+        // Ditto for IOExceptions; except we may want to wrap mapping exceptions
+        if (t instanceof IOException) {
+            if (!wrap || !(t instanceof JsonMappingException)) {
+                throw (IOException) t;
+            }
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        // [JACKSON-55] Need to add reference information
+        throw JsonMappingException.wrapWithPath(t, bean, index);
+    }
+
+    protected void wrapInstantiationProblem(Throwable t, DeserializationContext ctxt)
+        throws IOException
+    {
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors and "plain" IOExceptions to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
+        if (t instanceof IOException) {
+            // Since we have no more information to add, let's not actually wrap..
+            throw (IOException) t;
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        throw ctxt.instantiationException(_beanType.getRawClass(), t);
+    }
 }

@@ -1,14 +1,12 @@
 /*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,738 +15,449 @@
  * limitations under the License.
  */
 
-package org.apache.hadoop.hbase.client;
+package org.apache.pdfbox.pdmodel.encryption;
 
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.DoNotRetryIOException;
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.protobuf.generated.Tracing;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
-import org.apache.hadoop.hbase.util.Pair;
-import org.cloudera.htrace.Span;
-import org.cloudera.htrace.Trace;
-
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InterruptedIOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
+import java.security.AlgorithmParameterGenerator;
+import java.security.AlgorithmParameters;
+import java.security.GeneralSecurityException;
+import java.security.InvalidKeyException;
+import java.security.KeyStoreException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.NoSuchProviderException;
+import java.security.SecureRandom;
+import java.security.Security;
+import java.security.cert.CertificateEncodingException;
+import java.security.cert.X509Certificate;
 import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.KeyGenerator;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.SecretKey;
+
+import org.bouncycastle.asn1.ASN1InputStream;
+import org.bouncycastle.asn1.ASN1Primitive;
+import org.bouncycastle.asn1.ASN1Set;
+import org.bouncycastle.asn1.DERObjectIdentifier;
+import org.bouncycastle.asn1.DEROctetString;
+import org.bouncycastle.asn1.DEROutputStream;
+import org.bouncycastle.asn1.DERSet;
+import org.bouncycastle.asn1.cms.ContentInfo;
+import org.bouncycastle.asn1.cms.EncryptedContentInfo;
+import org.bouncycastle.asn1.cms.EnvelopedData;
+import org.bouncycastle.asn1.cms.IssuerAndSerialNumber;
+import org.bouncycastle.asn1.cms.KeyTransRecipientInfo;
+import org.bouncycastle.asn1.cms.RecipientIdentifier;
+import org.bouncycastle.asn1.cms.RecipientInfo;
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
+import org.bouncycastle.asn1.x509.TBSCertificateStructure;
+import org.bouncycastle.cms.CMSEnvelopedData;
+import org.bouncycastle.cms.CMSException;
+import org.bouncycastle.cms.RecipientInformation;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSString;
+import org.apache.pdfbox.exceptions.CryptographyException;
+import org.apache.pdfbox.pdmodel.PDDocument;
 
 /**
- * This class  allows a continuous flow of requests. It's written to be compatible with a
- * synchronous caller such as HTable.
- * <p>
- * The caller sends a buffer of operation, by calling submit. This class extract from this list
- * the operations it can send, i.e. the operations that are on region that are not considered
- * as busy. The process is asynchronous, i.e. it returns immediately when if has finished to
- * iterate on the list. If, and only if, the maximum number of current task is reached, the call
- * to submit will block.
- * </p>
- * <p>
- * The class manages internally the retries.
- * </p>
- * <p>
- * The class includes an error marker: it allows to know if an operation has failed or not, and
- * to get the exception details, i.e. the full list of throwables for each attempt. This marker
- * is here to help the backward compatibility in HTable. In most (new) cases, it should be
- * managed by the callbacks.
- * </p>
- * <p>
- * A callback is available, in order to: <list>
- * <li>Get the result of the operation (failure or success)</li>
- * <li>When an operation fails but could be retried, allows or not to retry</li>
- * <li>When an operation fails for good (can't be retried or already retried the maximum number
- * time), register the error or not.
- * </list>
- * <p>
- * This class is not thread safe externally; only one thread should submit operations at a time.
- * Internally, the class is thread safe enough to manage simultaneously new submission and results
- * arising from older operations.
- * </p>
- * <p>
- * Internally, this class works with {@link Row}, this mean it could be theoretically used for
- * gets as well.
- * </p>
+ * This class implements the public key security handler
+ * described in the PDF specification.
+ *
+ * [PDF 1.6: p 104]
+ *
+ * @see PublicKeyProtectionPolicy to see how to protect document with this security handler.
+ *
+ * @author Benoit Guillon (benoit.guillon@snv.jussieu.fr)
+ * @version $Revision: 1.3 $
  */
-class AsyncProcess<CResult> {
-  private static final Log LOG = LogFactory.getLog(AsyncProcess.class);
-  protected final HConnection hConnection;
-  protected final TableName tableName;
-  protected final ExecutorService pool;
-  protected final AsyncProcessCallback<CResult> callback;
-  protected final BatchErrors errors = new BatchErrors();
-  protected final BatchErrors retriedErrors = new BatchErrors();
-  protected final AtomicBoolean hasError = new AtomicBoolean(false);
-  protected final AtomicLong tasksSent = new AtomicLong(0);
-  protected final AtomicLong tasksDone = new AtomicLong(0);
-  protected final ConcurrentMap<String, AtomicInteger> taskCounterPerRegion =
-      new ConcurrentHashMap<String, AtomicInteger>();
-  protected final int maxTotalConcurrentTasks;
-  protected final int maxConcurrentTasksPerRegion;
-  protected final long pause;
-  protected int numTries;
-  protected final boolean useServerTrackerForRetries;
-  protected int serverTrackerTimeout;
-  protected RpcRetryingCallerFactory rpcCallerFactory;
-
-
-  /**
-   * This interface allows to keep the interface of the previous synchronous interface, that uses
-   * an array of object to return the result.
-   * <p/>
-   * This interface allows the caller to specify the behavior on errors: <list>
-   * <li>If we have not yet reach the maximum number of retries, the user can nevertheless
-   * specify if this specific operation should be retried or not.
-   * </li>
-   * <li>If an operation fails (i.e. is not retried or fails after all retries), the user can
-   * specify is we should mark this AsyncProcess as in error or not.
-   * </li>
-   * </list>
-   */
-  interface AsyncProcessCallback<CResult> {
+public class PublicKeySecurityHandler extends SecurityHandler
+{
 
     /**
-     * Called on success. originalIndex holds the index in the action list.
+     * The filter name.
      */
-    void success(int originalIndex, byte[] region, Row row, CResult result);
+    public static final String FILTER = "Adobe.PubSec";
+
+    private static final String SUBFILTER = "adbe.pkcs7.s4";
+
+    private PublicKeyProtectionPolicy policy = null;
 
     /**
-     * called on failure, if we don't retry (i.e. called once per failed operation).
+     * Constructor.
+     */
+    public PublicKeySecurityHandler()
+    {
+    }
+
+    /**
+     * Constructor used for encryption.
      *
-     * @return true if we should store the error and tag this async process as being in error.
-     *         false if the failure of this operation can be safely ignored, and does not require
-     *         the current process to be stopped without proceeding with the other operations in
-     *         the queue.
+     * @param p The protection policy.
      */
-    boolean failure(int originalIndex, byte[] region, Row row, Throwable t);
+    public PublicKeySecurityHandler(PublicKeyProtectionPolicy p)
+    {
+        policy = p;
+        this.keyLength = policy.getEncryptionKeyLength();
+    }
 
     /**
-     * Called on a failure we plan to retry. This allows the user to stop retrying. Will be
-     * called multiple times for a single action if it fails multiple times.
+     * Decrypt the document.
      *
-     * @return false if we should retry, true otherwise.
+     * @param doc The document to decrypt.
+     * @param decryptionMaterial The data used to decrypt the document.
+     *
+     * @throws CryptographyException If there is an error during decryption.
+     * @throws IOException If there is an error accessing data.
      */
-    boolean retriableFailure(int originalIndex, Row row, byte[] region, Throwable exception);
-  }
+    public void decryptDocument(PDDocument doc, DecryptionMaterial decryptionMaterial)
+        throws CryptographyException, IOException
+    {
+        this.document = doc;
 
-  private static class BatchErrors {
-    private List<Throwable> throwables = new ArrayList<Throwable>();
-    private List<Row> actions = new ArrayList<Row>();
-    private List<String> addresses = new ArrayList<String>();
+        PDEncryptionDictionary dictionary = doc.getEncryptionDictionary();
 
-    public void add(Throwable ex, Row row, HRegionLocation location) {
-      throwables.add(ex);
-      actions.add(row);
-      addresses.add(location != null ? location.getHostnamePort() : "null location");
+        prepareForDecryption( dictionary, doc.getDocument().getDocumentID(),
+        											decryptionMaterial );
+        
+        proceedDecryption();
     }
 
-    private RetriesExhaustedWithDetailsException makeException() {
-      return new RetriesExhaustedWithDetailsException(
-          new ArrayList<Throwable>(throwables),
-          new ArrayList<Row>(actions), new ArrayList<String>(addresses));
+    /**
+     * Prepares everything to decrypt the document.
+     *
+     * If {@link #decryptDocument(PDDocument, DecryptionMaterial)} is used, this method is
+     * called from there. Only if decryption of single objects is needed this should be called instead.
+     *
+     * @param encDictionary  encryption dictionary, can be retrieved via {@link PDDocument#getEncryptionDictionary()}
+     * @param documentIDArray  document id which is returned via {@link org.apache.pdfbox.cos.COSDocument#getDocumentID()} (not used by this handler)
+     * @param decryptionMaterial Information used to decrypt the document.
+     *
+     * @throws IOException If there is an error accessing data.
+     * @throws CryptographyException If there is an error with decryption.
+     */
+    public void prepareForDecryption(PDEncryptionDictionary encDictionary, COSArray documentIDArray,
+                                     DecryptionMaterial decryptionMaterial)
+                                     throws IOException, CryptographyException
+    {
+	      if(encDictionary.getLength() != 0)
+	      {
+	          this.keyLength = encDictionary.getLength();
+	      }
+	
+	      if(!(decryptionMaterial instanceof PublicKeyDecryptionMaterial))
+	      {
+	          throw new CryptographyException(
+	              "Provided decryption material is not compatible with the document");
+	      }
+	
+	      PublicKeyDecryptionMaterial material = (PublicKeyDecryptionMaterial)decryptionMaterial;
+	
+	      try
+	      {
+	          boolean foundRecipient = false;
+	
+	          // the decrypted content of the enveloped data that match
+	          // the certificate in the decryption material provided
+	          byte[] envelopedData = null;
+	
+	          // the bytes of each recipient in the recipients array
+	          byte[][] recipientFieldsBytes = new byte[encDictionary.getRecipientsLength()][];
+	
+	          int recipientFieldsLength = 0;
+	
+	          for(int i=0; i<encDictionary.getRecipientsLength(); i++)
+	          {
+	              COSString recipientFieldString = encDictionary.getRecipientStringAt(i);
+	              byte[] recipientBytes = recipientFieldString.getBytes();
+	              CMSEnvelopedData data = new CMSEnvelopedData(recipientBytes);
+	              Iterator recipCertificatesIt = data.getRecipientInfos().getRecipients().iterator();
+	              while(recipCertificatesIt.hasNext())
+	              {
+	                  RecipientInformation ri =
+	                      (RecipientInformation)recipCertificatesIt.next();
+	                  // Impl: if a matching certificate was previously found it is an error,
+	                  // here we just don't care about it
+	                  if(ri.getRID().match(material.getCertificate()) && !foundRecipient)
+	                  {
+	                      foundRecipient = true;
+	                      envelopedData = ri.getContent(material.getPrivateKey(), "BC");
+	                      break;
+	                  }
+	              }
+	              recipientFieldsBytes[i] = recipientBytes;
+	              recipientFieldsLength += recipientBytes.length;
+	          }
+	          if(!foundRecipient || envelopedData == null)
+	          {
+	              throw new CryptographyException("The certificate matches no recipient entry");
+	          }
+	          if(envelopedData.length != 24)
+	          {
+	              throw new CryptographyException("The enveloped data does not contain 24 bytes");
+	          }
+	          // now envelopedData contains:
+	          // - the 20 bytes seed
+	          // - the 4 bytes of permission for the current user
+	
+	          byte[] accessBytes = new byte[4];
+	          System.arraycopy(envelopedData, 20, accessBytes, 0, 4);
+	
+	          currentAccessPermission = new AccessPermission(accessBytes);
+	          currentAccessPermission.setReadOnly();
+	
+	           // what we will put in the SHA1 = the seed + each byte contained in the recipients array
+	          byte[] sha1Input = new byte[recipientFieldsLength + 20];
+	
+	          // put the seed in the sha1 input
+	          System.arraycopy(envelopedData, 0, sha1Input, 0, 20);
+	
+	          // put each bytes of the recipients array in the sha1 input
+	          int sha1InputOffset = 20;
+	          for(int i=0; i<recipientFieldsBytes.length; i++)
+	          {
+	              System.arraycopy(
+	                  recipientFieldsBytes[i], 0,
+	                  sha1Input, sha1InputOffset, recipientFieldsBytes[i].length);
+	              sha1InputOffset += recipientFieldsBytes[i].length;
+	          }
+	
+	          MessageDigest md = MessageDigests.getSHA1();
+	          byte[] mdResult = md.digest(sha1Input);
+	
+	          // we have the encryption key ...
+	          encryptionKey = new byte[this.keyLength/8];
+	          System.arraycopy(mdResult, 0, encryptionKey, 0, this.keyLength/8);
+	      }
+	      catch(CMSException e)
+	      {
+	          throw new CryptographyException(e);
+	      }
+	      catch(KeyStoreException e)
+	      {
+	          throw new CryptographyException(e);
+	      }
+	      catch(NoSuchProviderException e)
+	      {
+	          throw new CryptographyException(e);
+	      }
     }
+    
+    /**
+     * Prepare the document for encryption.
+     *
+     * @param doc The document that will be encrypted.
+     *
+     * @throws CryptographyException If there is an error while encrypting.
+     */
+    public void prepareDocumentForEncryption(PDDocument doc) throws CryptographyException
+    {
 
-    public void clear() {
-      throwables.clear();
-      actions.clear();
-      addresses.clear();
-    }
-  }
+        try
+        {
+            Security.addProvider(new BouncyCastleProvider());
 
-  public AsyncProcess(HConnection hc, TableName tableName, ExecutorService pool,
-      AsyncProcessCallback<CResult> callback, Configuration conf, 
-      RpcRetryingCallerFactory rpcCaller) {
-    this.hConnection = hc;
-    this.tableName = tableName;
-    this.pool = pool;
-    this.callback = callback;
-
-    this.pause = conf.getLong(HConstants.HBASE_CLIENT_PAUSE,
-        HConstants.DEFAULT_HBASE_CLIENT_PAUSE);
-    this.numTries = conf.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER,
-        HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
-
-    this.maxTotalConcurrentTasks = conf.getInt("hbase.client.max.total.tasks", 200);
-
-    // With one, we ensure that the ordering of the queries is respected: we don't start
-    //  a set of operations on a region before the previous one is done. As well, this limits
-    //  the pressure we put on the region server.
-    this.maxConcurrentTasksPerRegion = conf.getInt("hbase.client.max.perregion.tasks", 1);
-
-    this.useServerTrackerForRetries =
-        conf.getBoolean(HConnectionManager.RETRIES_BY_SERVER_KEY, true);
-
-    if (this.useServerTrackerForRetries) {
-      // Server tracker allows us to do faster, and yet useful (hopefully), retries.
-      // However, if we are too useful, we might fail very quickly due to retry count limit.
-      // To avoid this, we are going to cheat for now (see HBASE-7659), and calculate maximum
-      // retry time if normal retries were used. Then we will retry until this time runs out.
-      // If we keep hitting one server, the net effect will be the incremental backoff, and
-      // essentially the same number of retries as planned. If we have to do faster retries,
-      // we will do more retries in aggregate, but the user will be none the wiser.
-      this.serverTrackerTimeout = 0;
-      for (int i = 0; i < this.numTries; ++i) {
-        serverTrackerTimeout += ConnectionUtils.getPauseTime(this.pause, i);
-      }
-    }
-
-    this.rpcCallerFactory = rpcCaller;
-  }
-
-  /**
-   * Extract from the rows list what we can submit. The rows we can not submit are kept in the
-   * list.
-   *
-   * @param rows - the submitted row. Modified by the method: we remove the rows we took.
-   * @param atLeastOne true if we should submit at least a subset.
-   */
-  public void submit(List<? extends Row> rows, boolean atLeastOne) throws InterruptedIOException {
-    if (rows.isEmpty()){
-      return;
-    }
-
-    Map<HRegionLocation, MultiAction<Row>> actionsByServer =
-        new HashMap<HRegionLocation, MultiAction<Row>>();
-    List<Action<Row>> retainedActions = new ArrayList<Action<Row>>(rows.size());
-
-    do {
-      Map<String, Boolean> regionIncluded = new HashMap<String, Boolean>();
-      long currentTaskNumber = waitForMaximumCurrentTasks(maxTotalConcurrentTasks);
-      int posInList = -1;
-      Iterator<? extends Row> it = rows.iterator();
-      while (it.hasNext()) {
-        Row r = it.next();
-        HRegionLocation loc = findDestLocation(r, 1, posInList, false, regionIncluded);
-
-        if (loc != null) {   // loc is null if the dest is too busy or there is an error
-          Action<Row> action = new Action<Row>(r, ++posInList);
-          retainedActions.add(action);
-          addAction(loc, action, actionsByServer);
-          it.remove();
-        }
-      }
-
-      if (retainedActions.isEmpty() && atLeastOne && !hasError()) {
-        waitForNextTaskDone(currentTaskNumber);
-      }
-
-    } while (retainedActions.isEmpty() && atLeastOne && !hasError());
-
-    HConnectionManager.ServerErrorTracker errorsByServer = createServerErrorTracker();
-    sendMultiAction(retainedActions, actionsByServer, 1, errorsByServer);
-  }
-
-  /**
-   * Group the actions per region server.
-   *
-   * @param loc - the destination. Must not be null.
-   * @param action - the action to add to the multiaction
-   * @param actionsByServer the multiaction per server
-   */
-  private void addAction(HRegionLocation loc, Action<Row> action, Map<HRegionLocation,
-      MultiAction<Row>> actionsByServer) {
-    final byte[] regionName = loc.getRegionInfo().getRegionName();
-    MultiAction<Row> multiAction = actionsByServer.get(loc);
-    if (multiAction == null) {
-      multiAction = new MultiAction<Row>();
-      actionsByServer.put(loc, multiAction);
-    }
-
-    multiAction.add(regionName, action);
-  }
-
-  /**
-   * Find the destination, if this destination is not considered as busy.
-   *
-   * @param row          the row
-   * @param numAttempt   the num attempt
-   * @param posInList    the position in the list
-   * @param force        if we must submit whatever the server load
-   * @param regionStatus the
-   * @return null if we should not submit, the destination otherwise.
-   */
-  private HRegionLocation findDestLocation(Row row, int numAttempt,
-                                           int posInList, boolean force,
-                                           Map<String, Boolean> regionStatus) {
-    HRegionLocation loc = null;
-    IOException locationException = null;
-    try {
-      loc = hConnection.locateRegion(this.tableName, row.getRow());
-      if (loc == null) {
-        locationException = new IOException("No location found, aborting submit for" +
-            " tableName=" + tableName +
-            " rowkey=" + Arrays.toString(row.getRow()));
-      }
-    } catch (IOException e) {
-      locationException = e;
-    }
-    if (locationException != null) {
-      // There are multiple retries in locateRegion already. No need to add new.
-      // We can't continue with this row, hence it's the last retry.
-      manageError(numAttempt, posInList, row, false, locationException, null);
-      return null;
-    }
-
-    if (force) {
-      return loc;
-    }
-
-    String regionName = loc.getRegionInfo().getEncodedName();
-    Boolean addIt = regionStatus.get(regionName);
-    if (addIt == null) {
-      addIt = canTakeNewOperations(regionName);
-      regionStatus.put(regionName, addIt);
-    }
-
-    return addIt ? loc : null;
-  }
-
-
-  /**
-   * Check if we should send new operations to this region.
-   *
-   * @param encodedRegionName region name
-   * @return true if this region is considered as busy.
-   */
-  protected boolean canTakeNewOperations(String encodedRegionName) {
-    AtomicInteger ct = taskCounterPerRegion.get(encodedRegionName);
-    return ct == null || ct.get() < maxConcurrentTasksPerRegion;
-  }
-
-  /**
-   * Submit immediately the list of rows, whatever the server status. Kept for backward
-   * compatibility: it allows to be used with the batch interface that return an array of objects.
-   *
-   * @param rows the list of rows.
-   */
-  public void submitAll(List<? extends Row> rows) {
-    List<Action<Row>> actions = new ArrayList<Action<Row>>(rows.size());
-
-    // The position will be used by the processBatch to match the object array returned.
-    int posInList = -1;
-    for (Row r : rows) {
-      posInList++;
-      Action<Row> action = new Action<Row>(r, posInList);
-      actions.add(action);
-    }
-    HConnectionManager.ServerErrorTracker errorsByServer = createServerErrorTracker();
-    submit(actions, actions, 1, true, errorsByServer);
-  }
-
-
-  /**
-   * Group a list of actions per region servers, and send them. The created MultiActions are
-   * added to the inProgress list.
-   *
-   * @param initialActions - the full list of the actions in progress
-   * @param currentActions - the list of row to submit
-   * @param numAttempt - the current numAttempt (first attempt is 1)
-   * @param force - true if we submit the rowList without taking into account the server load
-   */
-  private void submit(List<Action<Row>> initialActions,
-                      List<Action<Row>> currentActions, int numAttempt, boolean force,
-                      final HConnectionManager.ServerErrorTracker errorsByServer) {
-    // group per location => regions server
-    final Map<HRegionLocation, MultiAction<Row>> actionsByServer =
-        new HashMap<HRegionLocation, MultiAction<Row>>();
-
-    // We have the same policy for a single region per call to submit: we don't want
-    //  to send half of the actions because the status changed in the middle. So we keep the
-    //  status
-    Map<String, Boolean> regionIncluded = new HashMap<String, Boolean>();
-
-    for (Action<Row> action : currentActions) {
-      HRegionLocation loc = findDestLocation(
-          action.getAction(), 1, action.getOriginalIndex(), force, regionIncluded);
-
-      if (loc != null) {
-        addAction(loc, action, actionsByServer);
-      }
-    }
-
-    if (!actionsByServer.isEmpty()) {
-      sendMultiAction(initialActions, actionsByServer, numAttempt, errorsByServer);
-    }
-  }
-
-  /**
-   * Send a multi action structure to the servers, after a delay depending on the attempt
-   * number. Asynchronous.
-   *
-   * @param initialActions  the list of the actions, flat.
-   * @param actionsByServer the actions structured by regions
-   * @param numAttempt      the attempt number.
-   */
-  public void sendMultiAction(final List<Action<Row>> initialActions,
-                              Map<HRegionLocation, MultiAction<Row>> actionsByServer,
-                              final int numAttempt,
-                              final HConnectionManager.ServerErrorTracker errorsByServer) {
-
-    // Send the queries and add them to the inProgress list
-    for (Map.Entry<HRegionLocation, MultiAction<Row>> e : actionsByServer.entrySet()) {
-      final HRegionLocation loc = e.getKey();
-      final MultiAction<Row> multi = e.getValue();
-      final String regionName = loc.getRegionInfo().getEncodedName();
-
-      incTaskCounters(regionName);
-
-      Runnable runnable = Trace.wrap("AsyncProcess.sendMultiAction", new Runnable() {
-        @Override
-        public void run() {
-          MultiResponse res;
-          try {
-            MultiServerCallable<Row> callable = createCallable(loc, multi);
-            try {
-              res = createCaller(callable).callWithoutRetries(callable);
-            } catch (IOException e) {
-              LOG.warn("The call to the RS failed, we don't know where we stand. location="
-                  + loc, e);
-              resubmitAll(initialActions, multi, loc, numAttempt + 1, e, errorsByServer);
-              return;
+            PDEncryptionDictionary dictionary = doc.getEncryptionDictionary();
+            if (dictionary == null) 
+            {
+                dictionary = new PDEncryptionDictionary();
             }
 
-            receiveMultiAction(initialActions, multi, loc, res, numAttempt, errorsByServer);
-          } finally {
-            decTaskCounters(regionName);
-          }
-        }
-      });
+            dictionary.setFilter(FILTER);
+            dictionary.setLength(this.keyLength);
+            dictionary.setVersion(2);
+            dictionary.setSubFilter(SUBFILTER);
 
-      try {
-        this.pool.submit(runnable);
-      } catch (RejectedExecutionException ree) {
-        // This should never happen. But as the pool is provided by the end user, let's secure
-        //  this a little.
-        decTaskCounters(regionName);
-        LOG.warn("The task was rejected by the pool. This is unexpected. " +
-            "location=" + loc, ree);
-        // We're likely to fail again, but this will increment the attempt counter, so it will
-        //  finish.
-        resubmitAll(initialActions, multi, loc, numAttempt + 1, ree, errorsByServer);
-      }
-    }
-  }
+            byte[][] recipientsField = new byte[policy.getRecipientsNumber()][];
 
-  /**
-   * Create a callable. Isolated to be easily overridden in the tests.
-   */
-  protected MultiServerCallable<Row> createCallable(final HRegionLocation location,
-      final MultiAction<Row> multi) {
-    return new MultiServerCallable<Row>(hConnection, tableName, location, multi);
-  }
+            // create the 20 bytes seed
 
-  /**
-   * For tests.
-   * @param callable
-   * @return Returns a caller.
-   */
-  protected RpcRetryingCaller<MultiResponse> createCaller(MultiServerCallable<Row> callable) {
-    // callable is unused.
-    return rpcCallerFactory.<MultiResponse> newCaller();
-  }
+            byte[] seed = new byte[20];
 
-  /**
-   * Check that we can retry acts accordingly: logs, set the error status, call the callbacks.
-   *
-   * @param numAttempt    the number of this attempt
-   * @param originalIndex the position in the list sent
-   * @param row           the row
-   * @param canRetry      if false, we won't retry whatever the settings.
-   * @param throwable     the throwable, if any (can be null)
-   * @param location      the location, if any (can be null)
-   * @return true if the action can be retried, false otherwise.
-   */
-  private boolean manageError(int numAttempt, int originalIndex, Row row, boolean canRetry,
-                              Throwable throwable, HRegionLocation location) {
-    if (canRetry) {
-      if (numAttempt >= numTries ||
-          (throwable != null && throwable instanceof DoNotRetryIOException)) {
-        canRetry = false;
-      }
-    }
-    byte[] region = location == null ? null : location.getRegionInfo().getEncodedNameAsBytes();
-
-    if (canRetry && callback != null) {
-      canRetry = callback.retriableFailure(originalIndex, row, region, throwable);
-    }
-
-    if (canRetry) {
-      if (LOG.isTraceEnabled()) {
-        retriedErrors.add(throwable, row, location);
-      }
-    } else {
-      if (callback != null) {
-        callback.failure(originalIndex, region, row, throwable);
-      }
-      errors.add(throwable, row, location);
-      this.hasError.set(true);
-    }
-
-    return canRetry;
-  }
-
-  /**
-   * Resubmit all the actions from this multiaction after a failure.
-   *
-   * @param initialActions the full initial action list
-   * @param rsActions  the actions still to do from the initial list
-   * @param location   the destination
-   * @param numAttempt the number of attempts so far
-   * @param t the throwable (if any) that caused the resubmit
-   */
-  private void resubmitAll(List<Action<Row>> initialActions, MultiAction<Row> rsActions,
-                           HRegionLocation location, int numAttempt, Throwable t,
-                           HConnectionManager.ServerErrorTracker errorsByServer) {
-    // Do not use the exception for updating cache because it might be coming from
-    // any of the regions in the MultiAction.
-    hConnection.updateCachedLocations(tableName,
-        rsActions.actions.values().iterator().next().get(0).getAction().getRow(), null, location);
-    errorsByServer.reportServerError(location);
-
-    List<Action<Row>> toReplay = new ArrayList<Action<Row>>();
-    for (List<Action<Row>> actions : rsActions.actions.values()) {
-      for (Action<Row> action : actions) {
-        if (manageError(numAttempt, action.getOriginalIndex(), action.getAction(),
-            true, t, location)) {
-          toReplay.add(action);
-        }
-      }
-    }
-
-    if (toReplay.isEmpty()) {
-      LOG.warn("Attempt #" + numAttempt + "/" + numTries + " failed for all (" +
-          initialActions.size() + ") operations on server " + location.getServerName() +
-          " NOT resubmitting, tableName=" + tableName + ", location=" + location);
-    } else {
-      submit(initialActions, toReplay, numAttempt, true, errorsByServer);
-    }
-  }
-
-  /**
-   * Called when we receive the result of a server query.
-   *
-   * @param initialActions - the whole action list
-   * @param rsActions      - the actions for this location
-   * @param location       - the location
-   * @param responses      - the response, if any
-   * @param numAttempt     - the attempt
-   */
-  private void receiveMultiAction(List<Action<Row>> initialActions,
-                                  MultiAction<Row> rsActions, HRegionLocation location,
-                                  MultiResponse responses, int numAttempt,
-                                  HConnectionManager.ServerErrorTracker errorsByServer) {
-
-    if (responses == null) {
-      LOG.info("Attempt #" + numAttempt + "/" + numTries + " failed for all operations" +
-          " on server " + location.getServerName() + " , trying to resubmit," +
-          " tableName=" + tableName + ", location=" + location);
-      resubmitAll(initialActions, rsActions, location, numAttempt + 1, null, errorsByServer);
-      return;
-    }
-
-    // Success or partial success
-    // Analyze detailed results. We can still have individual failures to be redo.
-    // two specific throwables are managed:
-    //  - DoNotRetryIOException: we continue to retry for other actions
-    //  - RegionMovedException: we update the cache with the new region location
-
-    List<Action<Row>> toReplay = new ArrayList<Action<Row>>();
-    Throwable throwable = null;
-
-    int failureCount = 0;
-    boolean canRetry = true;
-    for (Map.Entry<byte[], List<Pair<Integer, Object>>> resultsForRS :
-        responses.getResults().entrySet()) {
-
-      for (Pair<Integer, Object> regionResult : resultsForRS.getValue()) {
-        Object result = regionResult.getSecond();
-
-        // Failure: retry if it's make sense else update the errors lists
-        if (result == null || result instanceof Throwable) {
-          throwable = (Throwable) result;
-          Action<Row> correspondingAction = initialActions.get(regionResult.getFirst());
-          Row row = correspondingAction.getAction();
-
-          if (failureCount++ == 0) { // We're doing this once per location.
-            hConnection.updateCachedLocations(this.tableName, row.getRow(), result, location);
-            if (errorsByServer != null) {
-              errorsByServer.reportServerError(location);
-              canRetry = errorsByServer.canRetryMore();
+            KeyGenerator key;
+            try
+            {
+                key = KeyGenerator.getInstance("AES");
             }
-          }
+            catch (NoSuchAlgorithmException e)
+            {
+                // should never happen
+                throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
+            }
 
-          if (manageError(numAttempt, correspondingAction.getOriginalIndex(), row, canRetry,
-              throwable, location)) {
-            toReplay.add(correspondingAction);
-          }
-        } else { // success
-          if (callback != null) {
-            Action<Row> correspondingAction = initialActions.get(regionResult.getFirst());
-            Row row = correspondingAction.getAction();
-            //noinspection unchecked
-            this.callback.success(correspondingAction.getOriginalIndex(),
-                resultsForRS.getKey(), row, (CResult) result);
-          }
+            key.init(192, new SecureRandom());
+            SecretKey sk = key.generateKey();
+            System.arraycopy(sk.getEncoded(), 0, seed, 0, 20); // create the 20 bytes seed
+
+
+            Iterator it = policy.getRecipientsIterator();
+            int i = 0;
+
+
+            while(it.hasNext())
+            {
+                PublicKeyRecipient recipient = (PublicKeyRecipient)it.next();
+                X509Certificate certificate = recipient.getX509();
+                int permission = recipient.getPermission().getPermissionBytesForPublicKey();
+
+                byte[] pkcs7input = new byte[24];
+                byte one = (byte)(permission);
+                byte two = (byte)(permission >>> 8);
+                byte three = (byte)(permission >>> 16);
+                byte four = (byte)(permission >>> 24);
+
+                System.arraycopy(seed, 0, pkcs7input, 0, 20); // put this seed in the pkcs7 input
+
+                pkcs7input[20] = four;
+                pkcs7input[21] = three;
+                pkcs7input[22] = two;
+                pkcs7input[23] = one;
+
+                ASN1Primitive obj = createDERForRecipient(pkcs7input, certificate);
+
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+
+                DEROutputStream k = new DEROutputStream(baos);
+
+                k.writeObject(obj);
+
+                recipientsField[i] = baos.toByteArray();
+
+                i++;
+            }
+
+            dictionary.setRecipients(recipientsField);
+
+            int sha1InputLength = seed.length;
+
+            for(int j=0; j<dictionary.getRecipientsLength(); j++)
+            {
+                COSString string = dictionary.getRecipientStringAt(j);
+                sha1InputLength += string.getBytes().length;
+            }
+
+
+            byte[] sha1Input = new byte[sha1InputLength];
+
+            System.arraycopy(seed, 0, sha1Input, 0, 20);
+
+            int sha1InputOffset = 20;
+
+
+            for(int j=0; j<dictionary.getRecipientsLength(); j++)
+            {
+                COSString string = dictionary.getRecipientStringAt(j);
+                System.arraycopy(
+                    string.getBytes(), 0,
+                    sha1Input, sha1InputOffset, string.getBytes().length);
+                sha1InputOffset += string.getBytes().length;
+            }
+
+            MessageDigest sha1 = MessageDigests.getSHA1();
+            byte[] mdResult = sha1.digest(sha1Input);
+
+            this.encryptionKey = new byte[this.keyLength/8];
+            System.arraycopy(mdResult, 0, this.encryptionKey, 0, this.keyLength/8);
+
+            doc.setEncryptionDictionary(dictionary);
+            doc.getDocument().setEncryptionDictionary(dictionary.encryptionDictionary);
+
         }
-      }
-    }
-
-    if (!toReplay.isEmpty()) {
-      long backOffTime = (errorsByServer != null ?
-          errorsByServer.calculateBackoffTime(location, pause) :
-          ConnectionUtils.getPauseTime(pause, numAttempt));
-      if (numAttempt > 3 && LOG.isDebugEnabled()) {
-        // We use this value to have some logs when we have multiple failures, but not too many
-        //  logs as errors are to be expected wehn region moves, split and so on
-        LOG.debug("Attempt #" + numAttempt + "/" + numTries + " failed for " + failureCount +
-            " operations on server " + location.getServerName() + ", resubmitting " +
-            toReplay.size() + ", tableName=" + tableName + ", location=" +
-            location + ", last exception was: " + throwable +
-            " - sleeping " + backOffTime + " ms.");
-      }
-      try {
-        Thread.sleep(backOffTime);
-      } catch (InterruptedException e) {
-        LOG.warn("Not sent: " + toReplay.size() +
-            " operations,  tableName=" + tableName + ", location=" + location, e);
-        Thread.interrupted();
-        return;
-      }
-
-      submit(initialActions, toReplay, numAttempt + 1, true, errorsByServer);
-    } else if (failureCount != 0) {
-      LOG.warn("Attempt #" + numAttempt + "/" + numTries + " failed for " + failureCount +
-          " operations on server " + location.getServerName() + " NOT resubmitting." +
-          ", tableName=" + tableName + ", location=" + location);
-    }
-  }
-
-  /**
-   * Waits for another task to finish.
-   * @param currentNumberOfTask - the number of task finished when calling the method.
-   */
-  protected void waitForNextTaskDone(long currentNumberOfTask) throws InterruptedIOException {
-    while (currentNumberOfTask == tasksDone.get()) {
-      try {
-        synchronized (this.tasksDone) {
-          this.tasksDone.wait(100);
+        catch(GeneralSecurityException e)
+        {
+            throw new CryptographyException(e);
         }
-      } catch (InterruptedException e) {
-        throw new InterruptedIOException("Interrupted." +
-            " currentNumberOfTask=" + currentNumberOfTask +
-            ",  tableName=" + tableName + ", tasksDone=" + tasksDone.get());
-      }
-    }
-  }
-
-  /**
-   * Wait until the async does not have more than max tasks in progress.
-   */
-  private long waitForMaximumCurrentTasks(int max) throws InterruptedIOException {
-    long lastLog = EnvironmentEdgeManager.currentTimeMillis();
-    long currentTasksDone = this.tasksDone.get();
-
-    while ((tasksSent.get() - currentTasksDone) > max) {
-      long now = EnvironmentEdgeManager.currentTimeMillis();
-      if (now > lastLog + 10000) {
-        lastLog = now;
-        LOG.info(": Waiting for the global number of running tasks to be equals or less than "
-            + max + ", tasksSent=" + tasksSent.get() + ", tasksDone=" + tasksDone.get() +
-            ", currentTasksDone=" + currentTasksDone + ", tableName=" + tableName);
-      }
-      waitForNextTaskDone(currentTasksDone);
-      currentTasksDone = this.tasksDone.get();
+        catch(IOException e)
+        {
+            throw new CryptographyException(e);
+        }
     }
 
-    return currentTasksDone;
-  }
+    private ASN1Primitive createDERForRecipient(byte[] in, X509Certificate cert)
+            throws IOException, GeneralSecurityException
+    {
+        String algorithm = "1.2.840.113549.3.2";
+        AlgorithmParameterGenerator apg;
+        KeyGenerator keygen;
+        Cipher cipher;
+        try
+        {
+            apg = AlgorithmParameterGenerator.getInstance(algorithm);
+            keygen = KeyGenerator.getInstance(algorithm);
+            cipher = Cipher.getInstance(algorithm);
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            // should never happen
+            throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
+        }
+        catch (NoSuchPaddingException e)
+        {
+            // should never happen
+            throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
+        }
 
-  /**
-   * Wait until all tasks are executed, successfully or not.
-   */
-  public void waitUntilDone() throws InterruptedIOException {
-    waitForMaximumCurrentTasks(0);
-  }
+        AlgorithmParameters parameters = apg.generateParameters();
 
+        ASN1InputStream input = new ASN1InputStream(parameters.getEncoded("ASN.1"));
+        ASN1Primitive object = input.readObject();
 
-  public boolean hasError() {
-    return hasError.get();
-  }
+        keygen.init(128);
+        SecretKey secretkey = keygen.generateKey();
 
-  public List<? extends Row> getFailedOperations() {
-    return errors.actions;
-  }
+        cipher.init(1, secretkey, parameters);
+        byte[] bytes = cipher.doFinal(in);
 
-  /**
-   * Clean the errors stacks. Should be called only when there are no actions in progress.
-   */
-  public void clearErrors() {
-    errors.clear();
-    retriedErrors.clear();
-    hasError.set(false);
-  }
+        KeyTransRecipientInfo recipientInfo = computeRecipientInfo(cert, secretkey.getEncoded());
+        DERSet set = new DERSet(new RecipientInfo(recipientInfo));
 
-  public RetriesExhaustedWithDetailsException getErrors() {
-    return errors.makeException();
-  }
+        AlgorithmIdentifier algorithmId = new AlgorithmIdentifier(new DERObjectIdentifier(algorithm), object);
+        EncryptedContentInfo encryptedInfo = new EncryptedContentInfo(PKCSObjectIdentifiers.data, algorithmId, new DEROctetString(bytes));
+        EnvelopedData enveloped = new EnvelopedData(null, set, encryptedInfo, (ASN1Set) null);
 
-  /**
-   * incrementer the tasks counters for a given region. MT safe.
-   */
-  protected void incTaskCounters(String encodedRegionName) {
-    tasksSent.incrementAndGet();
-
-    AtomicInteger counterPerServer = taskCounterPerRegion.get(encodedRegionName);
-    if (counterPerServer == null) {
-      taskCounterPerRegion.putIfAbsent(encodedRegionName, new AtomicInteger());
-      counterPerServer = taskCounterPerRegion.get(encodedRegionName);
+        ContentInfo contentInfo = new ContentInfo(PKCSObjectIdentifiers.envelopedData, enveloped);
+        return contentInfo.toASN1Primitive();
     }
-    counterPerServer.incrementAndGet();
-  }
 
-  /**
-   * Decrements the counters for a given region
-   */
-  protected void decTaskCounters(String encodedRegionName) {
-    AtomicInteger counterPerServer = taskCounterPerRegion.get(encodedRegionName);
-    counterPerServer.decrementAndGet();
+    private KeyTransRecipientInfo computeRecipientInfo(X509Certificate x509certificate, byte[] abyte0)
+        throws IOException, CertificateEncodingException, InvalidKeyException,
+            BadPaddingException, IllegalBlockSizeException
+    {
+        ASN1InputStream input = new ASN1InputStream(x509certificate.getTBSCertificate());
 
-    tasksDone.incrementAndGet();
-    synchronized (tasksDone) {
-      tasksDone.notifyAll();
+        TBSCertificateStructure certificate = TBSCertificateStructure.getInstance(input.readObject());
+        AlgorithmIdentifier algorithmId = certificate.getSubjectPublicKeyInfo().getAlgorithmId();
+
+        IssuerAndSerialNumber serial = new IssuerAndSerialNumber(
+                certificate.getIssuer(),
+                certificate.getSerialNumber().getValue());
+
+        Cipher cipher;
+        try
+        {
+            cipher = Cipher.getInstance(algorithmId.getObjectId().getId());
+        }
+        catch (NoSuchAlgorithmException e)
+        {
+            // should never happen
+            throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
+        }
+        catch (NoSuchPaddingException e)
+        {
+            // should never happen
+            throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
+        }
+
+        cipher.init(1, x509certificate.getPublicKey());
+
+        DEROctetString octets = new DEROctetString(cipher.doFinal(abyte0));
+        RecipientIdentifier recipientId = new RecipientIdentifier(serial);
+        return new KeyTransRecipientInfo(recipientId, algorithmId, octets);
     }
-  }
-
-  /**
-   * Creates the server error tracker to use inside process.
-   * Currently, to preserve the main assumption about current retries, and to work well with
-   * the retry-limit-based calculation, the calculation is local per Process object.
-   * We may benefit from connection-wide tracking of server errors.
-   * @return ServerErrorTracker to use, null if there is no ServerErrorTracker on this connection
-   */
-  protected HConnectionManager.ServerErrorTracker createServerErrorTracker() {
-    if (useServerTrackerForRetries){
-      return new HConnectionManager.ServerErrorTracker(this.serverTrackerTimeout);
-    }else {
-      return null;
-    }
-  }
 }

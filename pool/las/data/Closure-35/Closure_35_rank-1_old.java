@@ -1,799 +1,730 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-package brooklyn.cli;
+package com.fasterxml.jackson.databind.ser;
 
-import groovy.lang.GroovyClassLoader;
-import groovy.lang.GroovyShell;
-import io.airlift.command.Cli;
-import io.airlift.command.Cli.CliBuilder;
-import io.airlift.command.Command;
-import io.airlift.command.Option;
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Type;
+import java.util.HashMap;
 
-import java.io.Console;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.net.URI;
-import java.util.Collection;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import brooklyn.catalog.BrooklynCatalog;
-import brooklyn.entity.Application;
-import brooklyn.entity.Entity;
-import brooklyn.entity.basic.AbstractApplication;
-import brooklyn.entity.basic.AbstractEntity;
-import brooklyn.entity.basic.ApplicationBuilder;
-import brooklyn.entity.basic.Entities;
-import brooklyn.entity.basic.StartableApplication;
-import brooklyn.entity.proxying.EntitySpec;
-import brooklyn.entity.rebind.persister.PersistMode;
-import brooklyn.entity.trait.Startable;
-import brooklyn.launcher.BrooklynLauncher;
-import brooklyn.launcher.BrooklynServerDetails;
-import brooklyn.launcher.config.StopWhichAppsOnShutdown;
-import brooklyn.management.ManagementContext;
-import brooklyn.management.ha.HighAvailabilityMode;
-import brooklyn.mementos.BrooklynMemento;
-import brooklyn.rest.security.PasswordHasher;
-import brooklyn.util.ResourceUtils;
-import brooklyn.util.exceptions.Exceptions;
-import brooklyn.util.exceptions.FatalConfigurationRuntimeException;
-import brooklyn.util.exceptions.FatalRuntimeException;
-import brooklyn.util.exceptions.UserFacingException;
-import brooklyn.util.guava.Maybe;
-import brooklyn.util.javalang.Enums;
-import brooklyn.util.net.Networking;
-import brooklyn.util.os.Os;
-import brooklyn.util.text.Identifiers;
-import brooklyn.util.text.StringEscapes.JavaStringEscapes;
-import brooklyn.util.text.Strings;
-
-import com.google.common.annotations.Beta;
-import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Objects.ToStringHelper;
-import com.google.common.collect.ImmutableList;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.SerializableString;
+import com.fasterxml.jackson.core.io.SerializedString;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.JsonObjectFormatVisitor;
+import com.fasterxml.jackson.databind.jsonschema.SchemaAware;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.ser.impl.PropertySerializerMap;
+import com.fasterxml.jackson.databind.ser.impl.UnwrappingBeanPropertyWriter;
+import com.fasterxml.jackson.databind.ser.std.BeanSerializerBase;
+import com.fasterxml.jackson.databind.util.Annotations;
+import com.fasterxml.jackson.databind.util.NameTransformer;
 
 /**
- * This class is the primary CLI for brooklyn.
- * Run with the `help` argument for help.
- * <p>
- * This class is designed for subclassing, with subclasses typically:
- * <li> providing their own static {@link #main(String...)} (of course) which need simply invoke 
- *      {@link #execCli(String[])} with the arguments 
- * <li> returning their CLI name (e.g. "start.sh") in an overridden {@link #cliScriptName()}
- * <li> providing an overridden {@link LaunchCommand} via {@link #cliLaunchCommand()} if desired
- * <li> providing any other CLI customisations by overriding {@link #cliBuilder()}
- *      (typically calling the parent and then customizing the builder)
- * <li> populating a custom catalog using {@link LaunchCommand#populateCatalog(BrooklynCatalog)}
+ * Base bean property handler class, which implements common parts of
+ * reflection-based functionality for accessing a property value
+ * and serializing it.
+ *<p> 
+ * Note that current design tries to keep instances immutable (semi-functional
+ * style); mostly because these instances are exposed to application
+ * code and this is to reduce likelihood of data corruption and
+ * synchronization issues.
  */
-public class Main extends AbstractMain {
+public class BeanPropertyWriter extends PropertyWriter
+    implements BeanProperty
+{
+    /**
+     * Marker object used to indicate "do not serialize if empty"
+     */
+    public final static Object MARKER_FOR_EMPTY = JsonInclude.Include.NON_EMPTY;
 
-    /** @deprecated since 0.7.0 will become private static, subclasses should define their own logger */
-    @Deprecated
-    public static final Logger log = LoggerFactory.getLogger(Main.class);
+    /*
+    /**********************************************************
+    /* Settings for accessing property value to serialize
+    /**********************************************************
+     */
 
-    public static void main(String... args) {
-        new Main().execCli(args);
+    /**
+     * Member (field, method) that represents property and allows access
+     * to associated annotations.
+     */
+    protected final AnnotatedMember _member;
+
+    /**
+     * Annotations from context (most often, class that declares property,
+     * or in case of sub-class serializer, from that sub-class)
+     */
+    protected final Annotations _contextAnnotations;
+    
+    /**
+     * Type property is declared to have, either in class definition 
+     * or associated annotations.
+     */
+    protected final JavaType _declaredType;
+    
+    /**
+     * Accessor method used to get property value, for
+     * method-accessible properties.
+     * Null if and only if {@link #_field} is null.
+     */
+    protected final Method _accessorMethod;
+    
+    /**
+     * Field that contains the property value for field-accessible
+     * properties.
+     * Null if and only if {@link #_accessorMethod} is null.
+     */
+    protected final Field _field;
+    
+    /*
+    /**********************************************************
+    /* Opaque internal data that bean serializer factory and
+    /* bean serializers can add.
+    /**********************************************************
+     */
+
+    protected HashMap<Object,Object> _internalSettings;
+    
+    /*
+    /**********************************************************
+    /* Serialization settings
+    /**********************************************************
+     */
+    
+    /**
+     * Logical name of the property; will be used as the field name
+     * under which value for the property is written.
+     *<p>
+     * NOTE: do NOT change name of this field; it is accessed by
+     * Afterburner module.
+     * ALSO NOTE: ... and while it really ought to be `SerializableString`,
+     * changing that is also binary-incompatible change. So nope.
+     */
+    protected final SerializedString _name;
+
+    /**
+     * Wrapper name to use for this element, if any
+     * 
+     * @since 2.2
+     */
+    protected final PropertyName _wrapperName;
+    
+    /**
+     * Type to use for locating serializer; normally same as return
+     * type of the accessor method, but may be overridden by annotations.
+     */
+    protected final JavaType _cfgSerializationType;
+
+    /**
+     * Serializer to use for writing out the value: null if it can not
+     * be known statically; non-null if it can.
+     */
+    protected JsonSerializer<Object> _serializer;
+
+    /**
+     * Serializer used for writing out null values, if any: if null,
+     * null values are to be suppressed.
+     */
+    protected JsonSerializer<Object> _nullSerializer;
+    
+    /**
+     * In case serializer is not known statically (i.e. <code>_serializer</code>
+     * is null), we will use a lookup structure for storing dynamically
+     * resolved mapping from type(s) to serializer(s).
+     */
+    protected transient PropertySerializerMap _dynamicSerializers;
+
+    /**
+     * Whether null values are to be suppressed (nothing written out if
+     * value is null) or not.
+     */
+    protected final boolean _suppressNulls;
+    
+    /**
+     * Value that is considered default value of the property; used for
+     * default-value-suppression if enabled.
+     */
+    protected final Object _suppressableValue;
+
+    /**
+     * Alternate set of property writers used when view-based filtering
+     * is available for the Bean.
+     */
+    protected final Class<?>[] _includeInViews;
+
+    /**
+     * If property being serialized needs type information to be
+     * included this is the type serializer to use.
+     * Declared type (possibly augmented with annotations) of property
+     * is used for determining exact mechanism to use (compared to
+     * actual runtime type used for serializing actual state).
+     */
+    protected TypeSerializer _typeSerializer;
+    
+    /**
+     * Base type of the property, if the declared type is "non-trivial";
+     * meaning it is either a structured type (collection, map, array),
+     * or parameterized. Used to retain type information about contained
+     * type, which is mostly necessary if type meta-data is to be
+     * included.
+     */
+    protected JavaType _nonTrivialBaseType;
+
+    /**
+     * Additional information about property
+     * 
+     * @since 2.3
+     */
+    protected final PropertyMetadata _metadata;
+
+    /*
+    /**********************************************************
+    /* Construction, configuration
+    /**********************************************************
+     */
+
+    @SuppressWarnings("unchecked")
+    public BeanPropertyWriter(BeanPropertyDefinition propDef,
+            AnnotatedMember member, Annotations contextAnnotations,
+            JavaType declaredType,
+            JsonSerializer<?> ser, TypeSerializer typeSer, JavaType serType,
+            boolean suppressNulls, Object suppressableValue)
+    {
+        _member = member;
+        _contextAnnotations = contextAnnotations;
+        _name = new SerializedString(propDef.getName());
+        _wrapperName = propDef.getWrapperName();
+        _declaredType = declaredType;
+        _serializer = (JsonSerializer<Object>) ser;
+        _dynamicSerializers = (ser == null) ? PropertySerializerMap.emptyMap() : null;
+        _typeSerializer = typeSer;
+        _cfgSerializationType = serType;
+        _metadata = propDef.getMetadata();
+
+        if (member instanceof AnnotatedField) {
+            _accessorMethod = null;
+            _field = (Field) member.getMember();
+        } else if (member instanceof AnnotatedMethod) {
+            _accessorMethod = (Method) member.getMember();
+            _field = null;
+        } else {
+            // 01-Dec-2014, tatu: Used to be illegal, but now explicitly allowed
+            _accessorMethod = null;
+            _field = null;
+        }
+        _suppressNulls = suppressNulls;
+        _suppressableValue = suppressableValue;
+        _includeInViews = propDef.findViews();
+
+        // this will be resolved later on, unless nulls are to be suppressed
+        _nullSerializer = null;
+    }
+    
+    /**
+     * "Copy constructor" to be used by filtering sub-classes
+     */
+    protected BeanPropertyWriter(BeanPropertyWriter base) {
+        this(base, base._name);
     }
 
-    @Command(name = "generate-password", description = "Generates a hashed web-console password")
-    public static class GeneratePasswordCommand extends BrooklynCommandCollectingArgs {
+    protected BeanPropertyWriter(BeanPropertyWriter base, SerializedString name) {
+        _name = name;
+        _wrapperName = base._wrapperName;
 
-        @Option(name = { "--user" }, title = "username", required = true)
-        public String user;
-
-        @Option(name = { "--stdin" }, title = "read password from stdin, instead of console", 
-                description = "Before using stdin, read http://stackoverflow.com/a/715681/1393883 for discussion of security!")
-        public boolean useStdin;
-
-        @Override
-        public Void call() throws Exception {
-            checkCanReadPassword();
-            
-            System.out.print("Enter password: ");
-            System.out.flush();
-            String password = readPassword();
-            if (Strings.isBlank(password)) {
-                throw new UserFacingException("Password must not be blank; aborting");
-            }
-            
-            System.out.print("Re-enter password: ");
-            System.out.flush();
-            String password2 = readPassword();
-            if (!password.equals(password2)) {
-                throw new UserFacingException("Passwords did not match; aborting");
-            }
-
-            String salt = Identifiers.makeRandomId(4);
-            String sha256password = PasswordHasher.sha256(salt, new String(password));
-            
-            System.out.println();
-            System.out.println("Please add the following to your brooklyn.properties:");
-            System.out.println();
-            System.out.println("brooklyn.webconsole.security.users="+user);
-            System.out.println("brooklyn.webconsole.security.user."+user+".salt="+salt);
-            System.out.println("brooklyn.webconsole.security.user."+user+".sha256="+sha256password);
-
-            return null;
+        _member = base._member;
+        _contextAnnotations = base._contextAnnotations;
+        _declaredType = base._declaredType;
+        _accessorMethod = base._accessorMethod;
+        _field = base._field;
+        _serializer = base._serializer;
+        _nullSerializer = base._nullSerializer;
+        // one more thing: copy internal settings, if any (since 1.7)
+        if (base._internalSettings != null) {
+            _internalSettings = new HashMap<Object,Object>(base._internalSettings);
         }
-        
-        private void checkCanReadPassword() {
-            if (useStdin) {
-                // yes; always
-            } else {
-                Console console = System.console();
-                if (console == null) {
-                    throw new FatalConfigurationRuntimeException("No console; cannot get password securely; aborting");
-                }
-            }
-        }
-        
-        private String readPassword() throws IOException {
-            if (useStdin) {
-                return readLine(System.in);
-            } else {
-                return new String(System.console().readPassword());
-            }
-        }
-        
-        private String readLine(InputStream in) throws IOException {
-            StringBuilder result = new StringBuilder();
-            char c;
-            while ((c = (char)in.read()) != '\n') {
-                result.append(c);
-            }
-            return result.toString();
-        }
-    }
-    
-    @Command(name = "launch", description = "Starts a server, optionally with applications")
-    public static class LaunchCommand extends BrooklynCommandCollectingArgs {
-
-        @Option(name = { "--localBrooklynProperties" }, title = "local brooklyn.properties file",
-                description = "local brooklyn.properties file, specific to this launch (appending to and overriding global properties)")
-        public String localBrooklynProperties;
-
-        @Option(name = { "--noGlobalBrooklynProperties" }, title = "do not use any global brooklyn.properties file found",
-            description = "do not use the default global brooklyn.properties file found")
-        public boolean noGlobalBrooklynProperties = false;
-
-        @Option(name = { "-a", "--app" }, title = "application class or file",
-                description = "The Application to start. " +
-                        "For example, my.AppName, file://my/app.yaml, or classpath://my/AppName.groovy -- "
-                        + "note that a BROOKLYN_CLASSPATH environment variable may be required to "
-                        + "load classes from other locations")
-        public String app;
-
-        @Beta
-        @Option(name = { "-s", "--script" }, title = "script URI",
-                description = "EXPERIMENTAL. URI for a Groovy script to parse and load." +
-                        " This script will run before starting the app.")
-        public String script = null;
-
-        @Option(name = { "-l", "--location", "--locations" }, title = "location list",
-                description = "Specifies the locations where the application will be launched. " +
-                        "You can specify more than one location as a comma-separated list of values " +
-                        "(or as a JSON array, if the values are complex)")
-        public String locations;
-
-        @Option(name = { "-p", "--port" }, title = "port number",
-                description = "Specifies the port to be used by the Brooklyn Management Console")
-        public String port = "8081+";
-
-        @Option(name = { "-nc", "--noConsole" },
-                description = "Whether to start the web console")
-        public boolean noConsole = false;
-
-        @Option(name = { "-b", "--bindAddress" },
-                description = "Specifies the IP address of the NIC to bind the Brooklyn Management Console to")
-        public String bindAddress = null;
-
-        @Option(name = { "-pa", "--publicAddress" },
-                description = "Specifies the IP address or URL that the Brooklyn Management Console Rest API will be available on")
-        public String publicAddress = null;
-
-        @Option(name = { "--noConsoleSecurity" },
-                description = "Whether to disable security for the web console with no security (i.e. no authentication required)")
-        public Boolean noConsoleSecurity = false;
-
-        @Option(name = { "--ignoreWebStartupErrors" },
-            description = "Ignore web subsystem failures on startup (default is to abort if it fails to start)")
-        public boolean ignoreWebErrors = false;
-
-        @Option(name = { "--ignorePersistenceStartupErrors" },
-            description = "Ignore persistence/HA subsystem failures on startup (default is to abort if it fails to start)")
-        public boolean ignorePersistenceErrors = false;
-
-        @Option(name = { "--ignoreManagedAppsStartupErrors" },
-            description = "Ignore failures starting managed applications passed on the command line on startup "
-                + "(default is to abort if they fail to start)")
-        public boolean ignoreAppErrors = false;
-
-        // Note in some cases, you can get java.util.concurrent.RejectedExecutionException 
-        // if shutdown is not co-ordinated, e.g. with Whirr:
-        // looks like: {@linktourl https://gist.github.com/47066f72d6f6f79b953e}
-        @Beta
-        @Option(name = { "-sk", "--stopOnKeyPress" },
-                description = "After startup, shutdown on user text entry")
-        public boolean stopOnKeyPress = false;
-
-        final static String STOP_WHICH_APPS_ON_SHUTDOWN = "--stopOnShutdown";
-        protected final static String STOP_ALL = "all";
-        protected final static String STOP_ALL_IF_NOT_PERSISTED = "allIfNotPersisted";
-        protected final static String STOP_NONE = "none";
-        protected final static String STOP_THESE = "these";        
-        protected final static String STOP_THESE_IF_NOT_PERSISTED = "theseIfNotPersisted";
-        static { Enums.checkAllEnumeratedIgnoreCase(StopWhichAppsOnShutdown.class, STOP_ALL, STOP_ALL_IF_NOT_PERSISTED, STOP_NONE, STOP_THESE, STOP_THESE_IF_NOT_PERSISTED); }
-        
-        @Option(name = { STOP_WHICH_APPS_ON_SHUTDOWN },
-            allowedValues = { STOP_ALL, STOP_ALL_IF_NOT_PERSISTED, STOP_NONE, STOP_THESE, STOP_THESE_IF_NOT_PERSISTED },
-            description = "Which managed applications to stop on shutdown. Possible values are:\n"+
-                "all: stop all apps\n"+
-                "none: leave all apps running\n"+
-                "these: stop the apps explicitly started on this command line, but leave others started subsequently running\n"+
-                "theseIfNotPersisted: stop the apps started on this command line IF persistence is not enabled, otherwise leave all running\n"+
-                "allIfNotPersisted: stop all apps IF persistence is not enabled, otherwise leave all running")
-        public String stopWhichAppsOnShutdown = STOP_THESE_IF_NOT_PERSISTED;
-
-        /** @deprecated since 0.7.0 see {@link #stopWhichAppsOnShutdown} */
-        @Deprecated
-        @Option(name = { "-ns", "--noShutdownOnExit" },
-            description = "Deprecated synonym for `--stopOnShutdown none`")
-        public boolean noShutdownOnExit = false;
-        
-        final static String PERSIST_OPTION = "--persist";
-        protected final static String PERSIST_OPTION_DISABLED = "disabled";
-        protected final static String PERSIST_OPTION_AUTO = "auto";
-        protected final static String PERSIST_OPTION_REBIND = "rebind";
-        protected final static String PERSIST_OPTION_CLEAN = "clean";
-        static { Enums.checkAllEnumeratedIgnoreCase(PersistMode.class, PERSIST_OPTION_DISABLED, PERSIST_OPTION_AUTO, PERSIST_OPTION_REBIND, PERSIST_OPTION_CLEAN); }
-        
-        // TODO currently defaults to disabled; want it to default to on, when we're ready
-        // TODO how to force a line-split per option?!
-        //      Looks like java.io.airlift.airline.UsagePrinter is splitting the description by word, and
-        //      wrapping it automatically.
-        //      See https://github.com/airlift/airline/issues/30
-        @Option(name = { PERSIST_OPTION }, 
-                allowedValues = { PERSIST_OPTION_DISABLED, PERSIST_OPTION_AUTO, PERSIST_OPTION_REBIND, PERSIST_OPTION_CLEAN },
-                title = "persistence mode",
-                description =
-                        "The persistence mode. Possible values are: \n"+
-                        "disabled: will not read or persist any state; \n"+
-                        "auto: will rebind to any existing state, or start up fresh if no state; \n"+
-                        "rebind: will rebind to the existing state, or fail if no state available; \n"+
-                        "clean: will start up fresh (removing any existing state)")
-        public String persist = PERSIST_OPTION_DISABLED;
-
-        @Option(name = { "--persistenceDir" }, title = "persistence dir",
-                description = "The directory to read/write persisted state (or container name if using an object store)")
-        public String persistenceDir;
-
-        @Option(name = { "--persistenceLocation" }, title = "persistence location",
-            description = "The location spec for an object store to read/write persisted state")
-        public String persistenceLocation;
-
-        final static String HA_OPTION = "--highAvailability";
-        protected final static String HA_OPTION_DISABLED = "disabled";
-        protected final static String HA_OPTION_AUTO = "auto";
-        protected final static String HA_OPTION_MASTER = "master";
-        protected final static String HA_OPTION_STANDBY = "standby";
-        static { Enums.checkAllEnumeratedIgnoreCase(HighAvailabilityMode.class, HA_OPTION_AUTO, HA_OPTION_DISABLED, HA_OPTION_MASTER, HA_OPTION_STANDBY); }
-        
-        @Option(name = { HA_OPTION }, allowedValues = { HA_OPTION_DISABLED, HA_OPTION_AUTO, HA_OPTION_MASTER, HA_OPTION_STANDBY },
-                title = "high availability mode",
-                description =
-                        "The high availability mode. Possible values are: \n"+
-                        "disabled: management node works in isolation - will not cooperate with any other standby/master nodes in management plane; \n"+
-                        "auto: will look for other management nodes, and will allocate itself as standby or master based on other nodes' states; \n"+
-                        "master: will startup as master - if there is already a master then fails immediately; \n"+
-                        "standby: will start up as standby - if there is not already a master then fails immediately")
-        public String highAvailability = HA_OPTION_AUTO;
-
-        @VisibleForTesting
-        protected ManagementContext explicitManagementContext;
-        
-        @Override
-        public Void call() throws Exception {
-            // Configure launcher
-            BrooklynLauncher launcher;
-            failIfArguments();
-            try {
-                if (log.isDebugEnabled()) log.debug("Invoked launch command {}", this);
-                
-                if (!quiet) stdout.println(BANNER);
-    
-                if (verbose) {
-                    if (app != null) {
-                        stdout.println("Launching brooklyn app: " + app + " in " + locations);
-                    } else {
-                        stdout.println("Launching brooklyn server (no app)");
-                    }
-                }
-    
-                PersistMode persistMode = computePersistMode();
-                HighAvailabilityMode highAvailabilityMode = computeHighAvailabilityMode(persistMode);
-                
-                StopWhichAppsOnShutdown stopWhichAppsOnShutdownMode = computeStopWhichAppsOnShutdown();
-                
-                computeLocations();
-                
-                ResourceUtils utils = ResourceUtils.create(this);
-                GroovyClassLoader loader = new GroovyClassLoader(getClass().getClassLoader());
-    
-                // First, run a setup script if the user has provided one
-                if (script != null) {
-                    execGroovyScript(utils, loader, script);
-                }
-    
-                launcher = createLauncher();
-    
-                launcher.persistMode(persistMode);
-                launcher.persistenceDir(persistenceDir);
-                launcher.persistenceLocation(persistenceLocation);
-
-                launcher.highAvailabilityMode(highAvailabilityMode);
-
-                launcher.stopWhichAppsOnShutdown(stopWhichAppsOnShutdownMode);
-                
-                computeAndSetApp(launcher, utils, loader);
-                
-            } catch (FatalConfigurationRuntimeException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new FatalConfigurationRuntimeException("Fatal error configuring Brooklyn launch: "+e.getMessage(), e);
-            }
-            
-            // Launch server
-            try {
-                launcher.start();
-            } catch (FatalRuntimeException e) {
-                // rely on caller logging this propagated exception
-                throw e;
-            } catch (Exception e) {
-                // for other exceptions we log it, possibly redundantly but better too much than too little
-                Exceptions.propagateIfFatal(e);
-                log.error("Error launching brooklyn: "+Exceptions.collapseText(e), e);
-                try {
-                    launcher.terminate();
-                } catch (Exception e2) {
-                    log.warn("Subsequent error during termination: "+e2);
-                    log.debug("Details of subsequent error during termination: "+e2, e2);
-                }
-                Exceptions.propagate(e);
-            }
-            
-            BrooklynServerDetails server = launcher.getServerDetails();
-            ManagementContext ctx = server.getManagementContext();
-            
-            try {
-                populateCatalog(launcher.getServerDetails().getManagementContext().getCatalog());
-            } catch (Exception e) {
-                Exceptions.propagateIfFatal(e);
-                // don't fail to start just because catalog is not available
-                log.error("Error populating catalog: "+e, e);
-            }
-
-            if (verbose) {
-                Entities.dumpInfo(launcher.getApplications());
-            }
-            
-            waitAfterLaunch(ctx);
-
-            return null;
-        }
-
-        protected void computeLocations() {
-            boolean hasLocations = !Strings.isBlank(locations);
-            if (app != null) {
-                if (hasLocations && isYamlApp()) {
-                    log.info("YAML app combined with command line locations; YAML locations will take precedence; this behaviour may change in subsequent versions");
-                } else if (!hasLocations && isYamlApp()) {
-                    log.info("No locations supplied; defaulting to locations defined in YAML (if any)");
-                } else if (!hasLocations) {
-                    log.info("No locations supplied; starting with no locations");
-                }
-            } else if (hasLocations) {
-                log.error("Locations specified without any applications; ignoring locations");
-            }
-        }
-
-        protected boolean isYamlApp() {
-            return app != null && app.endsWith(".yaml");
-        }
-
-        protected PersistMode computePersistMode() {
-            Maybe<PersistMode> persistMode = Enums.valueOfIgnoreCase(PersistMode.class, persist);
-            if (!persistMode.isPresent()) {
-                if (Strings.isBlank(persist)) {
-                    throw new FatalConfigurationRuntimeException("Persist mode must not be blank");
-                } else {
-                    throw new FatalConfigurationRuntimeException("Illegal persist setting: "+persist);
-                }
-            }
-   
-            if (persistMode.get() == PersistMode.DISABLED) {
-                if (Strings.isNonBlank(persistenceDir))
-                    throw new FatalConfigurationRuntimeException("Cannot specify persistenceDir when persist is disabled");
-                if (Strings.isNonBlank(persistenceLocation))
-                    throw new FatalConfigurationRuntimeException("Cannot specify persistenceLocation when persist is disabled");
-            }
-            return persistMode.get();
-        }
-
-        protected HighAvailabilityMode computeHighAvailabilityMode(PersistMode persistMode) {
-            Maybe<HighAvailabilityMode> highAvailabilityMode = Enums.valueOfIgnoreCase(HighAvailabilityMode.class, highAvailability);
-            if (!highAvailabilityMode.isPresent()) {
-                if (Strings.isBlank(highAvailability)) {
-                    throw new FatalConfigurationRuntimeException("High availability mode must not be blank");
-                } else {
-                    throw new FatalConfigurationRuntimeException("Illegal highAvailability setting: "+highAvailability);
-                }
-            }
-   
-            if (highAvailabilityMode.get() != HighAvailabilityMode.DISABLED) {
-                if (persistMode == PersistMode.DISABLED) {
-                    if (highAvailabilityMode.get() == HighAvailabilityMode.AUTO)
-                        return HighAvailabilityMode.DISABLED;
-                    throw new FatalConfigurationRuntimeException("Cannot specify highAvailability when persistence is disabled");
-                } else if (persistMode == PersistMode.CLEAN && highAvailabilityMode.get() == HighAvailabilityMode.STANDBY) {
-                    throw new FatalConfigurationRuntimeException("Cannot specify highAvailability STANDBY when persistence is CLEAN");
-                }
-            }
-            return highAvailabilityMode.get();
-        }
-        
-        protected StopWhichAppsOnShutdown computeStopWhichAppsOnShutdown() {
-            if (noShutdownOnExit) {
-                if (STOP_THESE_IF_NOT_PERSISTED.equals(stopWhichAppsOnShutdown)) {
-                    // the default; assume it was not explicitly specified so no error
-                    stopWhichAppsOnShutdown = STOP_NONE;
-                    // but warn of deprecation
-                    log.warn("Deprecated paramater `--noShutdownOnExit` detected; this will likely be removed in a future version; "
-                        + "replace with `"+STOP_WHICH_APPS_ON_SHUTDOWN+" "+stopWhichAppsOnShutdown+"`");
-                } else {
-                    throw new FatalConfigurationRuntimeException("Cannot specify both `--noShutdownOnExit` and `"+STOP_WHICH_APPS_ON_SHUTDOWN+"`");
-                }
-            }
-            return Enums.valueOfIgnoreCase(StopWhichAppsOnShutdown.class, stopWhichAppsOnShutdown).get();
-        }
-        
-        @VisibleForTesting
-        /** forces the launcher to use the given management context, when programmatically invoked;
-         * mainly used when testing to inject a safe (and fast) mgmt context */
-        public void useManagementContext(ManagementContext mgmt) {
-            explicitManagementContext = mgmt;
-        }
-
-        protected BrooklynLauncher createLauncher() {
-            BrooklynLauncher launcher;
-            launcher = BrooklynLauncher.newInstance();
-            launcher.localBrooklynPropertiesFile(localBrooklynProperties)
-                    .webconsolePort(port)
-                    .webconsole(!noConsole)
-                    .ignorePersistenceErrors(ignorePersistenceErrors)
-                    .ignoreWebErrors(ignoreWebErrors)
-                    .ignoreAppErrors(ignoreAppErrors)
-                    .locations(Strings.isBlank(locations) ? ImmutableList.<String>of() : JavaStringEscapes.unwrapJsonishListIfPossible(locations));
-            if (noGlobalBrooklynProperties) {
-                log.debug("Configuring to disable global brooklyn.properties");
-                launcher.globalBrooklynPropertiesFile(null);
-            }
-            if (noConsoleSecurity) {
-                log.info("Configuring to disable console security");
-                launcher.installSecurityFilter(false);
-            }
-            if (Strings.isNonEmpty(bindAddress)) {
-                log.debug("Configuring bind address as "+bindAddress);
-                launcher.bindAddress( Networking.getInetAddressWithFixedName(bindAddress) );
-            }
-            if (Strings.isNonEmpty(publicAddress)) {
-                log.debug("Configuring public address as "+publicAddress);
-                launcher.publicAddress( URI.create(publicAddress) );
-            }
-            if (explicitManagementContext!=null) {
-                log.debug("Configuring explicit management context "+explicitManagementContext);
-                launcher.managementContext(explicitManagementContext);
-            }
-            return launcher;
-        }
-
-        /** method intended for subclassing, to add items to the catalog */
-        protected void populateCatalog(BrooklynCatalog catalog) {
-            // Force load of catalog (so web console is up to date)
-            catalog.getCatalogItems();
-
-            // nothing else added here
-        }
-
-        /** convenience for subclasses to specify that an app should run,
-         * throwing the right (caught) error if another app has already been specified */
-        protected void setAppToLaunch(String className) {
-            if (app!=null) {
-                if (app.equals(className)) return;
-                throw new FatalConfigurationRuntimeException("Cannot specify app '"+className+"' when '"+app+"' is already specified; "
-                    + "remove one or more conflicting CLI arguments.");
-            }
-            app = className;
-        }
-        
-        protected void computeAndSetApp(BrooklynLauncher launcher, ResourceUtils utils, GroovyClassLoader loader)
-            throws NoSuchMethodException, InvocationTargetException, IllegalAccessException, InstantiationException {
-            if (app != null) {
-                // Create the instance of the brooklyn app
-                log.debug("Loading the user's application: {}", app);
-   
-                if (isYamlApp()) {
-                    log.debug("Loading application as YAML spec: {}", app);
-                    String content = utils.getResourceAsString(app);
-                    launcher.application(content);
-                } else {
-                    Object loadedApp = loadApplicationFromClasspathOrParse(utils, loader, app);
-                    if (loadedApp instanceof ApplicationBuilder) {
-                        launcher.application((ApplicationBuilder)loadedApp);
-                    } else if (loadedApp instanceof Application) {
-                        launcher.application((AbstractApplication)loadedApp);
-                    } else {
-                        throw new FatalConfigurationRuntimeException("Unexpected application type "+(loadedApp==null ? null : loadedApp.getClass())+", for app "+loadedApp);
-                    }
-                }
-            }
-        }
-        
-        protected void waitAfterLaunch(ManagementContext ctx) throws IOException {
-            if (stopOnKeyPress) {
-                // Wait for the user to type a key
-                log.info("Server started. Press return to stop.");
-                stdin.read();
-                stopAllApps(ctx.getApplications());
-            } else {
-                // Block forever so that Brooklyn doesn't exit (until someone does cntrl-c or kill)
-                log.info("Launched Brooklyn; will now block until shutdown issued. Shutdown via GUI or API or process interrupt.");
-                waitUntilInterrupted();
-            }
-        }
-
-        protected void waitUntilInterrupted() {
-            Object mutex = new Object();
-            synchronized (mutex) {
-                try {
-                    while (!Thread.currentThread().isInterrupted()) {
-                        mutex.wait();
-                        log.debug("Spurious wake in brooklyn Main while waiting for interrupt, how about that!");
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return; // exit gracefully
-                }
-            }
-        }
-
-        protected void execGroovyScript(ResourceUtils utils, GroovyClassLoader loader, String script) {
-            log.debug("Running the user provided script: {}", script);
-            String content = utils.getResourceAsString(script);
-            GroovyShell shell = new GroovyShell(loader);
-            shell.evaluate(content);
-        }
-
-        /**
-         * Helper method that gets an instance of a brooklyn {@link AbstractApplication} or an {@link ApplicationBuilder}.
-         * Guaranteed to be non-null result of one of those types (throwing exception if app not appropriate).
-         */
-        @SuppressWarnings("unchecked")
-        protected Object loadApplicationFromClasspathOrParse(ResourceUtils utils, GroovyClassLoader loader, String app)
-                throws NoSuchMethodException, InvocationTargetException, IllegalAccessException, InstantiationException {
-            
-            Class<?> tempclazz;
-            log.debug("Loading application as class on classpath: {}", app);
-            try {
-                tempclazz = loader.loadClass(app, true, false);
-            } catch (ClassNotFoundException cnfe) { // Not a class on the classpath
-                log.debug("Loading \"{}\" as class on classpath failed, now trying as .groovy source file", app);
-                String content = utils.getResourceAsString(app);
-                tempclazz = loader.parseClass(content);
-            }
-            final Class<?> clazz = tempclazz;
-            
-            // Instantiate an app builder (wrapping app class in ApplicationBuilder, if necessary)
-            if (ApplicationBuilder.class.isAssignableFrom(clazz)) {
-                Constructor<?> constructor = clazz.getConstructor();
-                return (ApplicationBuilder) constructor.newInstance();
-            } else if (StartableApplication.class.isAssignableFrom(clazz)) {
-                EntitySpec<? extends StartableApplication> appSpec;
-                if (tempclazz.isInterface())
-                    appSpec = EntitySpec.create((Class<? extends StartableApplication>) clazz);
-                else
-                    appSpec = EntitySpec.create(StartableApplication.class, (Class<? extends StartableApplication>) clazz);
-                return new ApplicationBuilder(appSpec) {
-                    @Override protected void doBuild() {
-                    }};
-            } else if (AbstractApplication.class.isAssignableFrom(clazz)) {
-                // TODO If this application overrides init() then in trouble, as that won't get called!
-                // TODO grr; what to do about non-startable applications?
-                // without this we could return ApplicationBuilder rather than Object
-                Constructor<?> constructor = clazz.getConstructor();
-                return (AbstractApplication) constructor.newInstance();
-            } else if (AbstractEntity.class.isAssignableFrom(clazz)) {
-                // TODO Should we really accept any entity type, and just wrap it in an app? That's not documented!
-                return new ApplicationBuilder() {
-                    @Override protected void doBuild() {
-                        addChild(EntitySpec.create(Entity.class).impl((Class<? extends AbstractEntity>)clazz).additionalInterfaces(clazz.getInterfaces()));
-                    }};
-            } else if (Entity.class.isAssignableFrom(clazz)) {
-                return new ApplicationBuilder() {
-                    @Override protected void doBuild() {
-                        addChild(EntitySpec.create((Class<? extends Entity>)clazz));
-                    }};
-            } else {
-                throw new FatalConfigurationRuntimeException("Application class "+clazz+" must extend one of ApplicationBuilder or AbstractApplication");
-            }
-        }
-
-        @VisibleForTesting
-        protected void stopAllApps(Collection<? extends Application> applications) {
-            for (Application application : applications) {
-                try {
-                    if (application instanceof Startable) {
-                        ((Startable)application).stop();
-                    }
-                } catch (Exception e) {
-                    log.error("Error stopping "+application+": "+e, e);
-                }
-            }
-        }
-        
-        @Override
-        public ToStringHelper string() {
-            return super.string()
-                    .add("app", app)
-                    .add("script", script)
-                    .add("location", locations)
-                    .add("port", port)
-                    .add("bindAddress", bindAddress)
-                    .add("noConsole", noConsole)
-                    .add("noConsoleSecurity", noConsoleSecurity)
-                    .add("ignorePersistenceErrors", ignorePersistenceErrors)
-                    .add("ignoreWebErrors", ignoreWebErrors)
-                    .add("ignoreAppErrors", ignoreAppErrors)
-                    .add("stopWhichAppsOnShutdown", stopWhichAppsOnShutdown)
-                    .add("noShutdownOnExit", noShutdownOnExit)
-                    .add("stopOnKeyPress", stopOnKeyPress)
-                    .add("localBrooklynProperties", localBrooklynProperties)
-                    .add("persist", persist)
-                    .add("persistenceLocation", persistenceLocation)
-                    .add("persistenceDir", persistenceDir)
-                    .add("highAvailability", highAvailability);
-        }
+        _cfgSerializationType = base._cfgSerializationType;
+        _dynamicSerializers = base._dynamicSerializers;
+        _suppressNulls = base._suppressNulls;
+        _suppressableValue = base._suppressableValue;
+        _includeInViews = base._includeInViews;
+        _typeSerializer = base._typeSerializer;
+        _nonTrivialBaseType = base._nonTrivialBaseType;
+        _metadata = base._metadata;
     }
 
-    @Command(name = "copy-state", description = "Retrieves persisted state")
-    public static class CopyStateCommand extends BrooklynCommandCollectingArgs {
-
-        @Option(name = { "--localBrooklynProperties" }, title = "local brooklyn.properties file",
-                description = "local brooklyn.properties file, specific to this launch (appending to and overriding global properties)")
-        public String localBrooklynProperties;
-
-        @Option(name = { "--persistenceDir" }, title = "persistence dir",
-                description = "The directory to read/write persisted state (or container name if using an object store)")
-        public String persistenceDir;
-
-        @Option(name = { "--persistenceLocation" }, title = "persistence location",
-            description = "The location spec for an object store to read/write persisted state")
-        public String persistenceLocation;
-    
-        @Option(name = { "--destinationDir" }, required = true, title = "destination dir",
-                description = "The directory to copy persistence data to")
-            public String destinationDir;
-        
-        @Override
-        public Void call() throws Exception {
-            File destinationDirF = new File(Os.tidyPath(destinationDir));
-            if (destinationDirF.isFile()) throw new FatalConfigurationRuntimeException("Destination directory is a file: "+destinationDir);
-
-
-            // Configure launcher
-            BrooklynLauncher launcher;
-            failIfArguments();
-            try {
-                log.info("Retrieving and copying persisted state to "+destinationDirF.getAbsolutePath());
-                
-                if (!quiet) stdout.println(BANNER);
-    
-                PersistMode persistMode = PersistMode.AUTO;
-                HighAvailabilityMode highAvailabilityMode = HighAvailabilityMode.DISABLED;
-                
-                launcher = BrooklynLauncher.newInstance()
-                        .localBrooklynPropertiesFile(localBrooklynProperties)
-                        .persistMode(persistMode)
-                        .persistenceDir(persistenceDir)
-                        .persistenceLocation(persistenceLocation)
-                        .highAvailabilityMode(highAvailabilityMode);
-                
-            } catch (FatalConfigurationRuntimeException e) {
-                throw e;
-            } catch (Exception e) {
-                throw new FatalConfigurationRuntimeException("Fatal error configuring Brooklyn launch: "+e.getMessage(), e);
-            }
-            
-            try {
-                BrooklynMemento memento = launcher.retrieveState();
-                launcher.persistState(memento, destinationDirF);
-                
-            } catch (FatalRuntimeException e) {
-                // rely on caller logging this propagated exception
-                throw e;
-            } catch (Exception e) {
-                // for other exceptions we log it, possibly redundantly but better too much than too little
-                Exceptions.propagateIfFatal(e);
-                log.error("Error retrieving persisted state: "+Exceptions.collapseText(e), e);
-                Exceptions.propagate(e);
-            } finally {
-                try {
-                    launcher.terminate();
-                } catch (Exception e2) {
-                    log.warn("Subsequent error during termination: "+e2);
-                    log.debug("Details of subsequent error during termination: "+e2, e2);
-                }
-            }
-            
-            return null;
+    public BeanPropertyWriter rename(NameTransformer transformer) {
+        String newName = transformer.transform(_name.getValue());
+        if (newName.equals(_name.toString())) {
+            return this;
         }
-
-        @Override
-        public ToStringHelper string() {
-            return super.string()
-                    .add("localBrooklynProperties", localBrooklynProperties)
-                    .add("persistenceLocation", persistenceLocation)
-                    .add("persistenceDir", persistenceDir)
-                    .add("destinationDir", destinationDir);
+        return new BeanPropertyWriter(this, new SerializedString(newName));
+    }
+    
+    /**
+     * Method called to assign value serializer for property
+     * 
+     * @since 2.0
+     */
+    public void assignSerializer(JsonSerializer<Object> ser) {
+        // may need to disable check in future?
+        if (_serializer != null && _serializer != ser) {
+            throw new IllegalStateException("Can not override serializer");
         }
+        _serializer = ser;
     }
 
-    /** method intended for overriding when the script filename is different 
-     * @return the name of the script the user has invoked */
-    protected String cliScriptName() {
-        return "brooklyn";
+    /**
+     * Method called to assign null value serializer for property
+     * 
+     * @since 2.0
+     */
+    public void assignNullSerializer(JsonSerializer<Object> nullSer) {
+        // may need to disable check in future?
+        if (_nullSerializer != null && _nullSerializer != nullSer) {
+            throw new IllegalStateException("Can not override null serializer");
+        }
+        _nullSerializer = nullSer;
+    }
+    
+    /**
+     * Method called create an instance that handles details of unwrapping
+     * contained value.
+     */
+    public BeanPropertyWriter unwrappingWriter(NameTransformer unwrapper) {
+        return new UnwrappingBeanPropertyWriter(this, unwrapper);
     }
 
-    /** method intended for overriding when a different {@link Cli} is desired,
-     * or when the subclass wishes to change any of the arguments */
+    /**
+     * Method called to define type to consider as "non-trivial" basetype,
+     * needed for dynamic serialization resolution for complex (usually container)
+     * types
+     */
+    public void setNonTrivialBaseType(JavaType t) {
+        _nonTrivialBaseType = t;
+    }
+
+    /*
+    /**********************************************************
+    /* BeanProperty impl
+    /**********************************************************
+     */
+
+    // Note: also part of 'PropertyWriter'
+    @Override public String getName() { return _name.getValue(); }
+
+    // Note: also part of 'PropertyWriter'
+    @Override public PropertyName getFullName() { // !!! TODO: impl properly
+        return new PropertyName(_name.getValue());
+    }
+    
+    @Override public JavaType getType() { return _declaredType; }
+    @Override public PropertyName getWrapperName() { return _wrapperName; }
+    @Override public boolean isRequired() { return _metadata.isRequired(); }
+    @Override public PropertyMetadata getMetadata() { return _metadata; }
+
+    // Note: also part of 'PropertyWriter'
     @Override
-    protected CliBuilder<BrooklynCommand> cliBuilder() {
-        @SuppressWarnings({ "unchecked" })
-        CliBuilder<BrooklynCommand> builder = Cli.<BrooklynCommand>builder(cliScriptName())
-                .withDescription("Brooklyn Management Service")
-                .withCommands(
-                        HelpCommand.class,
-                        InfoCommand.class,
-                        GeneratePasswordCommand.class,
-                        CopyStateCommand.class,
-                        cliLaunchCommand()
-                );
+    public <A extends Annotation> A getAnnotation(Class<A> acls) {
+        return _member.getAnnotation(acls);
+    }
 
-        return builder;
+    // Note: also part of 'PropertyWriter'
+    @Override
+    public <A extends Annotation> A getContextAnnotation(Class<A> acls) {
+        return _contextAnnotations.get(acls);
+    }
+
+    @Override public AnnotatedMember getMember() { return _member; }
+
+    // @since 2.3 -- needed so it can be overridden by unwrapping writer
+    protected void _depositSchemaProperty(ObjectNode propertiesNode, JsonNode schemaNode) {
+        propertiesNode.set(getName(), schemaNode);
     }
     
-    /** method intended for overriding when a custom {@link LaunchCommand} is being specified  */
-    protected Class<? extends BrooklynCommand> cliLaunchCommand() {
-        return LaunchCommand.class;
+    /*
+    /**********************************************************
+    /* Managing and accessing of opaque internal settings
+    /* (used by extensions)
+    /**********************************************************
+     */
+    
+    /**
+     * Method for accessing value of specified internal setting.
+     * 
+     * @return Value of the setting, if any; null if none.
+     */
+    public Object getInternalSetting(Object key)  {
+        return (_internalSettings == null) ? null : _internalSettings.get(key);
+    }
+    
+    /**
+     * Method for setting specific internal setting to given value
+     * 
+     * @return Old value of the setting, if any (null if none)
+     */
+    public Object setInternalSetting(Object key, Object value) {
+        if (_internalSettings == null) {
+            _internalSettings = new HashMap<Object,Object>();
+        }
+        return _internalSettings.put(key, value);
+    }
+
+    /**
+     * Method for removing entry for specified internal setting.
+     * 
+     * @return Existing value of the setting, if any (null if none)
+     */
+    public Object removeInternalSetting(Object key) {
+        Object removed = null;
+        if (_internalSettings != null) {
+            removed = _internalSettings.remove(key);
+            // to reduce memory usage, let's also drop the Map itself, if empty
+            if (_internalSettings.size() == 0) {
+                _internalSettings = null;
+            }
+        }
+        return removed;
+    }
+    
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
+     */
+
+    public SerializableString getSerializedName() { return _name; }
+    
+    public boolean hasSerializer() { return _serializer != null; }
+    public boolean hasNullSerializer() { return _nullSerializer != null; }
+
+    /**
+     * Accessor that will return true if this bean property has to support
+     * "unwrapping"; ability to replace POJO structural wrapping with optional
+     * name prefix and/or suffix (or in some cases, just removal of wrapper name).
+     *<p>
+     * Default implementation simply returns false.
+     * 
+     * @since 2.3
+     */
+    public boolean isUnwrapping() { return false; }
+    
+    public boolean willSuppressNulls() { return _suppressNulls; }
+    
+    // Needed by BeanSerializer#getSchema
+    public JsonSerializer<Object> getSerializer() { return _serializer; }
+
+    public JavaType getSerializationType() { return _cfgSerializationType; }
+
+    public Class<?> getRawSerializationType() {
+        return (_cfgSerializationType == null) ? null : _cfgSerializationType.getRawClass();
+    }
+    
+    public Class<?> getPropertyType() {
+        return (_accessorMethod != null) ? _accessorMethod.getReturnType() : _field.getType();
+    }
+
+    /**
+     * Get the generic property type of this property writer.
+     *
+     * @return The property type, or null if not found.
+     */
+    public Type getGenericPropertyType() {
+        if (_accessorMethod != null) {
+            return _accessorMethod.getGenericReturnType();
+        }
+        if (_field != null) {
+            return _field.getGenericType();
+        }
+        return null;
+    }
+
+    public Class<?>[] getViews() { return _includeInViews; }
+
+    /*
+    /**********************************************************
+    /* PropertyWriter methods (serialization)
+    /**********************************************************
+     */
+
+    /**
+     * Method called to access property that this bean stands for, from
+     * within given bean, and to serialize it as a JSON Object field
+     * using appropriate serializer.
+     */
+    @Override
+    public void serializeAsField(Object bean, JsonGenerator jgen, SerializerProvider prov) throws Exception
+    {
+        // inlined 'get()'
+        final Object value = (_accessorMethod == null) ? _field.get(bean) : _accessorMethod.invoke(bean);
+
+        // Null handling is bit different, check that first
+        if (value == null) {
+            if (_nullSerializer != null) {
+                jgen.writeFieldName(_name);
+                _nullSerializer.serialize(null, jgen, prov);
+            }
+            return;
+        }
+        // then find serializer to use
+        JsonSerializer<Object> ser = _serializer;
+        if (ser == null) {
+            Class<?> cls = value.getClass();
+            PropertySerializerMap m = _dynamicSerializers;
+            ser = m.serializerFor(cls);
+            if (ser == null) {
+                ser = _findAndAddDynamic(m, cls, prov);
+            }
+        }
+        // and then see if we must suppress certain values (default, empty)
+        if (_suppressableValue != null) {
+            if (MARKER_FOR_EMPTY == _suppressableValue) {
+                if (ser.isEmpty(value)) {
+                    return;
+                }
+            } else if (_suppressableValue.equals(value)) {
+                return;
+            }
+        }
+        // For non-nulls: simple check for direct cycles
+        if (value == bean) {
+            // three choices: exception; handled by call; or pass-through
+            if (_handleSelfReference(bean, jgen, prov, ser)) {
+                return;
+            }
+        }
+        jgen.writeFieldName(_name);
+        if (_typeSerializer == null) {
+            ser.serialize(value, jgen, prov);
+        } else {
+            ser.serializeWithType(value, jgen, prov, _typeSerializer);
+        }
+    }
+
+    /**
+     * Method called to indicate that serialization of a field was omitted
+     * due to filtering, in cases where backend data format does not allow
+     * basic omission.
+     * 
+     * @since 2.3
+     */
+    @Override
+    public void serializeAsOmittedField(Object bean, JsonGenerator jgen, SerializerProvider prov) throws Exception
+    {
+        if (!jgen.canOmitFields()) {
+            jgen.writeOmittedField(_name.getValue());
+        }
+    }
+    
+    /**
+     * Alternative to {@link #serializeAsField} that is used when a POJO
+     * is serialized as JSON Array; the difference is that no field names
+     * are written.
+     * 
+     * @since 2.3
+     */
+    @Override
+    public void serializeAsElement(Object bean, JsonGenerator jgen, SerializerProvider prov)
+        throws Exception
+    {
+        // inlined 'get()'
+        final Object value = (_accessorMethod == null) ? _field.get(bean) : _accessorMethod.invoke(bean);
+        if (value == null) { // nulls need specialized handling
+            if (_nullSerializer != null) {
+                _nullSerializer.serialize(null, jgen, prov);
+            } else { // can NOT suppress entries in tabular output
+                jgen.writeNull();
+            }
+            return;
+        }
+        // otherwise find serializer to use
+        JsonSerializer<Object> ser = _serializer;
+        if (ser == null) {
+            Class<?> cls = value.getClass();
+            PropertySerializerMap map = _dynamicSerializers;
+            ser = map.serializerFor(cls);
+            if (ser == null) {
+                ser = _findAndAddDynamic(map, cls, prov);
+            }
+        }
+        // and then see if we must suppress certain values (default, empty)
+        if (_suppressableValue != null) {
+            if (MARKER_FOR_EMPTY == _suppressableValue) {
+                if (ser.isEmpty(value)) { // can NOT suppress entries in tabular output
+                    serializeAsPlaceholder(bean, jgen, prov);
+                    return;
+                }
+            } else if (_suppressableValue.equals(value)) { // can NOT suppress entries in tabular output
+                serializeAsPlaceholder(bean, jgen, prov);
+                return;
+            }
+        }
+        // For non-nulls: simple check for direct cycles
+        if (value == bean) {
+            if (_handleSelfReference(bean, jgen, prov, ser)) {
+                return;
+            }
+        }
+        if (_typeSerializer == null) {
+            ser.serialize(value, jgen, prov);
+        } else {
+            ser.serializeWithType(value, jgen, prov, _typeSerializer);
+        }
+    }
+
+    /**
+     * Method called to serialize a placeholder used in tabular output when
+     * real value is not to be included (is filtered out), but when we need
+     * an entry so that field indexes will not be off. Typically this should
+     * output null or empty String, depending on datatype.
+     * 
+     * @since 2.1
+     */
+    @Override
+    public void serializeAsPlaceholder(Object bean, JsonGenerator jgen, SerializerProvider prov)
+        throws Exception
+    {
+        if (_nullSerializer != null) {
+            _nullSerializer.serialize(null, jgen, prov);
+        } else {
+            jgen.writeNull();
+        }
+    }
+    
+    /*
+    /**********************************************************
+    /* PropertyWriter methods (schema generation)
+    /**********************************************************
+     */
+
+    // Also part of BeanProperty implementation
+    @Override
+    public void depositSchemaProperty(JsonObjectFormatVisitor v)
+        throws JsonMappingException
+    {
+        if (v != null) {
+            if (isRequired()) {
+                v.property(this); 
+            } else {
+                v.optionalProperty(this);
+            }
+        }
+    }
+
+    // // // Legacy support for JsonFormatVisitable
+
+    /**
+     * Attempt to add the output of the given {@link BeanPropertyWriter} in the given {@link ObjectNode}.
+     * Otherwise, add the default schema {@link JsonNode} in place of the writer's output
+     * 
+     * @param propertiesNode Node which the given property would exist within
+     * @param provider Provider that can be used for accessing dynamic aspects of serialization
+     *  processing
+     */
+    @Override
+    @Deprecated
+    public void depositSchemaProperty(ObjectNode propertiesNode, SerializerProvider provider)
+        throws JsonMappingException
+    {
+        JavaType propType = getSerializationType();
+        // 03-Dec-2010, tatu: SchemaAware REALLY should use JavaType, but alas it doesn't...
+        Type hint = (propType == null) ? getGenericPropertyType() : propType.getRawClass();
+        JsonNode schemaNode;
+        // Maybe it already has annotated/statically configured serializer?
+        JsonSerializer<Object> ser = getSerializer();
+        if (ser == null) { // nope
+            ser = provider.findValueSerializer(getType(), this);
+        }
+        boolean isOptional = !isRequired();
+        if (ser instanceof SchemaAware) {
+            schemaNode =  ((SchemaAware) ser).getSchema(provider, hint, isOptional) ;
+        } else {  
+            schemaNode = com.fasterxml.jackson.databind.jsonschema.JsonSchema.getDefaultSchemaNode(); 
+        }
+        _depositSchemaProperty(propertiesNode, schemaNode);
+    }
+    
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+    
+    protected JsonSerializer<Object> _findAndAddDynamic(PropertySerializerMap map,
+            Class<?> type, SerializerProvider provider) throws JsonMappingException
+    {
+        PropertySerializerMap.SerializerAndMapResult result;
+        if (_nonTrivialBaseType != null) {
+            JavaType t = provider.constructSpecializedType(_nonTrivialBaseType, type);
+            result = map.findAndAddPrimarySerializer(t, provider, this);
+        } else {
+            result = map.findAndAddPrimarySerializer(type, provider, this);
+        }
+        // did we get a new map of serializers? If so, start using it
+        if (map != result.map) {
+            _dynamicSerializers = result.map;
+        }
+        return result.serializer;
+    }
+    
+    /**
+     * Method that can be used to access value of the property this
+     * Object describes, from given bean instance.
+     *<p>
+     * Note: method is final as it should not need to be overridden -- rather,
+     * calling method(s) ({@link #serializeAsField}) should be overridden
+     * to change the behavior
+     */
+    public final Object get(Object bean) throws Exception {
+        return (_accessorMethod == null) ? _field.get(bean) : _accessorMethod.invoke(bean);
+    }
+
+    /**
+     * Method called to handle a direct self-reference through this property.
+     * Method can choose to indicate an error by throwing {@link JsonMappingException};
+     * fully handle serialization (and return true); or indicate that it should be
+     * serialized normally (return false).
+     *<p>
+     * Default implementation will throw {@link JsonMappingException} if
+     * {@link SerializationFeature#FAIL_ON_SELF_REFERENCES} is enabled;
+     * or return <code>false</code> if it is disabled.
+     *
+     * @return True if method fully handled self-referential value; false if not (caller
+     *    is to handle it) or {@link JsonMappingException} if there is no way handle it
+     */
+    protected boolean _handleSelfReference(Object bean, JsonGenerator jgen, SerializerProvider prov, JsonSerializer<?> ser)
+            throws JsonMappingException {
+        if (prov.isEnabled(SerializationFeature.FAIL_ON_SELF_REFERENCES)
+                && !ser.usesObjectId()) {
+            // 05-Feb-2013, tatu: Usually a problem, but NOT if we are handling
+            //    object id; this may be the case for BeanSerializers at least.
+            // 13-Feb-2014, tatu: another possible ok case: custom serializer (something
+            //   OTHER than {@link BeanSerializerBase}
+            if (ser instanceof BeanSerializerBase) {
+                throw new JsonMappingException("Direct self-reference leading to cycle");
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder(40);
+        sb.append("property '").append(getName()).append("' (");
+        if (_accessorMethod != null) {
+            sb.append("via method ").append(_accessorMethod.getDeclaringClass().getName()).append("#").append(_accessorMethod.getName());
+        } else if (_field != null) {
+            sb.append("field \"").append(_field.getDeclaringClass().getName()).append("#").append(_field.getName());
+        } else {
+            sb.append("virtual");
+        }
+        if (_serializer == null) {
+            sb.append(", no static serializer");
+        } else {
+            sb.append(", static serializer of type "+_serializer.getClass().getName());
+        }
+        sb.append(')');
+        return sb.toString();
     }
 }

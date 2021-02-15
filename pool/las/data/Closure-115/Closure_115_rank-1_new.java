@@ -1,563 +1,676 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.openejb.assembler.classic;
+package org.jsoup.nodes;
 
-import java.io.File;
-import java.io.IOException;
-import java.lang.instrument.ClassFileTransformer;
-import java.lang.instrument.Instrumentation;
+import org.jsoup.helper.StringUtil;
+import org.jsoup.helper.Validate;
+import org.jsoup.parser.Parser;
+import org.jsoup.select.NodeTraversor;
+import org.jsoup.select.NodeVisitor;
+
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.net.URLClassLoader;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import javax.naming.Context;
-import javax.naming.InitialContext;
-import javax.naming.NamingException;
-import javax.persistence.EntityManagerFactory;
-import javax.resource.spi.ConnectionManager;
-import javax.resource.spi.ManagedConnectionFactory;
-import javax.transaction.TransactionManager;
-import javax.transaction.TransactionSynchronizationRegistry;
 
-import org.apache.openejb.Container;
-import org.apache.openejb.DeploymentInfo;
-import org.apache.openejb.EnvProps;
-import org.apache.openejb.Injection;
-import org.apache.openejb.OpenEJB;
-import org.apache.openejb.OpenEJBException;
-import org.apache.openejb.core.ConnectorReference;
-import org.apache.openejb.core.CoreContainerSystem;
-import org.apache.openejb.core.CoreDeploymentInfo;
-import org.apache.openejb.core.SimpleTransactionSynchronizationRegistry;
-import org.apache.openejb.core.TemporaryClassLoader;
-import org.apache.openejb.javaagent.Agent;
-import org.apache.openejb.loader.SystemInstance;
-import org.apache.openejb.persistence.GlobalJndiDataSourceResolver;
-import org.apache.openejb.persistence.JtaEntityManagerRegistry;
-import org.apache.openejb.persistence.PersistenceClassLoaderHandler;
-import org.apache.openejb.persistence.PersistenceDeployer;
-import org.apache.openejb.persistence.PersistenceDeployerException;
-import org.apache.openejb.spi.SecurityService;
-import org.apache.openejb.util.Logger;
-import org.apache.openejb.util.OpenEJBErrorHandler;
-import org.apache.openejb.util.SafeToolkit;
-import org.apache.openejb.util.proxy.ProxyFactory;
-import org.apache.openejb.util.proxy.ProxyManager;
-import org.apache.xbean.finder.ResourceFinder;
-import org.apache.xbean.recipe.ObjectRecipe;
-import org.apache.xbean.recipe.StaticRecipe;
+/**
+ The base, abstract Node model. Elements, Documents, Comments etc are all Node instances.
 
-public class Assembler extends AssemblerTool implements org.apache.openejb.spi.Assembler {
-
-    public static final Logger logger = Logger.getInstance("OpenEJB.startup", Assembler.class.getPackage().getName());
-
-
-    private final CoreContainerSystem containerSystem;
-    private final PersistenceClassLoaderHandler persistenceClassLoaderHandler;
-    private final JndiBuilder jndiBuilder;
-    private TransactionManager transactionManager;
-    private SecurityService securityService;
-
-    public org.apache.openejb.spi.ContainerSystem getContainerSystem() {
-        return containerSystem;
-    }
-
-    public TransactionManager getTransactionManager() {
-        return transactionManager;
-    }
-
-    public SecurityService getSecurityService() {
-        return securityService;
-    }
-
-    protected SafeToolkit toolkit = SafeToolkit.getToolkit("Assembler");
-    protected OpenEjbConfiguration config;
-
-    public Assembler() {
-        persistenceClassLoaderHandler = new PersistenceClassLoaderHandlerImpl();
-
-        installNaming();
-
-        containerSystem = new CoreContainerSystem();
-
-        jndiBuilder = new JndiBuilder(containerSystem.getJNDIContext());
-    }
-
-    public void init(Properties props) throws OpenEJBException {
-        this.props = props;
-        /* Get Configuration ////////////////////////////*/
-        String className = props.getProperty(EnvProps.CONFIGURATION_FACTORY);
-        if (className == null) {
-            className = props.getProperty("openejb.configurator", "org.apache.openejb.alt.config.ConfigurationFactory");
-        }
-
-        OpenEjbConfigurationFactory configFactory = (OpenEjbConfigurationFactory) toolkit.newInstance(className);
-        configFactory.init(props);
-        config = configFactory.getOpenEjbConfiguration();
-        /*\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
-    }
-
-    public static void installNaming() {
-        /* Add IntraVM JNDI service /////////////////////*/
-        Properties systemProperties = System.getProperties();
-        synchronized (systemProperties) {
-            String str = systemProperties.getProperty(Context.URL_PKG_PREFIXES);
-            String naming = "org.apache.openejb.core.ivm.naming";
-            if (str == null) {
-                str = naming;
-            } else if (str.indexOf(naming) == -1) {
-                str = naming + ":" + str;
-            }
-            systemProperties.setProperty(Context.URL_PKG_PREFIXES, str);
-        }
-        /*\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*/}
-
-    private static ThreadLocal<Map<String, Object>> context = new ThreadLocal<Map<String, Object>>();
-
-    public static void setContext(Map<String, Object> map) {
-        context.set(map);
-    }
-
-    public static Map<String, Object> getContext() {
-        Map<String, Object> map = context.get();
-        if (map == null) {
-            map = new HashMap<String, Object>();
-            context.set(map);
-        }
-        return map;
-    }
-
-    public void build() throws OpenEJBException {
-        setContext(new HashMap<String, Object>());
-        try {
-            buildContainerSystem(config);
-        } catch (OpenEJBException ae) {
-            /* OpenEJBExceptions contain useful information and are debbugable.
-             * Let the exception pass through to the top and be logged.
-             */
-            throw ae;
-        } catch (Exception e) {
-            /* General Exceptions at this level are too generic and difficult to debug.
-             * These exceptions are considered unknown bugs and are fatal.
-             * If you get an error at this level, please trap and handle the error
-             * where it is most relevant.
-             */
-            OpenEJBErrorHandler.handleUnknownError(e, "Assembler");
-            throw new OpenEJBException(e);
-        } finally {
-            context.set(null);
-        }
-    }
-
-    /////////////////////////////////////////////////////////////////////
-    ////
-    ////    Public Methods Used for Assembly
-    ////
-    /////////////////////////////////////////////////////////////////////
+ @author Jonathan Hedley, jonathan@hedley.net */
+public abstract class Node implements Cloneable {
+    Node parentNode;
+    List<Node> childNodes;
+    Attributes attributes;
+    String baseUri;
+    int siblingIndex;
 
     /**
-     * When given a complete OpenEjbConfiguration graph this method
-     * will construct an entire container system and return a reference to that
-     * container system, as ContainerSystem instance.
-     * <p/>
-     * This method leverage the other assemble and apply methods which
-     * can be used independently.
-     * <p/>
-     * Assembles and returns the {@link org.apache.openejb.core.CoreContainerSystem} using the
-     * information from the {@link OpenEjbConfiguration} object passed in.
-     * <pre>
-     * This method performs the following actions(in order):
-     * <p/>
-     * 1  Assembles ProxyFactory
-     * 2  Assembles External JNDI Contexts
-     * 3  Assembles TransactionService
-     * 4  Assembles SecurityService
-     * 5  Assembles ConnectionManagers
-     * 6  Assembles Connectors
-     * 7  Assembles Containers
-     * 8  Assembles Applications
-     * </pre>
-     *
-     * @param configInfo
-     * @throws Exception if there was a problem constructing the ContainerSystem.
-     * @throws Exception
-     * @see OpenEjbConfiguration
+     Create a new Node.
+     @param baseUri base URI
+     @param attributes attributes (not null, but may be empty)
      */
-    public void buildContainerSystem(OpenEjbConfiguration configInfo) throws Exception {
+    protected Node(String baseUri, Attributes attributes) {
+        Validate.notNull(baseUri);
+        Validate.notNull(attributes);
+        
+        childNodes = new ArrayList<Node>(4);
+        this.baseUri = baseUri.trim();
+        this.attributes = attributes;
+    }
 
+    protected Node(String baseUri) {
+        this(baseUri, new Attributes());
+    }
 
-        ContainerSystemInfo containerSystemInfo = configInfo.containerSystem;
+    /**
+     * Default constructor. Doesn't setup base uri, children, or attributes; use with caution.
+     */
+    protected Node() {
+        childNodes = Collections.emptyList();
+        attributes = null;
+    }
 
-        /*[1] Assemble ProxyFactory //////////////////////////////////////////
+    /**
+     Get the node name of this node. Use for debugging purposes and not logic switching (for that, use instanceof).
+     @return node name
+     */
+    public abstract String nodeName();
 
-            This operation must take place first because of interdependencies.
-            As DeploymentInfo objects are registered with the ContainerSystem using the
-            ContainerSystem.addDeploymentInfo() method, they are also added to the JNDI
-            Naming Service for OpenEJB.  This requires that a proxy for the deployed bean's
-            EJBHome be created. The proxy requires that the default proxy factory is set.
-        */
-        createProxyFactory(configInfo.facilities.intraVmServer);
+    /**
+     * Get an attribute's value by its key.
+     * <p>
+     * To get an absolute URL from an attribute that may be a relative URL, prefix the key with <code><b>abs</b></code>,
+     * which is a shortcut to the {@link #absUrl} method.
+     * </p>
+     * E.g.:
+     * <blockquote><code>String url = a.attr("abs:href");</code></blockquote>
+     * 
+     * @param attributeKey The attribute key.
+     * @return The attribute, or empty string if not present (to avoid nulls).
+     * @see #attributes()
+     * @see #hasAttr(String)
+     * @see #absUrl(String)
+     */
+    public String attr(String attributeKey) {
+        Validate.notNull(attributeKey);
 
-        for (JndiContextInfo contextInfo : configInfo.facilities.remoteJndiContexts) {
-            createExternalContext(contextInfo);
+        if (attributes.hasKey(attributeKey))
+            return attributes.get(attributeKey);
+        else if (attributeKey.toLowerCase().startsWith("abs:"))
+            return absUrl(attributeKey.substring("abs:".length()));
+        else return "";
+    }
+
+    /**
+     * Get all of the element's attributes.
+     * @return attributes (which implements iterable, in same order as presented in original HTML).
+     */
+    public Attributes attributes() {
+        return attributes;
+    }
+
+    /**
+     * Set an attribute (key=value). If the attribute already exists, it is replaced.
+     * @param attributeKey The attribute key.
+     * @param attributeValue The attribute value.
+     * @return this (for chaining)
+     */
+    public Node attr(String attributeKey, String attributeValue) {
+        attributes.put(attributeKey, attributeValue);
+        return this;
+    }
+
+    /**
+     * Test if this element has an attribute.
+     * @param attributeKey The attribute key to check.
+     * @return true if the attribute exists, false if not.
+     */
+    public boolean hasAttr(String attributeKey) {
+        Validate.notNull(attributeKey);
+
+        if (attributeKey.startsWith("abs:")) {
+            String key = attributeKey.substring("abs:".length());
+            if (attributes.hasKey(key) && !absUrl(key).equals(""))
+                return true;
         }
-
-        createTransactionManager(configInfo.facilities.transactionService);
-
-        createSecurityService(configInfo.facilities.securityService);
-
-        for (ConnectionManagerInfo connectionManagerInfo : configInfo.facilities.connectionManagers) {
-            createConnectionManager(connectionManagerInfo);
-        }
-
-        for (ConnectorInfo connectorInfo : configInfo.facilities.connectors) {
-            createConnector(connectorInfo);
-        }
-
-//        AssemblerTool.RoleMapping roleMapping = new AssemblerTool.RoleMapping(configInfo.facilities.securityService.roleMappings);
-
-        // Containers
-        for (ContainerInfo serviceInfo : containerSystemInfo.containers) {
-            createContainer(serviceInfo);
-        }
-
-        for (AppInfo appInfo : containerSystemInfo.applications) {
-
-            createApplication(appInfo, createAppClassLoader(appInfo));
-        }
+        return attributes.hasKey(attributeKey);
     }
 
-    public void createEjbJar(EjbJarInfo ejbJar) throws NamingException, IOException, OpenEJBException {
-        AppInfo appInfo = new AppInfo();
-        appInfo.ejbJars.add(ejbJar);
-        createApplication(appInfo);
+    /**
+     * Remove an attribute from this element.
+     * @param attributeKey The attribute to remove.
+     * @return this (for chaining)
+     */
+    public Node removeAttr(String attributeKey) {
+        Validate.notNull(attributeKey);
+        attributes.remove(attributeKey);
+        return this;
     }
 
-    public void createEjbJar(EjbJarInfo ejbJar, ClassLoader classLoader) throws NamingException, IOException, OpenEJBException {
-        AppInfo appInfo = new AppInfo();
-        appInfo.ejbJars.add(ejbJar);
-        createApplication(appInfo, classLoader);
+    /**
+     Get the base URI of this node.
+     @return base URI
+     */
+    public String baseUri() {
+        return baseUri;
     }
 
-    public void createClient(ClientInfo clientInfo) throws NamingException, IOException, OpenEJBException {
-        AppInfo appInfo = new AppInfo();
-        appInfo.clients.add(clientInfo);
-        createApplication(appInfo);
-    }
+    /**
+     Update the base URI of this node and all of its descendants.
+     @param baseUri base URI to set
+     */
+    public void setBaseUri(final String baseUri) {
+        Validate.notNull(baseUri);
 
-    public void createClient(ClientInfo clientInfo, ClassLoader classLoader) throws NamingException, IOException, OpenEJBException {
-        AppInfo appInfo = new AppInfo();
-        appInfo.clients.add(clientInfo);
-        createApplication(appInfo, classLoader);
-    }
-
-    public void createApplication(AppInfo appInfo) throws OpenEJBException, IOException, NamingException {
-        createApplication(appInfo, createAppClassLoader(appInfo));
-    }
-
-    public void createApplication(AppInfo appInfo, ClassLoader classLoader) throws OpenEJBException, IOException, NamingException {
-
-        // JPA - Persistence Units MUST be processed first since they will add ClassFileTransformers
-        // to the class loader which must be added before any classes are loaded
-        HashMap<String, Map<String, EntityManagerFactory>> allFactories = new HashMap<String, Map<String, EntityManagerFactory>>();
-        for (EjbJarInfo ejbJar : appInfo.ejbJars) {
-            try {
-                URL url = new File(ejbJar.jarPath).toURL();
-                ResourceFinder resourceFinder = new ResourceFinder("", classLoader, url);
-
-                PersistenceDeployer persistenceDeployer = new PersistenceDeployer(new GlobalJndiDataSourceResolver(null), persistenceClassLoaderHandler);
-                Map<String, EntityManagerFactory> factories = persistenceDeployer.deploy(resourceFinder.findAll("META-INF/persistence.xml"), classLoader);
-                allFactories.put(ejbJar.jarPath, factories);
-            } catch (PersistenceDeployerException e1) {
-                throw new OpenEJBException(e1);
-            } catch (IOException e) {
-                throw new OpenEJBException(e);
+        traverse(new NodeVisitor() {
+            public void head(Node node, int depth) {
+                node.baseUri = baseUri;
             }
-        }
 
-        // EJB
-        EjbJarBuilder ejbJarBuilder = new EjbJarBuilder(props, classLoader);
-        for (EjbJarInfo ejbJar : appInfo.ejbJars) {
-            HashMap<String, DeploymentInfo> deployments = ejbJarBuilder.build(ejbJar, allFactories);
-            RoleMapping roleMapping = new RoleMapping(new ArrayList());
-            for (DeploymentInfo deploymentInfo : deployments.values()) {
-                applyMethodPermissions((CoreDeploymentInfo) deploymentInfo, ejbJar.methodPermissions, roleMapping);
-                applyTransactionAttributes((CoreDeploymentInfo) deploymentInfo, ejbJar.methodTransactions);
-                containerSystem.addDeployment(deploymentInfo);
-                jndiBuilder.bind(deploymentInfo);
+            public void tail(Node node, int depth) {
             }
-
-            for (EnterpriseBeanInfo beanInfo : ejbJar.enterpriseBeans) {
-                CoreDeploymentInfo deployment = (CoreDeploymentInfo) deployments.get(beanInfo.ejbDeploymentId);
-                applySecurityRoleReference(deployment, beanInfo, roleMapping);
-            }
-        }
-
-        // App Client
-        for (ClientInfo clientInfo : appInfo.clients) {
-            JndiEncBuilder jndiEncBuilder = new JndiEncBuilder(clientInfo.jndiEnc);
-            Context context = (Context) jndiEncBuilder.build().lookup("env");
-            containerSystem.getJNDIContext().bind("java:openejb/client/" + clientInfo.moduleId + "/comp/env", context);
-            if (clientInfo.codebase != null) {
-                containerSystem.getJNDIContext().bind("java:openejb/client/" + clientInfo.moduleId + "/comp/path", clientInfo.codebase);
-            }
-            if (clientInfo.mainClass != null) {
-                containerSystem.getJNDIContext().bind("java:openejb/client/" + clientInfo.moduleId + "/comp/mainClass", clientInfo.mainClass);
-            }
-            ArrayList<Injection> injections = new ArrayList<Injection>();
-            JndiEncInfo jndiEnc = clientInfo.jndiEnc;
-            for (EjbReferenceInfo info : jndiEnc.ejbReferences) {
-                for (InjectionInfo target : info.targets) {
-                    try {
-                        Class targetClass = classLoader.loadClass(target.className);
-                        Injection injection = new Injection(info.referenceName, target.propertyName, targetClass);
-                        injections.add(injection);
-                    } catch (ClassNotFoundException e) {
-                        logger.error("Injection Target invalid: class=" + target.className + ", name=" + target.propertyName + ".  Exception: " + e.getMessage(), e);
-                    }
-                }
-            }
-            containerSystem.getJNDIContext().bind("java:openejb/client/" + clientInfo.moduleId + "/comp/injections", injections);
-        }
+        });
     }
 
-    public ClassLoader createAppClassLoader(AppInfo appInfo) throws OpenEJBException, IOException {
-        List<URL> jars = new ArrayList<URL>();
-        for (EjbJarInfo info : appInfo.ejbJars) {
-            jars.add(toUrl(info.jarPath));
-        }
-        for (ClientInfo info : appInfo.clients) {
-            jars.add(toUrl(info.codebase));
-        }
-        for (String jarPath : appInfo.libs) {
-            jars.add(toUrl(jarPath));
-        }
+    /**
+     * Get an absolute URL from a URL attribute that may be relative (i.e. an <code>&lt;a href&gt;</code> or
+     * <code>&lt;img src&gt;</code>).
+     * <p>
+     * E.g.: <code>String absUrl = linkEl.absUrl("href");</code>
+     * </p>
+     * <p>
+     * If the attribute value is already absolute (i.e. it starts with a protocol, like
+     * <code>http://</code> or <code>https://</code> etc), and it successfully parses as a URL, the attribute is
+     * returned directly. Otherwise, it is treated as a URL relative to the element's {@link #baseUri}, and made
+     * absolute using that.
+     * </p>
+     * <p>
+     * As an alternate, you can use the {@link #attr} method with the <code>abs:</code> prefix, e.g.:
+     * <code>String absUrl = linkEl.attr("abs:href");</code>
+     * </p>
+     * 
+     * @param attributeKey The attribute key
+     * @return An absolute URL if one could be made, or an empty string (not null) if the attribute was missing or
+     * could not be made successfully into a URL.
+     * @see #attr
+     * @see java.net.URL#URL(java.net.URL, String)
+     */
+    public String absUrl(String attributeKey) {
+        Validate.notEmpty(attributeKey);
 
-        // Generate the cmp2 concrete subclasses
-        Cmp2Builder cmp2Builder = new Cmp2Builder(appInfo);
-        File generatedJar = cmp2Builder.getJarFile();
-        if (generatedJar != null) {
-            jars.add(generatedJar.toURL());
-        }
-
-        // Create the class loader
-        ClassLoader classLoader = new URLClassLoader(jars.toArray(new URL[]{}), OpenEJB.class.getClassLoader());
-        return classLoader;
-    }
-
-    public void createExternalContext(JndiContextInfo contextInfo) throws OpenEJBException, NamingException {
-        InitialContext result;
-        try {
-            InitialContext ic = new InitialContext(contextInfo.properties);
-            result = ic;
-        } catch (NamingException ne) {
-
-            throw new OpenEJBException("The remote JNDI EJB references for remote-jndi-contexts = " + contextInfo.id + "+ could not be resolved.", ne);
-        }
-        InitialContext cntx = result;
-        containerSystem.getJNDIContext().bind("java:openejb/remote_jndi_contexts/" + contextInfo.id, cntx);
-    }
-
-    public void createContainer(ContainerInfo serviceInfo) throws OpenEJBException, NamingException {
-
-        ObjectRecipe serviceRecipe = new ObjectRecipe(serviceInfo.className, serviceInfo.factoryMethod, serviceInfo.constructorArgs.toArray(new String[0]), null);
-        serviceRecipe.setAllProperties(serviceInfo.properties);
-
-        serviceRecipe.setProperty("id", new StaticRecipe(serviceInfo.id));
-        serviceRecipe.setProperty("transactionManager", new StaticRecipe(props.get(TransactionManager.class.getName())));
-        serviceRecipe.setProperty("securityService", new StaticRecipe(props.get(SecurityService.class.getName())));
-
-        Object service = serviceRecipe.create();
-
-        Class interfce = serviceInterfaces.get(serviceInfo.serviceType);
-        checkImplementation(interfce, service.getClass(), serviceInfo.serviceType, serviceInfo.id);
-
-        this.containerSystem.getJNDIContext().bind("java:openejb/" + serviceInfo.serviceType + "/" + serviceInfo.id, service);
-
-        SystemInstance.get().setComponent(interfce, service);
-
-        props.put(interfce.getName(), service);
-        props.put(serviceInfo.serviceType, service);
-        props.put(serviceInfo.id, service);
-
-        containerSystem.addContainer(serviceInfo.id, (Container) service);
-    }
-
-    public void createProxyFactory(IntraVmServerInfo serviceInfo) throws OpenEJBException, NamingException {
-
-        ObjectRecipe serviceRecipe = new ObjectRecipe(serviceInfo.className, serviceInfo.factoryMethod, serviceInfo.constructorArgs.toArray(new String[0]), null);
-        serviceRecipe.setAllProperties(serviceInfo.properties);
-
-        Object service = serviceRecipe.create();
-
-        Class interfce = serviceInterfaces.get(serviceInfo.serviceType);
-        checkImplementation(interfce, service.getClass(), serviceInfo.serviceType, serviceInfo.id);
-
-        ProxyManager.registerFactory(serviceInfo.id, (ProxyFactory) service);
-        ProxyManager.setDefaultFactory(serviceInfo.id);
-
-        this.containerSystem.getJNDIContext().bind("java:openejb/" + serviceInfo.serviceType + "/" + serviceInfo.id, service);
-
-        SystemInstance.get().setComponent(interfce, service);
-
-        getContext().put(interfce.getName(), service);
-
-        props.put(interfce.getName(), service);
-        props.put(serviceInfo.serviceType, service);
-        props.put(serviceInfo.id, service);
-    }
-
-    public void createConnector(ConnectorInfo conInfo) throws OpenEJBException, NamingException {
-
-        ManagedConnectionFactoryInfo serviceInfo = conInfo.managedConnectionFactory;
-
-        ObjectRecipe serviceRecipe = new ObjectRecipe(serviceInfo.className, serviceInfo.factoryMethod, serviceInfo.constructorArgs.toArray(new String[0]), null);
-        serviceRecipe.setAllProperties(serviceInfo.properties);
-
-        Object service = serviceRecipe.create();
-
-        Class interfce = serviceInterfaces.get(serviceInfo.serviceType);
-        checkImplementation(interfce, service.getClass(), serviceInfo.serviceType, serviceInfo.id);
-
-        ConnectionManager connectionManager = (ConnectionManager) props.get(conInfo.connectionManagerId);
-        if (connectionManager == null) {
-            throw new RuntimeException("Invalid connection manager specified for connector identity = " + conInfo.connectorId);
-        }
-
-        ManagedConnectionFactory managedConnectionFactory = (ManagedConnectionFactory) service;
-
-        ConnectorReference reference = new ConnectorReference(connectionManager, managedConnectionFactory);
-
-        containerSystem.getJNDIContext().bind("java:openejb/" + serviceInfo.serviceType + "/" + conInfo.connectorId, reference);
-    }
-
-    public void createConnectionManager(ConnectionManagerInfo serviceInfo) throws OpenEJBException, java.lang.reflect.InvocationTargetException, IllegalAccessException, NoSuchMethodException, NamingException {
-
-        ObjectRecipe serviceRecipe = new ObjectRecipe(serviceInfo.className, serviceInfo.factoryMethod, serviceInfo.constructorArgs.toArray(new String[0]), null);
-        serviceRecipe.setAllProperties(serviceInfo.properties);
-
-        Object object = props.get("TransactionManager");
-        serviceRecipe.setProperty("transactionManager", new StaticRecipe(object));
-
-        Object service = serviceRecipe.create();
-
-        Class interfce = serviceInterfaces.get(serviceInfo.serviceType);
-        checkImplementation(interfce, service.getClass(), serviceInfo.serviceType, serviceInfo.id);
-
-        this.containerSystem.getJNDIContext().bind("java:openejb/" + serviceInfo.serviceType + "/" + serviceInfo.id, service);
-
-        SystemInstance.get().setComponent(interfce, service);
-
-        getContext().put(interfce.getName(), service);
-
-        props.put(interfce.getName(), service);
-        props.put(serviceInfo.serviceType, service);
-        props.put(serviceInfo.id, service);
-
-    }
-
-    public void createSecurityService(ServiceInfo serviceInfo) throws Exception {
-
-        ObjectRecipe serviceRecipe = new ObjectRecipe(serviceInfo.className, serviceInfo.factoryMethod, serviceInfo.constructorArgs.toArray(new String[0]), null);
-        serviceRecipe.setAllProperties(serviceInfo.properties);
-
-        Object service = serviceRecipe.create();
-
-        Class interfce = serviceInterfaces.get(serviceInfo.serviceType);
-        checkImplementation(interfce, service.getClass(), serviceInfo.serviceType, serviceInfo.id);
-
-        this.containerSystem.getJNDIContext().bind("java:openejb/" + serviceInfo.serviceType, service);
-
-        SystemInstance.get().setComponent(interfce, service);
-
-        getContext().put(interfce.getName(), service);
-
-        props.put(interfce.getName(), service);
-        props.put(serviceInfo.serviceType, service);
-        props.put(serviceInfo.id, service);
-
-        this.securityService = (SecurityService) service;
-    }
-
-    public void createTransactionManager(TransactionServiceInfo serviceInfo) throws NamingException, OpenEJBException {
-
-        ObjectRecipe serviceRecipe = new ObjectRecipe(serviceInfo.className, serviceInfo.factoryMethod, serviceInfo.constructorArgs.toArray(new String[0]), null);
-        serviceRecipe.setAllProperties(serviceInfo.properties);
-
-        Object service = serviceRecipe.create();
-
-        Class interfce = serviceInterfaces.get(serviceInfo.serviceType);
-        checkImplementation(interfce, service.getClass(), serviceInfo.serviceType, serviceInfo.id);
-
-        this.containerSystem.getJNDIContext().bind("java:openejb/" + serviceInfo.serviceType, service);
-
-        SystemInstance.get().setComponent(interfce, service);
-
-        getContext().put(interfce.getName(), service);
-
-        props.put(interfce.getName(), service);
-        props.put(serviceInfo.serviceType, service);
-        props.put(serviceInfo.id, service);
-
-        this.transactionManager = (TransactionManager) service;
-
-        // todo find a better place for this
-
-        // TransactionSynchronizationRegistry
-        TransactionSynchronizationRegistry synchronizationRegistry ;
-        if (transactionManager instanceof TransactionSynchronizationRegistry) {
-            synchronizationRegistry = (TransactionSynchronizationRegistry) transactionManager;
+        String relUrl = attr(attributeKey);
+        if (!hasAttr(attributeKey)) {
+            return ""; // nothing to make absolute with
         } else {
-            // todo this sould be built
-            synchronizationRegistry = new SimpleTransactionSynchronizationRegistry(transactionManager);
+            URL base;
+            try {
+                try {
+                    base = new URL(baseUri);
+                } catch (MalformedURLException e) {
+                    // the base is unsuitable, but the attribute may be abs on its own, so try that
+                    URL abs = new URL(relUrl);
+                    return abs.toExternalForm();
+                }
+                // workaround: java resolves '//path/file + ?foo' to '//path/?foo', not '//path/file?foo' as desired
+                if (relUrl.startsWith("?"))
+                    relUrl = base.getPath() + relUrl;
+                URL abs = new URL(base, relUrl);
+                return abs.toExternalForm();
+            } catch (MalformedURLException e) {
+                return "";
+            }
         }
-        Assembler.getContext().put(TransactionSynchronizationRegistry.class.getName(), synchronizationRegistry);
-        SystemInstance.get().setComponent(TransactionSynchronizationRegistry.class, synchronizationRegistry);
-
-        // JtaEntityManagerRegistry
-        // todo this sould be built
-        JtaEntityManagerRegistry jtaEntityManagerRegistry = new JtaEntityManagerRegistry(synchronizationRegistry);
-        Assembler.getContext().put(JtaEntityManagerRegistry.class.getName(), jtaEntityManagerRegistry);
-        SystemInstance.get().setComponent(JtaEntityManagerRegistry.class, jtaEntityManagerRegistry);
     }
 
-    private URL toUrl(String jarPath) throws OpenEJBException {
-        try {
-            return new File(jarPath).toURL();
-        } catch (MalformedURLException e) {
-            throw new OpenEJBException(messages.format("cl0001", jarPath, e.getMessage()));
+    /**
+     Get a child node by its 0-based index.
+     @param index index of child node
+     @return the child node at this index. Throws a {@code IndexOutOfBoundsException} if the index is out of bounds.
+     */
+    public Node childNode(int index) {
+        return childNodes.get(index);
+    }
+
+    /**
+     Get this node's children. Presented as an unmodifiable list: new children can not be added, but the child nodes
+     themselves can be manipulated.
+     @return list of children. If no children, returns an empty list.
+     */
+    public List<Node> childNodes() {
+        return Collections.unmodifiableList(childNodes);
+    }
+
+    /**
+     * Returns a deep copy of this node's children. Changes made to these nodes will not be reflected in the original
+     * nodes
+     * @return a deep copy of this node's children
+     */
+    public List<Node> childNodesCopy() {
+        List<Node> children = new ArrayList<Node>(childNodes.size());
+        for (Node node : childNodes) {
+            children.add(node.clone());
+        }
+        return children;
+    }
+
+    /**
+     * Get the number of child nodes that this node holds.
+     * @return the number of child nodes that this node holds.
+     */
+    public final int childNodeSize() {
+        return childNodes.size();
+    }
+    
+    protected Node[] childNodesAsArray() {
+        return childNodes.toArray(new Node[childNodeSize()]);
+    }
+
+    /**
+     Gets this node's parent node.
+     @return parent node; or null if no parent.
+     */
+    public Node parent() {
+        return parentNode;
+    }
+
+    /**
+     Gets this node's parent node. Node overridable by extending classes, so useful if you really just need the Node type.
+     @return parent node; or null if no parent.
+     */
+    public final Node parentNode() {
+        return parentNode;
+    }
+    
+    /**
+     * Gets the Document associated with this Node. 
+     * @return the Document associated with this Node, or null if there is no such Document.
+     */
+    public Document ownerDocument() {
+        if (this instanceof Document)
+            return (Document) this;
+        else if (parentNode == null)
+            return null;
+        else
+            return parentNode.ownerDocument();
+    }
+    
+    /**
+     * Remove (delete) this node from the DOM tree. If this node has children, they are also removed.
+     */
+    public void remove() {
+        Validate.notNull(parentNode);
+        parentNode.removeChild(this);
+    }
+
+    /**
+     * Insert the specified HTML into the DOM before this node (i.e. as a preceding sibling).
+     * @param html HTML to add before this node
+     * @return this node, for chaining
+     * @see #after(String)
+     */
+    public Node before(String html) {
+        addSiblingHtml(siblingIndex(), html);
+        return this;
+    }
+
+    /**
+     * Insert the specified node into the DOM before this node (i.e. as a preceding sibling).
+     * @param node to add before this node
+     * @return this node, for chaining
+     * @see #after(Node)
+     */
+    public Node before(Node node) {
+        Validate.notNull(node);
+        Validate.notNull(parentNode);
+
+        parentNode.addChildren(siblingIndex(), node);
+        return this;
+    }
+
+    /**
+     * Insert the specified HTML into the DOM after this node (i.e. as a following sibling).
+     * @param html HTML to add after this node
+     * @return this node, for chaining
+     * @see #before(String)
+     */
+    public Node after(String html) {
+        addSiblingHtml(siblingIndex()+1, html);
+        return this;
+    }
+
+    /**
+     * Insert the specified node into the DOM after this node (i.e. as a following sibling).
+     * @param node to add after this node
+     * @return this node, for chaining
+     * @see #before(Node)
+     */
+    public Node after(Node node) {
+        Validate.notNull(node);
+        Validate.notNull(parentNode);
+
+        parentNode.addChildren(siblingIndex()+1, node);
+        return this;
+    }
+
+    private void addSiblingHtml(int index, String html) {
+        Validate.notNull(html);
+        Validate.notNull(parentNode);
+
+        Element context = parent() instanceof Element ? (Element) parent() : null;        
+        List<Node> nodes = Parser.parseFragment(html, context, baseUri());
+        parentNode.addChildren(index, nodes.toArray(new Node[nodes.size()]));
+    }
+
+    /**
+     Wrap the supplied HTML around this node.
+     @param html HTML to wrap around this element, e.g. {@code <div class="head"></div>}. Can be arbitrarily deep.
+     @return this node, for chaining.
+     */
+    public Node wrap(String html) {
+        Validate.notEmpty(html);
+
+        Element context = parent() instanceof Element ? (Element) parent() : null;
+        List<Node> wrapChildren = Parser.parseFragment(html, context, baseUri());
+        Node wrapNode = wrapChildren.get(0);
+        if (wrapNode == null || !(wrapNode instanceof Element)) // nothing to wrap with; noop
+            return null;
+
+        Element wrap = (Element) wrapNode;
+        Element deepest = getDeepChild(wrap);
+        parentNode.replaceChild(this, wrap);
+        deepest.addChildren(this);
+
+        // remainder (unbalanced wrap, like <div></div><p></p> -- The <p> is remainder
+        if (wrapChildren.size() > 0) {
+            for (int i = 0; i < wrapChildren.size(); i++) {
+                Node remainder = wrapChildren.get(i);
+                remainder.parentNode.removeChild(remainder);
+                wrap.appendChild(remainder);
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Removes this node from the DOM, and moves its children up into the node's parent. This has the effect of dropping
+     * the node but keeping its children.
+     * <p>
+     * For example, with the input html:
+     * </p>
+     * <p>{@code <div>One <span>Two <b>Three</b></span></div>}</p>
+     * Calling {@code element.unwrap()} on the {@code span} element will result in the html:
+     * <p>{@code <div>One Two <b>Three</b></div>}</p>
+     * and the {@code "Two "} {@link TextNode} being returned.
+     * 
+     * @return the first child of this node, after the node has been unwrapped. Null if the node had no children.
+     * @see #remove()
+     * @see #wrap(String)
+     */
+    public Node unwrap() {
+        Validate.notNull(parentNode);
+
+        int index = siblingIndex;
+        Node firstChild = childNodes.size() > 0 ? childNodes.get(0) : null;
+        parentNode.addChildren(index, this.childNodesAsArray());
+        this.remove();
+
+        return firstChild;
+    }
+
+    private Element getDeepChild(Element el) {
+        List<Element> children = el.children();
+        if (children.size() > 0)
+            return getDeepChild(children.get(0));
+        else
+            return el;
+    }
+    
+    /**
+     * Replace this node in the DOM with the supplied node.
+     * @param in the node that will will replace the existing node.
+     */
+    public void replaceWith(Node in) {
+        Validate.notNull(in);
+        Validate.notNull(parentNode);
+        parentNode.replaceChild(this, in);
+    }
+
+    protected void setParentNode(Node parentNode) {
+        if (this.parentNode != null)
+            this.parentNode.removeChild(this);
+        this.parentNode = parentNode;
+    }
+
+    protected void replaceChild(Node out, Node in) {
+        Validate.isTrue(out.parentNode == this);
+        Validate.notNull(in);
+        if (in.parentNode != null)
+            in.parentNode.removeChild(in);
+        
+        Integer index = out.siblingIndex();
+        childNodes.set(index, in);
+        in.parentNode = this;
+        in.setSiblingIndex(index);
+        out.parentNode = null;
+    }
+
+    protected void removeChild(Node out) {
+        Validate.isTrue(out.parentNode == this);
+        int index = out.siblingIndex();
+        childNodes.remove(index);
+        reindexChildren(index);
+        out.parentNode = null;
+    }
+
+    protected void addChildren(Node... children) {
+        //most used. short circuit addChildren(int), which hits reindex children and array copy
+        for (Node child: children) {
+            reparentChild(child);
+            childNodes.add(child);
+            child.setSiblingIndex(childNodes.size()-1);
         }
     }
 
+    protected void addChildren(int index, Node... children) {
+        Validate.noNullElements(children);
+        for (int i = children.length - 1; i >= 0; i--) {
+            Node in = children[i];
+            reparentChild(in);
+            childNodes.add(index, in);
+        }
+        reindexChildren(index);
+    }
 
-    private static class PersistenceClassLoaderHandlerImpl implements PersistenceClassLoaderHandler {
-        public void addTransformer(ClassLoader classLoader, ClassFileTransformer classFileTransformer) {
-            Instrumentation instrumentation = Agent.getInstrumentation();
-            if (instrumentation != null) {
-                instrumentation.addTransformer(classFileTransformer);
+    protected void reparentChild(Node child) {
+        if (child.parentNode != null)
+            child.parentNode.removeChild(child);
+        child.setParentNode(this);
+    }
+    
+    private void reindexChildren(int start) {
+        for (int i = start; i < childNodes.size(); i++) {
+            childNodes.get(i).setSiblingIndex(i);
+        }
+    }
+    
+    /**
+     Retrieves this node's sibling nodes. Similar to {@link #childNodes()  node.parent.childNodes()}, but does not
+     include this node (a node is not a sibling of itself).
+     @return node siblings. If the node has no parent, returns an empty list.
+     */
+    public List<Node> siblingNodes() {
+        if (parentNode == null)
+            return Collections.emptyList();
+
+        List<Node> nodes = parentNode.childNodes;
+        List<Node> siblings = new ArrayList<Node>(nodes.size() - 1);
+        for (Node node: nodes)
+            if (node != this)
+                siblings.add(node);
+        return siblings;
+    }
+
+    /**
+     Get this node's next sibling.
+     @return next sibling, or null if this is the last sibling
+     */
+    public Node nextSibling() {
+        if (parentNode == null)
+            return null; // root
+        
+        List<Node> siblings = parentNode.childNodes;
+        Integer index = siblingIndex();
+        Validate.notNull(index);
+        if (siblings.size() > index+1)
+            return siblings.get(index+1);
+        else
+            return null;
+    }
+
+    /**
+     Get this node's previous sibling.
+     @return the previous sibling, or null if this is the first sibling
+     */
+    public Node previousSibling() {
+        if (parentNode == null)
+            return null; // root
+
+        List<Node> siblings = parentNode.childNodes;
+        Integer index = siblingIndex();
+        Validate.notNull(index);
+        if (index > 0)
+            return siblings.get(index-1);
+        else
+            return null;
+    }
+
+    /**
+     * Get the list index of this node in its node sibling list. I.e. if this is the first node
+     * sibling, returns 0.
+     * @return position in node sibling list
+     * @see org.jsoup.nodes.Element#elementSiblingIndex()
+     */
+    public int siblingIndex() {
+        return siblingIndex;
+    }
+    
+    protected void setSiblingIndex(int siblingIndex) {
+        this.siblingIndex = siblingIndex;
+    }
+
+    /**
+     * Perform a depth-first traversal through this node and its descendants.
+     * @param nodeVisitor the visitor callbacks to perform on each node
+     * @return this node, for chaining
+     */
+    public Node traverse(NodeVisitor nodeVisitor) {
+        Validate.notNull(nodeVisitor);
+        NodeTraversor traversor = new NodeTraversor(nodeVisitor);
+        traversor.traverse(this);
+        return this;
+    }
+
+    /**
+     Get the outer HTML of this node.
+     @return HTML
+     */
+    public String outerHtml() {
+        StringBuilder accum = new StringBuilder(128);
+        outerHtml(accum);
+        return accum.toString();
+    }
+
+    protected void outerHtml(StringBuilder accum) {
+        new NodeTraversor(new OuterHtmlVisitor(accum, getOutputSettings())).traverse(this);
+    }
+
+    // if this node has no document (or parent), retrieve the default output settings
+    Document.OutputSettings getOutputSettings() {
+        return ownerDocument() != null ? ownerDocument().outputSettings() : (new Document("")).outputSettings();
+    }
+
+    /**
+     Get the outer HTML of this node.
+     @param accum accumulator to place HTML into
+     */
+    abstract void outerHtmlHead(StringBuilder accum, int depth, Document.OutputSettings out);
+
+    abstract void outerHtmlTail(StringBuilder accum, int depth, Document.OutputSettings out);
+
+    @Override
+    public String toString() {
+        return outerHtml();
+    }
+
+    protected void indent(StringBuilder accum, int depth, Document.OutputSettings out) {
+        accum.append("\n").append(StringUtil.padding(depth * out.indentAmount()));
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        // todo: have nodes hold a child index, compare against that and parent (not children)
+
+        return this == o;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = parentNode != null ? parentNode.hashCode() : 0;
+        // not children, or will block stack as they go back up to parent)
+        result = 31 * result + (attributes != null ? attributes.hashCode() : 0);
+        return result;
+    }
+
+    /**
+     * Create a stand-alone, deep copy of this node, and all of its children. The cloned node will have no siblings or
+     * parent node. As a stand-alone object, any changes made to the clone or any of its children will not impact the
+     * original node.
+     * <p>
+     * The cloned node may be adopted into another Document or node structure using {@link Element#appendChild(Node)}.
+     * @return stand-alone cloned node
+     */
+    @Override
+    public Node clone() {
+        Node thisClone = doClone(null); // splits for orphan
+
+        // Queue up nodes that need their children cloned (BFS).
+        LinkedList<Node> nodesToProcess = new LinkedList<Node>();
+        nodesToProcess.add(thisClone);
+
+        while (!nodesToProcess.isEmpty()) {
+            Node currParent = nodesToProcess.remove();
+
+            for (int i = 0; i < currParent.childNodes.size(); i++) {
+                Node childClone = currParent.childNodes.get(i).doClone(currParent);
+                currParent.childNodes.set(i, childClone);
+                nodesToProcess.add(childClone);
             }
         }
 
-        public ClassLoader getNewTempClassLoader(ClassLoader classLoader) {
-            return new TemporaryClassLoader(classLoader);
+        return thisClone;
+    }
+
+    /*
+     * Return a clone of the node using the given parent (which can be null).
+     * Not a deep copy of children.
+     */
+    protected Node doClone(Node parent) {
+        Node clone;
+
+        try {
+            clone = (Node) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+        }
+
+        clone.parentNode = parent; // can be null, to create an orphan split
+        clone.siblingIndex = parent == null ? 0 : siblingIndex;
+        clone.attributes = attributes != null ? attributes.clone() : null;
+        clone.baseUri = baseUri;
+        clone.childNodes = new ArrayList<Node>(childNodes.size());
+
+        for (Node child: childNodes)
+            clone.childNodes.add(child);
+
+        return clone;
+    }
+
+    private static class OuterHtmlVisitor implements NodeVisitor {
+        private StringBuilder accum;
+        private Document.OutputSettings out;
+
+        OuterHtmlVisitor(StringBuilder accum, Document.OutputSettings out) {
+            this.accum = accum;
+            this.out = out;
+        }
+
+        public void head(Node node, int depth) {
+            node.outerHtmlHead(accum, depth, out);
+        }
+
+        public void tail(Node node, int depth) {
+            if (!node.nodeName().equals("#text")) // saves a void hit.
+                node.outerHtmlTail(accum, depth, out);
         }
     }
 }

@@ -1,12 +1,13 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements. See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,735 +15,845 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.kafka.streams.perf;
 
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.PartitionInfo;
-import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
-import org.apache.kafka.common.serialization.IntegerDeserializer;
-import org.apache.kafka.common.serialization.IntegerSerializer;
-import org.apache.kafka.common.serialization.Serde;
-import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.common.utils.Utils;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.kstream.ForeachAction;
-import org.apache.kafka.streams.kstream.JoinWindows;
-import org.apache.kafka.streams.kstream.KStream;
-import org.apache.kafka.streams.kstream.KTable;
-import org.apache.kafka.streams.kstream.TimeWindows;
-import org.apache.kafka.streams.kstream.ValueJoiner;
-import org.apache.kafka.streams.kstream.Windowed;
-import org.apache.kafka.streams.processor.AbstractProcessor;
-import org.apache.kafka.streams.processor.Processor;
-import org.apache.kafka.streams.processor.ProcessorContext;
-import org.apache.kafka.streams.processor.ProcessorSupplier;
-import org.apache.kafka.streams.state.KeyValueIterator;
-import org.apache.kafka.streams.state.KeyValueStore;
-import org.apache.kafka.streams.state.StoreBuilder;
-import org.apache.kafka.streams.state.Stores;
-import org.apache.kafka.streams.state.WindowStore;
+package org.apache.hadoop.hbase.master.assignment;
 
 import java.io.IOException;
-import java.time.Duration;
+import java.io.InterruptedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Properties;
-import java.util.Random;
-import java.util.concurrent.CountDownLatch;
+import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.UnknownRegionException;
+import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
+import org.apache.hadoop.hbase.client.MasterSwitchType;
+import org.apache.hadoop.hbase.client.Mutation;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionInfoBuilder;
+import org.apache.hadoop.hbase.client.RegionReplicaUtil;
+import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.io.hfile.CacheConfig;
+import org.apache.hadoop.hbase.master.MasterCoprocessorHost;
+import org.apache.hadoop.hbase.master.MasterFileSystem;
+import org.apache.hadoop.hbase.master.RegionState.State;
+import org.apache.hadoop.hbase.master.assignment.RegionStates.RegionStateNode;
+import org.apache.hadoop.hbase.master.normalizer.NormalizationPlan;
+import org.apache.hadoop.hbase.master.procedure.AbstractStateMachineRegionProcedure;
+import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
+import org.apache.hadoop.hbase.master.procedure.MasterProcedureUtil;
+import org.apache.hadoop.hbase.procedure2.ProcedureMetrics;
+import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
+import org.apache.hadoop.hbase.quotas.QuotaExceededException;
+import org.apache.hadoop.hbase.regionserver.HRegionFileSystem;
+import org.apache.hadoop.hbase.regionserver.HStore;
+import org.apache.hadoop.hbase.regionserver.HStoreFile;
+import org.apache.hadoop.hbase.regionserver.RegionSplitPolicy;
+import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.FSUtils;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.util.Threads;
+import org.apache.hadoop.hbase.wal.WALSplitter;
+import org.apache.hadoop.util.ReflectionUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.SplitTableRegionState;
 
 /**
- * Class that provides support for a series of benchmarks. It is usually driven by
- * tests/kafkatest/benchmarks/streams/streams_simple_benchmark_test.py.
- * If ran manually through the main() function below, you must do the following:
- * 1. Have ZK and a Kafka broker set up
- * 2. Run the loading step first: SimpleBenchmark localhost:9092 /tmp/statedir numRecords true "all"
- * 3. Run the stream processing step second: SimpleBenchmark localhost:9092 /tmp/statedir numRecords false "all"
- * Note that what changed is the 4th parameter, from "true" indicating that is a load phase, to "false" indicating
- * that this is a real run.
- *
- * Note that "all" is a convenience option when running this test locally and will not work when running the test
- * at scale (through tests/kafkatest/benchmarks/streams/streams_simple_benchmark_test.py). That is due to exact syncronization
- * needs for each test (e.g., you wouldn't want one instance to run "count" while another
- * is still running "consume"
+ * The procedure to split a region in a table.
+ * Takes lock on the parent region.
+ * It holds the lock for the life of the procedure.
+ * <p>Throws exception on construction if determines context hostile to spllt (cluster going
+ * down or master is shutting down or table is disabled).</p>
  */
-public class SimpleBenchmark {
-    private static final String LOADING_PRODUCER_CLIENT_ID = "simple-benchmark-loading-producer";
+@InterfaceAudience.Private
+public class SplitTableRegionProcedure
+    extends AbstractStateMachineRegionProcedure<SplitTableRegionState> {
+  private static final Logger LOG = LoggerFactory.getLogger(SplitTableRegionProcedure.class);
+  private Boolean traceEnabled = null;
+  private RegionInfo daughter_1_RI;
+  private RegionInfo daughter_2_RI;
+  private byte[] bestSplitRow;
+  private RegionSplitPolicy splitPolicy;
 
-    private static final String SOURCE_TOPIC_ONE = "simpleBenchmarkSourceTopic1";
-    private static final String SOURCE_TOPIC_TWO = "simpleBenchmarkSourceTopic2";
-    private static final String SINK_TOPIC = "simpleBenchmarkSinkTopic";
+  public SplitTableRegionProcedure() {
+    // Required by the Procedure framework to create the procedure on replay
+  }
 
-    private static final String YAHOO_CAMPAIGNS_TOPIC = "yahooCampaigns";
-    private static final String YAHOO_EVENTS_TOPIC = "yahooEvents";
+  public SplitTableRegionProcedure(final MasterProcedureEnv env,
+      final RegionInfo regionToSplit, final byte[] splitRow) throws IOException {
+    super(env, regionToSplit);
+    preflightChecks(env, true);
+    // When procedure goes to run in its prepare step, it also does these checkOnline checks. Here
+    // we fail-fast on construction. There it skips the split with just a warning.
+    checkOnline(env, regionToSplit);
+    this.bestSplitRow = splitRow;
+    checkSplittable(env, regionToSplit, bestSplitRow);
+    final TableName table = regionToSplit.getTable();
+    final long rid = getDaughterRegionIdTimestamp(regionToSplit);
+    this.daughter_1_RI = RegionInfoBuilder.newBuilder(table)
+        .setStartKey(regionToSplit.getStartKey())
+        .setEndKey(bestSplitRow)
+        .setSplit(false)
+        .setRegionId(rid)
+        .build();
+    this.daughter_2_RI = RegionInfoBuilder.newBuilder(table)
+        .setStartKey(bestSplitRow)
+        .setEndKey(regionToSplit.getEndKey())
+        .setSplit(false)
+        .setRegionId(rid)
+        .build();
+    TableDescriptor htd = env.getMasterServices().getTableDescriptors().get(getTableName());
+    if(htd.getRegionSplitPolicyClassName() != null) {
+      // Since we don't have region reference here, creating the split policy instance without it.
+      // This can be used to invoke methods which don't require Region reference. This instantiation
+      // of a class on Master-side though it only makes sense on the RegionServer-side is
+      // for Phoenix Local Indexing. Refer HBASE-12583 for more information.
+      Class<? extends RegionSplitPolicy> clazz =
+          RegionSplitPolicy.getSplitPolicyClass(htd, env.getMasterConfiguration());
+      this.splitPolicy = ReflectionUtils.newInstance(clazz, env.getMasterConfiguration());
+    }
+  }
 
-    private static final ValueJoiner<byte[], byte[], byte[]> VALUE_JOINER = new ValueJoiner<byte[], byte[], byte[]>() {
-        @Override
-        public byte[] apply(final byte[] value1, final byte[] value2) {
-            // dump joiner in order to have as less join overhead as possible
-            if (value1 != null) {
-                return value1;
-            } else if (value2 != null) {
-                return value2;
-            } else {
-                return new byte[100];
-            }
+  /**
+   * Check whether the region is splittable
+   * @param env MasterProcedureEnv
+   * @param regionToSplit parent Region to be split
+   * @param splitRow if splitRow is not specified, will first try to get bestSplitRow from RS
+   * @throws IOException
+   */
+  private void checkSplittable(final MasterProcedureEnv env,
+      final RegionInfo regionToSplit, final byte[] splitRow) throws IOException {
+    // Ask the remote RS if this region is splittable.
+    // If we get an IOE, report it along w/ the failure so can see why we are not splittable at this time.
+    if(regionToSplit.getReplicaId() != RegionInfo.DEFAULT_REPLICA_ID) {
+      throw new IllegalArgumentException ("Can't invoke split on non-default regions directly");
+    }
+    RegionStateNode node =
+        env.getAssignmentManager().getRegionStates().getRegionStateNode(getParentRegion());
+    IOException splittableCheckIOE = null;
+    boolean splittable = false;
+    if (node != null) {
+      try {
+        if (bestSplitRow == null || bestSplitRow.length == 0) {
+          LOG.info("splitKey isn't explicitly specified, " + " will try to find a best split key from RS");
         }
-    };
-
-    private static final Serde<byte[]> BYTE_SERDE = Serdes.ByteArray();
-    private static final Serde<Integer> INTEGER_SERDE = Serdes.Integer();
-
-    long processedBytes = 0L;
-    int processedRecords = 0;
-
-    private static final long POLL_MS = 500L;
-    private static final long COMMIT_INTERVAL_MS = 30000L;
-    private static final int MAX_POLL_RECORDS = 1000;
-
-    /* ----------- benchmark variables that are hard-coded ----------- */
-
-    private static final int KEY_SPACE_SIZE = 10000;
-
-    private static final long STREAM_STREAM_JOIN_WINDOW = 10000L;
-
-    private static final long AGGREGATE_WINDOW_SIZE = 1000L;
-
-    private static final long AGGREGATE_WINDOW_ADVANCE = 500L;
-
-    private static final int SOCKET_SIZE_BYTES = 1024 * 1024;
-
-    // the following numbers are based on empirical results and should only
-    // be considered for updates when perf results have significantly changed
-
-    // with at least 10 million records, we run for at most 3 minutes
-    private static final int MAX_WAIT_MS = 3 * 60 * 1000;
-
-    /* ----------- benchmark variables that can be specified ----------- */
-
-    final String testName;
-
-    final int numRecords;
-
-    final Properties props;
-
-    private final int valueSize;
-
-    private final double keySkew;
-
-    /* ----------- ----------------------------------------- ----------- */
-
-
-    private SimpleBenchmark(final Properties props,
-                            final String testName,
-                            final int numRecords,
-                            final double keySkew,
-                            final int valueSize) {
-        super();
-        this.props = props;
-        this.testName = testName;
-        this.keySkew = keySkew;
-        this.valueSize = valueSize;
-        this.numRecords = numRecords;
-    }
-
-    private void run() {
-        switch (testName) {
-            // loading phases
-            case "load-one":
-                produce(LOADING_PRODUCER_CLIENT_ID, SOURCE_TOPIC_ONE, numRecords, keySkew, valueSize);
-                break;
-            case "load-two":
-                produce(LOADING_PRODUCER_CLIENT_ID, SOURCE_TOPIC_ONE, numRecords, keySkew, valueSize);
-                produce(LOADING_PRODUCER_CLIENT_ID, SOURCE_TOPIC_TWO, numRecords, keySkew, valueSize);
-                break;
-
-            // testing phases
-            case "consume":
-                consume(SOURCE_TOPIC_ONE);
-                break;
-            case "consumeproduce":
-                consumeAndProduce(SOURCE_TOPIC_ONE);
-                break;
-            case "streamcount":
-                countStreamsNonWindowed(SOURCE_TOPIC_ONE);
-                break;
-            case "streamcountwindowed":
-                countStreamsWindowed(SOURCE_TOPIC_ONE);
-                break;
-            case "streamprocess":
-                processStream(SOURCE_TOPIC_ONE);
-                break;
-            case "streamprocesswithsink":
-                processStreamWithSink(SOURCE_TOPIC_ONE);
-                break;
-            case "streamprocesswithstatestore":
-                processStreamWithStateStore(SOURCE_TOPIC_ONE);
-                break;
-            case "streamprocesswithwindowstore":
-                processStreamWithWindowStore(SOURCE_TOPIC_ONE);
-                break;
-            case "streamtablejoin":
-                streamTableJoin(SOURCE_TOPIC_ONE, SOURCE_TOPIC_TWO);
-                break;
-            case "streamstreamjoin":
-                streamStreamJoin(SOURCE_TOPIC_ONE, SOURCE_TOPIC_TWO);
-                break;
-            case "tabletablejoin":
-                tableTableJoin(SOURCE_TOPIC_ONE, SOURCE_TOPIC_TWO);
-                break;
-            case "yahoo":
-                yahooBenchmark(YAHOO_CAMPAIGNS_TOPIC, YAHOO_EVENTS_TOPIC);
-                break;
-            default:
-                throw new RuntimeException("Unknown test name " + testName);
-
+        // Always set bestSplitRow request as true here,
+        // need to call Region#checkSplit to check it splittable or not
+        GetRegionInfoResponse response =
+            Util.getRegionInfoResponse(env, node.getRegionLocation(), node.getRegionInfo(), true);
+        if(bestSplitRow == null || bestSplitRow.length == 0) {
+          bestSplitRow = response.hasBestSplitRow() ? response.getBestSplitRow().toByteArray() : null;
         }
-    }
+        splittable = response.hasSplittable() && response.getSplittable();
 
-    public static void main(String[] args) throws IOException {
-        if (args.length < 5) {
-            System.err.println("Not enough parameters are provided; expecting propFileName, testName, numRecords, keySkew, valueSize");
-            System.exit(1);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Splittable=" + splittable + " " + node.toShortString());
         }
+      } catch (IOException e) {
+        splittableCheckIOE = e;
+      }
+    }
 
-        String propFileName = args[0];
-        String testName = args[1].toLowerCase(Locale.ROOT);
-        int numRecords = Integer.parseInt(args[2]);
-        double keySkew = Double.parseDouble(args[3]); // 0d means even distribution
-        int valueSize = Integer.parseInt(args[4]);
+    if (!splittable) {
+      IOException e = new IOException(regionToSplit.getShortNameToLog() + " NOT splittable");
+      if (splittableCheckIOE != null) e.initCause(splittableCheckIOE);
+      throw e;
+    }
 
-        final Properties props = Utils.loadProps(propFileName);
-        final String kafka = props.getProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG);
+    if(bestSplitRow == null || bestSplitRow.length == 0) {
+      throw new DoNotRetryIOException("Region not splittable because bestSplitPoint = null, "
+          + "maybe table is too small for auto split. For force split, try specifying split row");
+    }
 
-        if (kafka == null) {
-            System.err.println("No bootstrap kafka servers specified in " + StreamsConfig.BOOTSTRAP_SERVERS_CONFIG);
-            System.exit(1);
+    if (Bytes.equals(regionToSplit.getStartKey(), bestSplitRow)) {
+      throw new DoNotRetryIOException(
+        "Split row is equal to startkey: " + Bytes.toStringBinary(splitRow));
+    }
+
+    if (!regionToSplit.containsRow(bestSplitRow)) {
+      throw new DoNotRetryIOException(
+        "Split row is not inside region key range splitKey:" + Bytes.toStringBinary(splitRow) +
+        " region: " + regionToSplit);
+    }
+  }
+
+  /**
+   * Calculate daughter regionid to use.
+   * @param hri Parent {@link RegionInfo}
+   * @return Daughter region id (timestamp) to use.
+   */
+  private static long getDaughterRegionIdTimestamp(final RegionInfo hri) {
+    long rid = EnvironmentEdgeManager.currentTime();
+    // Regionid is timestamp.  Can't be less than that of parent else will insert
+    // at wrong location in hbase:meta (See HBASE-710).
+    if (rid < hri.getRegionId()) {
+      LOG.warn("Clock skew; parent regions id is " + hri.getRegionId() +
+        " but current time here is " + rid);
+      rid = hri.getRegionId() + 1;
+    }
+    return rid;
+  }
+
+  @Override
+  protected Flow executeFromState(final MasterProcedureEnv env, final SplitTableRegionState state)
+      throws InterruptedException {
+    LOG.trace("{} execute state={}", this, state);
+
+    try {
+      switch (state) {
+        case SPLIT_TABLE_REGION_PREPARE:
+          if (prepareSplitRegion(env)) {
+            setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_PRE_OPERATION);
+            break;
+          } else {
+            return Flow.NO_MORE_STATE;
+          }
+        case SPLIT_TABLE_REGION_PRE_OPERATION:
+          preSplitRegion(env);
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_CLOSE_PARENT_REGION);
+          break;
+        case SPLIT_TABLE_REGION_CLOSE_PARENT_REGION:
+          addChildProcedure(createUnassignProcedures(env, getRegionReplication(env)));
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_CREATE_DAUGHTER_REGIONS);
+          break;
+        case SPLIT_TABLE_REGION_CREATE_DAUGHTER_REGIONS:
+          createDaughterRegions(env);
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_WRITE_MAX_SEQUENCE_ID_FILE);
+          break;
+        case SPLIT_TABLE_REGION_WRITE_MAX_SEQUENCE_ID_FILE:
+          writeMaxSequenceIdFile(env);
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_PRE_OPERATION_BEFORE_META);
+          break;
+        case SPLIT_TABLE_REGION_PRE_OPERATION_BEFORE_META:
+          preSplitRegionBeforeMETA(env);
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_UPDATE_META);
+          break;
+        case SPLIT_TABLE_REGION_UPDATE_META:
+          updateMetaForDaughterRegions(env);
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_PRE_OPERATION_AFTER_META);
+          break;
+        case SPLIT_TABLE_REGION_PRE_OPERATION_AFTER_META:
+          preSplitRegionAfterMETA(env);
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_OPEN_CHILD_REGIONS);
+          break;
+        case SPLIT_TABLE_REGION_OPEN_CHILD_REGIONS:
+          addChildProcedure(createAssignProcedures(env, getRegionReplication(env)));
+          setNextState(SplitTableRegionState.SPLIT_TABLE_REGION_POST_OPERATION);
+          break;
+        case SPLIT_TABLE_REGION_POST_OPERATION:
+          postSplitRegion(env);
+          return Flow.NO_MORE_STATE;
+        default:
+          throw new UnsupportedOperationException(this + " unhandled state=" + state);
+      }
+    } catch (IOException e) {
+      String msg = "Error trying to split region " + getParentRegion().getEncodedName() +
+          " in the table " + getTableName() + " (in state=" + state + ")";
+      if (!isRollbackSupported(state)) {
+        // We reach a state that cannot be rolled back. We just need to keep retry.
+        LOG.warn(msg, e);
+      } else {
+        LOG.error(msg, e);
+        setFailure("master-split-regions", e);
+      }
+    }
+    // if split fails,  need to call ((HRegion)parent).clearSplit() when it is a force split
+    return Flow.HAS_MORE_STATE;
+  }
+
+  /**
+   * To rollback {@link SplitTableRegionProcedure}, an AssignProcedure is asynchronously
+   * submitted for parent region to be split (rollback doesn't wait on the completion of the
+   * AssignProcedure) . This can be improved by changing rollback() to support sub-procedures.
+   * See HBASE-19851 for details.
+   */
+  @Override
+  protected void rollbackState(final MasterProcedureEnv env, final SplitTableRegionState state)
+      throws IOException, InterruptedException {
+    if (isTraceEnabled()) {
+      LOG.trace(this + " rollback state=" + state);
+    }
+
+    try {
+      switch (state) {
+        case SPLIT_TABLE_REGION_POST_OPERATION:
+        case SPLIT_TABLE_REGION_OPEN_CHILD_REGIONS:
+        case SPLIT_TABLE_REGION_PRE_OPERATION_AFTER_META:
+        case SPLIT_TABLE_REGION_UPDATE_META:
+          // PONR
+          throw new UnsupportedOperationException(this + " unhandled state=" + state);
+        case SPLIT_TABLE_REGION_PRE_OPERATION_BEFORE_META:
+          break;
+        case SPLIT_TABLE_REGION_CREATE_DAUGHTER_REGIONS:
+        case SPLIT_TABLE_REGION_WRITE_MAX_SEQUENCE_ID_FILE:
+          // Doing nothing, as re-open parent region would clean up daughter region directories.
+          break;
+        case SPLIT_TABLE_REGION_CLOSE_PARENT_REGION:
+          openParentRegion(env);
+          break;
+        case SPLIT_TABLE_REGION_PRE_OPERATION:
+          postRollBackSplitRegion(env);
+          break;
+        case SPLIT_TABLE_REGION_PREPARE:
+          break; // nothing to do
+        default:
+          throw new UnsupportedOperationException(this + " unhandled state=" + state);
+      }
+    } catch (IOException e) {
+      // This will be retried. Unless there is a bug in the code,
+      // this should be just a "temporary error" (e.g. network down)
+      LOG.warn("pid=" + getProcId() + " failed rollback attempt step " + state +
+          " for splitting the region "
+        + getParentRegion().getEncodedName() + " in table " + getTableName(), e);
+      throw e;
+    }
+  }
+
+  /*
+   * Check whether we are in the state that can be rollback
+   */
+  @Override
+  protected boolean isRollbackSupported(final SplitTableRegionState state) {
+    switch (state) {
+      case SPLIT_TABLE_REGION_POST_OPERATION:
+      case SPLIT_TABLE_REGION_OPEN_CHILD_REGIONS:
+      case SPLIT_TABLE_REGION_PRE_OPERATION_AFTER_META:
+      case SPLIT_TABLE_REGION_UPDATE_META:
+        // It is not safe to rollback if we reach to these states.
+        return false;
+      default:
+        break;
+    }
+    return true;
+  }
+
+  @Override
+  protected SplitTableRegionState getState(final int stateId) {
+    return SplitTableRegionState.forNumber(stateId);
+  }
+
+  @Override
+  protected int getStateId(final SplitTableRegionState state) {
+    return state.getNumber();
+  }
+
+  @Override
+  protected SplitTableRegionState getInitialState() {
+    return SplitTableRegionState.SPLIT_TABLE_REGION_PREPARE;
+  }
+
+  @Override
+  protected void serializeStateData(ProcedureStateSerializer serializer)
+      throws IOException {
+    super.serializeStateData(serializer);
+
+    final MasterProcedureProtos.SplitTableRegionStateData.Builder splitTableRegionMsg =
+        MasterProcedureProtos.SplitTableRegionStateData.newBuilder()
+        .setUserInfo(MasterProcedureUtil.toProtoUserInfo(getUser()))
+        .setParentRegionInfo(ProtobufUtil.toRegionInfo(getRegion()))
+        .addChildRegionInfo(ProtobufUtil.toRegionInfo(daughter_1_RI))
+        .addChildRegionInfo(ProtobufUtil.toRegionInfo(daughter_2_RI));
+    serializer.serialize(splitTableRegionMsg.build());
+  }
+
+  @Override
+  protected void deserializeStateData(ProcedureStateSerializer serializer)
+      throws IOException {
+    super.deserializeStateData(serializer);
+
+    final MasterProcedureProtos.SplitTableRegionStateData splitTableRegionsMsg =
+        serializer.deserialize(MasterProcedureProtos.SplitTableRegionStateData.class);
+    setUser(MasterProcedureUtil.toUserInfo(splitTableRegionsMsg.getUserInfo()));
+    setRegion(ProtobufUtil.toRegionInfo(splitTableRegionsMsg.getParentRegionInfo()));
+    assert(splitTableRegionsMsg.getChildRegionInfoCount() == 2);
+    daughter_1_RI = ProtobufUtil.toRegionInfo(splitTableRegionsMsg.getChildRegionInfo(0));
+    daughter_2_RI = ProtobufUtil.toRegionInfo(splitTableRegionsMsg.getChildRegionInfo(1));
+  }
+
+  @Override
+  public void toStringClassDetails(StringBuilder sb) {
+    sb.append(getClass().getSimpleName());
+    sb.append(" table=");
+    sb.append(getTableName());
+    sb.append(", parent=");
+    sb.append(getParentRegion().getShortNameToLog());
+    sb.append(", daughterA=");
+    sb.append(daughter_1_RI.getShortNameToLog());
+    sb.append(", daughterB=");
+    sb.append(daughter_2_RI.getShortNameToLog());
+  }
+
+  private RegionInfo getParentRegion() {
+    return getRegion();
+  }
+
+  @Override
+  public TableOperationType getTableOperationType() {
+    return TableOperationType.REGION_SPLIT;
+  }
+
+  @Override
+  protected ProcedureMetrics getProcedureMetrics(MasterProcedureEnv env) {
+    return env.getAssignmentManager().getAssignmentManagerMetrics().getSplitProcMetrics();
+  }
+
+  private byte[] getSplitRow() {
+    return daughter_2_RI.getStartKey();
+  }
+
+  private static final State[] EXPECTED_SPLIT_STATES = new State[] { State.OPEN, State.CLOSED };
+
+  /**
+   * Prepare to Split region.
+   * @param env MasterProcedureEnv
+   */
+  @VisibleForTesting
+  public boolean prepareSplitRegion(final MasterProcedureEnv env) throws IOException {
+    // Check whether the region is splittable
+    RegionStateNode node =
+        env.getAssignmentManager().getRegionStates().getRegionStateNode(getParentRegion());
+
+    if (node == null) {
+      throw new UnknownRegionException(getParentRegion().getRegionNameAsString());
+    }
+
+    RegionInfo parentHRI = node.getRegionInfo();
+    if (parentHRI == null) {
+      LOG.info("Unsplittable; parent region is null; node={}", node);
+      return false;
+    }
+    // Lookup the parent HRI state from the AM, which has the latest updated info.
+    // Protect against the case where concurrent SPLIT requests came in and succeeded
+    // just before us.
+    if (node.isInState(State.SPLIT)) {
+      LOG.info("Split of " + parentHRI + " skipped; state is already SPLIT");
+      return false;
+    }
+    if (parentHRI.isSplit() || parentHRI.isOffline()) {
+      LOG.info("Split of " + parentHRI + " skipped because offline/split.");
+      return false;
+    }
+
+    // expected parent to be online or closed
+    if (!node.isInState(EXPECTED_SPLIT_STATES)) {
+      // We may have SPLIT already?
+      setFailure(new IOException("Split " + parentHRI.getRegionNameAsString() +
+          " FAILED because state=" + node.getState() + "; expected " +
+          Arrays.toString(EXPECTED_SPLIT_STATES)));
+      return false;
+    }
+
+    // Since we have the lock and the master is coordinating the operation
+    // we are always able to split the region
+    if (!env.getMasterServices().isSplitOrMergeEnabled(MasterSwitchType.SPLIT)) {
+      LOG.warn("pid=" + getProcId() + " split switch is off! skip split of " + parentHRI);
+      setFailure(new IOException("Split region " + parentHRI.getRegionNameAsString() +
+          " failed due to split switch off"));
+      return false;
+    }
+
+    // set node state as SPLITTING
+    node.setState(State.SPLITTING);
+
+    return true;
+  }
+
+  /**
+   * Action before splitting region in a table.
+   * @param env MasterProcedureEnv
+   */
+  private void preSplitRegion(final MasterProcedureEnv env)
+      throws IOException, InterruptedException {
+    final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
+    if (cpHost != null) {
+      cpHost.preSplitRegionAction(getTableName(), getSplitRow(), getUser());
+    }
+
+    // TODO: Clean up split and merge. Currently all over the place.
+    // Notify QuotaManager and RegionNormalizer
+    try {
+      env.getMasterServices().getMasterQuotaManager().onRegionSplit(this.getParentRegion());
+    } catch (QuotaExceededException e) {
+      env.getAssignmentManager().getRegionNormalizer().planSkipped(this.getParentRegion(),
+          NormalizationPlan.PlanType.SPLIT);
+      throw e;
+    }
+  }
+
+  /**
+   * Action after rollback a split table region action.
+   * @param env MasterProcedureEnv
+   */
+  private void postRollBackSplitRegion(final MasterProcedureEnv env) throws IOException {
+    final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
+    if (cpHost != null) {
+      cpHost.postRollBackSplitRegionAction(getUser());
+    }
+  }
+
+  /**
+   * Rollback close parent region
+   * @param env MasterProcedureEnv
+   */
+  private void openParentRegion(final MasterProcedureEnv env) throws IOException {
+    // Check whether the region is closed; if so, open it in the same server
+    final int regionReplication = getRegionReplication(env);
+    final ServerName serverName = getParentRegionServerName(env);
+
+    final AssignProcedure[] procs = new AssignProcedure[regionReplication];
+    for (int i = 0; i < regionReplication; ++i) {
+      final RegionInfo hri = RegionReplicaUtil.getRegionInfoForReplica(getParentRegion(), i);
+      procs[i] = env.getAssignmentManager().createAssignProcedure(hri, serverName);
+    }
+    env.getMasterServices().getMasterProcedureExecutor().submitProcedures(procs);
+  }
+
+  /**
+   * Create daughter regions
+   * @param env MasterProcedureEnv
+   */
+  @VisibleForTesting
+  public void createDaughterRegions(final MasterProcedureEnv env) throws IOException {
+    final MasterFileSystem mfs = env.getMasterServices().getMasterFileSystem();
+    final Path tabledir = FSUtils.getTableDir(mfs.getRootDir(), getTableName());
+    final FileSystem fs = mfs.getFileSystem();
+    HRegionFileSystem regionFs = HRegionFileSystem.openRegionFromFileSystem(
+      env.getMasterConfiguration(), fs, tabledir, getParentRegion(), false);
+    regionFs.createSplitsDir();
+
+    Pair<Integer, Integer> expectedReferences = splitStoreFiles(env, regionFs);
+
+    assertReferenceFileCount(fs, expectedReferences.getFirst(),
+      regionFs.getSplitsDir(daughter_1_RI));
+    //Move the files from the temporary .splits to the final /table/region directory
+    regionFs.commitDaughterRegion(daughter_1_RI);
+    assertReferenceFileCount(fs, expectedReferences.getFirst(),
+      new Path(tabledir, daughter_1_RI.getEncodedName()));
+
+    assertReferenceFileCount(fs, expectedReferences.getSecond(),
+      regionFs.getSplitsDir(daughter_2_RI));
+    regionFs.commitDaughterRegion(daughter_2_RI);
+    assertReferenceFileCount(fs, expectedReferences.getSecond(),
+      new Path(tabledir, daughter_2_RI.getEncodedName()));
+  }
+
+  /**
+   * Create Split directory
+   * @param env MasterProcedureEnv
+   */
+  private Pair<Integer, Integer> splitStoreFiles(final MasterProcedureEnv env,
+      final HRegionFileSystem regionFs) throws IOException {
+    final MasterFileSystem mfs = env.getMasterServices().getMasterFileSystem();
+    final Configuration conf = env.getMasterConfiguration();
+    // The following code sets up a thread pool executor with as many slots as
+    // there's files to split. It then fires up everything, waits for
+    // completion and finally checks for any exception
+    //
+    // Note: splitStoreFiles creates daughter region dirs under the parent splits dir
+    // Nothing to unroll here if failure -- re-run createSplitsDir will
+    // clean this up.
+    int nbFiles = 0;
+    final Map<String, Collection<StoreFileInfo>> files =
+      new HashMap<String, Collection<StoreFileInfo>>(regionFs.getFamilies().size());
+    for (String family: regionFs.getFamilies()) {
+      Collection<StoreFileInfo> sfis = regionFs.getStoreFiles(family);
+      if (sfis == null) continue;
+      Collection<StoreFileInfo> filteredSfis = null;
+      for (StoreFileInfo sfi: sfis) {
+        // Filter. There is a lag cleaning up compacted reference files. They get cleared
+        // after a delay in case outstanding Scanners still have references. Because of this,
+        // the listing of the Store content may have straggler reference files. Skip these.
+        // It should be safe to skip references at this point because we checked above with
+        // the region if it thinks it is splittable and if we are here, it thinks it is
+        // splitable.
+        if (sfi.isReference()) {
+          LOG.info("Skipping split of " + sfi + "; presuming ready for archiving.");
+          continue;
         }
+        if (filteredSfis == null) {
+          filteredSfis = new ArrayList<StoreFileInfo>(sfis.size());
+          files.put(family, filteredSfis);
+        }
+        filteredSfis.add(sfi);
+        nbFiles++;
+      }
+    }
+    if (nbFiles == 0) {
+      // no file needs to be splitted.
+      return new Pair<Integer, Integer>(0,0);
+    }
+    // Max #threads is the smaller of the number of storefiles or the default max determined above.
+    int maxThreads = Math.min(
+      conf.getInt(HConstants.REGION_SPLIT_THREADS_MAX,
+        conf.getInt(HStore.BLOCKING_STOREFILES_KEY, HStore.DEFAULT_BLOCKING_STOREFILE_COUNT)),
+      nbFiles);
+    LOG.info("pid=" + getProcId() + " splitting " + nbFiles + " storefiles, region=" +
+      getParentRegion().getShortNameToLog() + ", threads=" + maxThreads);
+    final ExecutorService threadPool = Executors.newFixedThreadPool(
+      maxThreads, Threads.getNamedThreadFactory("StoreFileSplitter-%1$d"));
+    final List<Future<Pair<Path,Path>>> futures = new ArrayList<Future<Pair<Path,Path>>>(nbFiles);
 
-        // Note: this output is needed for automated tests and must not be removed
-        System.out.println("StreamsTest instance started");
+    TableDescriptor htd = env.getMasterServices().getTableDescriptors().get(getTableName());
+    // Split each store file.
+    for (Map.Entry<String, Collection<StoreFileInfo>>e: files.entrySet()) {
+      byte [] familyName = Bytes.toBytes(e.getKey());
+      final ColumnFamilyDescriptor hcd = htd.getColumnFamily(familyName);
+      final Collection<StoreFileInfo> storeFiles = e.getValue();
+      if (storeFiles != null && storeFiles.size() > 0) {
+        final CacheConfig cacheConf = new CacheConfig(conf, hcd);
+        for (StoreFileInfo storeFileInfo: storeFiles) {
+          StoreFileSplitter sfs =
+              new StoreFileSplitter(regionFs, familyName, new HStoreFile(mfs.getFileSystem(),
+                  storeFileInfo, conf, cacheConf, hcd.getBloomFilterType(), true));
+          futures.add(threadPool.submit(sfs));
+        }
+      }
+    }
+    // Shutdown the pool
+    threadPool.shutdown();
 
-        System.out.println("testName=" + testName);
-        System.out.println("streamsProperties=" + props);
-        System.out.println("numRecords=" + numRecords);
-        System.out.println("keySkew=" + keySkew);
-        System.out.println("valueSize=" + valueSize);
-
-        final SimpleBenchmark benchmark = new SimpleBenchmark(props, testName, numRecords, keySkew, valueSize);
-
-        benchmark.run();
+    // Wait for all the tasks to finish.
+    // When splits ran on the RegionServer, how-long-to-wait-configuration was named
+    // hbase.regionserver.fileSplitTimeout. If set, use its value.
+    long fileSplitTimeout = conf.getLong("hbase.master.fileSplitTimeout",
+        conf.getLong("hbase.regionserver.fileSplitTimeout", 600000));
+    try {
+      boolean stillRunning = !threadPool.awaitTermination(fileSplitTimeout, TimeUnit.MILLISECONDS);
+      if (stillRunning) {
+        threadPool.shutdownNow();
+        // wait for the thread to shutdown completely.
+        while (!threadPool.isTerminated()) {
+          Thread.sleep(50);
+        }
+        throw new IOException("Took too long to split the" +
+            " files and create the references, aborting split");
+      }
+    } catch (InterruptedException e) {
+      throw (InterruptedIOException)new InterruptedIOException().initCause(e);
     }
 
-    public void setStreamProperties(final String applicationId) {
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
-        props.put(StreamsConfig.CLIENT_ID_CONFIG, "simple-benchmark");
-        props.put(StreamsConfig.POLL_MS_CONFIG, POLL_MS);
-        props.put(StreamsConfig.COMMIT_INTERVAL_MS_CONFIG, COMMIT_INTERVAL_MS);
-        props.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.Integer().getClass());
-        props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.ByteArray().getClass());
-        // the socket buffer needs to be large, especially when running in AWS with
-        // high latency. if running locally the default is fine.
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        props.put(ConsumerConfig.RECEIVE_BUFFER_CONFIG, SOCKET_SIZE_BYTES);
-        props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, MAX_POLL_RECORDS);
-
-        // improve producer throughput
-        props.put(ProducerConfig.LINGER_MS_CONFIG, 5000);
-        props.put(ProducerConfig.BATCH_SIZE_CONFIG, 128 * 1024);
-
-        //TODO remove this config or set to smaller value when KIP-91 is merged
-        props.put(StreamsConfig.producerPrefix(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG), 60000);
+    int daughterA = 0;
+    int daughterB = 0;
+    // Look for any exception
+    for (Future<Pair<Path, Path>> future : futures) {
+      try {
+        Pair<Path, Path> p = future.get();
+        daughterA += p.getFirst() != null ? 1 : 0;
+        daughterB += p.getSecond() != null ? 1 : 0;
+      } catch (InterruptedException e) {
+        throw (InterruptedIOException) new InterruptedIOException().initCause(e);
+      } catch (ExecutionException e) {
+        throw new IOException(e);
+      }
     }
 
-    private Properties setProduceConsumeProperties(final String clientId) {
-        Properties clientProps = new Properties();
-        clientProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, props.getProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG));
-        clientProps.put(ProducerConfig.CLIENT_ID_CONFIG, clientId);
-        // the socket buffer needs to be large, especially when running in AWS with
-        // high latency. if running locally the default is fine.
-        clientProps.put(ProducerConfig.LINGER_MS_CONFIG, 5000);
-        clientProps.put(ProducerConfig.BATCH_SIZE_CONFIG, 128 * 1024);
-        clientProps.put(ProducerConfig.SEND_BUFFER_CONFIG, SOCKET_SIZE_BYTES);
-        clientProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, IntegerSerializer.class);
-        clientProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
-        clientProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, IntegerDeserializer.class);
-        clientProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class);
-        clientProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        // the socket buffer needs to be large, especially when running in AWS with
-        // high latency. if running locally the default is fine.
-        clientProps.put(ConsumerConfig.RECEIVE_BUFFER_CONFIG, SOCKET_SIZE_BYTES);
-        clientProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, MAX_POLL_RECORDS);
-        return clientProps;
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("pid=" + getProcId() + " split storefiles for region " +
+        getParentRegion().getShortNameToLog() +
+          " Daughter A: " + daughterA + " storefiles, Daughter B: " +
+          daughterB + " storefiles.");
+    }
+    return new Pair<Integer, Integer>(daughterA, daughterB);
+  }
+
+  private void assertReferenceFileCount(final FileSystem fs, final int expectedReferenceFileCount,
+      final Path dir) throws IOException {
+    if (expectedReferenceFileCount != 0 &&
+        expectedReferenceFileCount != FSUtils.getRegionReferenceFileCount(fs, dir)) {
+      throw new IOException("Failing split. Expected reference file count isn't equal.");
+    }
+  }
+
+  private Pair<Path, Path> splitStoreFile(HRegionFileSystem regionFs, byte[] family, HStoreFile sf)
+    throws IOException {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("pid=" + getProcId() + " splitting started for store file: " +
+          sf.getPath() + " for region: " + getParentRegion().getShortNameToLog());
     }
 
-    void resetStats() {
-        processedRecords = 0;
-        processedBytes = 0L;
+    final byte[] splitRow = getSplitRow();
+    final String familyName = Bytes.toString(family);
+    final Path path_first = regionFs.splitStoreFile(this.daughter_1_RI, familyName, sf, splitRow,
+        false, splitPolicy);
+    final Path path_second = regionFs.splitStoreFile(this.daughter_2_RI, familyName, sf, splitRow,
+       true, splitPolicy);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("pid=" + getProcId() + " splitting complete for store file: " +
+          sf.getPath() + " for region: " + getParentRegion().getShortNameToLog());
     }
+    return new Pair<Path,Path>(path_first, path_second);
+  }
+
+  /**
+   * Utility class used to do the file splitting / reference writing
+   * in parallel instead of sequentially.
+   */
+  private class StoreFileSplitter implements Callable<Pair<Path,Path>> {
+    private final HRegionFileSystem regionFs;
+    private final byte[] family;
+    private final HStoreFile sf;
 
     /**
-     * Produce values to a topic
-     * @param clientId String specifying client ID
-     * @param topic Topic to produce to
-     * @param numRecords Number of records to produce
-     * @param keySkew Key zipf distribution skewness
-     * @param valueSize Size of value in bytes
+     * Constructor that takes what it needs to split
+     * @param regionFs the file system
+     * @param family Family that contains the store file
+     * @param sf which file
      */
-    private void produce(final String clientId,
-                         final String topic,
-                         final int numRecords,
-                         final double keySkew,
-                         final int valueSize) {
-        final Properties props = setProduceConsumeProperties(clientId);
-        final ZipfGenerator keyGen = new ZipfGenerator(KEY_SPACE_SIZE, keySkew);
+    public StoreFileSplitter(HRegionFileSystem regionFs, byte[] family, HStoreFile sf) {
+      this.regionFs = regionFs;
+      this.sf = sf;
+      this.family = family;
+    }
 
-        try (final KafkaProducer<Integer, byte[]> producer = new KafkaProducer<>(props)) {
-            final byte[] value = new byte[valueSize];
-            // put some random values to increase entropy. Some devices
-            // like SSDs do compression and if the array is all zeros
-            // the performance will be too good.
-            new Random(System.currentTimeMillis()).nextBytes(value);
+    @Override
+    public Pair<Path,Path> call() throws IOException {
+      return splitStoreFile(regionFs, family, sf);
+    }
+  }
 
-            for (int i = 0; i < numRecords; i++) {
-                producer.send(new ProducerRecord<>(topic, keyGen.next(), value));
-            }
+  /**
+   * Post split region actions before the Point-of-No-Return step
+   * @param env MasterProcedureEnv
+   **/
+  private void preSplitRegionBeforeMETA(final MasterProcedureEnv env)
+      throws IOException, InterruptedException {
+    final List<Mutation> metaEntries = new ArrayList<Mutation>();
+    final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
+    if (cpHost != null) {
+      cpHost.preSplitBeforeMETAAction(getSplitRow(), metaEntries, getUser());
+      try {
+        for (Mutation p : metaEntries) {
+          RegionInfo.parseRegionName(p.getRow());
         }
+      } catch (IOException e) {
+        LOG.error("pid=" + getProcId() + " row key of mutation from coprocessor not parsable as "
+            + "region name."
+            + "Mutations from coprocessor should only for hbase:meta table.");
+        throw e;
+      }
     }
+  }
 
-    private void consumeAndProduce(final String topic) {
-        final Properties consumerProps = setProduceConsumeProperties("simple-benchmark-consumer");
-        final Properties producerProps = setProduceConsumeProperties("simple-benchmark-producer");
+  /**
+   * Add daughter regions to META
+   * @param env MasterProcedureEnv
+   */
+  private void updateMetaForDaughterRegions(final MasterProcedureEnv env) throws IOException {
+    env.getAssignmentManager().markRegionAsSplit(getParentRegion(), getParentRegionServerName(env),
+      daughter_1_RI, daughter_2_RI);
+  }
 
-        final long startTime = System.currentTimeMillis();
-        try (final KafkaConsumer<Integer, byte[]> consumer = new KafkaConsumer<>(consumerProps);
-             final KafkaProducer<Integer, byte[]> producer = new KafkaProducer<>(producerProps)) {
-            final List<TopicPartition> partitions = getAllPartitions(consumer, topic);
-
-            consumer.assign(partitions);
-            consumer.seekToBeginning(partitions);
-
-            while (true) {
-                final ConsumerRecords<Integer, byte[]> records = consumer.poll(Duration.ofMillis(POLL_MS));
-                if (records.isEmpty()) {
-                    if (processedRecords == numRecords) {
-                        break;
-                    }
-                } else {
-                    for (final ConsumerRecord<Integer, byte[]> record : records) {
-                        producer.send(new ProducerRecord<>(SINK_TOPIC, record.key(), record.value()));
-                        processedRecords++;
-                        processedBytes += record.value().length + Integer.SIZE;
-                        if (processedRecords == numRecords) {
-                            break;
-                        }
-                    }
-                }
-                if (processedRecords == numRecords) {
-                    break;
-                }
-            }
-        }
-
-        final long endTime = System.currentTimeMillis();
-
-        printResults("ConsumerProducer Performance [records/latency/rec-sec/MB-sec read]: ", endTime - startTime);
+  /**
+   * Pre split region actions after the Point-of-No-Return step
+   * @param env MasterProcedureEnv
+   **/
+  private void preSplitRegionAfterMETA(final MasterProcedureEnv env)
+      throws IOException, InterruptedException {
+    final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
+    if (cpHost != null) {
+      cpHost.preSplitAfterMETAAction(getUser());
     }
+  }
 
-    private void consume(final String topic) {
-        final Properties consumerProps = setProduceConsumeProperties("simple-benchmark-consumer");
-
-        final long startTime = System.currentTimeMillis();
-
-        try (final KafkaConsumer<Integer, byte[]> consumer = new KafkaConsumer<>(consumerProps)) {
-            final List<TopicPartition> partitions = getAllPartitions(consumer, topic);
-
-            consumer.assign(partitions);
-            consumer.seekToBeginning(partitions);
-
-            while (true) {
-                final ConsumerRecords<Integer, byte[]> records = consumer.poll(Duration.ofMillis(POLL_MS));
-                if (records.isEmpty()) {
-                    if (processedRecords == numRecords) {
-                        break;
-                    }
-                } else {
-                    for (final ConsumerRecord<Integer, byte[]> record : records) {
-                        processedRecords++;
-                        processedBytes += record.value().length + Integer.SIZE;
-                        if (processedRecords == numRecords) {
-                            break;
-                        }
-                    }
-                }
-                if (processedRecords == numRecords) {
-                    break;
-                }
-            }
-        }
-
-        final long endTime = System.currentTimeMillis();
-
-        printResults("Consumer Performance [records/latency/rec-sec/MB-sec read]: ", endTime - startTime);
+  /**
+   * Post split region actions
+   * @param env MasterProcedureEnv
+   **/
+  private void postSplitRegion(final MasterProcedureEnv env) throws IOException {
+    final MasterCoprocessorHost cpHost = env.getMasterCoprocessorHost();
+    if (cpHost != null) {
+      cpHost.postCompletedSplitRegionAction(daughter_1_RI, daughter_2_RI, getUser());
     }
+  }
 
-    private void processStream(final String topic) {
-        final CountDownLatch latch = new CountDownLatch(1);
+  private ServerName getParentRegionServerName(final MasterProcedureEnv env) {
+    return env.getMasterServices().getAssignmentManager()
+      .getRegionStates().getRegionServerOfRegion(getParentRegion());
+  }
 
-        setStreamProperties("simple-benchmark-streams-source");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-
-        builder.stream(topic, Consumed.with(INTEGER_SERDE, BYTE_SERDE)).peek(new CountDownAction(latch));
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-        runGenericBenchmark(streams, "Streams Source Performance [records/latency/rec-sec/MB-sec joined]: ", latch);
+  private UnassignProcedure[] createUnassignProcedures(final MasterProcedureEnv env,
+      final int regionReplication) {
+    final UnassignProcedure[] procs = new UnassignProcedure[regionReplication];
+    for (int i = 0; i < procs.length; ++i) {
+      final RegionInfo hri = RegionReplicaUtil.getRegionInfoForReplica(getParentRegion(), i);
+      procs[i] = env.getAssignmentManager().
+          createUnassignProcedure(hri, null, true, !RegionReplicaUtil.isDefaultReplica(hri));
     }
+    return procs;
+  }
 
-    private void processStreamWithSink(final String topic) {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        setStreamProperties("simple-benchmark-streams-source-sink");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-
-        final KStream<Integer, byte[]> source = builder.stream(topic);
-        source.peek(new CountDownAction(latch)).to(SINK_TOPIC);
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-        runGenericBenchmark(streams, "Streams SourceSink Performance [records/latency/rec-sec/MB-sec joined]: ", latch);
+  private AssignProcedure[] createAssignProcedures(final MasterProcedureEnv env,
+      final int regionReplication) {
+    final ServerName targetServer = getParentRegionServerName(env);
+    final AssignProcedure[] procs = new AssignProcedure[regionReplication * 2];
+    int procsIdx = 0;
+    for (int i = 0; i < regionReplication; ++i) {
+      final RegionInfo hri = RegionReplicaUtil.getRegionInfoForReplica(daughter_1_RI, i);
+      procs[procsIdx++] = env.getAssignmentManager().createAssignProcedure(hri, targetServer);
     }
-
-    private void processStreamWithStateStore(final String topic) {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        setStreamProperties("simple-benchmark-streams-with-store");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-        final StoreBuilder<KeyValueStore<Integer, byte[]>> storeBuilder
-                = Stores.keyValueStoreBuilder(Stores.persistentKeyValueStore("store"), INTEGER_SERDE, BYTE_SERDE);
-        builder.addStateStore(storeBuilder.withCachingEnabled());
-
-        final KStream<Integer, byte[]> source = builder.stream(topic);
-
-        source.peek(new CountDownAction(latch)).process(new ProcessorSupplier<Integer, byte[]>() {
-            @Override
-            public Processor<Integer, byte[]> get() {
-                return new AbstractProcessor<Integer, byte[]>() {
-                    KeyValueStore<Integer, byte[]> store;
-
-                    @SuppressWarnings("unchecked")
-                    @Override
-                    public void init(final ProcessorContext context) {
-                        super.init(context);
-                        store = (KeyValueStore<Integer, byte[]>) context.getStateStore("store");
-                    }
-
-                    @Override
-                    public void process(final Integer key, final byte[] value) {
-                        store.get(key);
-                        store.put(key, value);
-                    }
-                };
-            }
-        }, "store");
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-        runGenericBenchmark(streams, "Streams Stateful Performance [records/latency/rec-sec/MB-sec joined]: ", latch);
+    for (int i = 0; i < regionReplication; ++i) {
+      final RegionInfo hri = RegionReplicaUtil.getRegionInfoForReplica(daughter_2_RI, i);
+      procs[procsIdx++] = env.getAssignmentManager().createAssignProcedure(hri, targetServer);
     }
+    return procs;
+  }
 
-    private void processStreamWithWindowStore(final String topic) {
-        final CountDownLatch latch = new CountDownLatch(1);
+  private int getRegionReplication(final MasterProcedureEnv env) throws IOException {
+    final TableDescriptor htd = env.getMasterServices().getTableDescriptors().get(getTableName());
+    return htd.getRegionReplication();
+  }
 
-        setStreamProperties("simple-benchmark-streams-with-store");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-        final StoreBuilder<WindowStore<Integer, byte[]>> storeBuilder
-                = Stores.windowStoreBuilder(Stores.persistentWindowStore("store",
-                AGGREGATE_WINDOW_SIZE * 3,
-                3,
-                AGGREGATE_WINDOW_SIZE,
-                false),
-                INTEGER_SERDE, BYTE_SERDE);
-        builder.addStateStore(storeBuilder.withCachingEnabled());
-
-        final KStream<Integer, byte[]> source = builder.stream(topic);
-
-        source.peek(new CountDownAction(latch)).process(new ProcessorSupplier<Integer, byte[]>() {
-            @Override
-            public Processor<Integer, byte[]> get() {
-                return new AbstractProcessor<Integer, byte[]>() {
-                    WindowStore<Integer, byte[]> store;
-
-                    @SuppressWarnings("unchecked")
-                    @Override
-                    public void init(final ProcessorContext context) {
-                        super.init(context);
-                        store = (WindowStore<Integer, byte[]>) context.getStateStore("store");
-                    }
-
-                    @Override
-                    public void process(final Integer key, final byte[] value) {
-                        final long timestamp = context().timestamp();
-                        final KeyValueIterator<Windowed<Integer>, byte[]> iter = store.fetch(key - 10, key + 10, timestamp - 1000L, timestamp + 1000L);
-                        while (iter.hasNext()) {
-                            iter.next();
-                        }
-                        iter.close();
-
-                        store.put(key, value);
-                    }
-                };
-            }
-        }, "store");
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-        runGenericBenchmark(streams, "Streams Stateful Performance [records/latency/rec-sec/MB-sec joined]: ", latch);
+  private void writeMaxSequenceIdFile(MasterProcedureEnv env) throws IOException {
+    FileSystem fs = env.getMasterServices().getMasterFileSystem().getFileSystem();
+    long maxSequenceId =
+      WALSplitter.getMaxRegionSequenceId(fs, getRegionDir(env, getParentRegion()));
+    if (maxSequenceId > 0) {
+      WALSplitter.writeRegionSequenceIdFile(fs, getRegionDir(env, daughter_1_RI), maxSequenceId);
+      WALSplitter.writeRegionSequenceIdFile(fs, getRegionDir(env, daughter_2_RI), maxSequenceId);
     }
+  }
 
-    /**
-     * Measure the performance of a simple aggregate like count.
-     * Counts the occurrence of numbers (note that normally people count words, this
-     * example counts numbers)
-     */
-    private void countStreamsNonWindowed(final String sourceTopic) {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        setStreamProperties("simple-benchmark-nonwindowed-count");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-        final KStream<Integer, byte[]> input = builder.stream(sourceTopic);
-
-        input.peek(new CountDownAction(latch))
-                .groupByKey()
-                .count();
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-        runGenericBenchmark(streams, "Streams Count Performance [records/latency/rec-sec/MB-sec counted]: ", latch);
+  /**
+   * The procedure could be restarted from a different machine. If the variable is null, we need to
+   * retrieve it.
+   * @return traceEnabled
+   */
+  private boolean isTraceEnabled() {
+    if (traceEnabled == null) {
+      traceEnabled = LOG.isTraceEnabled();
     }
+    return traceEnabled;
+  }
 
-    /**
-     * Measure the performance of a simple aggregate like count.
-     * Counts the occurrence of numbers (note that normally people count words, this
-     * example counts numbers)
-     */
-    private void countStreamsWindowed(final String sourceTopic) {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        setStreamProperties("simple-benchmark-windowed-count");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-        final KStream<Integer, byte[]> input = builder.stream(sourceTopic);
-
-        input.peek(new CountDownAction(latch))
-                .groupByKey()
-                .windowedBy(TimeWindows.of(AGGREGATE_WINDOW_SIZE).advanceBy(AGGREGATE_WINDOW_ADVANCE))
-                .count();
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-        runGenericBenchmark(streams, "Streams Count Windowed Performance [records/latency/rec-sec/MB-sec counted]: ", latch);
-    }
-
-    /**
-     * Measure the performance of a KStream-KTable left join. The setup is such that each
-     * KStream record joins to exactly one element in the KTable
-     */
-    private void streamTableJoin(final String kStreamTopic, final String kTableTopic) {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        setStreamProperties("simple-benchmark-stream-table-join");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-
-        final KStream<Integer, byte[]> input1 = builder.stream(kStreamTopic);
-        final KTable<Integer, byte[]> input2 = builder.table(kTableTopic);
-
-        input1.leftJoin(input2, VALUE_JOINER).foreach(new CountDownAction(latch));
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-
-        // run benchmark
-        runGenericBenchmark(streams, "Streams KStreamKTable LeftJoin Performance [records/latency/rec-sec/MB-sec joined]: ", latch);
-    }
-
-    /**
-     * Measure the performance of a KStream-KStream left join. The setup is such that each
-     * KStream record joins to exactly one element in the other KStream
-     */
-    private void streamStreamJoin(final String kStreamTopic1, final String kStreamTopic2) {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        setStreamProperties("simple-benchmark-stream-stream-join");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-
-        final KStream<Integer, byte[]> input1 = builder.stream(kStreamTopic1);
-        final KStream<Integer, byte[]> input2 = builder.stream(kStreamTopic2);
-
-        input1.leftJoin(input2, VALUE_JOINER, JoinWindows.of(STREAM_STREAM_JOIN_WINDOW)).foreach(new CountDownAction(latch));
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-
-        // run benchmark
-        runGenericBenchmark(streams, "Streams KStreamKStream LeftJoin Performance [records/latency/rec-sec/MB-sec  joined]: ", latch);
-    }
-
-    /**
-     * Measure the performance of a KTable-KTable left join. The setup is such that each
-     * KTable record joins to exactly one element in the other KTable
-     */
-    private void tableTableJoin(String kTableTopic1, String kTableTopic2) {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        // setup join
-        setStreamProperties("simple-benchmark-table-table-join");
-
-        final StreamsBuilder builder = new StreamsBuilder();
-
-        final KTable<Integer, byte[]> input1 = builder.table(kTableTopic1);
-        final KTable<Integer, byte[]> input2 = builder.table(kTableTopic2);
-
-        input1.leftJoin(input2, VALUE_JOINER).toStream().foreach(new CountDownAction(latch));
-
-        final KafkaStreams streams = createKafkaStreamsWithExceptionHandler(builder, props);
-
-        // run benchmark
-        runGenericBenchmark(streams, "Streams KTableKTable LeftJoin Performance [records/latency/rec-sec/MB-sec joined]: ", latch);
-    }
-
-    void printResults(final String nameOfBenchmark, final long latency) {
-        System.out.println(nameOfBenchmark +
-            processedRecords + "/" +
-            latency + "/" +
-            recordsPerSec(latency, processedRecords) + "/" +
-            megabytesPerSec(latency, processedBytes));
-    }
-
-    void runGenericBenchmark(final KafkaStreams streams, final String nameOfBenchmark, final CountDownLatch latch) {
-        streams.start();
-
-        final long startTime = System.currentTimeMillis();
-        long endTime = startTime;
-
-        while (latch.getCount() > 0 && (endTime - startTime < MAX_WAIT_MS)) {
-            try {
-                latch.await(1000, TimeUnit.MILLISECONDS);
-            } catch (final InterruptedException ex) {
-                Thread.interrupted();
-            }
-
-            endTime = System.currentTimeMillis();
-        }
-        streams.close();
-
-        printResults(nameOfBenchmark, endTime - startTime);
-    }
-
-    private class CountDownAction implements ForeachAction<Integer, byte[]> {
-        private final CountDownLatch latch;
-
-        CountDownAction(final CountDownLatch latch) {
-            this.latch = latch;
-        }
-
-        @Override
-        public void apply(final Integer key, final byte[] value) {
-            processedRecords++;
-            processedBytes += Integer.SIZE + value.length;
-
-            if (processedRecords == numRecords) {
-                this.latch.countDown();
-            }
-        }
-    }
-
-    private KafkaStreams createKafkaStreamsWithExceptionHandler(final StreamsBuilder builder, final Properties props) {
-        final KafkaStreams streamsClient = new KafkaStreams(builder.build(), props);
-        streamsClient.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-            @Override
-            public void uncaughtException(Thread t, Throwable e) {
-                System.out.println("FATAL: An unexpected exception is encountered on thread " + t + ": " + e);
-
-                streamsClient.close(30, TimeUnit.SECONDS);
-            }
-        });
-
-        return streamsClient;
-    }
-    
-    private double megabytesPerSec(long time, long processedBytes) {
-        return  (processedBytes / 1024.0 / 1024.0) / (time / 1000.0);
-    }
-
-    private double recordsPerSec(long time, int numRecords) {
-        return numRecords / (time / 1000.0);
-    }
-
-    private List<TopicPartition> getAllPartitions(KafkaConsumer<?, ?> consumer, String... topics) {
-        ArrayList<TopicPartition> partitions = new ArrayList<>();
-
-        for (String topic : topics) {
-            for (PartitionInfo info : consumer.partitionsFor(topic)) {
-                partitions.add(new TopicPartition(info.topic(), info.partition()));
-            }
-        }
-        return partitions;
-    }
-
-    private void yahooBenchmark(final String campaignsTopic, final String eventsTopic) {
-        final YahooBenchmark benchmark = new YahooBenchmark(this, campaignsTopic, eventsTopic);
-
-        benchmark.run();
-    }
-
-    private class ZipfGenerator {
-        final private Random rand = new Random(System.currentTimeMillis());
-        final private int size;
-        final private double skew;
-
-        private double bottom = 0.0d;
-
-        ZipfGenerator(final int size, final double skew) {
-            this.size = size;
-            this.skew = skew;
-
-            for (int i = 1; i < size; i++) {
-                this.bottom += 1.0d / Math.pow(i, this.skew);
-            }
-        }
-
-        int next() {
-            if (skew == 0.0d) {
-                return rand.nextInt(size);
-            } else {
-                int rank;
-                double dice;
-                double frequency;
-
-                rank = rand.nextInt(size);
-                frequency = (1.0d / Math.pow(rank, this.skew)) / this.bottom;
-                dice = rand.nextDouble();
-
-                while (!(dice < frequency)) {
-                    rank = rand.nextInt(size);
-                    frequency = (1.0d / Math.pow(rank, this.skew)) / this.bottom;
-                    dice = rand.nextDouble();
-                }
-
-                return rank;
-            }
-        }
-    }
+  @Override
+  protected boolean abort(MasterProcedureEnv env) {
+    // Abort means rollback. We can't rollback all steps. HBASE-18018 added abort to all
+    // Procedures. Here is a Procedure that has a PONR and cannot be aborted wants it enters this
+    // range of steps; what do we do for these should an operator want to cancel them? HBASE-20022.
+    return isRollbackSupported(getCurrentState())? super.abort(env): false;
+  }
 }

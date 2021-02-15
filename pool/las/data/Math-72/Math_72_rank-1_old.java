@@ -1,833 +1,1063 @@
-/*
- * $Id$
- * ============================================================================
- *                    The Apache Software License, Version 1.1
- * ============================================================================
- *
- * Copyright (C) 1999-2003 The Apache Software Foundation. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modifica-
- * tion, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * 3. The end-user documentation included with the redistribution, if any, must
- *    include the following acknowledgment: "This product includes software
- *    developed by the Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowledgment may appear in the software itself, if
- *    and wherever such third-party acknowledgments normally appear.
- *
- * 4. The names "FOP" and "Apache Software Foundation" must not be used to
- *    endorse or promote products derived from this software without prior
- *    written permission. For written permission, please contact
- *    apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache", nor may
- *    "Apache" appear in their name, without prior written permission of the
- *    Apache Software Foundation.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED WARRANTIES,
- * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
- * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * APACHE SOFTWARE FOUNDATION OR ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLU-
- * DING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
- * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
- * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * ============================================================================
- *
- * This software consists of voluntary contributions made by many individuals
- * on behalf of the Apache Software Foundation and was originally created by
- * James Tauber <jtauber@jtauber.com>. For more information on the Apache
- * Software Foundation, please see <http://www.apache.org/>.
- */
-package org.apache.fop.render.rtf;
+package com.fasterxml.jackson.databind.deser;
 
-// Java
 import java.io.IOException;
-import java.io.OutputStream;
-import java.io.OutputStreamWriter;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.*;
 
-import org.apache.avalon.framework.logger.ConsoleLogger;
-import org.apache.avalon.framework.logger.Logger;
-import org.apache.fop.apps.FOPException;
-import org.apache.fop.fo.EnumProperty;
-import org.apache.fop.fo.FOInputHandler;
-import org.apache.fop.datatypes.FixedLength;
-import org.apache.fop.fo.flow.Block;
-import org.apache.fop.fo.flow.ExternalGraphic;
-import org.apache.fop.fo.flow.Inline;
-import org.apache.fop.fo.flow.InstreamForeignObject;
-import org.apache.fop.fo.flow.Leader;
-import org.apache.fop.fo.flow.ListBlock;
-import org.apache.fop.fo.flow.ListItem;
-import org.apache.fop.fo.flow.PageNumber;
-import org.apache.fop.fo.flow.Table;
-import org.apache.fop.fo.flow.TableColumn;
-import org.apache.fop.fo.flow.TableBody;
-import org.apache.fop.fo.flow.TableCell;
-import org.apache.fop.fo.flow.TableHeader;
-import org.apache.fop.fo.flow.TableRow;
-import org.apache.fop.fo.pagination.Flow;
-import org.apache.fop.fo.pagination.PageSequence;
-import org.apache.fop.fo.pagination.SimplePageMaster;
-import org.apache.fop.fo.properties.Constants;
-import org.apache.fop.fo.Property;
-import org.apache.fop.fo.LengthProperty;
-import org.apache.fop.apps.Document;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.ITableAttributes;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.IRtfAfterContainer;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.IRtfBeforeContainer;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.IRtfTextrunContainer;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfAfter;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfAttributes;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfBefore;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfDocumentArea;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfElement;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfExternalGraphic;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfFile;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfParagraph;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfSection;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfTextrun;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfTable;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfTableRow;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.RtfTableCell;
-import org.apache.fop.render.rtf.rtflib.rtfdoc.IRtfTableContainer;
-import org.xml.sax.SAXException;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.annotation.ObjectIdGenerator;
+import com.fasterxml.jackson.annotation.ObjectIdGenerators;
+
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.deser.impl.*;
+import com.fasterxml.jackson.databind.deser.std.ContainerDeserializerBase;
+import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.type.ClassKey;
+import com.fasterxml.jackson.databind.util.*;
 
 /**
- * RTF Handler: generates RTF output using the structure events from
- * the FO Tree sent to this structure handler.
- *
- * @author Bertrand Delacretaz <bdelacretaz@codeconsult.ch>
- * @author Trembicki-Guy, Ed <GuyE@DNB.com>
- * @author Boris Poudérous <boris.pouderous@eads-telecom.com>
- * @author Peter Herweg <pherweg@web.de>
- * @author Andreas Putz <a.putz@skynamics.com>
+ * Base class for <code>BeanDeserializer</code>.
  */
-public class RTFHandler extends FOInputHandler {
+public abstract class BeanDeserializerBase
+    extends StdDeserializer<Object>
+    implements ContextualDeserializer, ResolvableDeserializer,
+        java.io.Serializable // since 2.1
+{
+    private static final long serialVersionUID = -2038793552422727904L;
 
-    private RtfFile rtfFile;
-    private final OutputStream os;
-    private final Logger log = new ConsoleLogger();
-    private RtfSection sect;
-    private RtfDocumentArea docArea;
-    private boolean bPrevHeaderSpecified = false;//true, if there has been a
-                                                 //header in any page-sequence
-    private boolean bPrevFooterSpecified = false;//true, if there has been a
-                                                 //footer in any page-sequence
-    private boolean bHeaderSpecified = false;  //true, if there is a header
-                                               //in current page-sequence
-    private boolean bFooterSpecified = false;  //true, if there is a footer
-                                               //in current page-sequence
-    private BuilderContext builderContext = new BuilderContext(null);
-
-    private static final String ALPHA_WARNING = "WARNING: RTF renderer is "
-        + "veryveryalpha at this time, see class org.apache.fop.rtf.renderer.RTFHandler";
+    /*
+    /**********************************************************
+    /* Information regarding type being deserialized
+    /**********************************************************
+     */
 
     /**
-     * Creates a new RTF structure handler.
-     * @param doc the Document for which this RTFHandler is processing
-     * @param os OutputStream to write to
+     * Annotations from the bean class: used for accessing
+     * annotations during resolution
+     * (see {@link #resolve}) and
+     * contextualization (see {@link #createContextual})
+     *<p> 
+     * Transient since annotations only used during construction.
      */
-    public RTFHandler(Document doc, OutputStream os) {
-        super(doc);
-        this.os = os;
-        // use pdf fonts for now, this is only for resolving names
-        org.apache.fop.render.pdf.FontSetup.setup(doc, null);
-        log.warn(ALPHA_WARNING);
-    }
+    final private transient Annotations _classAnnotations;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#startDocument()
+     * Declared type of the bean this deserializer handles.
      */
-    public void startDocument() throws SAXException {
-        // TODO sections should be created
-        try {
-            rtfFile = new RtfFile(new OutputStreamWriter(os));
-            docArea = rtfFile.startDocumentArea();
-        } catch (IOException ioe) {
-            // TODO could we throw Exception in all FOInputHandler events?
-            throw new SAXException(ioe);
-        }
-    }
+    final protected JavaType _beanType;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#endDocument()
+     * Requested shape from bean class annotations.
      */
-    public void endDocument() throws SAXException {
-        try {
-            rtfFile.flush();
-        } catch (IOException ioe) {
-            // TODO could we throw Exception in all FOInputHandler events?
-            throw new SAXException(ioe);
-        }
-    }
+    final protected JsonFormat.Shape _serializationShape;
+    
+    /*
+    /**********************************************************
+    /* Configuration for creating value instance
+    /**********************************************************
+     */
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler
+     * Object that handles details of constructing initial 
+     * bean value (to which bind data to), unless instance
+     * is passed (via updateValue())
      */
-    public void startPageSequence(PageSequence pageSeq)  {
-        try {
-            sect = docArea.newSection();
-
-            //read page size and margins, if specified
-            Property prop;
-            if ((prop = pageSeq.properties.get("master-reference")) != null) {
-                String reference = prop.getString();
-
-                SimplePageMaster pagemaster 
-                    = pageSeq.getLayoutMasterSet().getSimplePageMaster(reference);
-
-                //only simple-page-master supported, so pagemaster may be null
-                if (pagemaster != null) {
-                    sect.getRtfAttributes().set(
-                        PageAttributesConverter.convertPageAttributes(
-                            pagemaster.properties, null));
-                }
-            }
-
-            builderContext.pushContainer(sect);
-
-            bHeaderSpecified = false;
-            bFooterSpecified = false;
-        } catch (IOException ioe) {
-            // TODO could we throw Exception in all FOInputHandler events?
-            log.error("startPageSequence: " + ioe.getMessage());
-            //TODO throw new FOPException(ioe);
-        }
-    }
+    protected final ValueInstantiator _valueInstantiator;
+    
+    /**
+     * Deserializer that is used iff delegate-based creator is
+     * to be used for deserializing from JSON Object.
+     */
+    protected JsonDeserializer<Object> _delegateDeserializer;
+    
+    /**
+     * If the bean needs to be instantiated using constructor
+     * or factory method
+     * that takes one or more named properties as argument(s),
+     * this creator is used for instantiation.
+     * This value gets resolved during general resolution.
+     */
+    protected PropertyBasedCreator _propertyBasedCreator;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#endPageSequence(PageSequence)
+     * Flag that is set to mark "non-standard" cases; where either
+     * we use one of non-default creators, or there are unwrapped
+     * values to consider.
      */
-    public void endPageSequence(PageSequence pageSeq) throws FOPException {
-        builderContext.popContainer();
-    }
+    protected boolean _nonStandardCreation;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#startFlow(Flow)
+     * Flag that indicates that no "special features" whatsoever
+     * are enabled, so the simplest processing is possible.
      */
-    public void startFlow(Flow fl) {
-        try {
-            if (fl.getFlowName().equals("xsl-region-body")) {
-                // if there is no header in current page-sequence but there has been
-                // a header in a previous page-sequence, insert an empty header.
-                if (bPrevHeaderSpecified && !bHeaderSpecified) {
-                    RtfAttributes attr = new RtfAttributes();
-                    attr.set(RtfBefore.HEADER);
+    protected boolean _vanillaProcessing;
 
-                    final IRtfBeforeContainer contBefore 
-                        = (IRtfBeforeContainer)builderContext.getContainer
-                                (IRtfBeforeContainer.class, true, this);
-                    contBefore.newBefore(attr);
-                }
-
-                // if there is no footer in current page-sequence but there has been
-                // a footer in a previous page-sequence, insert an empty footer.
-                if (bPrevFooterSpecified && !bFooterSpecified) {
-                    RtfAttributes attr = new RtfAttributes();
-                    attr.set(RtfAfter.FOOTER);
-
-                    final IRtfAfterContainer contAfter
-                        = (IRtfAfterContainer)builderContext.getContainer
-                                (IRtfAfterContainer.class, true, this);
-                    contAfter.newAfter(attr);
-                }
-
-            } else if (fl.getFlowName().equals("xsl-region-before")) {
-                bHeaderSpecified = true;
-                bPrevHeaderSpecified = true;
-
-                final IRtfBeforeContainer c 
-                    = (IRtfBeforeContainer)builderContext.getContainer(
-                        IRtfBeforeContainer.class,
-                        true, this);
-
-                RtfAttributes beforeAttributes = ((RtfElement)c).getRtfAttributes();
-                if (beforeAttributes == null) {
-                    beforeAttributes = new RtfAttributes();
-                }
-                beforeAttributes.set(RtfBefore.HEADER);
-
-                RtfBefore before = c.newBefore(beforeAttributes);
-                builderContext.pushContainer(before);
-            } else if (fl.getFlowName().equals("xsl-region-after")) {
-                bFooterSpecified = true;
-                bPrevFooterSpecified = true;
-
-                final IRtfAfterContainer c 
-                    = (IRtfAfterContainer)builderContext.getContainer(
-                        IRtfAfterContainer.class,
-                        true, this);
-
-                RtfAttributes afterAttributes = ((RtfElement)c).getRtfAttributes();
-                if (afterAttributes == null) {
-                    afterAttributes = new RtfAttributes();
-                }
-
-                afterAttributes.set(RtfAfter.FOOTER);
-
-                RtfAfter after = c.newAfter(afterAttributes);
-                builderContext.pushContainer(after);
-            }
-        } catch (IOException ioe) {
-            log.error("startFlow: " + ioe.getMessage());
-            throw new Error(ioe.getMessage());
-        } catch (Exception e) {
-            log.error("startFlow: " + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
+    /*
+    /**********************************************************
+    /* Property information, setters
+    /**********************************************************
+     */
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#endFlow(Flow)
+     * Mapping of property names to properties, built when all properties
+     * to use have been successfully resolved.
      */
-    public void endFlow(Flow fl) {
-        try {
-            if (fl.getFlowName().equals("xsl-region-body")) {
-                //just do nothing
-            } else if (fl.getFlowName().equals("xsl-region-before")) {
-                builderContext.popContainer();
-            } else if (fl.getFlowName().equals("xsl-region-after")) {
-                builderContext.popContainer();
-            }
-        } catch (Exception e) {
-            log.error("endFlow: " + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
+    final protected BeanPropertyMap _beanProperties;
+    
+    /**
+     * List of {@link ValueInjector}s, if any injectable values are
+     * expected by the bean; otherwise null.
+     * This includes injectors used for injecting values via setters
+     * and fields, but not ones passed through constructor parameters.
+     */
+    final protected ValueInjector[] _injectables;
+    
+    /**
+     * Fallback setter used for handling any properties that are not
+     * mapped to regular setters. If setter is not null, it will be
+     * called once for each such property.
+     */
+    protected SettableAnyProperty _anySetter;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#startBlock(Block)
+     * In addition to properties that are set, we will also keep
+     * track of recognized but ignorable properties: these will
+     * be skipped without errors or warnings.
      */
-    public void startBlock(Block bl) {
-        try {
-            RtfAttributes rtfAttr
-                = TextAttributesConverter.convertAttributes(bl.properties, null);
-                    
-            IRtfTextrunContainer container 
-                = (IRtfTextrunContainer)builderContext.getContainer(
-                    IRtfTextrunContainer.class,
-                    true, this);
-
-            RtfTextrun textrun = container.getTextrun();
-            
-            textrun.addParagraphBreak();
-            textrun.pushAttributes(rtfAttr);
-        } catch (IOException ioe) {
-            // TODO could we throw Exception in all FOInputHandler events?
-            log.error("startBlock: " + ioe.getMessage());
-            throw new Error("IOException: " + ioe);
-        } catch (Exception e) {
-            log.error("startBlock: " + e.getMessage());
-            throw new Error("Exception: " + e);
-        }
-    }
-
+    final protected HashSet<String> _ignorableProps;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#endBlock(Block)
+     * Flag that can be set to ignore and skip unknown properties.
+     * If set, will not throw an exception for unknown properties.
      */
-    public void endBlock(Block bl) {
-        try {
-            IRtfTextrunContainer container 
-                = (IRtfTextrunContainer)builderContext.getContainer(
-                    IRtfTextrunContainer.class,
-                    true, this);
-                    
-            RtfTextrun textrun = container.getTextrun();
-            
-            textrun.addParagraphBreak();
-            textrun.popAttributes();
-            
-        } catch (IOException ioe) {
-            log.error("startBlock:" + ioe.getMessage());
-            throw new Error(ioe.getMessage());
-        } catch (Exception e) {
-            log.error("startBlock:" + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
+    final protected boolean _ignoreAllUnknown;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#startTable(Table)
+     * Flag that indicates that some aspect of deserialization depends
+     * on active view used (if any)
      */
-    public void startTable(Table tbl) {
-        // create an RtfTable in the current table container
-        TableContext tableContext = new TableContext(builderContext);
-
-        try {
-            RtfAttributes atts 
-                = TableAttributesConverter.convertTableAttributes(tbl.properties);
-            
-            final IRtfTableContainer tc 
-                = (IRtfTableContainer)builderContext.getContainer(
-                    IRtfTableContainer.class, true, null);
-            builderContext.pushContainer(tc.newTable(atts, tableContext));
-        } catch (Exception e) {
-            log.error("startTable:" + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-
-        builderContext.pushTableContext(tableContext);
-    }
+    final protected boolean _needViewProcesing;
+    
+    /**
+     * We may also have one or more back reference fields (usually
+     * zero or one).
+     */
+    final protected Map<String, SettableBeanProperty> _backRefs;
+    
+    /*
+    /**********************************************************
+    /* Related handlers
+    /**********************************************************
+     */
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#endTable(Table)
+     * Lazily constructed map used to contain deserializers needed
+     * for polymorphic subtypes.
+     * Note that this is <b>only needed</b> for polymorphic types,
+     * that is, when the actual type is not statically known.
+     * For other types this remains null.
      */
-    public void endTable(Table tbl) {
-        builderContext.popTableContext();
-        builderContext.popContainer();
-    }
+    protected transient HashMap<ClassKey, JsonDeserializer<Object>> _subDeserializers;
 
     /**
-    *
-    * @param tc TableColumn that is starting;
-    */
-
-    public void startColumn(TableColumn tc) {
-        try {
-            Integer iWidth = new Integer(tc.getColumnWidth() / 1000);
-            builderContext.getTableContext().setNextColumnWidth(iWidth.toString() + "pt");
-            builderContext.getTableContext().setNextColumnRowSpanning(new Integer(0), null);
-        } catch (Exception e) {
-            log.error("startColumn: " + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-
-    }
-
-     /**
-     *
-     * @param tc TableColumn that is ending;
+     * If one of properties has "unwrapped" value, we need separate
+     * helper object
      */
-
-    public void endColumn(TableColumn tc) {
-    }
+    protected UnwrappedPropertyHandler _unwrappedPropertyHandler;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#startHeader(TableBody)
+     * Handler that we need iff any of properties uses external
+     * type id.
      */
-    public void startHeader(TableBody th) {
-    }
+    protected ExternalTypeHandler _externalTypeIdHandler;
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#endHeader(TableBody)
+     * If an Object Id is to be used for value handled by this
+     * deserializer, this reader is used for handling.
      */
-    public void endHeader(TableBody th) {
-    }
+    protected final ObjectIdReader _objectIdReader;
+
+    /*
+    /**********************************************************
+    /* Life-cycle, construction, initialization
+    /**********************************************************
+     */
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#startFooter(TableBody)
+     * Constructor used when initially building a deserializer
+     * instance, given a {@link BeanDeserializerBuilder} that
+     * contains configuration.
      */
-    public void startFooter(TableBody tf) {
-    }
+    protected BeanDeserializerBase(BeanDeserializerBuilder builder,
+            BeanDescription beanDesc,
+            BeanPropertyMap properties, Map<String, SettableBeanProperty> backRefs,
+            HashSet<String> ignorableProps, boolean ignoreAllUnknown,
+            boolean hasViews)
+    {
+        super(beanDesc.getType());
 
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endFooter(TableBody)
-     */
-    public void endFooter(TableBody tf) {
-    }
-
-    /**
-     *
-     * @param inl Inline that is starting.
-     */
-    public void startInline(Inline inl) {
-
-        try {
-            RtfAttributes rtfAttr
-                = TextAttributesConverter.convertCharacterAttributes(inl.properties, null);
-                    
-            IRtfTextrunContainer container
-                = (IRtfTextrunContainer)builderContext.getContainer(
-                    IRtfTextrunContainer.class, true, this);
-                    
-            RtfTextrun textrun = container.getTextrun();
-            textrun.pushAttributes(rtfAttr);
-        } catch (IOException ioe) {
-            log.error("startInline:" + ioe.getMessage());
-            throw new Error(ioe.getMessage());
-        } catch (FOPException fe) {
-            log.error("startInline:" + fe.getMessage());
-            throw new Error(fe.getMessage());
-        } catch (Exception e) {
-            log.error("startInline:" + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
-
-    /**
-     *
-     * @param inl Inline that is ending.
-     */
-    public void endInline(Inline inl) {
-        try {
-            IRtfTextrunContainer container
-                = (IRtfTextrunContainer)builderContext.getContainer(
-                    IRtfTextrunContainer.class, true, this);
-                    
-            RtfTextrun textrun = container.getTextrun();
-            textrun.popAttributes();
-        } catch (IOException ioe) {
-            log.error("startInline:" + ioe.getMessage());
-            throw new Error(ioe.getMessage());
-        } catch (Exception e) {
-            log.error("startInline:" + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
-
-     /**
-     * @see org.apache.fop.fo.FOInputHandler#startBody(TableBody)
-     */
-    public void startBody(TableBody tb) {
-        try {
-            RtfAttributes atts = TableAttributesConverter.convertRowAttributes (tb.properties,
-                   null);
-
-            RtfTable tbl = (RtfTable)builderContext.getContainer(RtfTable.class, true, this);
-            tbl.setHeaderAttribs(atts);
-        } catch (Exception e) {
-            log.error("startBody: " + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endBody(TableBody)
-     */
-    public void endBody(TableBody tb) {
-        try {
-            RtfTable tbl = (RtfTable)builderContext.getContainer(RtfTable.class, true, this);
-            tbl.setHeaderAttribs(null);
-        } catch (Exception e) {
-            log.error("endBody: " + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startRow(TableRow)
-     */
-    public void startRow(TableRow tr) {
-        try {
-            // create an RtfTableRow in the current RtfTable
-            final RtfTable tbl = (RtfTable)builderContext.getContainer(RtfTable.class,
-                    true, null);
-
-            RtfAttributes atts = TableAttributesConverter.convertRowAttributes(tr.properties,
-                    tbl.getHeaderAttribs());
-                    
-            if(tr.getParent() instanceof TableHeader) {
-                atts.set(ITableAttributes.ATTR_HEADER);
-            }
-
-            builderContext.pushContainer(tbl.newTableRow(atts));
-
-            // reset column iteration index to correctly access column widths
-            builderContext.getTableContext().selectFirstColumn();
-        } catch (Exception e) {
-            log.error("startRow: " + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endRow(TableRow)
-     */
-    public void endRow(TableRow tr) {
-        builderContext.popContainer();
-        builderContext.getTableContext().decreaseRowSpannings();
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startCell(TableCell)
-     */
-    public void startCell(TableCell tc) {
-        try {
-            TableContext tctx = builderContext.getTableContext();
-            final RtfTableRow row = (RtfTableRow)builderContext.getContainer(RtfTableRow.class,
-                    true, null);
-
-
-            //while the current column is in row-spanning, act as if
-            //a vertical merged cell would have been specified.
-            while (tctx.getNumberOfColumns() > tctx.getColumnIndex()
-                  && tctx.getColumnRowSpanningNumber().intValue() > 0) {
-                row.newTableCellMergedVertically((int)tctx.getColumnWidth(),
-                        tctx.getColumnRowSpanningAttrs());
-                tctx.selectNextColumn();
-            }
-
-            //get the width of the currently started cell
-            float width = tctx.getColumnWidth();
-
-            // create an RtfTableCell in the current RtfTableRow
-            RtfAttributes atts = TableAttributesConverter.convertCellAttributes(tc.properties);
-            RtfTableCell cell = row.newTableCell((int)width, atts);
-
-            //process number-rows-spanned attribute
-            Property p = null;
-            if ((p = tc.properties.get("number-rows-spanned")) != null) {
-                // Start vertical merge
-                cell.setVMerge(RtfTableCell.MERGE_START);
-
-                // set the number of rows spanned
-                tctx.setCurrentColumnRowSpanning(new Integer(p.getNumber().intValue()),
-                        cell.getRtfAttributes());
-            } else {
-                tctx.setCurrentColumnRowSpanning(new Integer(1), null);
-            }
-
-            builderContext.pushContainer(cell);
-        } catch (Exception e) {
-            log.error("startCell: " + e.getMessage());
-            throw new Error(e.getMessage());
-        }
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endCell(TableCell)
-     */
-    public void endCell(TableCell tc) {
-        builderContext.popContainer();
-        builderContext.getTableContext().selectNextColumn();
-    }
-
-    // Lists
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startList(ListBlock)
-     */
-    public void startList(ListBlock lb) {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endList(ListBlock)
-     */
-    public void endList(ListBlock lb) {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startListItem(ListItem)
-     */
-    public void startListItem(ListItem li) {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endListItem(ListItem)
-     */
-    public void endListItem(ListItem li) {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startListLabel()
-     */
-    public void startListLabel() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endListLabel()
-     */
-    public void endListLabel() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startListBody()
-     */
-    public void startListBody() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endListBody()
-     */
-    public void endListBody() {
-    }
-
-    // Static Regions
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startStatic()
-     */
-    public void startStatic() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endStatic()
-     */
-    public void endStatic() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startMarkup()
-     */
-    public void startMarkup() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endMarkup()
-     */
-    public void endMarkup() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#startLink()
-     */
-    public void startLink() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#endLink()
-     */
-    public void endLink() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#image(ExternalGraphic)
-     */
-    public void image(ExternalGraphic eg) {
-        try {
-       
+        AnnotatedClass ac = beanDesc.getClassInfo();
+        _classAnnotations = ac.getAnnotations();       
+        _beanType = beanDesc.getType();
+        _valueInstantiator = builder.getValueInstantiator();
         
-            final IRtfTextrunContainer c 
-                = (IRtfTextrunContainer)builderContext.getContainer(
-                    IRtfTextrunContainer.class, true, this);
-            
-            final RtfExternalGraphic newGraphic = c.getTextrun().newImage();
-       
-            Property p = null; 
-               
-            //get source file
-            if ((p = eg.properties.get("src")) != null) {
-                newGraphic.setURL (p.getString());
-            } else {
-                log.error("The attribute 'src' of <fo:external-graphic> is required.");
-                return;
-            }
-            
-            //get scaling
-            if ((p = eg.properties.get("scaling")) != null) {
-                EnumProperty e = (EnumProperty)p;
-                if (p.getEnum() == Constants.UNIFORM) {
-                    newGraphic.setScaling ("uniform");
-                }
-            }
-            
-            //get width
-            if ((p = eg.properties.get("width")) != null) {
-                LengthProperty lengthProp = (LengthProperty)p;
-                if (lengthProp.getLength() instanceof FixedLength) {
-                    Float f = new Float(lengthProp.getLength().getValue() / 1000f);
-                    String sValue = f.toString() + "pt";
-                    newGraphic.setWidth(sValue);
-                }
-            }
-            
-            //get height
-            if ((p = eg.properties.get("height")) != null) {
-                LengthProperty lengthProp = (LengthProperty)p;
-                if (lengthProp.getLength() instanceof FixedLength) {
-                    Float f = new Float(lengthProp.getLength().getValue() / 1000f);
-                    String sValue = f.toString() + "pt";
-                    newGraphic.setHeight(sValue);
-                }
-            }
+        _beanProperties = properties;
+        _backRefs = backRefs;
+        _ignorableProps = ignorableProps;
+        _ignoreAllUnknown = ignoreAllUnknown;
 
-            //TODO: make this configurable:
-            //      int compression = m_context.m_options.getRtfExternalGraphicCompressionRate ();
-            int compression = 0;
-            if (compression != 0) {
-                if (!newGraphic.setCompressionRate(compression)) {
-                    log.warn("The compression rate " + compression 
-                        + " is invalid. The value has to be between 1 and 100 %.");
-                }
+        _anySetter = builder.getAnySetter();
+        List<ValueInjector> injectables = builder.getInjectables();
+        _injectables = (injectables == null || injectables.isEmpty()) ? null
+                : injectables.toArray(new ValueInjector[injectables.size()]);
+        _objectIdReader = builder.getObjectIdReader();
+        _nonStandardCreation = (_unwrappedPropertyHandler != null)
+            || _valueInstantiator.canCreateUsingDelegate()
+            || _valueInstantiator.canCreateFromObjectWith()
+            || !_valueInstantiator.canCreateUsingDefault()
+            ;
+
+        // Any transformation we may need to apply?
+        JsonFormat.Value format = beanDesc.findExpectedFormat(null);
+        _serializationShape = (format == null) ? null : format.getShape();
+
+        _needViewProcesing = hasViews;
+        _vanillaProcessing = !_nonStandardCreation
+                && (_injectables == null)
+                && !_needViewProcesing
+                // also, may need to reorder stuff if we expect Object Id:
+                && (_objectIdReader != null)
+                ;
+    }
+
+    protected BeanDeserializerBase(BeanDeserializerBase src)
+    {
+        this(src, src._ignoreAllUnknown);
+    }
+
+    protected BeanDeserializerBase(BeanDeserializerBase src, boolean ignoreAllUnknown)
+    {
+        super(src._beanType);
+        
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _beanProperties = src._beanProperties;
+        _backRefs = src._backRefs;
+        _ignorableProps = src._ignorableProps;
+        _ignoreAllUnknown = ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        _objectIdReader = src._objectIdReader;
+        
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        _vanillaProcessing = src._vanillaProcessing;
+    }
+ 
+    protected BeanDeserializerBase(BeanDeserializerBase src, NameTransformer unwrapper)
+    {
+        super(src._beanType);
+
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _backRefs = src._backRefs;
+        _ignorableProps = src._ignorableProps;
+        _ignoreAllUnknown = (unwrapper != null) || src._ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        _objectIdReader = src._objectIdReader;
+
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+
+        if (unwrapper != null) {
+            // delegate further unwraps, if any
+            if (_unwrappedPropertyHandler != null) { // got handler, delegate
+                _unwrappedPropertyHandler.renameAll(unwrapper);
             }
-        } catch (Exception e) {
-            log.error("image: " + e.getMessage());
+            // and handle direct unwrapping as well:
+            _beanProperties = src._beanProperties.renameAll(unwrapper);
+        } else {
+            _beanProperties = src._beanProperties;
+        }
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        // probably adds a twist, so:
+        _vanillaProcessing = false;
+    }
+
+    public BeanDeserializerBase(BeanDeserializerBase src, ObjectIdReader oir)
+    {
+        super(src._beanType);
+        
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _backRefs = src._backRefs;
+        _ignorableProps = src._ignorableProps;
+        _ignoreAllUnknown = src._ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        _vanillaProcessing = src._vanillaProcessing;
+
+        // then actual changes:
+        _objectIdReader = oir;
+
+        if (oir == null) {
+            _beanProperties = src._beanProperties;
+        } else {
+            _beanProperties = src._beanProperties.withProperty(new ObjectIdValueProperty(oir));
         }
     }
 
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#pageRef()
-     */
-    public void pageRef() {
+    public BeanDeserializerBase(BeanDeserializerBase src, HashSet<String> ignorableProps)
+    {
+        super(src._beanType);
+        
+        _classAnnotations = src._classAnnotations;
+        _beanType = src._beanType;
+        
+        _valueInstantiator = src._valueInstantiator;
+        _delegateDeserializer = src._delegateDeserializer;
+        _propertyBasedCreator = src._propertyBasedCreator;
+        
+        _backRefs = src._backRefs;
+        _ignorableProps = ignorableProps;
+        _ignoreAllUnknown = src._ignoreAllUnknown;
+        _anySetter = src._anySetter;
+        _injectables = src._injectables;
+        
+        _nonStandardCreation = src._nonStandardCreation;
+        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
+        _needViewProcesing = src._needViewProcesing;
+        _serializationShape = src._serializationShape;
+
+        _vanillaProcessing = src._vanillaProcessing;
+        _objectIdReader = src._objectIdReader;
+        _beanProperties = src._beanProperties;
     }
+    
+    @Override
+    public abstract JsonDeserializer<Object> unwrappingDeserializer(NameTransformer unwrapper);
+
+    public abstract BeanDeserializerBase withObjectIdReader(ObjectIdReader oir);
+
+    public abstract BeanDeserializerBase withIgnorableProperties(HashSet<String> ignorableProps);
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#foreignObject(InstreamForeignObject)
+     * Fluent factory for creating a variant that can handle
+     * POJO output as a JSON Array. Implementations may ignore this request
+     * if no such input is possible.
+     * 
+     * @since 2.1
      */
-    public void foreignObject(InstreamForeignObject ifo) {
-    }
+    protected abstract BeanDeserializerBase asArrayDeserializer();
+    
+    /*
+    /**********************************************************
+    /* Validation, post-processing
+    /**********************************************************
+     */
 
     /**
-     * @see org.apache.fop.fo.FOInputHandler#footnote()
+     * Method called to finalize setup of this deserializer,
+     * after deserializer itself has been registered.
+     * This is needed to handle recursive and transitive dependencies.
      */
-    public void footnote() {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#leader(Leader)
-     */
-    public void leader(Leader l) {
-    }
-
-    /**
-     * @see org.apache.fop.fo.FOInputHandler#characters(char[], int, int)
-     */
-    public void characters(char[] data, int start, int length) {
-        try {
-            IRtfTextrunContainer container
-                = (IRtfTextrunContainer)builderContext.getContainer(
-                    IRtfTextrunContainer.class, true, this);
-                    
-            RtfTextrun textrun = container.getTextrun();
-            textrun.addString(new String(data, start, length));
-         } catch (IOException ioe) {
-            // FIXME could we throw Exception in all FOInputHandler events?
-            log.error("characters: " + ioe.getMessage());
-            throw new Error(ioe.getMessage());
-        } catch (Exception e) {
-            log.error("characters:" + e.getMessage());
-            throw new Error(e.getMessage());
+//  @Override
+    public void resolve(DeserializationContext ctxt)
+        throws JsonMappingException
+    {
+        ExternalTypeHandler.Builder extTypes = null;
+        // if ValueInstantiator can use "creator" approach, need to resolve it here...
+        if (_valueInstantiator.canCreateFromObjectWith()) {
+            SettableBeanProperty[] creatorProps = _valueInstantiator.getFromObjectArguments(ctxt.getConfig());
+            _propertyBasedCreator = PropertyBasedCreator.construct(ctxt, _valueInstantiator, creatorProps);
+            // also: need to try to resolve 'external' type ids...
+            for (SettableBeanProperty prop : _propertyBasedCreator.properties()) {
+                if (prop.hasValueTypeDeserializer()) {
+                    TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
+                    if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
+                        if (extTypes == null) {
+                            extTypes = new ExternalTypeHandler.Builder();
+                        }
+                        extTypes.addExternal(prop, typeDeser);
+                    }
+                }
+            }
         }
+
+        UnwrappedPropertyHandler unwrapped = null;
+
+        for (SettableBeanProperty origProp : _beanProperties) {
+            SettableBeanProperty prop = origProp;
+            // May already have deserializer from annotations, if so, skip:
+            if (!prop.hasValueDeserializer()) {
+                prop = prop.withValueDeserializer(findDeserializer(ctxt, prop.getType(), prop));
+            } else { // may need contextual version
+                JsonDeserializer<Object> deser = prop.getValueDeserializer();
+                if (deser instanceof ContextualDeserializer) {
+                    JsonDeserializer<?> cd = ((ContextualDeserializer) deser).createContextual(ctxt, prop);
+                    if (cd != deser) {
+                        prop = prop.withValueDeserializer(cd);
+                    }
+                }
+            }
+            // [JACKSON-235]: need to link managed references with matching back references
+            prop = _resolveManagedReferenceProperty(ctxt, prop);
+            // [JACKSON-132]: support unwrapped values (via @JsonUnwrapped)
+            SettableBeanProperty u = _resolveUnwrappedProperty(ctxt, prop);
+            if (u != null) {
+                prop = u;
+                if (unwrapped == null) {
+                    unwrapped = new UnwrappedPropertyHandler();
+                }
+                unwrapped.addProperty(prop);
+                continue;
+            }
+            // [JACKSON-594]: non-static inner classes too:
+            prop = _resolveInnerClassValuedProperty(ctxt, prop);
+            if (prop != origProp) {
+                _beanProperties.replace(prop);
+            }
+            
+            /* one more thing: if this property uses "external property" type inclusion
+             * (see [JACKSON-453]), it needs different handling altogether
+             */
+            if (prop.hasValueTypeDeserializer()) {
+                TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
+                if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
+                    if (extTypes == null) {
+                        extTypes = new ExternalTypeHandler.Builder();
+                    }
+                    extTypes.addExternal(prop, typeDeser);
+                    // In fact, remove from list of known properties to simplify later handling
+                    _beanProperties.remove(prop);
+                    continue;
+                }
+            }
+        }
+
+        // "any setter" may also need to be resolved now
+        if (_anySetter != null && !_anySetter.hasValueDeserializer()) {
+            _anySetter = _anySetter.withValueDeserializer(findDeserializer(ctxt,
+                    _anySetter.getType(), _anySetter.getProperty()));
+        }
+
+        // as well as delegate-based constructor:
+        if (_valueInstantiator.canCreateUsingDelegate()) {
+            JavaType delegateType = _valueInstantiator.getDelegateType(ctxt.getConfig());
+            if (delegateType == null) {
+                throw new IllegalArgumentException("Invalid delegate-creator definition for "+_beanType
+                        +": value instantiator ("+_valueInstantiator.getClass().getName()
+                        +") returned true for 'canCreateUsingDelegate()', but null for 'getDelegateType()'");
+            }
+            AnnotatedWithParams delegateCreator = _valueInstantiator.getDelegateCreator();
+            // Need to create a temporary property to allow contextual deserializers:
+            BeanProperty.Std property = new BeanProperty.Std(null,
+                    delegateType, _classAnnotations, delegateCreator);
+            _delegateDeserializer = findDeserializer(ctxt, delegateType, property);
+        }
+        
+        if (extTypes != null) {
+            _externalTypeIdHandler = extTypes.build();
+            // we consider this non-standard, to offline handling
+            _nonStandardCreation = true;
+        }
+        
+        _unwrappedPropertyHandler = unwrapped;
+        if (unwrapped != null) { // we consider this non-standard, to offline handling
+            _nonStandardCreation = true;
+        }
+
+        // may need to disable vanilla processing, if unwrapped handling was enabled...
+        _vanillaProcessing = _vanillaProcessing && !_nonStandardCreation;
     }
 
     /**
+     * Although most of post-processing is done in resolve(), we only get
+     * access to referring property's annotations here; and this is needed
+     * to support per-property ObjectIds.
+     * We will also consider Shape transformations (read from Array) at this
+     * point, since it may come from either Class definition or property.
+     */
+//  @Override
+    public JsonDeserializer<?> createContextual(DeserializationContext ctxt,
+            BeanProperty property) throws JsonMappingException
+    {
+        ObjectIdReader oir = _objectIdReader;
+        String[] ignorals = null;
+
+        // First: may have an override for Object Id:
+        final AnnotationIntrospector intr = ctxt.getAnnotationIntrospector();
+        final AnnotatedMember accessor = (property == null || intr == null)
+                ? null : property.getMember();
+        if (property != null && intr != null) {
+            ignorals = intr.findPropertiesToIgnore(accessor);
+            ObjectIdInfo objectIdInfo = intr.findObjectIdInfo(accessor);
+            if (objectIdInfo != null) { // some code duplication here as well (from BeanDeserializerFactory)
+                // 2.1: allow modifications by "id ref" annotations as well:
+                objectIdInfo = intr.findObjectReferenceInfo(accessor, objectIdInfo);
+                
+                Class<?> implClass = objectIdInfo.getGeneratorType();
+                // Property-based generator is trickier
+                JavaType idType;
+                SettableBeanProperty idProp;
+                ObjectIdGenerator<?> idGen;
+                if (implClass == ObjectIdGenerators.PropertyGenerator.class) {
+                    String propName = objectIdInfo.getPropertyName();
+                    idProp = findProperty(propName);
+                    if (idProp == null) {
+                        throw new IllegalArgumentException("Invalid Object Id definition for "
+                                +getBeanClass().getName()+": can not find property with name '"+propName+"'");
+                    }
+                    idType = idProp.getType();
+                    idGen = new PropertyBasedObjectIdGenerator(objectIdInfo.getScope());
+                } else { // other types need to be simpler
+                    JavaType type = ctxt.constructType(implClass);
+                    idType = ctxt.getTypeFactory().findTypeParameters(type, ObjectIdGenerator.class)[0];
+                    idProp = null;
+                    idGen = ctxt.objectIdGeneratorInstance(accessor, objectIdInfo);
+                }
+                JsonDeserializer<?> deser = ctxt.findRootValueDeserializer(idType);
+                oir = ObjectIdReader.construct(idType, objectIdInfo.getPropertyName(),
+                		idGen, deser, idProp);
+            }
+        }
+        // either way, need to resolve serializer:
+        BeanDeserializerBase contextual = this;
+        if (oir != null && oir != _objectIdReader) {
+            contextual = contextual.withObjectIdReader(oir);
+        }
+        // And possibly add more properties to ignore
+        if (ignorals != null && ignorals.length != 0) {
+            HashSet<String> newIgnored = ArrayBuilders.setAndArray(contextual._ignorableProps, ignorals);
+            contextual = contextual.withIgnorableProperties(newIgnored);
+        }
+
+        // One more thing: are we asked to serialize POJO as array?
+        JsonFormat.Shape shape = null;
+        if (accessor != null) {
+            JsonFormat.Value format = intr.findFormat((Annotated) accessor);
+
+            if (format != null) {
+                shape = format.getShape();
+            }
+        }
+        if (shape == null) {
+            shape = _serializationShape;
+        }
+        if (shape == JsonFormat.Shape.ARRAY) {
+            contextual = contextual.asArrayDeserializer();
+        }
+        return contextual;
+    }
+
+    
+    /**
+     * Helper method called to see if given property is part of 'managed' property
+     * pair (managed + back reference), and if so, handle resolution details.
+     */
+    protected SettableBeanProperty _resolveManagedReferenceProperty(DeserializationContext ctxt,
+            SettableBeanProperty prop)
+    {
+        String refName = prop.getManagedReferenceName();
+        if (refName == null) {
+            return prop;
+        }
+        JsonDeserializer<?> valueDeser = prop.getValueDeserializer();
+        SettableBeanProperty backProp = null;
+        boolean isContainer = false;
+        if (valueDeser instanceof BeanDeserializerBase) {
+            backProp = ((BeanDeserializerBase) valueDeser).findBackReference(refName);
+        } else if (valueDeser instanceof ContainerDeserializerBase<?>) {
+            JsonDeserializer<?> contentDeser = ((ContainerDeserializerBase<?>) valueDeser).getContentDeserializer();
+            if (!(contentDeser instanceof BeanDeserializerBase)) {
+                String deserName = (contentDeser == null) ? "NULL" : contentDeser.getClass().getName();
+                throw new IllegalArgumentException("Can not handle managed/back reference '"+refName
+                        +"': value deserializer is of type ContainerDeserializerBase, but content type is not handled by a BeanDeserializer "
+                        +" (instead it's of type "+deserName+")");
+            }
+            backProp = ((BeanDeserializerBase) contentDeser).findBackReference(refName);
+            isContainer = true;
+        } else if (valueDeser instanceof AbstractDeserializer) {
+            backProp = ((AbstractDeserializer) valueDeser).findBackReference(refName);
+        } else {
+            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName
+                    +"': type for value deserializer is not BeanDeserializer or ContainerDeserializerBase, but "
+                    +valueDeser.getClass().getName());
+        }
+        if (backProp == null) {
+            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': no back reference property found from type "
+                    +prop.getType());
+        }
+        // also: verify that type is compatible
+        JavaType referredType = _beanType;
+        JavaType backRefType = backProp.getType();
+        if (!backRefType.getRawClass().isAssignableFrom(referredType.getRawClass())) {
+            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': back reference type ("
+                    +backRefType.getRawClass().getName()+") not compatible with managed type ("
+                    +referredType.getRawClass().getName()+")");
+        }
+        return new ManagedReferenceProperty(prop, refName, backProp,
+                _classAnnotations, isContainer);
+    }
+
+    /**
+     * Helper method called to see if given property might be so-called unwrapped
+     * property: these require special handling.
+     */
+    protected SettableBeanProperty _resolveUnwrappedProperty(DeserializationContext ctxt,
+            SettableBeanProperty prop)
+    {
+        AnnotatedMember am = prop.getMember();
+        if (am != null) {
+            NameTransformer unwrapper = ctxt.getAnnotationIntrospector().findUnwrappingNameTransformer(am);
+            if (unwrapper != null) {
+                JsonDeserializer<Object> orig = prop.getValueDeserializer();
+                JsonDeserializer<Object> unwrapping = orig.unwrappingDeserializer(unwrapper);
+                if (unwrapping != orig && unwrapping != null) {
+                    // might be cleaner to create new instance; but difficult to do reliably, so:
+                    return prop.withValueDeserializer(unwrapping);
+                }
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Helper method that will handle gruesome details of dealing with properties
+     * that have non-static inner class as value...
+     */
+    protected SettableBeanProperty _resolveInnerClassValuedProperty(DeserializationContext ctxt,
+            SettableBeanProperty prop)
+    {            
+        /* Should we encounter a property that has non-static inner-class
+         * as value, we need to add some more magic to find the "hidden" constructor...
+         */
+        JsonDeserializer<Object> deser = prop.getValueDeserializer();
+        // ideally wouldn't rely on it being BeanDeserializerBase; but for now it'll have to do
+        if (deser instanceof BeanDeserializerBase) {
+            BeanDeserializerBase bd = (BeanDeserializerBase) deser;
+            ValueInstantiator vi = bd.getValueInstantiator();
+            if (!vi.canCreateUsingDefault()) { // no default constructor
+                Class<?> valueClass = prop.getType().getRawClass();
+                Class<?> enclosing = ClassUtil.getOuterClass(valueClass);
+                // and is inner class of the bean class...
+                if (enclosing != null && enclosing == _beanType.getRawClass()) {
+                    for (Constructor<?> ctor : valueClass.getConstructors()) {
+                        Class<?>[] paramTypes = ctor.getParameterTypes();
+                        if (paramTypes.length == 1 && paramTypes[0] == enclosing) {
+                            if (ctxt.getConfig().canOverrideAccessModifiers()) {
+                                ClassUtil.checkAndFixAccess(ctor);
+                            }
+                            return new InnerClassProperty(prop, ctor);
+                        }
+                    }
+                }
+            }
+        }
+        return prop;
+    }
+
+    /*
+    /**********************************************************
+    /* Public accessors
+    /**********************************************************
+     */
+
+    @Override
+    public boolean isCachable() { return true; }
+
+    /**
+     * Overridden to return true for those instances that are
+     * handling value for which Object Identity handling is enabled
+     * (either via value type or referring property).
+     */
+    @Override
+    public ObjectIdReader getObjectIdReader() {
+        return _objectIdReader;
+    }
+    
+    public boolean hasProperty(String propertyName) {
+        return _beanProperties.find(propertyName) != null;
+    }
+
+    public boolean hasViews() {
+        return _needViewProcesing;
+    }
+    
+    /**
+     * Accessor for checking number of deserialized properties.
+     */
+    public int getPropertyCount() { 
+        return _beanProperties.size();
+    }
+
+    @Override
+    public Collection<Object> getKnownPropertyNames() {
+        ArrayList<Object> names = new ArrayList<Object>();
+        for (SettableBeanProperty prop : _beanProperties) {
+            names.add(prop.getName());
+        }
+        return names;
+    }
+    
+    public final Class<?> getBeanClass() { return _beanType.getRawClass(); }
+
+    @Override public JavaType getValueType() { return _beanType; }
+
+    /**
+     * Accessor for iterating over properties this deserializer uses; with
+     * the exception that properties passed via Creator methods
+     * (specifically, "property-based constructor") are not included,
+     * but can be accessed separate by calling
+     * {@link #creatorProperties}
+     */
+    public Iterator<SettableBeanProperty> properties()
+    {
+        if (_beanProperties == null) {
+            throw new IllegalStateException("Can only call after BeanDeserializer has been resolved");
+        }
+        return _beanProperties.iterator();
+    }
+
+    /**
+     * Accessor for finding properties that represents values to pass
+     * through property-based creator method (constructor or
+     * factory method)
+     * 
+     * @since 2.0
+     */
+    public Iterator<SettableBeanProperty> creatorProperties()
+    {
+        if (_propertyBasedCreator == null) {
+            return Collections.<SettableBeanProperty>emptyList().iterator();
+        }
+        return _propertyBasedCreator.properties().iterator();
+    }
+
+    /**
+     * Accessor for finding the property with given name, if POJO
+     * has one. Name used is the external name, i.e. name used
+     * in external data representation (JSON).
+     * 
+     * @since 2.0
+     */
+    public SettableBeanProperty findProperty(String propertyName)
+    {
+        SettableBeanProperty prop = (_beanProperties == null) ?
+                null : _beanProperties.find(propertyName);
+        if (prop == null && _propertyBasedCreator != null) {
+            prop = _propertyBasedCreator.findCreatorProperty(propertyName);
+        }
+        return prop;
+    }
+    
+    /**
+     * Method needed by {@link BeanDeserializerFactory} to properly link
+     * managed- and back-reference pairs.
+     */
+    public SettableBeanProperty findBackReference(String logicalName)
+    {
+        if (_backRefs == null) {
+            return null;
+        }
+        return _backRefs.get(logicalName);
+    }
+
+    public ValueInstantiator getValueInstantiator() {
+        return _valueInstantiator;
+    }
+
+    /*
+    /**********************************************************
+    /* Mutators
+    /**********************************************************
+     */
+
+    /**
+     * Method that can be used to replace an existing property with
+     * a modified one.
+     *<p>
+     * NOTE: only ever use this method if you know what you are doing;
+     * incorrect usage can break deserializer.
      *
-     * @param pagenum PageNumber that is starting.
+     * @param original Property to replace
+     * @param replacement Property to replace it with
+     * 
+     * @since 2.1
      */
-    public void startPageNumber(PageNumber pagenum) {
-        try {
-            RtfAttributes rtfAttr
-                = TextAttributesConverter.convertCharacterAttributes(
-                    pagenum.properties, null);
-                    
-            IRtfTextrunContainer container
-                = (IRtfTextrunContainer)builderContext.getContainer(
-                    IRtfTextrunContainer.class, true, this);
-                    
-            RtfTextrun textrun = container.getTextrun();
-            textrun.addPageNumber(rtfAttr);
-        } catch (IOException ioe) {
-            log.error("startPageNumber:" + ioe.getMessage());
-            throw new Error(ioe.getMessage());
-        } catch (Exception e) {
-            log.error("startPageNumber: " + e.getMessage());
-            throw new Error(e.getMessage());
+    public void replaceProperty(SettableBeanProperty original,
+            SettableBeanProperty replacement)
+    {
+        _beanProperties.replace(replacement);
+    }
+
+    /*
+    /**********************************************************
+    /* Partial deserializer implementation
+    /**********************************************************
+     */
+    
+    @Override
+    public final Object deserializeWithType(JsonParser jp, DeserializationContext ctxt,
+            TypeDeserializer typeDeserializer)
+        throws IOException, JsonProcessingException
+    {
+        /* 16-Feb-2012, tatu: ObjectId may be used as well... need to check
+         *    that first
+         */
+        if (_objectIdReader != null) {
+            JsonToken t = jp.getCurrentToken();
+            // should be good enough check; we only care about Strings, integral numbers:
+            if (t != null && t.isScalarValue()) {
+                return deserializeFromObjectId(jp, ctxt);
+            }
         }
+        // In future could check current token... for now this should be enough:
+        return typeDeserializer.deserializeTypedFromObject(jp, ctxt);
     }
 
     /**
-     *
-     * @param pagenum PageNumber that is ending.
+     * Method called in cases where it looks like we got an Object Id
+     * to parse and use as a reference.
      */
-    public void endPageNumber(PageNumber pagenum) {
+    protected Object deserializeFromObjectId(JsonParser jp, DeserializationContext ctxt)
+        throws IOException, JsonProcessingException
+    {
+        Object id = _objectIdReader.deserializer.deserialize(jp, ctxt);
+        ReadableObjectId roid = ctxt.findObjectId(id, _objectIdReader.generator);
+        // do we have it resolved?
+        Object pojo = roid.item;
+        if (pojo == null) { // not yet; should wait...
+            throw new IllegalStateException("Could not resolve Object Id ["+id+"] -- unresolved forward-reference?");
+        }
+        return pojo;
+    }
+    
+    /*
+    /**********************************************************
+    /* Overridable helper methods
+    /**********************************************************
+     */
+
+    protected void injectValues(DeserializationContext ctxt, Object bean)
+            throws IOException, JsonProcessingException
+    {
+        for (ValueInjector injector : _injectables) {
+            injector.inject(ctxt, bean);
+        }
+    }
+    
+    /**
+     * Method called when a JSON property is encountered that has not matching
+     * setter, any-setter or field, and thus can not be assigned.
+     */
+    @Override
+    protected void handleUnknownProperty(JsonParser jp, DeserializationContext ctxt,
+            Object beanOrClass, String propName)
+        throws IOException, JsonProcessingException
+    {
+        /* 22-Aug-2010, tatu: Caller now mostly checks for ignorable properties, so
+         *    following should not be necessary. However, "handleUnknownProperties()" seems
+         *    to still possibly need it so it is left for now.
+         */
+        // If registered as ignorable, skip
+        if (_ignoreAllUnknown ||
+            (_ignorableProps != null && _ignorableProps.contains(propName))) {
+            jp.skipChildren();
+            return;
+        }
+        /* Otherwise use default handling (call handler(s); if not
+         * handled, throw exception or skip depending on settings)
+         */
+        super.handleUnknownProperty(jp, ctxt, beanOrClass, propName);
+    }
+
+    /**
+     * Method called to handle set of one or more unknown properties,
+     * stored in their entirety in given {@link TokenBuffer}
+     * (as field entries, name and value).
+     */
+    protected Object handleUnknownProperties(DeserializationContext ctxt, Object bean, TokenBuffer unknownTokens)
+        throws IOException, JsonProcessingException
+    {
+        // First: add closing END_OBJECT as marker
+        unknownTokens.writeEndObject();
+        
+        // note: buffer does NOT have starting START_OBJECT
+        JsonParser bufferParser = unknownTokens.asParser();
+        while (bufferParser.nextToken() != JsonToken.END_OBJECT) {
+            String propName = bufferParser.getCurrentName();
+            // Unknown: let's call handler method
+            bufferParser.nextToken();
+            handleUnknownProperty(bufferParser, ctxt, bean, propName);
+        }
+        return bean;
+    }
+    
+    /**
+     * Helper method called to (try to) locate deserializer for given sub-type of
+     * type that this deserializer handles.
+     */
+    protected JsonDeserializer<Object> _findSubclassDeserializer(DeserializationContext ctxt,
+            Object bean, TokenBuffer unknownTokens)
+        throws IOException, JsonProcessingException
+    {  
+        JsonDeserializer<Object> subDeser;
+
+        // First: maybe we have already created sub-type deserializer?
+        synchronized (this) {
+            subDeser = (_subDeserializers == null) ? null : _subDeserializers.get(new ClassKey(bean.getClass()));
+        }
+        if (subDeser != null) {
+            return subDeser;
+        }
+        // If not, maybe we can locate one. First, need provider
+        JavaType type = ctxt.constructType(bean.getClass());
+        /* 30-Jan-2012, tatu: Ideally we would be passing referring
+         *   property; which in theory we could keep track of via
+         *   ResolvableDeserializer (if we absolutely must...).
+         *   But for now, let's not bother.
+         */
+//        subDeser = ctxt.findValueDeserializer(type, _property);
+        subDeser = ctxt.findRootValueDeserializer(type);
+        // Also, need to cache it
+        if (subDeser != null) {
+            synchronized (this) {
+                if (_subDeserializers == null) {
+                    _subDeserializers = new HashMap<ClassKey,JsonDeserializer<Object>>();;
+                }
+                _subDeserializers.put(new ClassKey(bean.getClass()), subDeser);
+            }            
+        }
+        return subDeser;
+    }
+    
+    /*
+    /**********************************************************
+    /* Helper methods for error reporting
+    /**********************************************************
+     */
+
+    /**
+     * Method that will modify caught exception (passed in as argument)
+     * as necessary to include reference information, and to ensure it
+     * is a subtype of {@link IOException}, or an unchecked exception.
+     *<p>
+     * Rules for wrapping and unwrapping are bit complicated; essentially:
+     *<ul>
+     * <li>Errors are to be passed as is (if uncovered via unwrapping)
+     * <li>"Plain" IOExceptions (ones that are not of type
+     *   {@link JsonMappingException} are to be passed as is
+     *</ul>
+     */
+    public void wrapAndThrow(Throwable t, Object bean, String fieldName,
+            DeserializationContext ctxt)
+        throws IOException
+    {
+        /* 05-Mar-2009, tatu: But one nasty edge is when we get
+         *   StackOverflow: usually due to infinite loop. But that
+         *   usually gets hidden within an InvocationTargetException...
+         */
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors and "plain" IOExceptions to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
+        // Ditto for IOExceptions; except we may want to wrap mapping exceptions
+        if (t instanceof IOException) {
+            if (!wrap || !(t instanceof JsonMappingException)) {
+                throw (IOException) t;
+            }
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        // [JACKSON-55] Need to add reference information
+        throw JsonMappingException.wrapWithPath(t, bean, fieldName);
+    }
+
+    public void wrapAndThrow(Throwable t, Object bean, int index, DeserializationContext ctxt)
+        throws IOException
+    {
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors and "plain" IOExceptions to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
+        // Ditto for IOExceptions; except we may want to wrap mapping exceptions
+        if (t instanceof IOException) {
+            if (!wrap || !(t instanceof JsonMappingException)) {
+                throw (IOException) t;
+            }
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        // [JACKSON-55] Need to add reference information
+        throw JsonMappingException.wrapWithPath(t, bean, index);
+    }
+
+    protected void wrapInstantiationProblem(Throwable t, DeserializationContext ctxt)
+        throws IOException
+    {
+        while (t instanceof InvocationTargetException && t.getCause() != null) {
+            t = t.getCause();
+        }
+        // Errors and "plain" IOExceptions to be passed as is
+        if (t instanceof Error) {
+            throw (Error) t;
+        }
+        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
+        if (t instanceof IOException) {
+            // Since we have no more information to add, let's not actually wrap..
+            throw (IOException) t;
+        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
+            if (t instanceof RuntimeException) {
+                throw (RuntimeException) t;
+            }
+        }
+        throw ctxt.instantiationException(_beanType.getRawClass(), t);
     }
 }

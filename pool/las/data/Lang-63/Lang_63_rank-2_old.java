@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,993 +14,808 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.openejb.config;
 
-package org.apache.carbondata.hadoop.api;
+import org.apache.openejb.OpenEJBException;
+import org.apache.openejb.config.sys.JaxbOpenejb;
+import org.apache.openejb.config.sys.Resources;
+import org.apache.openejb.core.webservices.WsdlResolver;
+import org.apache.openejb.jee.ApplicationClient;
+import org.apache.openejb.jee.Beans;
+import org.apache.openejb.jee.Connector;
+import org.apache.openejb.jee.Connector10;
+import org.apache.openejb.jee.EjbJar;
+import org.apache.openejb.jee.FacesConfig;
+import org.apache.openejb.jee.HandlerChains;
+import org.apache.openejb.jee.JavaWsdlMapping;
+import org.apache.openejb.jee.JaxbJavaee;
+import org.apache.openejb.jee.Listener;
+import org.apache.openejb.jee.TldTaglib;
+import org.apache.openejb.jee.WebApp;
+import org.apache.openejb.jee.Webservices;
+import org.apache.openejb.jee.bval.ValidationConfigType;
+import org.apache.openejb.jee.jpa.EntityMappings;
+import org.apache.openejb.jee.jpa.fragment.PersistenceFragment;
+import org.apache.openejb.jee.jpa.fragment.PersistenceUnitFragment;
+import org.apache.openejb.jee.jpa.unit.JaxbPersistenceFactory;
+import org.apache.openejb.jee.jpa.unit.Persistence;
+import org.apache.openejb.jee.jpa.unit.PersistenceUnit;
+import org.apache.openejb.jee.oejb2.GeronimoEjbJarType;
+import org.apache.openejb.jee.oejb2.JaxbOpenejbJar2;
+import org.apache.openejb.jee.oejb2.OpenejbJarType;
+import org.apache.openejb.jee.oejb3.JaxbOpenejbJar3;
+import org.apache.openejb.jee.oejb3.OpenejbJar;
+import org.apache.openejb.loader.IO;
+import org.apache.openejb.util.LengthInputStream;
+import org.apache.openejb.util.LogCategory;
+import org.apache.openejb.util.Logger;
+import org.apache.openejb.util.Saxs;
+import org.apache.openejb.util.URLs;
+import org.xml.sax.Attributes;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+import org.xml.sax.helpers.DefaultHandler;
 
+import javax.wsdl.Definition;
+import javax.wsdl.factory.WSDLFactory;
+import javax.wsdl.xml.WSDLReader;
+import javax.xml.bind.JAXBElement;
+import javax.xml.bind.JAXBException;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.parsers.SAXParser;
+import javax.xml.parsers.SAXParserFactory;
 import java.io.ByteArrayInputStream;
-import java.io.DataInputStream;
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Constructor;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.BitSet;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedList;
+import java.io.InputStream;
+import java.net.URL;
+import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
-import org.apache.carbondata.core.constants.CarbonCommonConstants;
-import org.apache.carbondata.core.datamap.DataMapStoreManager;
-import org.apache.carbondata.core.datamap.TableDataMap;
-import org.apache.carbondata.core.datastore.filesystem.CarbonFile;
-import org.apache.carbondata.core.datastore.impl.FileFactory;
-import org.apache.carbondata.core.exception.InvalidConfigurationException;
-import org.apache.carbondata.core.indexstore.ExtendedBlocklet;
-import org.apache.carbondata.core.indexstore.blockletindex.BlockletDataMap;
-import org.apache.carbondata.core.indexstore.blockletindex.BlockletDataMapFactory;
-import org.apache.carbondata.core.metadata.AbsoluteTableIdentifier;
-import org.apache.carbondata.core.metadata.ColumnarFormatVersion;
-import org.apache.carbondata.core.metadata.schema.PartitionInfo;
-import org.apache.carbondata.core.metadata.schema.partition.PartitionType;
-import org.apache.carbondata.core.metadata.schema.table.CarbonTable;
-import org.apache.carbondata.core.metadata.schema.table.TableInfo;
-import org.apache.carbondata.core.mutate.CarbonUpdateUtil;
-import org.apache.carbondata.core.mutate.SegmentUpdateDetails;
-import org.apache.carbondata.core.mutate.UpdateVO;
-import org.apache.carbondata.core.mutate.data.BlockMappingVO;
-import org.apache.carbondata.core.reader.CarbonIndexFileReader;
-import org.apache.carbondata.core.scan.expression.Expression;
-import org.apache.carbondata.core.scan.filter.FilterExpressionProcessor;
-import org.apache.carbondata.core.scan.filter.SingleTableProvider;
-import org.apache.carbondata.core.scan.filter.TableProvider;
-import org.apache.carbondata.core.scan.filter.resolver.FilterResolverIntf;
-import org.apache.carbondata.core.scan.model.CarbonQueryPlan;
-import org.apache.carbondata.core.scan.model.QueryModel;
-import org.apache.carbondata.core.stats.QueryStatistic;
-import org.apache.carbondata.core.stats.QueryStatisticsConstants;
-import org.apache.carbondata.core.stats.QueryStatisticsRecorder;
-import org.apache.carbondata.core.statusmanager.FileFormat;
-import org.apache.carbondata.core.statusmanager.SegmentStatusManager;
-import org.apache.carbondata.core.statusmanager.SegmentUpdateStatusManager;
-import org.apache.carbondata.core.util.CarbonProperties;
-import org.apache.carbondata.core.util.CarbonTimeStatisticsFactory;
-import org.apache.carbondata.core.util.CarbonUtil;
-import org.apache.carbondata.core.util.DataTypeConverter;
-import org.apache.carbondata.core.util.DataTypeConverterImpl;
-import org.apache.carbondata.core.util.path.CarbonStorePath;
-import org.apache.carbondata.core.util.path.CarbonTablePath;
-import org.apache.carbondata.format.BlockIndex;
-import org.apache.carbondata.hadoop.CarbonInputSplit;
-import org.apache.carbondata.hadoop.CarbonMultiBlockSplit;
-import org.apache.carbondata.hadoop.CarbonProjection;
-import org.apache.carbondata.hadoop.CarbonRecordReader;
-import org.apache.carbondata.hadoop.readsupport.CarbonReadSupport;
-import org.apache.carbondata.hadoop.readsupport.impl.DictionaryDecodeReadSupport;
-import org.apache.carbondata.hadoop.util.CarbonInputFormatUtil;
-import org.apache.carbondata.hadoop.util.ObjectSerializationUtil;
-import org.apache.carbondata.hadoop.util.SchemaReader;
+public class ReadDescriptors implements DynamicDeployer {
+    public static final Logger logger = Logger.getInstance(LogCategory.OPENEJB_STARTUP, ReadDescriptors.class);
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocalFileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.mapreduce.InputSplit;
-import org.apache.hadoop.mapreduce.Job;
-import org.apache.hadoop.mapreduce.JobContext;
-import org.apache.hadoop.mapreduce.RecordReader;
-import org.apache.hadoop.mapreduce.TaskAttemptContext;
-import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
-import org.apache.hadoop.mapreduce.lib.input.FileSplit;
-import org.apache.hadoop.mapreduce.security.TokenCache;
+    @SuppressWarnings({"unchecked"})
+    public AppModule deploy(AppModule appModule) throws OpenEJBException {
+        for (EjbModule ejbModule : appModule.getEjbModules()) {
 
-/**
- * Input format of CarbonData file.
- *
- * @param <T>
- */
-public class CarbonTableInputFormat<T> extends FileInputFormat<Void, T> {
-
-  // comma separated list of input segment numbers
-  public static final String INPUT_SEGMENT_NUMBERS =
-      "mapreduce.input.carboninputformat.segmentnumbers";
-  public static final String VALIDATE_INPUT_SEGMENT_IDs =
-      "mapreduce.input.carboninputformat.validsegments";
-  // comma separated list of input files
-  public static final String INPUT_FILES = "mapreduce.input.carboninputformat.files";
-  public static final String ALTER_PARTITION_ID = "mapreduce.input.carboninputformat.partitionid";
-  private static final Log LOG = LogFactory.getLog(CarbonTableInputFormat.class);
-  private static final String FILTER_PREDICATE =
-      "mapreduce.input.carboninputformat.filter.predicate";
-  private static final String COLUMN_PROJECTION = "mapreduce.input.carboninputformat.projection";
-  private static final String TABLE_INFO = "mapreduce.input.carboninputformat.tableinfo";
-  private static final String CARBON_READ_SUPPORT = "mapreduce.input.carboninputformat.readsupport";
-  private static final String CARBON_CONVERTER = "mapreduce.input.carboninputformat.converter";
-  private static final String DATA_MAP_DSTR = "mapreduce.input.carboninputformat.datamapdstr";
-  public static final String DATABASE_NAME = "mapreduce.input.carboninputformat.databaseName";
-  public static final String TABLE_NAME = "mapreduce.input.carboninputformat.tableName";
-  public static final String PARTITIONS_TO_PRUNE =
-      "mapreduce.input.carboninputformat.partitions.to.prune";
-  public static final String UPADTE_T =
-      "mapreduce.input.carboninputformat.partitions.to.prune";
-
-  // a cache for carbon table, it will be used in task side
-  private CarbonTable carbonTable;
-
-  /**
-   * Set the `tableInfo` in `configuration`
-   */
-  public static void setTableInfo(Configuration configuration, TableInfo tableInfo)
-      throws IOException {
-    if (null != tableInfo) {
-      configuration.set(TABLE_INFO, CarbonUtil.encodeToString(tableInfo.serialize()));
-    }
-  }
-
-  /**
-   * Get TableInfo object from `configuration`
-   */
-  private static TableInfo getTableInfo(Configuration configuration) throws IOException {
-    String tableInfoStr = configuration.get(TABLE_INFO);
-    if (tableInfoStr == null) {
-      return null;
-    } else {
-      TableInfo output = new TableInfo();
-      output.readFields(
-          new DataInputStream(
-              new ByteArrayInputStream(CarbonUtil.decodeStringToBytes(tableInfoStr))));
-      return output;
-    }
-  }
-
-  /**
-   * Get the cached CarbonTable or create it by TableInfo in `configuration`
-   */
-  private CarbonTable getOrCreateCarbonTable(Configuration configuration) throws IOException {
-    if (carbonTable == null) {
-      // carbon table should be created either from deserialized table info (schema saved in
-      // hive metastore) or by reading schema in HDFS (schema saved in HDFS)
-      TableInfo tableInfo = getTableInfo(configuration);
-      CarbonTable carbonTable;
-      if (tableInfo != null) {
-        carbonTable = CarbonTable.buildFromTableInfo(tableInfo);
-      } else {
-        carbonTable = SchemaReader.readCarbonTableFromStore(
-            getAbsoluteTableIdentifier(configuration));
-      }
-      this.carbonTable = carbonTable;
-      return carbonTable;
-    } else {
-      return this.carbonTable;
-    }
-  }
-
-  public static void setTablePath(Configuration configuration, String tablePath) {
-    configuration.set(FileInputFormat.INPUT_DIR, tablePath);
-  }
-
-  public static void setPartitionIdList(Configuration configuration, List<String> partitionIds) {
-    configuration.set(ALTER_PARTITION_ID, partitionIds.toString());
-  }
-
-
-  public static void setDataMapJob(Configuration configuration, DataMapJob dataMapJob)
-      throws IOException {
-    if (dataMapJob != null) {
-      String toString = ObjectSerializationUtil.convertObjectToString(dataMapJob);
-      configuration.set(DATA_MAP_DSTR, toString);
-    }
-  }
-
-  private static DataMapJob getDataMapJob(Configuration configuration) throws IOException {
-    String jobString = configuration.get(DATA_MAP_DSTR);
-    if (jobString != null) {
-      return (DataMapJob) ObjectSerializationUtil.convertStringToObject(jobString);
-    }
-    return null;
-  }
-
-  /**
-   * It sets unresolved filter expression.
-   *
-   * @param configuration
-   * @param filterExpression
-   */
-  public static void setFilterPredicates(Configuration configuration, Expression filterExpression) {
-    if (filterExpression == null) {
-      return;
-    }
-    try {
-      String filterString = ObjectSerializationUtil.convertObjectToString(filterExpression);
-      configuration.set(FILTER_PREDICATE, filterString);
-    } catch (Exception e) {
-      throw new RuntimeException("Error while setting filter expression to Job", e);
-    }
-  }
-
-  public static void setColumnProjection(Configuration configuration, CarbonProjection projection) {
-    if (projection == null || projection.isEmpty()) {
-      return;
-    }
-    String[] allColumns = projection.getAllColumns();
-    StringBuilder builder = new StringBuilder();
-    for (String column : allColumns) {
-      builder.append(column).append(",");
-    }
-    String columnString = builder.toString();
-    columnString = columnString.substring(0, columnString.length() - 1);
-    configuration.set(COLUMN_PROJECTION, columnString);
-  }
-
-  public static String getColumnProjection(Configuration configuration) {
-    return configuration.get(COLUMN_PROJECTION);
-  }
-
-  public static void setCarbonReadSupport(Configuration configuration,
-      Class<? extends CarbonReadSupport> readSupportClass) {
-    if (readSupportClass != null) {
-      configuration.set(CARBON_READ_SUPPORT, readSupportClass.getName());
-    }
-  }
-
-  private static CarbonTablePath getTablePath(AbsoluteTableIdentifier absIdentifier) {
-    return CarbonStorePath.getCarbonTablePath(absIdentifier);
-  }
-
-  /**
-   * Set list of segments to access
-   */
-  public static void setSegmentsToAccess(Configuration configuration, List<String> validSegments) {
-    configuration.set(INPUT_SEGMENT_NUMBERS, CarbonUtil.convertToString(validSegments));
-  }
-
-  /**
-   * Set `CARBON_INPUT_SEGMENTS` from property to configuration
-   */
-  public static void setQuerySegment(Configuration conf, AbsoluteTableIdentifier identifier) {
-    String dbName = identifier.getCarbonTableIdentifier().getDatabaseName().toLowerCase();
-    String tbName = identifier.getCarbonTableIdentifier().getTableName().toLowerCase();
-    String segmentNumbersFromProperty = CarbonProperties.getInstance()
-        .getProperty(CarbonCommonConstants.CARBON_INPUT_SEGMENTS + dbName + "." + tbName, "*");
-    if (!segmentNumbersFromProperty.trim().equals("*")) {
-      CarbonTableInputFormat
-          .setSegmentsToAccess(conf, Arrays.asList(segmentNumbersFromProperty.split(",")));
-    }
-  }
-
-  /**
-   * set list of segment to access
-   */
-  public static void setValidateSegmentsToAccess(Configuration configuration, Boolean validate) {
-    configuration.set(CarbonTableInputFormat.VALIDATE_INPUT_SEGMENT_IDs, validate.toString());
-  }
-
-  /**
-   * get list of segment to access
-   */
-  public static boolean getValidateSegmentsToAccess(Configuration configuration) {
-    return configuration.get(CarbonTableInputFormat.VALIDATE_INPUT_SEGMENT_IDs, "true")
-        .equalsIgnoreCase("true");
-  }
-
-  /**
-   * set list of partitions to prune
-   */
-  public static void setPartitionsToPrune(Configuration configuration, List<String> partitions) {
-    if (partitions == null) {
-      return;
-    }
-    try {
-      String partitionString = ObjectSerializationUtil.convertObjectToString(partitions);
-      configuration.set(PARTITIONS_TO_PRUNE, partitionString);
-    } catch (Exception e) {
-      throw new RuntimeException("Error while setting patition information to Job", e);
-    }
-  }
-
-  /**
-   * get list of partitions to prune
-   */
-  public static List<String> getPartitionsToPrune(Configuration configuration) throws IOException {
-    String partitionString = configuration.get(PARTITIONS_TO_PRUNE);
-    if (partitionString != null) {
-      return (List<String>) ObjectSerializationUtil.convertStringToObject(partitionString);
-    }
-    return null;
-  }
-
-  public AbsoluteTableIdentifier getAbsoluteTableIdentifier(Configuration configuration)
-      throws IOException {
-    String tablePath = configuration.get(INPUT_DIR, "");
-    try {
-      return AbsoluteTableIdentifier
-          .from(tablePath, getDatabaseName(configuration), getTableName(configuration));
-    } catch (InvalidConfigurationException e) {
-      throw new IOException(e);
-    }
-  }
-
-  /**
-   * {@inheritDoc}
-   * Configurations FileInputFormat.INPUT_DIR
-   * are used to get table path to read.
-   *
-   * @param job
-   * @return List<InputSplit> list of CarbonInputSplit
-   * @throws IOException
-   */
-  @Override public List<InputSplit> getSplits(JobContext job) throws IOException {
-    AbsoluteTableIdentifier identifier = getAbsoluteTableIdentifier(job.getConfiguration());
-    SegmentUpdateStatusManager updateStatusManager = new SegmentUpdateStatusManager(identifier);
-    CarbonTable carbonTable = getOrCreateCarbonTable(job.getConfiguration());
-    if (null == carbonTable) {
-      throw new IOException("Missing/Corrupt schema file for table.");
-    }
-    TableDataMap blockletMap =
-        DataMapStoreManager.getInstance().getDataMap(identifier, BlockletDataMap.NAME,
-            BlockletDataMapFactory.class.getName());
-    List<String> invalidSegments = new ArrayList<>();
-    List<UpdateVO> invalidTimestampsList = new ArrayList<>();
-    List<String> streamSegments = null;
-
-    if (getValidateSegmentsToAccess(job.getConfiguration())) {
-      // get all valid segments and set them into the configuration
-      SegmentStatusManager segmentStatusManager = new SegmentStatusManager(identifier);
-      SegmentStatusManager.ValidAndInvalidSegmentsInfo segments =
-          segmentStatusManager.getValidAndInvalidSegments();
-      List<String> validSegments = segments.getValidSegments();
-      streamSegments = segments.getStreamSegments();
-      if (validSegments.size() == 0) {
-        return getSplitsOfStreaming(job, identifier, streamSegments);
-      }
-
-      List<String> filteredSegmentToAccess = getFilteredSegment(job, validSegments);
-      if (filteredSegmentToAccess.size() == 0) {
-        return new ArrayList<>(0);
-      } else {
-        setSegmentsToAccess(job.getConfiguration(), filteredSegmentToAccess);
-      }
-      // remove entry in the segment index if there are invalid segments
-      invalidSegments.addAll(segments.getInvalidSegments());
-      for (String invalidSegmentId : invalidSegments) {
-        invalidTimestampsList.add(updateStatusManager.getInvalidTimestampRange(invalidSegmentId));
-      }
-      if (invalidSegments.size() > 0) {
-        blockletMap.clear(invalidSegments);
-      }
-    }
-
-    // get updated filtered list
-    List<String> filteredSegmentToAccess = Arrays.asList(getSegmentsToAccess(job));
-    // Clean the updated segments from memory if the update happens on segments
-    List<String> toBeCleanedSegments = new ArrayList<>();
-    for (SegmentUpdateDetails segmentUpdateDetail : updateStatusManager
-        .getUpdateStatusDetails()) {
-      boolean refreshNeeded =
-          DataMapStoreManager.getInstance().getTableSegmentRefresher(identifier)
-              .isRefreshNeeded(segmentUpdateDetail.getSegmentName(), updateStatusManager);
-      if (refreshNeeded) {
-        toBeCleanedSegments.add(segmentUpdateDetail.getSegmentName());
-      }
-    }
-    // Clean segments if refresh is needed
-    for (String segment : filteredSegmentToAccess) {
-      if (DataMapStoreManager.getInstance().getTableSegmentRefresher(identifier)
-          .isRefreshNeeded(segment)) {
-        toBeCleanedSegments.add(segment);
-      }
-    }
-    blockletMap.clear(toBeCleanedSegments);
-
-    // process and resolve the expression
-    Expression filter = getFilterPredicates(job.getConfiguration());
-    TableProvider tableProvider = new SingleTableProvider(carbonTable);
-    // this will be null in case of corrupt schema file.
-    PartitionInfo partitionInfo = carbonTable.getPartitionInfo(carbonTable.getTableName());
-    CarbonInputFormatUtil.processFilterExpression(filter, carbonTable, null, null);
-
-    // prune partitions for filter query on partition table
-    BitSet matchedPartitions = null;
-    if (partitionInfo != null && partitionInfo.getPartitionType() != PartitionType.NATIVE_HIVE) {
-      matchedPartitions = setMatchedPartitions(null, filter, partitionInfo, null);
-      if (matchedPartitions != null) {
-        if (matchedPartitions.cardinality() == 0) {
-          return new ArrayList<InputSplit>();
-        } else if (matchedPartitions.cardinality() == partitionInfo.getNumPartitions()) {
-          matchedPartitions = null;
-        }
-      }
-    }
-
-    FilterResolverIntf filterInterface = CarbonInputFormatUtil
-        .resolveFilter(filter, carbonTable.getAbsoluteTableIdentifier(), tableProvider);
-
-    // do block filtering and get split
-    List<InputSplit> splits =
-        getSplits(job, filterInterface, filteredSegmentToAccess, matchedPartitions, partitionInfo,
-            null);
-    // pass the invalid segment to task side in order to remove index entry in task side
-    if (invalidSegments.size() > 0) {
-      for (InputSplit split : splits) {
-        ((org.apache.carbondata.hadoop.CarbonInputSplit) split).setInvalidSegments(invalidSegments);
-        ((org.apache.carbondata.hadoop.CarbonInputSplit) split)
-            .setInvalidTimestampRange(invalidTimestampsList);
-      }
-    }
-
-    // add all splits of streaming
-    List<InputSplit> splitsOfStreaming = getSplitsOfStreaming(job, identifier, streamSegments);
-    if (!splitsOfStreaming.isEmpty()) {
-      splits.addAll(splitsOfStreaming);
-    }
-    return splits;
-  }
-
-  /**
-   * Return segment list after filtering out valid segments and segments set by user by
-   * `INPUT_SEGMENT_NUMBERS` in job configuration
-   */
-  private List<String> getFilteredSegment(JobContext job, List<String> validSegments) {
-    String[] segmentsToAccess = getSegmentsToAccess(job);
-    Set<String> segmentToAccessSet = new HashSet<>(Arrays.asList(segmentsToAccess));
-    List<String> filteredSegmentToAccess = new ArrayList<>();
-    if (segmentsToAccess.length == 0 || segmentsToAccess[0].equalsIgnoreCase("*")) {
-      filteredSegmentToAccess.addAll(validSegments);
-    } else {
-      for (String validSegment : validSegments) {
-        if (segmentToAccessSet.contains(validSegment)) {
-          filteredSegmentToAccess.add(validSegment);
-        }
-      }
-      if (!filteredSegmentToAccess.containsAll(segmentToAccessSet)) {
-        List<String> filteredSegmentToAccessTemp = new ArrayList<>(filteredSegmentToAccess);
-        filteredSegmentToAccessTemp.removeAll(segmentToAccessSet);
-        LOG.info(
-            "Segments ignored are : " + Arrays.toString(filteredSegmentToAccessTemp.toArray()));
-      }
-    }
-    return filteredSegmentToAccess;
-  }
-
-  /**
-   * use file list in .carbonindex file to get the split of streaming.
-   */
-  public List<InputSplit> getSplitsOfStreaming(JobContext job, AbsoluteTableIdentifier identifier,
-      List<String> streamSegments) throws IOException {
-    List<InputSplit> splits = new ArrayList<InputSplit>();
-    if (streamSegments != null && !streamSegments.isEmpty()) {
-
-      CarbonTablePath tablePath = CarbonStorePath.getCarbonTablePath(identifier);
-      long minSize = Math.max(getFormatMinSplitSize(), getMinSplitSize(job));
-      long maxSize = getMaxSplitSize(job);
-      for (String segmentId : streamSegments) {
-        String segmentDir = tablePath.getSegmentDir("0", segmentId);
-        FileFactory.FileType fileType = FileFactory.getFileType(segmentDir);
-        if (FileFactory.isFileExist(segmentDir, fileType)) {
-          String indexName = CarbonTablePath.getCarbonStreamIndexFileName();
-          String indexPath = segmentDir + File.separator + indexName;
-          CarbonFile index = FileFactory.getCarbonFile(indexPath, fileType);
-          // index file exists
-          if (index.exists()) {
-            // data file exists
-            CarbonIndexFileReader indexReader = new CarbonIndexFileReader();
-            try {
-              // map block index
-              indexReader.openThriftReader(indexPath);
-              while (indexReader.hasNext()) {
-                BlockIndex blockIndex = indexReader.readBlockIndexInfo();
-                String filePath = segmentDir + File.separator + blockIndex.getFile_name();
-                Path path = new Path(filePath);
-                long length = blockIndex.getFile_size();
-                if (length != 0) {
-                  BlockLocation[] blkLocations;
-                  FileSystem fs = FileFactory.getFileSystem(path);
-                  FileStatus file = fs.getFileStatus(path);
-                  blkLocations = fs.getFileBlockLocations(path, 0, length);
-                  long blockSize = file.getBlockSize();
-                  long splitSize = computeSplitSize(blockSize, minSize, maxSize);
-                  long bytesRemaining = length;
-                  while (((double) bytesRemaining) / splitSize > 1.1) {
-                    int blkIndex = getBlockIndex(blkLocations, length - bytesRemaining);
-                    splits.add(makeSplit(segmentId, path, length - bytesRemaining, splitSize,
-                        blkLocations[blkIndex].getHosts(),
-                        blkLocations[blkIndex].getCachedHosts(), FileFormat.ROW_V1));
-                    bytesRemaining -= splitSize;
-                  }
-                  if (bytesRemaining != 0) {
-                    int blkIndex = getBlockIndex(blkLocations, length - bytesRemaining);
-                    splits.add(makeSplit(segmentId, path, length - bytesRemaining, bytesRemaining,
-                        blkLocations[blkIndex].getHosts(),
-                        blkLocations[blkIndex].getCachedHosts(), FileFormat.ROW_V1));
-                  }
-                } else {
-                  //Create empty hosts array for zero length files
-                  splits.add(makeSplit(segmentId, path, 0, length, new String[0],
-                      FileFormat.ROW_V1));
-                }
-              }
-            } finally {
-              indexReader.closeThriftReader();
+            if (ejbModule.getEjbJar() == null) {
+                readEjbJar(ejbModule, appModule);
             }
-          }
+
+            if (ejbModule.getOpenejbJar() == null) {
+                readOpenejbJar(ejbModule);
+            }
+
+            if (ejbModule.getBeans() == null) {
+                readBeans(ejbModule, appModule);
+            }
+
+            readValidationConfigType(ejbModule);
+            readCmpOrm(ejbModule);
+            readResourcesXml(ejbModule);
         }
-      }
+
+        for (ClientModule clientModule : appModule.getClientModules()) {
+            readAppClient(clientModule, appModule);
+            readValidationConfigType(clientModule);
+            readResourcesXml(clientModule);
+        }
+
+        for (ConnectorModule connectorModule : appModule.getConnectorModules()) {
+            readConnector(connectorModule, appModule);
+            readValidationConfigType(connectorModule);
+            readResourcesXml(connectorModule);
+        }
+
+        for (WebModule webModule : appModule.getWebModules()) {
+            readWebApp(webModule, appModule);
+            readValidationConfigType(webModule);
+            readResourcesXml(webModule);
+        }
+
+        List<Object> persistenceUrls = (List<Object>) appModule.getAltDDs().get("persistence.xml");
+        if (persistenceUrls != null) {
+            for (Object persistenceUrl : persistenceUrls) {
+                final boolean url = persistenceUrl instanceof URL;
+                final Source source = getSource(persistenceUrl);
+
+                final String moduleName;
+                final String path;
+                final String rootUrl;
+                if (url) {
+                    final URL pUrl = (URL) persistenceUrl;
+                    File file = URLs.toFile(pUrl);
+                    path = file.getAbsolutePath();
+
+                    if (file.getName().endsWith("persistence.xml")) {
+                        final String parent = file.getParentFile().getName();
+                        if (parent.equalsIgnoreCase("WEB-INF") || parent.equalsIgnoreCase("META-INF")) {
+                            file = file.getParentFile().getParentFile();
+                        } else { // we don't really know so simply go back (users will often put persistence.xml in root resource folder with arquillian)
+                            file = file.getParentFile();
+                        }
+                    }
+                    moduleName = file.toURI().toString();
+
+                    String tmpRootUrl = moduleName;
+
+                    String extForm = pUrl.toExternalForm();
+                    if (extForm.contains("WEB-INF/classes/META-INF/")) {
+                        tmpRootUrl = extForm.substring(0, extForm.indexOf("/META-INF"));
+                    }
+                    if (tmpRootUrl.endsWith(".war")) {
+                        tmpRootUrl = tmpRootUrl.substring(0, tmpRootUrl.length() - ".war".length());
+                    }
+                    rootUrl = tmpRootUrl;
+                } else {
+                    moduleName = "";
+                    rootUrl = "";
+                    path = null;
+                }
+
+                try {
+                    Persistence persistence = JaxbPersistenceFactory.getPersistence(Persistence.class, source.get());
+                    PersistenceModule persistenceModule = new PersistenceModule(appModule, rootUrl, persistence);
+                    persistenceModule.getWatchedResources().add(moduleName);
+                    if (url && "file".equals(((URL) persistenceUrl).getProtocol())) {
+                        persistenceModule.getWatchedResources().add(path);
+                    }
+                    appModule.addPersistenceModule(persistenceModule);
+                } catch (Exception e1) {
+                    DeploymentLoader.logger.error("Unable to load Persistence Unit from EAR: " + appModule.getJarLocation() + ", module: " + moduleName + ". Exception: " + e1.getMessage(), e1);
+                }
+            }
+        }
+
+        final List<URL> persistenceFragmentUrls = (List<URL>) appModule.getAltDDs().get("persistence-fragment.xml");
+        if (persistenceFragmentUrls != null) {
+            for (URL persistenceFragmentUrl : persistenceFragmentUrls) {
+                try {
+                    final PersistenceFragment persistenceFragment = JaxbPersistenceFactory.getPersistence(PersistenceFragment.class, persistenceFragmentUrl);
+                    // merging
+                    for (PersistenceUnitFragment fragmentUnit : persistenceFragment.getPersistenceUnitFragment()) {
+                        for (PersistenceModule persistenceModule : appModule.getPersistenceModules()) {
+                            final Persistence persistence = persistenceModule.getPersistence();
+                            for (PersistenceUnit unit : persistence.getPersistenceUnit()) {
+                                if (!fragmentUnit.getName().equals(unit.getName())) {
+                                    continue;
+                                }
+
+                                if (!persistenceFragment.getVersion().equals(persistence.getVersion())) {
+                                    logger.error("persistence unit version and fragment version are different, fragment will be ignored");
+                                    continue;
+                                }
+
+                                if ("file".equals(persistenceFragmentUrl.getProtocol())) {
+                                    persistenceModule.getWatchedResources().add(URLs.toFile(persistenceFragmentUrl).getAbsolutePath());
+                                }
+
+                                for (String clazz : fragmentUnit.getClazz()) {
+                                    if (!unit.getClazz().contains(clazz)) {
+                                        logger.info("Adding class " + clazz + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getClazz().add(clazz);
+                                    }
+                                }
+                                for (String mappingFile : fragmentUnit.getMappingFile()) {
+                                    if (!unit.getMappingFile().contains(mappingFile)) {
+                                        logger.info("Adding mapping file " + mappingFile + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getMappingFile().add(mappingFile);
+                                    }
+                                }
+                                for (String jarFile : fragmentUnit.getJarFile()) {
+                                    if (!unit.getJarFile().contains(jarFile)) {
+                                        logger.info("Adding jar file " + jarFile + " to persistence unit " + fragmentUnit.getName());
+                                        unit.getJarFile().add(jarFile);
+                                    }
+                                }
+                                if (fragmentUnit.isExcludeUnlistedClasses()) {
+                                    unit.setExcludeUnlistedClasses(true);
+                                    logger.info("Excluding unlisted classes for persistence unit " + fragmentUnit.getName());
+                                } // else let the main persistence unit decide
+                            }
+                        }
+                    }
+                } catch (Exception e1) {
+                    DeploymentLoader.logger.error("Unable to load Persistence Unit Fragment from EAR: " + appModule.getJarLocation() + ", fragment: " + persistenceFragmentUrl.toString() + ". Exception: " + e1.getMessage(), e1);
+                }
+            }
+        }
+
+        return appModule;
+
     }
-    return splits;
-  }
 
-  protected FileSplit makeSplit(String segmentId, Path file, long start, long length,
-      String[] hosts, FileFormat fileFormat) {
-    return new CarbonInputSplit(segmentId, file, start, length, hosts, fileFormat);
-  }
-
-
-  protected FileSplit makeSplit(String segmentId, Path file, long start, long length,
-      String[] hosts, String[] inMemoryHosts, FileFormat fileFormat) {
-    return new CarbonInputSplit(segmentId, file, start, length, hosts, inMemoryHosts, fileFormat);
-  }
-
-  /**
-   * Read data in one segment. For alter table partition statement
-   * @param job
-   * @param targetSegment
-   * @param oldPartitionIdList  get old partitionId before partitionInfo was changed
-   * @return
-   * @throws IOException
-   */
-  public List<InputSplit> getSplitsOfOneSegment(JobContext job, String targetSegment,
-      List<Integer> oldPartitionIdList, PartitionInfo partitionInfo)
-      throws IOException {
-    AbsoluteTableIdentifier identifier = getAbsoluteTableIdentifier(job.getConfiguration());
-    List<String> invalidSegments = new ArrayList<>();
-    List<UpdateVO> invalidTimestampsList = new ArrayList<>();
-
-    List<String> segmentList = new ArrayList<>();
-    segmentList.add(targetSegment);
-    setSegmentsToAccess(job.getConfiguration(), segmentList);
-    try {
-
-      // process and resolve the expression
-      Expression filter = getFilterPredicates(job.getConfiguration());
-      CarbonTable carbonTable = getOrCreateCarbonTable(job.getConfiguration());
-      // this will be null in case of corrupt schema file.
-      if (null == carbonTable) {
-        throw new IOException("Missing/Corrupt schema file for table.");
-      }
-
-      CarbonInputFormatUtil.processFilterExpression(filter, carbonTable, null, null);
-
-      TableProvider tableProvider = new SingleTableProvider(carbonTable);
-      // prune partitions for filter query on partition table
-      String partitionIds = job.getConfiguration().get(ALTER_PARTITION_ID);
-      // matchedPartitions records partitionIndex, not partitionId
-      BitSet matchedPartitions = null;
-      if (partitionInfo != null) {
-        matchedPartitions =
-            setMatchedPartitions(partitionIds, filter, partitionInfo, oldPartitionIdList);
-        if (matchedPartitions != null) {
-          if (matchedPartitions.cardinality() == 0) {
-            return new ArrayList<InputSplit>();
-          } else if (matchedPartitions.cardinality() == partitionInfo.getNumPartitions()) {
-            matchedPartitions = null;
-          }
+    private static URL getUrl(Module module, String name) {
+        URL url = (URL) module.getAltDDs().get(name);
+        if (url == null && module.getClassLoader() != null) {
+            url = module.getClassLoader().getResource("META-INF/" + name);
+            if (url != null) {
+                module.getAltDDs().put(name, url);
+            }
         }
-      }
-
-      FilterResolverIntf filterInterface =
-          CarbonInputFormatUtil.resolveFilter(filter, identifier, tableProvider);
-      // do block filtering and get split
-      List<InputSplit> splits = getSplits(job, filterInterface, segmentList, matchedPartitions,
-          partitionInfo, oldPartitionIdList);
-      // pass the invalid segment to task side in order to remove index entry in task side
-      if (invalidSegments.size() > 0) {
-        for (InputSplit split : splits) {
-          ((CarbonInputSplit) split).setInvalidSegments(invalidSegments);
-          ((CarbonInputSplit) split).setInvalidTimestampRange(invalidTimestampsList);
-        }
-      }
-      return splits;
-    } catch (IOException e) {
-      throw new RuntimeException("Can't get splits of the target segment ", e);
+        return url;
     }
-  }
 
-  /**
-   * set the matched partition indices into a BitSet
-   * @param partitionIds  from alter table command, for normal query, it's null
-   * @param filter   from query
-   * @param partitionInfo
-   * @param oldPartitionIdList  only used in alter table command
-   * @return
-   */
-  private BitSet setMatchedPartitions(String partitionIds, Expression filter,
-      PartitionInfo partitionInfo, List<Integer> oldPartitionIdList) {
-    BitSet matchedPartitions = null;
-    if (null != partitionIds) {
-      String[] partList = partitionIds.replace("[", "").replace("]", "").split(",");
-      // partList[0] -> use the first element to initiate BitSet, will auto expand later
-      matchedPartitions = new BitSet(Integer.parseInt(partList[0].trim()));
-      for (String partitionId : partList) {
-        Integer index = oldPartitionIdList.indexOf(Integer.parseInt(partitionId.trim()));
-        matchedPartitions.set(index);
-      }
-    } else {
-      if (null != filter) {
-        matchedPartitions =
-            new FilterExpressionProcessor().getFilteredPartitions(filter, partitionInfo);
-      }
-    }
-    return matchedPartitions;
-  }
-  /**
-   * {@inheritDoc}
-   * Configurations FileInputFormat.INPUT_DIR, CarbonTableInputFormat.INPUT_SEGMENT_NUMBERS
-   * are used to get table path to read.
-   *
-   * @return
-   * @throws IOException
-   */
-  private List<InputSplit> getSplits(JobContext job, FilterResolverIntf filterResolver,
-      List<String> validSegments, BitSet matchedPartitions, PartitionInfo partitionInfo,
-      List<Integer> oldPartitionIdList) throws IOException {
+    /**
+     * All the readFooXml(URL) methods could simply use this method
+     * @param module
+     * @param name
+     * @return
+     */
+    private static Source getSource(Module module, String name) {
+        Object o = module.getAltDDs().get(name);
+        if (o != null) return getSource(o);
 
-    List<InputSplit> result = new LinkedList<InputSplit>();
-    UpdateVO invalidBlockVOForSegmentId = null;
-    Boolean isIUDTable = false;
+        if (module.getClassLoader() != null) {
+            URL url = module.getClassLoader().getResource("META-INF/" + name);
+            if (url != null) {
+                module.getAltDDs().put(name, url);
+            }
 
-    AbsoluteTableIdentifier absoluteTableIdentifier =
-        getOrCreateCarbonTable(job.getConfiguration()).getAbsoluteTableIdentifier();
-    SegmentUpdateStatusManager updateStatusManager =
-        new SegmentUpdateStatusManager(absoluteTableIdentifier);
-
-    isIUDTable = (updateStatusManager.getUpdateStatusDetails().length != 0);
-
-    // for each segment fetch blocks matching filter in Driver BTree
-    List<org.apache.carbondata.hadoop.CarbonInputSplit> dataBlocksOfSegment =
-        getDataBlocksOfSegment(job, absoluteTableIdentifier, filterResolver, matchedPartitions,
-            validSegments, partitionInfo, oldPartitionIdList);
-    for (org.apache.carbondata.hadoop.CarbonInputSplit inputSplit : dataBlocksOfSegment) {
-
-      // Get the UpdateVO for those tables on which IUD operations being performed.
-      if (isIUDTable) {
-        invalidBlockVOForSegmentId =
-            updateStatusManager.getInvalidTimestampRange(inputSplit.getSegmentId());
-      }
-      String[] deleteDeltaFilePath = null;
-      if (isIUDTable) {
-        // In case IUD is not performed in this table avoid searching for
-        // invalidated blocks.
-        if (CarbonUtil
-            .isInvalidTableBlock(inputSplit.getSegmentId(), inputSplit.getPath().toString(),
-                invalidBlockVOForSegmentId, updateStatusManager)) {
-          continue;
+            return new UrlSource(url);
         }
-        // When iud is done then only get delete delta files for a block
-        try {
-          deleteDeltaFilePath =
-              updateStatusManager.getDeleteDeltaFilePath(inputSplit.getPath().toString());
-        } catch (Exception e) {
-          throw new IOException(e);
-        }
-      }
-      inputSplit.setDeleteDeltaFiles(deleteDeltaFilePath);
-      result.add(inputSplit);
-    }
-    return result;
-  }
-
-  protected Expression getFilterPredicates(Configuration configuration) {
-    try {
-      String filterExprString = configuration.get(FILTER_PREDICATE);
-      if (filterExprString == null) {
         return null;
-      }
-      Object filter = ObjectSerializationUtil.convertStringToObject(filterExprString);
-      return (Expression) filter;
-    } catch (IOException e) {
-      throw new RuntimeException("Error while reading filter expression", e);
-    }
-  }
-
-  /**
-   * get data blocks of given segment
-   */
-  private List<org.apache.carbondata.hadoop.CarbonInputSplit> getDataBlocksOfSegment(JobContext job,
-      AbsoluteTableIdentifier absoluteTableIdentifier, FilterResolverIntf resolver,
-      BitSet matchedPartitions, List<String> segmentIds, PartitionInfo partitionInfo,
-      List<Integer> oldPartitionIdList) throws IOException {
-
-    QueryStatisticsRecorder recorder = CarbonTimeStatisticsFactory.createDriverRecorder();
-    QueryStatistic statistic = new QueryStatistic();
-
-    // get tokens for all the required FileSystem for table path
-    TokenCache.obtainTokensForNamenodes(job.getCredentials(),
-        new Path[] { new Path(absoluteTableIdentifier.getTablePath()) }, job.getConfiguration());
-
-    TableDataMap blockletMap = DataMapStoreManager.getInstance()
-        .getDataMap(absoluteTableIdentifier, BlockletDataMap.NAME,
-            BlockletDataMapFactory.class.getName());
-    DataMapJob dataMapJob = getDataMapJob(job.getConfiguration());
-    List<String> partitionsToPrune = getPartitionsToPrune(job.getConfiguration());
-    List<ExtendedBlocklet> prunedBlocklets;
-    if (dataMapJob != null) {
-      DistributableDataMapFormat datamapDstr =
-          new DistributableDataMapFormat(absoluteTableIdentifier, BlockletDataMap.NAME,
-              segmentIds, partitionsToPrune,
-              BlockletDataMapFactory.class.getName());
-      prunedBlocklets = dataMapJob.execute(datamapDstr, resolver);
-    } else {
-      prunedBlocklets = blockletMap.prune(segmentIds, resolver, partitionsToPrune);
     }
 
-    List<org.apache.carbondata.hadoop.CarbonInputSplit> resultFilterredBlocks = new ArrayList<>();
-    int partitionIndex = 0;
-    List<Integer> partitionIdList = new ArrayList<>();
-    if (partitionInfo != null && partitionInfo.getPartitionType() != PartitionType.NATIVE_HIVE) {
-      partitionIdList = partitionInfo.getPartitionIds();
+    public static void readResourcesXml(Module module) {
+        URL url = getUrl(module, "resources.xml");
+        if (url != null) {
+            try {
+                final Resources openejb = JaxbOpenejb.unmarshal(Resources.class, IO.read(url));
+                module.initResources(openejb);
+            } catch (Exception e) {
+                logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
+            }
+        }
     }
-    for (ExtendedBlocklet blocklet : prunedBlocklets) {
-      long partitionId = CarbonTablePath.DataFileUtil.getTaskIdFromTaskNo(
-          CarbonTablePath.DataFileUtil.getTaskNo(blocklet.getPath()));
 
-      // OldPartitionIdList is only used in alter table partition command because it change
-      // partition info first and then read data.
-      // For other normal query should use newest partitionIdList
-      if (partitionInfo != null && partitionInfo.getPartitionType() != PartitionType.NATIVE_HIVE) {
-        if (oldPartitionIdList != null) {
-          partitionIndex = oldPartitionIdList.indexOf((int)partitionId);
+    private void readValidationConfigType(Module module) throws OpenEJBException {
+        if (module.getValidationConfig() != null) {
+            return;
+        }
+
+        final Source value = getSource(module.getAltDDs().get("validation.xml"));
+        if (value != null) {
+            try {
+                ValidationConfigType validationConfigType = JaxbOpenejb.unmarshal(ValidationConfigType.class, ((Source) value).get(), false);
+                module.setValidationConfig(validationConfigType);
+            } catch (Exception e) {
+                logger.warning("can't read validation.xml to construct a validation factory, it will be ignored");
+            }
+        }
+    }
+
+    private void readOpenejbJar(EjbModule ejbModule) throws OpenEJBException {
+        Source source = getSource(ejbModule.getAltDDs().get("openejb-jar.xml"));
+
+        if (source != null) {
+            try {
+                // Attempt to parse it first as a v3 descriptor
+                OpenejbJar openejbJar = JaxbOpenejbJar3.unmarshal(OpenejbJar.class, source.get()).postRead();
+                ejbModule.setOpenejbJar(openejbJar);
+            } catch (final Exception v3ParsingException) {
+                // Attempt to parse it second as a v2 descriptor
+                OpenejbJar openejbJar = new OpenejbJar();
+                ejbModule.setOpenejbJar(openejbJar);
+
+                try {
+                    JAXBElement element = (JAXBElement) JaxbOpenejbJar2.unmarshal(OpenejbJarType.class, source.get());
+                    OpenejbJarType o2 = (OpenejbJarType) element.getValue();
+                    ejbModule.getAltDDs().put("openejb-jar.xml", o2);
+
+                    GeronimoEjbJarType g2 = OpenEjb2Conversion.convertToGeronimoOpenejbXml(o2);
+
+                    ejbModule.getAltDDs().put("geronimo-openejb.xml", g2);
+                } catch (final Exception v2ParsingException) {
+                    // Now we have to determine which error to throw; the v3 file exception or the fallback v2 file exception.
+                    final Exception[] realIssue = {v3ParsingException};
+
+                    try {
+                        SAXParserFactory factory = Saxs.namespaceAwareFactory();
+                        SAXParser parser = factory.newSAXParser();
+                        parser.parse(source.get(), new DefaultHandler() {
+                            public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException {
+                                if (localName.equals("environment")) {
+                                    realIssue[0] = v2ParsingException;
+                                    throw new SAXException("Throw exception to stop parsing");
+                                }
+                                if (uri == null) return;
+                                if (uri.contains("openejb-jar-2.") || uri.contains("geronimo.apache.org/xml/ns")) {
+                                    realIssue[0] = v2ParsingException;
+                                    throw new SAXException("Throw exception to stop parsing");
+                                }
+                            }
+                        });
+                    } catch (Exception dontCare) {
+                    }
+
+                    String filePath = "<error: could not be written>";
+                    try {
+                        File tempFile = File.createTempFile("openejb-jar-", ".xml");
+                        try {
+                            IO.copy(source.get(), tempFile);
+                        } catch (IOException e) {
+                        }
+                        filePath = tempFile.getAbsolutePath();
+                    } catch (IOException e) {
+                    }
+
+                    Exception e = realIssue[0];
+                    if (e instanceof SAXException) {
+                        throw new OpenEJBException("Cannot parse the openejb-jar.xml. Xml content written to: "+filePath, e);
+                    } else if (e instanceof JAXBException) {
+                        throw new OpenEJBException("Cannot unmarshall the openejb-jar.xml. Xml content written to: "+filePath, e);
+                    } else if (e instanceof IOException) {
+                        throw new OpenEJBException("Cannot read the openejb-jar.xml.", e);
+                    } else {
+                        throw new OpenEJBException("Encountered unknown error parsing the openejb-jar.xml.", e);
+                    }
+                }
+            }
+        }
+
+        Source source1 = getSource(ejbModule.getAltDDs().get("geronimo-openejb.xml"));
+        if (source1 != null) {
+            try {
+                GeronimoEjbJarType geronimoEjbJarType = null;
+                Object o = JaxbOpenejbJar2.unmarshal(GeronimoEjbJarType.class, source1.get());
+                if (o instanceof GeronimoEjbJarType) {
+                    geronimoEjbJarType = (GeronimoEjbJarType) o;
+                } else if (o instanceof JAXBElement) {
+                    JAXBElement element = (JAXBElement) o;
+                    geronimoEjbJarType = (GeronimoEjbJarType) element.getValue();
+                }
+                if (geronimoEjbJarType != null) {
+                    Object nested = geronimoEjbJarType.getOpenejbJar();
+                    if (nested != null && nested instanceof OpenejbJar) {
+                        OpenejbJar existingOpenejbJar = ejbModule.getOpenejbJar();
+                        if (existingOpenejbJar == null || existingOpenejbJar.getEjbDeploymentCount() <= 0) {
+                            OpenejbJar openejbJar = (OpenejbJar) nested;
+                            ejbModule.getAltDDs().put("openejb-jar.xml", openejbJar);
+                            ejbModule.setOpenejbJar(openejbJar);
+                        }
+                    }
+                    ejbModule.getAltDDs().put("geronimo-openejb.xml", geronimoEjbJarType);
+                }
+            } catch (Exception e) {
+                throw new OpenEJBException("Failed parsing geronimo-openejb.xml", e);
+            }
+        }
+
+    }
+
+    private void readAppClient(ClientModule clientModule, AppModule appModule) throws OpenEJBException {
+        if (clientModule.getApplicationClient() != null) return;
+
+        Object data = clientModule.getAltDDs().get("application-client.xml");
+        if (data instanceof ApplicationClient) {
+            clientModule.setApplicationClient((ApplicationClient) data);
+        } else if (data instanceof URL) {
+            URL url = (URL) data;
+            ApplicationClient applicationClient = readApplicationClient(url);
+            clientModule.setApplicationClient(applicationClient);
         } else {
-          partitionIndex = partitionIdList.indexOf((int)partitionId);
+            if (!clientModule.isEjbModuleGenerated()) {
+                DeploymentLoader.logger.debug("No application-client.xml found assuming annotations present: " + appModule.getJarLocation() + ", module: " + clientModule.getModuleId());
+                clientModule.setApplicationClient(new ApplicationClient());
+            }
         }
-      }
-      if (partitionIndex != -1) {
-        // matchedPartitions variable will be null in two cases as follows
-        // 1. the table is not a partition table
-        // 2. the table is a partition table, and all partitions are matched by query
-        // for partition table, the task id of carbaondata file name is the partition id.
-        // if this partition is not required, here will skip it.
-        if (matchedPartitions == null || matchedPartitions.get(partitionIndex)) {
-          CarbonInputSplit inputSplit = convertToCarbonInputSplit(blocklet);
-          if (inputSplit != null) {
-            resultFilterredBlocks.add(inputSplit);
-          }
+    }
+
+    public void readEjbJar(EjbModule ejbModule, AppModule appModule) throws OpenEJBException {
+        if (ejbModule.getEjbJar() != null) return;
+
+        final Source data = getSource(ejbModule.getAltDDs().get("ejb-jar.xml"));
+        if (data != null) {
+            try {
+                EjbJar ejbJar = readEjbJar(data.get());
+                ejbModule.setEjbJar(ejbJar);
+            } catch (IOException e) {
+                throw new OpenEJBException(e);
+            }
+        } else {
+            DeploymentLoader.logger.debug("No ejb-jar.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + ejbModule.getModuleId());
+            ejbModule.setEjbJar(new EjbJar());
         }
-      }
     }
-    statistic
-        .addStatistics(QueryStatisticsConstants.LOAD_BLOCKS_DRIVER, System.currentTimeMillis());
-    recorder.recordStatisticsForDriver(statistic, job.getConfiguration().get("query.id"));
-    return resultFilterredBlocks;
-  }
 
-  private CarbonInputSplit convertToCarbonInputSplit(ExtendedBlocklet blocklet) throws IOException {
-    org.apache.carbondata.hadoop.CarbonInputSplit split =
-        org.apache.carbondata.hadoop.CarbonInputSplit.from(blocklet.getSegmentId(),
-            blocklet.getBlockletId(), new FileSplit(new Path(blocklet.getPath()), 0,
-                blocklet.getLength(), blocklet.getLocations()),
-            ColumnarFormatVersion.valueOf((short) blocklet.getDetailInfo().getVersionNumber()));
-    split.setDetailInfo(blocklet.getDetailInfo());
-    return split;
-  }
-
-  @Override public RecordReader<Void, T> createRecordReader(InputSplit inputSplit,
-      TaskAttemptContext taskAttemptContext) throws IOException, InterruptedException {
-    Configuration configuration = taskAttemptContext.getConfiguration();
-    QueryModel queryModel = getQueryModel(inputSplit, taskAttemptContext);
-    CarbonReadSupport<T> readSupport = getReadSupportClass(configuration);
-    return new CarbonRecordReader<T>(queryModel, readSupport);
-  }
-
-  public QueryModel getQueryModel(InputSplit inputSplit, TaskAttemptContext taskAttemptContext)
-      throws IOException {
-    Configuration configuration = taskAttemptContext.getConfiguration();
-    CarbonTable carbonTable = getOrCreateCarbonTable(configuration);
-    TableProvider tableProvider = new SingleTableProvider(carbonTable);
-    // getting the table absoluteTableIdentifier from the carbonTable
-    // to avoid unnecessary deserialization
-    AbsoluteTableIdentifier identifier = carbonTable.getAbsoluteTableIdentifier();
-
-    // query plan includes projection column
-    String projection = getColumnProjection(configuration);
-    CarbonQueryPlan queryPlan = CarbonInputFormatUtil.createQueryPlan(carbonTable, projection);
-    QueryModel queryModel = QueryModel.createModel(identifier, queryPlan, carbonTable,
-        getDataTypeConverter(configuration));
-
-    // set the filter to the query model in order to filter blocklet before scan
-    Expression filter = getFilterPredicates(configuration);
-    boolean[] isFilterDimensions = new boolean[carbonTable.getDimensionOrdinalMax()];
-    // getAllMeasures returns list of visible and invisible columns
-    boolean[] isFilterMeasures =
-        new boolean[carbonTable.getAllMeasures().size()];
-    CarbonInputFormatUtil.processFilterExpression(filter, carbonTable, isFilterDimensions,
-        isFilterMeasures);
-    queryModel.setIsFilterDimensions(isFilterDimensions);
-    queryModel.setIsFilterMeasures(isFilterMeasures);
-    FilterResolverIntf filterIntf = CarbonInputFormatUtil
-        .resolveFilter(filter, carbonTable.getAbsoluteTableIdentifier(), tableProvider);
-    queryModel.setFilterExpressionResolverTree(filterIntf);
-
-    // update the file level index store if there are invalid segment
-    if (inputSplit instanceof CarbonMultiBlockSplit) {
-      CarbonMultiBlockSplit split = (CarbonMultiBlockSplit) inputSplit;
-      List<String> invalidSegments = split.getAllSplits().get(0).getInvalidSegments();
-      if (invalidSegments.size() > 0) {
-        queryModel.setInvalidSegmentIds(invalidSegments);
-      }
-      List<UpdateVO> invalidTimestampRangeList =
-          split.getAllSplits().get(0).getInvalidTimestampRange();
-      if ((null != invalidTimestampRangeList) && (invalidTimestampRangeList.size() > 0)) {
-        queryModel.setInvalidBlockForSegmentId(invalidTimestampRangeList);
-      }
-    }
-    return queryModel;
-  }
-
-  public CarbonReadSupport<T> getReadSupportClass(Configuration configuration) {
-    String readSupportClass = configuration.get(CARBON_READ_SUPPORT);
-    //By default it uses dictionary decoder read class
-    CarbonReadSupport<T> readSupport = null;
-    if (readSupportClass != null) {
-      try {
-        Class<?> myClass = Class.forName(readSupportClass);
-        Constructor<?> constructor = myClass.getConstructors()[0];
-        Object object = constructor.newInstance();
-        if (object instanceof CarbonReadSupport) {
-          readSupport = (CarbonReadSupport) object;
+    private static void checkDuplicatedByBeansXml(final List<String> list, final List<String> duplicated) {
+        final Iterator<String> it = list.iterator();
+        while (it.hasNext()) {
+            final String str = it.next();
+            if (list.indexOf(str) != list.lastIndexOf(str)) {
+                duplicated.add(str);
+            }
         }
-      } catch (ClassNotFoundException ex) {
-        LOG.error("Class " + readSupportClass + "not found", ex);
-      } catch (Exception ex) {
-        LOG.error("Error while creating " + readSupportClass, ex);
-      }
-    } else {
-      readSupport = new DictionaryDecodeReadSupport<>();
     }
-    return readSupport;
-  }
 
-  @Override protected boolean isSplitable(JobContext context, Path filename) {
-    try {
-      // Don't split the file if it is local file system
-      FileSystem fileSystem = filename.getFileSystem(context.getConfiguration());
-      if (fileSystem instanceof LocalFileSystem) {
-        return false;
-      }
-    } catch (Exception e) {
-      return true;
+    public static void checkDuplicatedByBeansXml(final Beans beans, final Beans complete) {
+        checkDuplicatedByBeansXml(beans.getAlternativeClasses(), complete.getDuplicatedAlternatives().getClasses());
+        checkDuplicatedByBeansXml(beans.getAlternativeStereotypes(), complete.getDuplicatedAlternatives().getStereotypes());
+        checkDuplicatedByBeansXml(beans.getDecorators(), complete.getDuplicatedDecorators());
+        checkDuplicatedByBeansXml(beans.getInterceptors(), complete.getDuplicatedInterceptors());
     }
-    return true;
-  }
 
-  /**
-   * required to be moved to core
-   *
-   * @return updateExtension
-   */
-  private String getUpdateExtension() {
-    // TODO: required to modify when supporting update, mostly will be update timestamp
-    return "update";
-  }
+    private void readBeans(EjbModule ejbModule, AppModule appModule) throws OpenEJBException {
+        if (ejbModule.getBeans() != null) return;
 
-  /**
-   * return valid segment to access
-   */
-  public String[] getSegmentsToAccess(JobContext job) {
-    String segmentString = job.getConfiguration().get(INPUT_SEGMENT_NUMBERS, "");
-    if (segmentString.trim().isEmpty()) {
-      return new String[0];
-    }
-    return segmentString.split(",");
-  }
-
-  /**
-   * Get the row count of the Block and mapping of segment and Block count.
-   *
-   * @param identifier
-   * @return
-   * @throws IOException
-   */
-  public BlockMappingVO getBlockRowCount(Job job, AbsoluteTableIdentifier identifier,
-      List<String> partitions) throws IOException {
-    TableDataMap blockletMap = DataMapStoreManager.getInstance()
-        .getDataMap(identifier, BlockletDataMap.NAME, BlockletDataMapFactory.class.getName());
-    SegmentUpdateStatusManager updateStatusManager = new SegmentUpdateStatusManager(identifier);
-    SegmentStatusManager.ValidAndInvalidSegmentsInfo allSegments =
-        new SegmentStatusManager(identifier).getValidAndInvalidSegments();
-    Map<String, Long> blockRowCountMapping = new HashMap<>();
-    Map<String, Long> segmentAndBlockCountMapping = new HashMap<>();
-
-    // TODO: currently only batch segment is supported, add support for streaming table
-    List<String> filteredSegment = getFilteredSegment(job, allSegments.getValidSegments());
-
-    List<ExtendedBlocklet> blocklets = blockletMap.prune(filteredSegment, null, partitions);
-    for (ExtendedBlocklet blocklet : blocklets) {
-      String blockName = blocklet.getPath();
-      blockName = CarbonTablePath.getCarbonDataFileName(blockName);
-      blockName = blockName + CarbonTablePath.getCarbonDataExtension();
-
-      long rowCount = blocklet.getDetailInfo().getRowCount();
-
-      String key = CarbonUpdateUtil.getSegmentBlockNameKey(blocklet.getSegmentId(), blockName);
-
-      // if block is invalid then dont add the count
-      SegmentUpdateDetails details = updateStatusManager.getDetailsForABlock(key);
-
-      if (null == details || !CarbonUpdateUtil.isBlockInvalid(details.getSegmentStatus())) {
-        Long blockCount = blockRowCountMapping.get(key);
-        if (blockCount == null) {
-          blockCount = 0L;
-          Long count = segmentAndBlockCountMapping.get(blocklet.getSegmentId());
-          if (count == null) {
-            count = 0L;
-          }
-          segmentAndBlockCountMapping.put(blocklet.getSegmentId(), count + 1);
+        final Object raw = ejbModule.getAltDDs().get("beans.xml");
+        final Source data = getSource(raw);
+        if (data != null) {
+            try {
+                Beans beans = readBeans(data.get());
+                checkDuplicatedByBeansXml(beans, beans);
+                ejbModule.setBeans(beans);
+            } catch (IOException e) {
+                throw new OpenEJBException(e);
+            }
+        } else if (raw instanceof Beans) {
+            ejbModule.setBeans((Beans) raw);
+        } else {
+//            DeploymentLoader.logger.debug("No beans.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + ejbModule.getModuleId());
+//            ejbModule.setBeans(new Beans());
         }
-        blockCount += rowCount;
-        blockRowCountMapping.put(key, blockCount);
-      }
     }
 
-    return new BlockMappingVO(blockRowCountMapping, segmentAndBlockCountMapping);
-  }
-
-  /**
-   * It is optional, if user does not set then it reads from store
-   *
-   * @param configuration
-   * @param converter is the Data type converter for different computing engine
-   * @throws IOException
-   */
-  public static void setDataTypeConverter(Configuration configuration, DataTypeConverter converter)
-      throws IOException {
-    if (null != converter) {
-      configuration.set(CARBON_CONVERTER,
-          ObjectSerializationUtil.convertObjectToString(converter));
+    private void readCmpOrm(EjbModule ejbModule) throws OpenEJBException {
+        Object data = ejbModule.getAltDDs().get("openejb-cmp-orm.xml");
+        if (data == null || data instanceof EntityMappings) {
+            return;
+        } else if (data instanceof URL) {
+            URL url = (URL) data;
+            try {
+                EntityMappings entitymappings = (EntityMappings) JaxbJavaee.unmarshalJavaee(EntityMappings.class, IO.read(url));
+                ejbModule.getAltDDs().put("openejb-cmp-orm.xml", entitymappings);
+            } catch (SAXException e) {
+                throw new OpenEJBException("Cannot parse the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+            } catch (JAXBException e) {
+                throw new OpenEJBException("Cannot unmarshall the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+            } catch (IOException e) {
+                throw new OpenEJBException("Cannot read the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+            } catch (Exception e) {
+                throw new OpenEJBException("Encountered unknown error parsing the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
+            }
+        }
     }
-  }
 
-  public static DataTypeConverter getDataTypeConverter(Configuration configuration)
-      throws IOException {
-    String converter = configuration.get(CARBON_CONVERTER);
-    if (converter == null) {
-      return new DataTypeConverterImpl();
-    }
-    return (DataTypeConverter) ObjectSerializationUtil.convertStringToObject(converter);
-  }
+    private void readConnector(ConnectorModule connectorModule, AppModule appModule) throws OpenEJBException {
+        if (connectorModule.getConnector() != null) return;
 
-  public static void setDatabaseName(Configuration configuration, String databaseName) {
-    if (null != databaseName) {
-      configuration.set(DATABASE_NAME, databaseName);
+        Object data = connectorModule.getAltDDs().get("ra.xml");
+        if (data instanceof Connector) {
+            connectorModule.setConnector((Connector) data);
+        } else if (data instanceof URL) {
+            URL url = (URL) data;
+            Connector connector = readConnector(url);
+            connectorModule.setConnector(connector);
+        } else {
+            DeploymentLoader.logger.debug("No ra.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + connectorModule.getModuleId());
+            connectorModule.setConnector(new Connector());
+        }
     }
-  }
 
-  public static String getDatabaseName(Configuration configuration)
-      throws InvalidConfigurationException {
-    String databseName = configuration.get(DATABASE_NAME);
-    if (null == databseName) {
-      throw new InvalidConfigurationException("Database name is not set.");
-    }
-    return databseName;
-  }
+    private void readWebApp(WebModule webModule, AppModule appModule) throws OpenEJBException {
+        if (webModule.getWebApp() != null) return;
 
-  public static void setTableName(Configuration configuration, String tableName) {
-    if (null != tableName) {
-      configuration.set(TABLE_NAME, tableName);
+        Object data = webModule.getAltDDs().get("web.xml");
+        if (data instanceof WebApp) {
+            webModule.setWebApp((WebApp) data);
+        } else if (data instanceof URL) {
+            URL url = (URL) data;
+            WebApp webApp = readWebApp(url);
+            webModule.setWebApp(webApp);
+        } else {
+            DeploymentLoader.logger.debug("No web.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + webModule.getModuleId());
+            webModule.setWebApp(new WebApp());
+        }
     }
-  }
 
-  public static String getTableName(Configuration configuration)
-      throws InvalidConfigurationException {
-    String tableName = configuration.get(TABLE_NAME);
-    if (tableName == null) {
-      throw new InvalidConfigurationException("Table name is not set");
+    public static ApplicationClient readApplicationClient(URL url) throws OpenEJBException {
+        ApplicationClient applicationClient;
+        try {
+            applicationClient = (ApplicationClient) JaxbJavaee.unmarshalJavaee(ApplicationClient.class, IO.read(url));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the application-client.xml file: "+ url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the application-client.xml file: "+ url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the application-client.xml file: "+ url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the application-client.xml file: "+ url.toExternalForm(), e);
+        }
+        return applicationClient;
     }
-    return tableName;
-  }
+
+    public static EjbJar readEjbJar(final InputStream is) throws OpenEJBException {
+        try {
+            final String content = IO.slurp(is);
+            if (isEmptyEjbJar(new ByteArrayInputStream(content.getBytes()))) {
+                final String id = getId(new ByteArrayInputStream(content.getBytes()));
+                return new EjbJar(id);
+            }
+            return (EjbJar) JaxbJavaee.unmarshalJavaee(EjbJar.class, new ByteArrayInputStream(content.getBytes()));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
+        }
+    }
+
+    public static Beans readBeans(final InputStream inputStream) throws OpenEJBException {
+        try {
+            final String content = IO.slurp(inputStream);
+            if (isEmptyBeansXml(new ByteArrayInputStream(content.getBytes()))) return new Beans();
+            return (Beans) JaxbJavaee.unmarshalJavaee(Beans.class, new ByteArrayInputStream(content.getBytes()));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the beans.xml");// file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the beans.xml");// file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the beans.xml");// file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the beans.xml");// file: " + url.toExternalForm(), e);
+        }
+    }
+
+    private static boolean isEmptyEjbJar(final InputStream is) throws IOException, ParserConfigurationException, SAXException {
+        return isEmpty(is, "ejb-jar");
+    }
+
+    private static boolean isEmptyBeansXml(final InputStream is) throws IOException, ParserConfigurationException, SAXException {
+        return isEmpty(is, "beans");
+    }
+
+    private static boolean isEmpty(final InputStream is, final String rootElement) throws IOException, ParserConfigurationException, SAXException {
+        final LengthInputStream in = new LengthInputStream(is);
+        InputSource inputSource = new InputSource(in);
+
+        SAXParser parser = Saxs.namespaceAwareFactory().newSAXParser();
+
+        try {
+            parser.parse(inputSource, new DefaultHandler(){
+                public void startElement(String uri, String localName, String qName, Attributes att) throws SAXException {
+                    if (!localName.equals(rootElement)) throw new SAXException(localName);
+                }
+
+                public InputSource resolveEntity(String publicId, String systemId) throws IOException, SAXException {
+                    return new InputSource(new ByteArrayInputStream(new byte[0]));
+                }
+            });
+            return true;
+        } catch (SAXException e) {
+            return in.getLength() == 0;
+        }
+    }
+
+    private static String getId(final InputStream is) {
+        final String[] id = {null};
+
+        try {
+            final LengthInputStream in = new LengthInputStream(is);
+            InputSource inputSource = new InputSource(in);
+
+            SAXParser parser = Saxs.namespaceAwareFactory().newSAXParser();
+
+            parser.parse(inputSource, new DefaultHandler() {
+                public void startElement(String uri, String localName, String qName, Attributes att) throws SAXException {
+                    id[0] = att.getValue("id");
+                }
+
+                public InputSource resolveEntity(String publicId, String systemId) throws IOException, SAXException {
+                    return new InputSource(new ByteArrayInputStream(new byte[0]));
+                }
+            });
+        } catch (Exception e) {
+        }
+
+        return id[0];
+    }
+
+    public static Webservices readWebservices(URL url) throws OpenEJBException {
+        Webservices webservices;
+        try {
+            webservices = (Webservices) JaxbJavaee.unmarshalJavaee(Webservices.class, IO.read(url));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
+        }
+        return webservices;
+    }
+
+    public static HandlerChains readHandlerChains(URL url) throws OpenEJBException {
+        HandlerChains handlerChains;
+        try {
+            handlerChains = (HandlerChains) JaxbJavaee.unmarshalHandlerChains(HandlerChains.class, IO.read(url));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
+        }
+        return handlerChains;
+    }
+
+    public static JavaWsdlMapping readJaxrpcMapping(URL url) throws OpenEJBException {
+        JavaWsdlMapping wsdlMapping;
+        try {
+            wsdlMapping = (JavaWsdlMapping) JaxbJavaee.unmarshalJavaee(JavaWsdlMapping.class, IO.read(url));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the JaxRPC mapping file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the JaxRPC mapping file: " + url.toExternalForm(), e);
+        }
+        return wsdlMapping;
+    }
+
+    public static Definition readWsdl(URL url) throws OpenEJBException {
+        Definition definition;
+        try {
+            WSDLFactory factory = WSDLFactory.newInstance();
+            WSDLReader reader = factory.newWSDLReader();
+            reader.setFeature("javax.wsdl.verbose", true);
+            reader.setFeature("javax.wsdl.importDocuments", true);
+            WsdlResolver wsdlResolver = new WsdlResolver(new URL(url, ".").toExternalForm(), new InputSource(IO.read(url)));
+            definition = reader.readWSDL(wsdlResolver);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the wsdl file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the wsdl file: " + url.toExternalForm(), e);
+        }
+        return definition;
+    }
+
+    public static Connector readConnector(URL url) throws OpenEJBException {
+        Connector connector;
+        try {
+            connector = (Connector) JaxbJavaee.unmarshalJavaee(Connector.class, IO.read(url));
+        } catch (JAXBException e) {
+            try {
+                Connector10 connector10 = (Connector10) JaxbJavaee.unmarshalJavaee(Connector10.class, IO.read(url));
+                connector = Connector.newConnector(connector10);
+            } catch (ParserConfigurationException e1) {
+                throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
+            } catch (SAXException e1) {
+                throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
+            } catch (JAXBException e1) {
+                throw new OpenEJBException("Cannot unmarshall the ra.xml file: " + url.toExternalForm(), e);
+            } catch (IOException e1) {
+                throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
+            }
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the ra.xml file: " + url.toExternalForm(), e);
+        }
+        return connector;
+    }
+
+    public static WebApp readWebApp(URL url) throws OpenEJBException {
+        WebApp webApp;
+        try {
+            webApp = (WebApp) JaxbJavaee.unmarshalJavaee(WebApp.class, IO.read(url));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the web.xml file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the web.xml file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the web.xml file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the web.xml file: " + url.toExternalForm(), e);
+        }
+        return webApp;
+    }
+
+    public static TldTaglib readTldTaglib(URL url) throws OpenEJBException {
+        // TOMEE-164 Optimization on reading built-in tld files
+        if (url.getPath().contains("jstl-1.2.jar")) return new TldTaglib();
+        if (url.getPath().contains("myfaces-impl")) {
+            final TldTaglib taglib = new TldTaglib();
+            final Listener listener = new Listener();
+            listener.setListenerClass("org.apache.myfaces.webapp.StartupServletContextListener");
+            taglib.getListener().add(listener);
+            return taglib;
+        }
+
+        TldTaglib tldTaglib;
+        try {
+            tldTaglib = (TldTaglib) JaxbJavaee.unmarshalTaglib(TldTaglib.class, IO.read(url));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the JSP tag library definition file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the JSP tag library definition file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the JSP tag library definition file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the JSP tag library definition file: " + url.toExternalForm(), e);
+        }
+        return tldTaglib;
+    }
+
+    public static FacesConfig readFacesConfig(URL url) throws OpenEJBException {
+        try {
+            final Source src = getSource(url);
+            if (src == null) {
+                return new FacesConfig();
+            }
+
+            final String content = IO.slurp(src.get());
+            if (isEmpty(new ByteArrayInputStream(content.getBytes()), "faces-config")) {
+                return new FacesConfig();
+            }
+     		return  (FacesConfig) JaxbJavaee.unmarshalJavaee(FacesConfig.class, new ByteArrayInputStream(content.getBytes()));
+        } catch (SAXException e) {
+            throw new OpenEJBException("Cannot parse the faces configuration file: " + url.toExternalForm(), e);
+        } catch (JAXBException e) {
+            throw new OpenEJBException("Cannot unmarshall the faces configuration file: " + url.toExternalForm(), e);
+        } catch (IOException e) {
+            throw new OpenEJBException("Cannot read the faces configuration file: " + url.toExternalForm(), e);
+        } catch (Exception e) {
+            throw new OpenEJBException("Encountered unknown error parsing the faces configuration file: " + url.toExternalForm(), e);
+        }
+    }
+
+    private static Source getSource(Object o) {
+        if (o instanceof Source) {
+            return (Source) o;
+        }
+
+        if (o instanceof URL) {
+            return new UrlSource((URL) o);
+        }
+
+        if (o instanceof String) {
+            return new StringSource((String) o);
+        }
+
+        return null;
+    }
+
+    public interface Source {
+        InputStream get() throws IOException;
+    }
+
+    public static class UrlSource implements Source {
+        private final URL url;
+
+        public UrlSource(URL url) {
+            this.url = url;
+        }
+
+        @Override
+        public InputStream get() throws IOException {
+            return IO.read(url);
+        }
+    }
+
+    public static class StringSource implements Source {
+        private byte[] bytes;
+
+        public StringSource(String content) {
+            bytes = content.getBytes();
+        }
+
+        @Override
+        public InputStream get() throws IOException {
+            return new ByteArrayInputStream(bytes);
+        }
+    }
 }

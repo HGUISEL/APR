@@ -1,203 +1,73 @@
-/*   Copyright 2004 The Apache Software Foundation
- *
- *   Licensed under the Apache License, Version 2.0 (the "License");
- *   you may not use this file except in compliance with the License.
- *   You may obtain a copy of the License at
- *
- *       http://www.apache.org/licenses/LICENSE-2.0
- *
- *   Unless required by applicable law or agreed to in writing, software
- *   distributed under the License is distributed on an "AS IS" BASIS,
- *   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *   See the License for the specific language governing permissions and
- *  limitations under the License.
- */
+package com.fasterxml.jackson.core.exc;
 
-package org.apache.xmlbeans.impl.common;
-
-import java.io.*;
-import java.util.jar.JarOutputStream;
-import java.util.jar.JarEntry;
-import java.util.jar.JarInputStream;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.util.RequestPayload;
 
 /**
- * Provides utility services for jarring and unjarring files and directories.
- * Note that a given instance of JarHelper is not threadsafe with respect to
- * multiple jar operations.
+ * Exception type for read-side problems that are not direct decoding ("parsing")
+ * problems (those would be reported as {@link com.fasterxml.jackson.core.JsonParseException}s),
+ * but rather result from failed attempts to convert specific Java value out of valid
+ * but incompatible input value. One example is numeric coercions where target number type's
+ * range does not allow mapping of too large/too small input value.
  *
- * @author Patrick Calahan <pcal@bea.com>
+ * @since 2.10
  */
-public class JarHelper
-{
-  // ========================================================================
-  // Constants
+public class InputCoercionException extends StreamReadException {
+    private static final long serialVersionUID = 1L;
 
-  private static final int BUFFER_SIZE = 2156;
+    /**
+     * Input token that represents input value that failed to coerce.
+     */
+    protected final JsonToken _inputType;
 
-  // ========================================================================
-  // Variables
-
-  private byte[] mBuffer = new byte[BUFFER_SIZE];
-  private int mByteCount = 0;
-  private boolean mVerbose = false;
-  private String destJarName = "";
-
-  // ========================================================================
-  // Constructor
-
-  /**
-   * Instantiates a new JarHelper.
-   */
-  public JarHelper() {}
-
-  // ========================================================================
-  // Public methods
-
-  /**
-   * Jars a given directory or single file into a JarOutputStream.
-   */
-  public void jarDir(File dirOrFile2Jar, File destJar)
-          throws IOException {
-
-    if (dirOrFile2Jar == null || destJar == null)
-        throw new IllegalArgumentException();
-
-    destJarName = destJar.getPath().replace(File.separatorChar, SEP);
-    if (destJarName.startsWith("./"))
-      destJarName = destJarName.substring(2);
-
-    FileOutputStream fout = new FileOutputStream(destJar);
-    JarOutputStream jout = new JarOutputStream(fout);
-    //jout.setLevel(0);
-    try {
-      jarDir(dirOrFile2Jar, jout, null);
-    } catch(IOException ioe) {
-      throw ioe;
-    } finally {
-      jout.close();
-      fout.close();
+    /**
+     * Target type that input value failed to coerce to.
+     */
+    protected final Class<?> _targetType;
+    
+    /**
+     * Constructor that uses current parsing location as location, and
+     * sets processor (accessible via {@link #getProcessor()}) to
+     * specified parser.
+     */
+    public InputCoercionException(JsonParser p, JsonToken inputType, Class<?> targetType,
+            String msg) {
+        super(p, msg);
+        _inputType = inputType;
+        _targetType = targetType;
     }
-  }
 
-  /**
-   * Unjars a given jar file into a given directory.
-   */
-  public void unjarDir(File jarFile, File destDir) throws IOException {
-    BufferedOutputStream dest = null;
-    FileInputStream fis = new FileInputStream(jarFile);
-    unjar(fis,destDir);
-  }
-
-  /**
-   * Given an InputStream on a jar file, unjars the contents into the given
-   * directory.
-   */
-  public void unjar(InputStream in, File destDir) throws IOException {
-    BufferedOutputStream dest = null;
-    JarInputStream jis = new JarInputStream(in);
-    JarEntry entry;
-    while ((entry = jis.getNextJarEntry()) != null) {
-      if (entry.isDirectory()) {
-        File dir = new File(destDir,entry.getName());
-        dir.mkdir();
-        if (entry.getTime() != -1) dir.setLastModified(entry.getTime());
-        continue;
-      }
-      int count;
-      byte data[] = new byte[BUFFER_SIZE];
-      File destFile = new File(destDir, entry.getName());
-      if (mVerbose)
-        System.out.println("unjarring " + destFile +
-                           " from " + entry.getName());
-      FileOutputStream fos = new FileOutputStream(destFile);
-      dest = new BufferedOutputStream(fos, BUFFER_SIZE);
-      while ((count = jis.read(data, 0, BUFFER_SIZE)) != -1) {
-        dest.write(data, 0, count);
-      }
-      dest.flush();
-      dest.close();
-      if (entry.getTime() != -1) destFile.setLastModified(entry.getTime());
+    /**
+     * Fluent method that may be used to assign originating {@link JsonParser},
+     * to be accessed using {@link #getProcessor()}.
+     *<p>
+     * NOTE: `this` instance is modified and no new instance is constructed.
+     */
+    @Override
+    public InputCoercionException withParser(JsonParser p) {
+        _processor = p;
+        return this;
     }
-    jis.close();
-  }
 
-  public void setVerbose(boolean b) {
-    mVerbose = b;
-  }
-
-  // ========================================================================
-  // Private methods
-
-  private static final char SEP = '/';
-  /**
-   * Recursively jars up the given path under the given directory.
-   */
-  private void jarDir(File dirOrFile2jar, JarOutputStream jos, String path)
-          throws IOException {
-    if (mVerbose) System.out.println("checking " + dirOrFile2jar);
-    if (dirOrFile2jar.isDirectory()) {
-      String[] dirList = dirOrFile2jar.list();
-      String subPath = (path == null) ? "" : (path+dirOrFile2jar.getName()+SEP);
-      if (path != null) {
-        JarEntry je = new JarEntry(subPath);
-        je.setTime(dirOrFile2jar.lastModified());
-        jos.putNextEntry(je);
-        jos.flush();
-        jos.closeEntry();
-      }
-      for (int i = 0; i < dirList.length; i++) {
-        File f = new File(dirOrFile2jar, dirList[i]);
-        jarDir(f,jos,subPath);
-      }
-    } else {
-      String filePath = dirOrFile2jar.getPath();
-      if (filePath.startsWith("/"))
-          filePath = filePath.substring(1);
-      else if (filePath.startsWith("./"))
-          filePath = filePath.substring(2);
-
-      if (filePath.equals("") || filePath.equals(destJarName))
-      {
-        if (mVerbose) System.out.println("skipping " + filePath);
-        return;
-      }
-
-      if (mVerbose) System.out.println("adding " + filePath);
-      FileInputStream fis = new FileInputStream(dirOrFile2jar);
-      try {
-        JarEntry entry = new JarEntry(path+dirOrFile2jar.getName());
-        entry.setTime(dirOrFile2jar.lastModified());
-        jos.putNextEntry(entry);
-        while ((mByteCount = fis.read(mBuffer)) != -1) {
-          jos.write(mBuffer, 0, mByteCount);
-          if (mVerbose) System.out.println("wrote " + mByteCount + " bytes");
-        }
-        jos.flush();
-        jos.closeEntry();
-      } catch (IOException ioe) {
-        throw ioe;
-      } finally {
-        fis.close();
-      }
+    @Override
+    public InputCoercionException withRequestPayload(RequestPayload p) {
+        _requestPayload = p;
+        return this;
     }
-  }
 
-  // for debugging
-  public static void main(String[] args)
-      throws IOException
-  {
-      if (args.length < 2)
-      {
-        System.err.println("Usage: JarHelper jarname.jar directory");
-        return;
-      }
+    /**
+     * Accessor for getting information about input type (in form of token, giving "shape"
+     * of input) for which coercion failed.
+     */
+    public JsonToken getInputType() {
+        return _inputType;
+    }
 
-      JarHelper jarHelper = new JarHelper();
-      jarHelper.mVerbose = true;
-
-      File destJar = new File(args[0]);
-      File dirOrFile2Jar = new File(args[1]);
-
-      jarHelper.jarDir(dirOrFile2Jar, destJar);
-  }
+    /**
+     * Accessor for getting information about target type (in form of Java {@link java.lang.Class})
+     * for which coercion failed.
+     */
+    public Class<?> getTargetType() {
+        return _targetType;
+    }
 }

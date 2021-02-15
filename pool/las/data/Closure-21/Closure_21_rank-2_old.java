@@ -1,359 +1,284 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-package org.apache.lens.cli.commands;
+package com.fasterxml.jackson.databind.ser;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.List;
-
-import org.apache.lens.api.APIResult;
-
-import org.springframework.shell.core.CommandMarker;
-import org.springframework.shell.core.annotation.CliCommand;
-import org.springframework.shell.core.annotation.CliOption;
-import org.springframework.stereotype.Component;
-
-import com.google.common.base.Joiner;
-import com.google.common.base.Splitter;
-import com.google.common.collect.Iterables;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.introspect.*;
+import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
+import com.fasterxml.jackson.databind.util.*;
 
 /**
- * The Class LensDimensionTableCommands.
+ * Helper class for {@link BeanSerializerFactory} that is used to
+ * construct {@link BeanPropertyWriter} instances. Can be sub-classed
+ * to change behavior.
  */
-@Component
-public class LensDimensionTableCommands extends BaseLensCommand implements CommandMarker {
+public class PropertyBuilder
+{
+    // @since 2.7
+    private final static Object NO_DEFAULT_MARKER = Boolean.FALSE;
+    
+    final protected SerializationConfig _config;
+    final protected BeanDescription _beanDesc;
 
-  /**
-   * Show dimension tables.
-   *
-   * @return the string
-   */
-  @CliCommand(value = "show dimtables", help = "show list of dimension tables in database")
-  public String showDimensionTables() {
-    List<String> dims = getClient().getAllDimensionTables();
-    if (dims != null) {
-      return Joiner.on("\n").join(dims);
-    } else {
-      return "No Dimensions Found";
-    }
-  }
+    /**
+     * Default inclusion mode for properties of the POJO for which
+     * properties are collected; possibly overridden on
+     * per-property basis.
+     */
+    final protected JsonInclude.Value _defaultInclusion;
 
-  /**
-   * Creates the dimension table.
-   *
-   * @param dimSpec Path to dim spec
-   * @return the string
-   */
-  @CliCommand(value = "create dimtable", help = "Create a new dimension table")
-  public String createDimensionTable(
-    @CliOption(key = {"", "table"}, mandatory = true, help = "<path to dim-spec>") String dimSpec) {
+    final protected AnnotationIntrospector _annotationIntrospector;
 
-    File f = new File(dimSpec);
-    if (!f.exists()) {
-      return "dimtable spec path" + f.getAbsolutePath() + " does not exist. Please check the path";
-    }
+    /**
+     * If a property has serialization inclusion value of
+     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT},
+     * we need to know the default value of the bean, to know if property value
+     * equals default one.
+     */
+    protected Object _defaultBean;
 
-    APIResult result = getClient().createDimensionTable(dimSpec);
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "create dimension table succeeded";
-    } else {
-      return "create dimension table failed";
-    }
-  }
-
-  /**
-   * Drop dimension table.
-   *
-   * @param dim     the dim
-   * @param cascade the cascade
-   * @return the string
-   */
-  @CliCommand(value = "drop dimtable", help = "drop dimension table")
-  public String dropDimensionTable(
-    @CliOption(key = {"", "table"}, mandatory = true, help = "dimension table name to be dropped") String dim,
-    @CliOption(key = {"cascade"}, mandatory = false, unspecifiedDefaultValue = "false") boolean cascade) {
-    APIResult result = getClient().dropDimensionTable(dim, cascade);
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "Successfully dropped " + dim + "!!!";
-    } else {
-      return "Dropping " + dim + " table failed";
-    }
-  }
-
-  /**
-   * Update dimension table.
-   *
-   * @param specPair the spec pair
-   * @return the string
-   */
-  @CliCommand(value = "update dimtable", help = "update dimension table")
-  public String updateDimensionTable(
-    @CliOption(key = {"", "table"}, mandatory = true, help
-      = "<dimension-table-name> <path to table-spec>") String specPair) {
-    Iterable<String> parts = Splitter.on(' ').trimResults().omitEmptyStrings().split(specPair);
-    String[] pair = Iterables.toArray(parts, String.class);
-    if (pair.length != 2) {
-      return "Syntax error, please try in following "
-        + "format. create dimtable <dimtable spec path> <storage spec path>";
+    public PropertyBuilder(SerializationConfig config, BeanDescription beanDesc)
+    {
+        _config = config;
+        _beanDesc = beanDesc;
+        _defaultInclusion = beanDesc.findPropertyInclusion(config.getDefaultPropertyInclusion());
+        _annotationIntrospector = _config.getAnnotationIntrospector();
     }
 
-    File f = new File(pair[1]);
+    /*
+    /**********************************************************
+    /* Public API
+    /**********************************************************
+     */
 
-    if (!f.exists()) {
-      return "Fact spec path" + f.getAbsolutePath() + " does not exist. Please check the path";
+    public Annotations getClassAnnotations() {
+        return _beanDesc.getClassAnnotations();
     }
 
-    APIResult result = getClient().updateDimensionTable(pair[0], pair[1]);
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "Update of " + pair[0] + " succeeded";
-    } else {
-      return "Update of " + pair[0] + " failed";
-    }
-  }
+    /**
+     * @param contentTypeSer Optional explicit type information serializer
+     *    to use for contained values (only used for properties that are
+     *    of container type)
+     */
+    protected BeanPropertyWriter buildWriter(SerializerProvider prov,
+            BeanPropertyDefinition propDef, JavaType declaredType, JsonSerializer<?> ser,
+            TypeSerializer typeSer, TypeSerializer contentTypeSer,
+            AnnotatedMember am, boolean defaultUseStaticTyping)
+        throws JsonMappingException
+    {
+        // do we have annotation that forces type to use (to declared type or its super type)?
+        JavaType serializationType = findSerializationType(am, defaultUseStaticTyping, declaredType);
 
-  /**
-   * Describe dimension table.
-   *
-   * @param dim the dim
-   * @return the string
-   */
-  @CliCommand(value = "describe dimtable", help = "describe a dimension table")
-  public String describeDimensionTable(
-    @CliOption(key = {"", "table"}, mandatory = true, help = "dimension table name to be described") String dim) {
-    try {
-      return formatJson(mapper.writer(pp).writeValueAsString(getClient().getDimensionTable(dim)));
-    } catch (IOException e) {
-      throw new IllegalArgumentException(e);
-    }
-  }
+        // Container types can have separate type serializers for content (value / element) type
+        if (contentTypeSer != null) {
+            /* 04-Feb-2010, tatu: Let's force static typing for collection, if there is
+             *    type information for contents. Should work well (for JAXB case); can be
+             *    revisited if this causes problems.
+             */
+            if (serializationType == null) {
+//                serializationType = TypeFactory.type(am.getGenericType(), _beanDesc.getType());
+                serializationType = declaredType;
+            }
+            JavaType ct = serializationType.getContentType();
+            // Not exactly sure why, but this used to occur; better check explicitly:
+            if (ct == null) {
+                throw new IllegalStateException("Problem trying to create BeanPropertyWriter for property '"
+                        +propDef.getName()+"' (of type "+_beanDesc.getType()+"); serialization type "+serializationType+" has no content");
+            }
+            serializationType = serializationType.withContentTypeHandler(contentTypeSer);
+            ct = serializationType.getContentType();
+        }
+        
+        Object valueToSuppress = null;
+        boolean suppressNulls = false;
 
-  /**
-   * Gets the dim storages.
-   *
-   * @param dim the dim
-   * @return the dim storages
-   */
-  @CliCommand(value = "dimtable list storage", help = "display list of storage associated to dimension table")
-  public String getDimStorages(
-    @CliOption(key = {"", "table"}, mandatory = true, help = "<table-name> for listing storages") String dim) {
-    List<String> storages = getClient().getDimStorages(dim);
-    StringBuilder sb = new StringBuilder();
-    for (String storage : storages) {
-      if (!storage.isEmpty()) {
-        sb.append(storage).append("\n");
-      }
-    }
+        JsonInclude.Value inclV = _defaultInclusion.withOverrides(propDef.findInclusion());
+        JsonInclude.Include inclusion = inclV.getValueInclusion();
+        if (inclusion == JsonInclude.Include.USE_DEFAULTS) { // should not occur but...
+            inclusion = JsonInclude.Include.ALWAYS;
+        }
 
-    if (sb.toString().isEmpty()) {
-      return "No storages found for " + dim;
-    }
-    return sb.toString().substring(0, sb.toString().length() - 1);
-  }
+        /*
+        JsonInclude.Include inclusion = propDef.findInclusion().getValueInclusion();
+        if (inclusion == JsonInclude.Include.USE_DEFAULTS) { // since 2.6
+            inclusion = _defaultInclusion;
+            if (inclusion == null) {
+                inclusion = JsonInclude.Include.ALWAYS;
+            }
+        }
+        */
 
-  /**
-   * Drop all dim storages.
-   *
-   * @param table the table
-   * @return the string
-   */
-  @CliCommand(value = "dimtable drop-all storages", help = "drop all storages associated to dimension table")
-  public String dropAllDimStorages(
-    @CliOption(key = {"", "table"}, mandatory = true, help
-      = "<table-name> for which all storage should be dropped") String table) {
-    APIResult result = getClient().dropAllStoragesOfDim(table);
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "All storages of " + table + " dropped successfully";
-    } else {
-      return "Error dropping storages of " + table;
-    }
-  }
+        switch (inclusion) {
+        case NON_DEFAULT:
+            valueToSuppress = getDefaultValue(propDef.getName(), am);
+            if (valueToSuppress == null) {
+                suppressNulls = true;
+            } else {
+                if (valueToSuppress.getClass().isArray()) {
+                    valueToSuppress = ArrayBuilders.getArrayComparator(valueToSuppress);
+                }
+            }
+            break;
+        case NON_ABSENT: // new with 2.6, to support Guava/JDK8 Optionals
+            // always suppress nulls
+            suppressNulls = true;
+            // and for referential types, also "empty", which in their case means "absent"
+            if (declaredType.isReferenceType()) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
+        case NON_EMPTY:
+            // always suppress nulls
+            suppressNulls = true;
+            // but possibly also 'empty' values:
+            valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            break;
+        case NON_NULL:
+            suppressNulls = true;
+            // fall through
+        case ALWAYS: // default
+        default:
+            // we may still want to suppress empty collections, as per [JACKSON-254]:
+            if (declaredType.isContainerType()
+                    && !_config.isEnabled(SerializationFeature.WRITE_EMPTY_JSON_ARRAYS)) {
+                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
+            }
+            break;
+        }
+        BeanPropertyWriter bpw = new BeanPropertyWriter(propDef,
+                am, _beanDesc.getClassAnnotations(), declaredType,
+                ser, typeSer, serializationType, suppressNulls, valueToSuppress);
 
-  /**
-   * Adds the new dim storage.
-   *
-   * @param tablepair the tablepair
-   * @return the string
-   */
-  @CliCommand(value = "dimtable add storage", help = "adds a new storage to dimension")
-  public String addNewDimStorage(
-    @CliOption(key = {"", "table"}, mandatory = true, help
-      = "<dim-table-name> <path to storage-spec>") String tablepair) {
-    Iterable<String> parts = Splitter.on(' ').trimResults().omitEmptyStrings().split(tablepair);
-    String[] pair = Iterables.toArray(parts, String.class);
-    if (pair.length != 2) {
-      return "Syntax error, please try in following "
-        + "format. create dimtable <dimtable spec path> <storage spec path>";
-    }
-
-    File f = new File(pair[1]);
-    if (!f.exists()) {
-      return "Storage spech path " + f.getAbsolutePath() + " does not exist. Please check the path";
-    }
-
-    APIResult result = getClient().addStorageToDim(pair[0], pair[1]);
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "Dim table storage addition completed";
-    } else {
-      return "Dim table storage addition failed";
-    }
-  }
-
-  /**
-   * Drop storage from dim.
-   *
-   * @param tablepair the tablepair
-   * @return the string
-   */
-  @CliCommand(value = "dimtable drop storage", help = "drop storage to dimension table")
-  public String dropStorageFromDim(
-    @CliOption(key = {"", "table"}, mandatory = true, help
-      = "<dimension-table-name> <storage-name>") String tablepair) {
-    Iterable<String> parts = Splitter.on(' ').trimResults().omitEmptyStrings().split(tablepair);
-    String[] pair = Iterables.toArray(parts, String.class);
-    if (pair.length != 2) {
-      return "Syntax error, please try in following "
-        + "format. create dimtable <dimtable spec path> <storage spec path>";
-    }
-    APIResult result = getClient().dropStorageFromDim(pair[0], pair[1]);
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "Dim table storage removal successful";
-    } else {
-      return "Dim table storage removal failed";
-    }
-  }
-
-  /**
-   * Gets the storage from dim.
-   *
-   * @param tablepair the tablepair
-   * @return the storage from dim
-   */
-  @CliCommand(value = "dimtable get storage", help = "describe storage of dimension table")
-  public String getStorageFromDim(
-    @CliOption(key = {"", "table"}, mandatory = true, help
-      = "<dimension-table-name> <storage-name>") String tablepair) {
-    Iterable<String> parts = Splitter.on(' ').trimResults().omitEmptyStrings().split(tablepair);
-    String[] pair = Iterables.toArray(parts, String.class);
-    if (pair.length != 2) {
-      return "Syntax error, please try in following "
-        + "format. create dimtable <dimtable spec path> <storage spec path>";
-    }
-    try {
-      return formatJson(mapper.writer(pp).writeValueAsString(getClient().getStorageFromDim(pair[0], pair[1])));
-    } catch (IOException e) {
-      throw new IllegalArgumentException(e);
-    }
-  }
-
-  /**
-   * Gets the all partitions of dim.
-   *
-   * @param specPair the spec pair
-   * @return the all partitions of dim
-   */
-  @CliCommand(value = "dimtable list partitions", help = "get all partitions associated with dimension table")
-  public String getAllPartitionsOfDim(
-    @CliOption(key = {"", "table"}, mandatory = true, help = "<dimension-table-name> <storageName> "
-      + "[optional <partition query filter> to get]") String specPair) {
-    Iterable<String> parts = Splitter.on(' ').trimResults().omitEmptyStrings().split(specPair);
-    String[] pair = Iterables.toArray(parts, String.class);
-    if (pair.length == 2) {
-      try {
-        return formatJson(mapper.writer(pp).writeValueAsString(getClient().getAllPartitionsOfDim(pair[0], pair[1])));
-      } catch (IOException e) {
-        throw new IllegalArgumentException(e);
-      }
+        // How about custom null serializer?
+        Object serDef = _annotationIntrospector.findNullSerializer(am);
+        if (serDef != null) {
+            bpw.assignNullSerializer(prov.serializerInstance(am, serDef));
+        }
+        // And then, handling of unwrapping
+        NameTransformer unwrapper = _annotationIntrospector.findUnwrappingNameTransformer(am);
+        if (unwrapper != null) {
+            bpw = bpw.unwrappingWriter(unwrapper);
+        }
+        return bpw;
     }
 
-    if (pair.length == 3) {
-      try {
-        return formatJson(mapper.writer(pp).writeValueAsString(
-          getClient().getAllPartitionsOfDim(pair[0], pair[1], pair[2])));
-      } catch (IOException e) {
-        throw new IllegalArgumentException(e);
-      }
+    /*
+    /**********************************************************
+    /* Helper methods; annotation access
+    /**********************************************************
+     */
+
+    /**
+     * Method that will try to determine statically defined type of property
+     * being serialized, based on annotations (for overrides), and alternatively
+     * declared type (if static typing for serialization is enabled).
+     * If neither can be used (no annotations, dynamic typing), returns null.
+     */
+    protected JavaType findSerializationType(Annotated a, boolean useStaticTyping, JavaType declaredType)
+        throws JsonMappingException
+    {
+        JavaType secondary = _annotationIntrospector.refineSerializationType(_config, a, declaredType);
+        // 11-Oct-2015, tatu: As of 2.7, not 100% sure following checks are needed. But keeping
+        //    for now, just in case
+        if (secondary != declaredType) {
+            Class<?> serClass = secondary.getRawClass();
+            // Must be a super type to be usable
+            Class<?> rawDeclared = declaredType.getRawClass();
+            if (serClass.isAssignableFrom(rawDeclared)) {
+                ; // fine as is
+            } else {
+                /* 18-Nov-2010, tatu: Related to fixing [JACKSON-416], an issue with such
+                 *   check is that for deserialization more specific type makes sense;
+                 *   and for serialization more generic. But alas JAXB uses but a single
+                 *   annotation to do both... Hence, we must just discard type, as long as
+                 *   types are related
+                 */
+                if (!rawDeclared.isAssignableFrom(serClass)) {
+                    throw new IllegalArgumentException("Illegal concrete-type annotation for method '"+a.getName()+"': class "+serClass.getName()+" not a super-type of (declared) class "+rawDeclared.getName());
+                }
+                /* 03-Dec-2010, tatu: Actually, ugh, we may need to further relax this
+                 *   and actually accept subtypes too for serialization. Bit dangerous in theory
+                 *   but need to trust user here...
+                 */
+            }
+            useStaticTyping = true;
+            declaredType = secondary;
+        }
+        // If using static typing, declared type is known to be the type...
+        JsonSerialize.Typing typing = _annotationIntrospector.findSerializationTyping(a);
+        if ((typing != null) && (typing != JsonSerialize.Typing.DEFAULT_TYPING)) {
+            useStaticTyping = (typing == JsonSerialize.Typing.STATIC);
+        }
+        if (useStaticTyping) {
+            // 11-Oct-2015, tatu: Make sure JavaType also "knows" static-ness...
+            return declaredType.withStaticTyping();
+            
+        }
+        return null;
     }
 
-    return "Syntax error, please try in following "
-      + "format. dim list partitions <table> <storage> [partition values]";
-  }
+    /*
+    /**********************************************************
+    /* Helper methods for default value handling
+    /**********************************************************
+     */
 
-  /**
-   * Drop all partitions of dim.
-   *
-   * @param specPair the spec pair
-   * @return the string
-   */
-  @CliCommand(value = "dimtable drop partitions", help = "drop all partitions associated with dimension table")
-  public String dropAllPartitionsOfDim(
-    @CliOption(key = {"", "table"}, mandatory = true, help = "<dimension-table-name> <storageName> "
-      + "[optional <partition query filter> to drop]") String specPair) {
-    Iterable<String> parts = Splitter.on(' ').trimResults().omitEmptyStrings().split(specPair);
-    String[] pair = Iterables.toArray(parts, String.class);
-    APIResult result;
-    if (pair.length == 2) {
-      result = getClient().dropAllPartitionsOfDim(pair[0], pair[1]);
-    }
-    if (pair.length == 3) {
-      result = getClient().dropAllPartitionsOfDim(pair[0], pair[1], pair[3]);
-    } else {
-      return "Syntax error, please try in following "
-        + "format. dimtable drop partitions <table> <storage> [partition values]";
-    }
+    protected Object getDefaultBean()
+    {
+        Object def = _defaultBean;
+        if (def == null) {
+            /* If we can fix access rights, we should; otherwise non-public
+             * classes or default constructor will prevent instantiation
+             */
+            def = _beanDesc.instantiateBean(_config.canOverrideAccessModifiers());
+            if (def == null) {
+                // 06-Nov-2015, tatu: As per [databind#998], do not fail.
+                /*
+                Class<?> cls = _beanDesc.getClassInfo().getAnnotated();
+                throw new IllegalArgumentException("Class "+cls.getName()+" has no default constructor; can not instantiate default bean value to support 'properties=JsonSerialize.Inclusion.NON_DEFAULT' annotation");
+                 */
 
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "Successfully dropped partition of " + pair[0];
-    } else {
-      return "failure in  dropping partition of " + pair[0];
+                // And use a marker
+                def = NO_DEFAULT_MARKER;
+            }
+            _defaultBean = def;
+        }
+        return (def == NO_DEFAULT_MARKER) ? null : _defaultBean;
     }
 
-  }
-
-  /**
-   * Adds the partition to fact.
-   *
-   * @param specPair the spec pair
-   * @return the string
-   */
-  @CliCommand(value = "dimtable add partition", help = "add a partition to dim table")
-  public String addPartitionToFact(
-    @CliOption(key = {"", "table"}, mandatory = true, help = "<dimension-table-name> <storage-name>"
-      + " <path to partition specification>") String specPair) {
-    Iterable<String> parts = Splitter.on(' ').trimResults().omitEmptyStrings().split(specPair);
-    String[] pair = Iterables.toArray(parts, String.class);
-    APIResult result;
-    if (pair.length != 3) {
-      return "Syntax error, please try in following "
-        + "format. dimtable add partition <table> <storage> <partition spec>";
+    protected Object getDefaultValue(String name, AnnotatedMember member)
+    {
+        Object defaultBean = getDefaultBean();
+        if (defaultBean == null) {
+            // 06-Nov-2015, tatu: Returning null is fine for Object types; but need special
+            //   handling for primitives since they are never passed as nulls.
+            Class<?> cls = member.getRawType();
+            if (cls.isPrimitive()) {
+                return ClassUtil.defaultValue(cls);
+            }
+            return null;
+        }
+        try {
+            return member.getValue(defaultBean);
+        } catch (Exception e) {
+            return _throwWrapped(e, name, defaultBean);
+        }
     }
 
-    File f = new File(pair[2]);
-    if (!f.exists()) {
-      return "Partition spec does not exist";
+    /*
+    /**********************************************************
+    /* Helper methods for exception handling
+    /**********************************************************
+     */
+    
+    protected Object _throwWrapped(Exception e, String propName, Object defaultBean)
+    {
+        Throwable t = e;
+        while (t.getCause() != null) {
+            t = t.getCause();
+        }
+        if (t instanceof Error) throw (Error) t;
+        if (t instanceof RuntimeException) throw (RuntimeException) t;
+        throw new IllegalArgumentException("Failed to get property '"+propName+"' of default "+defaultBean.getClass().getName()+" instance");
     }
-
-    result = getClient().addPartitionToDim(pair[0], pair[1], pair[2]);
-    if (result.getStatus() == APIResult.Status.SUCCEEDED) {
-      return "Successfully added partition to " + pair[0];
-    } else {
-      return "failure in  addition of partition to " + pair[0];
-    }
-  }
-
 }

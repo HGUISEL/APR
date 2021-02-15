@@ -1,901 +1,1114 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
- * agreements. See the NOTICE file distributed with this work for additional information regarding
- * copyright ownership. The ASF licenses this file to You under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.geode.internal.cache;
+package org.apache.kafka.streams;
 
-import java.util.Collection;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.config.AbstractConfig;
+import org.apache.kafka.common.config.ConfigDef;
+import org.apache.kafka.common.config.ConfigDef.Importance;
+import org.apache.kafka.common.config.ConfigDef.Type;
+import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.config.TopicConfig;
+import org.apache.kafka.common.metrics.Sensor;
+import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.errors.DeserializationExceptionHandler;
+import org.apache.kafka.streams.errors.LogAndFailExceptionHandler;
+import org.apache.kafka.streams.errors.ProductionExceptionHandler;
+import org.apache.kafka.streams.errors.DefaultProductionExceptionHandler;
+import org.apache.kafka.streams.errors.StreamsException;
+import org.apache.kafka.streams.processor.DefaultPartitionGrouper;
+import org.apache.kafka.streams.processor.FailOnInvalidTimestamp;
+import org.apache.kafka.streams.processor.TimestampExtractor;
+import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantLock;
 
-import org.apache.logging.log4j.Logger;
+import static org.apache.kafka.common.config.ConfigDef.Range.atLeast;
+import static org.apache.kafka.common.config.ConfigDef.Range.between;
+import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
+import static org.apache.kafka.common.requests.IsolationLevel.READ_COMMITTED;
 
-import org.apache.geode.GemFireException;
-import org.apache.geode.cache.Cache;
-import org.apache.geode.cache.CommitConflictException;
-import org.apache.geode.cache.EntryNotFoundException;
-import org.apache.geode.cache.Region.Entry;
-import org.apache.geode.cache.TransactionDataNotColocatedException;
-import org.apache.geode.cache.TransactionDataRebalancedException;
-import org.apache.geode.cache.TransactionException;
-import org.apache.geode.cache.TransactionId;
-import org.apache.geode.cache.UnsupportedOperationInTransactionException;
-import org.apache.geode.cache.client.internal.ServerRegionDataAccess;
-import org.apache.geode.distributed.DistributedMember;
-import org.apache.geode.distributed.internal.DistributionConfig;
-import org.apache.geode.distributed.internal.membership.InternalDistributedMember;
-import org.apache.geode.internal.cache.tier.sockets.ClientProxyMembershipID;
-import org.apache.geode.internal.cache.tier.sockets.VersionedObjectList;
-import org.apache.geode.internal.cache.tx.ClientTXStateStub;
-import org.apache.geode.internal.cache.tx.TransactionalOperation.ServerRegionOperation;
-import org.apache.geode.internal.i18n.LocalizedStrings;
-import org.apache.geode.internal.lang.SystemPropertyHelper;
-import org.apache.geode.internal.logging.LogService;
-import org.apache.geode.internal.logging.log4j.LocalizedMessage;
+/**
+ * Configuration for a {@link KafkaStreams} instance.
+ * Can also be used to configure the Kafka Streams internal {@link KafkaConsumer}, {@link KafkaProducer} and {@link AdminClient}.
+ * To avoid consumer/producer/admin property conflicts, you should prefix those properties using
+ * {@link #consumerPrefix(String)}, {@link #producerPrefix(String)} and {@link #adminClientPrefix(String)}, respectively.
+ * <p>
+ * Example:
+ * <pre>{@code
+ * // potentially wrong: sets "metadata.max.age.ms" to 1 minute for producer AND consumer
+ * Properties streamsProperties = new Properties();
+ * streamsProperties.put(ConsumerConfig.METADATA_MAX_AGE_CONFIG, 60000);
+ * // or
+ * streamsProperties.put(ProducerConfig.METADATA_MAX_AGE_CONFIG, 60000);
+ *
+ * // suggested:
+ * Properties streamsProperties = new Properties();
+ * // sets "metadata.max.age.ms" to 1 minute for consumer only
+ * streamsProperties.put(StreamsConfig.consumerPrefix(ConsumerConfig.METADATA_MAX_AGE_CONFIG), 60000);
+ * // sets "metadata.max.age.ms" to 1 minute for producer only
+ * streamsProperties.put(StreamsConfig.producerPrefix(ProducerConfig.METADATA_MAX_AGE_CONFIG), 60000);
+ *
+ * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
+ * }</pre>
+ *
+ * This instance can also be used to pass in custom configurations to different modules (e.g. passing a special config in your customized serde class).
+ * The consumer/producer/admin prefix can also be used to distinguish these custom config values passed to different clients with the same config name.
+ * * Example:
+ * <pre>{@code
+ * Properties streamsProperties = new Properties();
+ * // sets "my.custom.config" to "foo" for consumer only
+ * streamsProperties.put(StreamsConfig.consumerPrefix("my.custom.config"), "foo");
+ * // sets "my.custom.config" to "bar" for producer only
+ * streamsProperties.put(StreamsConfig.producerPrefix("my.custom.config"), "bar");
+ * // sets "my.custom.config2" to "boom" for all clients universally
+ * streamsProperties.put("my.custom.config2", "boom");
+ *
+ * // as a result, inside producer's serde class configure(..) function,
+ * // users can now read both key-value pairs "my.custom.config" -> "foo"
+ * // and "my.custom.config2" -> "boom" from the config map
+ * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
+ * }</pre>
+ *
+ * When increasing both {@link ProducerConfig#RETRIES_CONFIG} and {@link ProducerConfig#MAX_BLOCK_MS_CONFIG} to be more resilient to non-available brokers you should also
+ * consider increasing {@link ConsumerConfig#MAX_POLL_INTERVAL_MS_CONFIG} using the following guidance:
+ * <pre>
+ *     max.poll.interval.ms > min ( max.block.ms, (retries +1) * request.timeout.ms )
+ * </pre>
+ *
+ *
+ * Kafka Streams requires at least the following properties to be set:
+ * <ul>
+ *  <li>{@link #APPLICATION_ID_CONFIG "application.id"}</li>
+ *  <li>{@link #BOOTSTRAP_SERVERS_CONFIG "bootstrap.servers"}</li>
+ * </ul>
+ *
+ * By default, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
+ * <ul>
+ *   <li>{@link ConsumerConfig#ENABLE_AUTO_COMMIT_CONFIG "enable.auto.commit"} (false) - Streams client will always disable/turn off auto committing</li>
+ * </ul>
+ *
+ * If {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} is set to {@link #EXACTLY_ONCE "exactly_once"}, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
+ * <ul>
+ *   <li>{@link ConsumerConfig#ISOLATION_LEVEL_CONFIG "isolation.level"} (read_committed) - Consumers will always read committed data only</li>
+ *   <li>{@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG "enable.idempotence"} (true) - Producer will always have idempotency enabled</li>
+ *   <li>{@link ProducerConfig#MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION "max.in.flight.requests.per.connection"} (5) - Producer will always have one in-flight request per connection</li>
+ * </ul>
+ *
+ *
+ * @see KafkaStreams#KafkaStreams(org.apache.kafka.streams.Topology, Properties)
+ * @see ConsumerConfig
+ * @see ProducerConfig
+ */
+public class StreamsConfig extends AbstractConfig {
 
-public class TXStateProxyImpl implements TXStateProxy {
-  private static final Logger logger = LogService.getLogger();
+    private final static Logger log = LoggerFactory.getLogger(StreamsConfig.class);
 
-  protected static final AtomicBoolean txDistributedClientWarningIssued = new AtomicBoolean();
+    private static final ConfigDef CONFIG;
 
-  private boolean isJTA;
-  private TXId txId;
-  protected final TXManagerImpl txMgr;
-  protected DistributedMember target;
-  private boolean commitRequestedByOwner;
-  private boolean isJCATransaction;
+    private final boolean eosEnabled;
+    private final static long DEFAULT_COMMIT_INTERVAL_MS = 30000L;
+    private final static long EOS_DEFAULT_COMMIT_INTERVAL_MS = 100L;
 
-  /**
-   * for client/server JTA transactions we need to have a single thread handle both beforeCompletion
-   * and afterCompletion so that beforeC can obtain locks for the afterC step. This is that thread
-   */
-  protected volatile TXSynchronizationRunnable synchRunnable;
+    /**
+     * Prefix used to provide default topic configs to be applied when creating internal topics.
+     * These should be valid properties from {@link org.apache.kafka.common.config.TopicConfig TopicConfig}.
+     * It is recommended to use {@link #topicPrefix(String)}.
+     */
+    // TODO: currently we cannot get the full topic configurations and hence cannot allow topic configs without the prefix,
+    //       this can be lifted once kafka.log.LogConfig is completely deprecated by org.apache.kafka.common.config.TopicConfig
+    public static final String TOPIC_PREFIX = "topic.";
 
-  private final ReentrantLock lock = new ReentrantLock();
+    /**
+     * Prefix used to isolate {@link KafkaConsumer consumer} configs from other client configs.
+     * It is recommended to use {@link #consumerPrefix(String)} to add this prefix to {@link ConsumerConfig consumer
+     * properties}.
+     */
+    public static final String CONSUMER_PREFIX = "consumer.";
 
-  /** number of operations in this transaction */
-  private int operationCount = 0;
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the main consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. main.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    public static final String MAIN_CONSUMER_PREFIX = "main.consumer.";
 
-  /**
-   * tracks bucketIds of transactional operations so as to distinguish between
-   * TransactionDataNotColocated and TransactionDataRebalanced exceptions.
-   */
-  private Map<Integer, Boolean> buckets = new HashMap<Integer, Boolean>();
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the restore consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. restore.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    public static final String RESTORE_CONSUMER_PREFIX = "restore.consumer.";
 
-  public void setSynchronizationRunnable(TXSynchronizationRunnable synch) {
-    this.synchRunnable = synch;
-  }
+    /**
+     * Prefix used to override {@link KafkaConsumer consumer} configs for the global consumer client from
+     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
+     * 1. global.consumer.[config-name]
+     * 2. consumer.[config-name]
+     * 3. [config-name]
+     */
+    public static final String GLOBAL_CONSUMER_PREFIX = "global.consumer.";
 
-  public TXSynchronizationRunnable getSynchronizationRunnable() {
-    return this.synchRunnable;
-  }
+    /**
+     * Prefix used to isolate {@link KafkaProducer producer} configs from other client configs.
+     * It is recommended to use {@link #producerPrefix(String)} to add this prefix to {@link ProducerConfig producer
+     * properties}.
+     */
+    public static final String PRODUCER_PREFIX = "producer.";
 
-  public ReentrantLock getLock() {
-    return this.lock;
-  }
+    /**
+     * Prefix used to isolate {@link org.apache.kafka.clients.admin.AdminClient admin} configs from other client configs.
+     * It is recommended to use {@link #adminClientPrefix(String)} to add this prefix to {@link ProducerConfig producer
+     * properties}.
+     */
+    public static final String ADMIN_CLIENT_PREFIX = "admin.";
 
-  boolean isJTA() {
-    return isJTA;
-  }
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.0.x}.
+     */
+    public static final String UPGRADE_FROM_0100 = "0.10.0";
 
-  public TXId getTxId() {
-    return txId;
-  }
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.1.x}.
+     */
+    public static final String UPGRADE_FROM_0101 = "0.10.1";
 
-  public TXManagerImpl getTxMgr() {
-    return txMgr;
-  }
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.2.x}.
+     */
+    public static final String UPGRADE_FROM_0102 = "0.10.2";
 
-  protected volatile TXStateInterface realDeal;
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.11.0.x}.
+     */
+    public static final String UPGRADE_FROM_0110 = "0.11.0";
 
-  protected boolean inProgress = true;
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.0.x}.
+     */
+    public static final String UPGRADE_FROM_10 = "1.0";
 
-  protected InternalDistributedMember onBehalfOfClientMember = null;
+    /**
+     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.1.x}.
+     */
+    public static final String UPGRADE_FROM_11 = "1.1";
 
-  /**
-   * This returns either the TXState for the current transaction or a proxy for the state if it is
-   * held in another member. If no state currently exists, one is created
-   *
-   * @param key the key of the entry that is currently being modified
-   * @param r the region that is currently being modified
-   * @return the state or a proxy for the state
-   */
-  public TXStateInterface getRealDeal(KeyInfo key, LocalRegion r) {
-    if (this.realDeal == null) {
-      if (r == null) { // TODO: stop gap to get tests working
-        this.realDeal = new TXState(this, false);
-      } else {
-        // Code to keep going forward
-        if (r.hasServerProxy()) {
-          this.realDeal = new ClientTXStateStub(this, target, r);
-          if (r.scope.isDistributed()) {
-            if (txDistributedClientWarningIssued.compareAndSet(false, true)) {
-              logger.warn(LocalizedMessage.create(
-                  LocalizedStrings.TXStateProxyImpl_Distributed_Region_In_Client_TX,
-                  r.getFullPath()));
+    /**
+     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for at-least-once processing guarantees.
+     */
+    public static final String AT_LEAST_ONCE = "at_least_once";
+
+    /**
+     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for exactly-once processing guarantees.
+     */
+    public static final String EXACTLY_ONCE = "exactly_once";
+
+    /** {@code application.id} */
+    public static final String APPLICATION_ID_CONFIG = "application.id";
+    private static final String APPLICATION_ID_DOC = "An identifier for the stream processing application. Must be unique within the Kafka cluster. It is used as 1) the default client-id prefix, 2) the group-id for membership management, 3) the changelog topic prefix.";
+
+    /**{@code user.endpoint} */
+    public static final String APPLICATION_SERVER_CONFIG = "application.server";
+    private static final String APPLICATION_SERVER_DOC = "A host:port pair pointing to an embedded user defined endpoint that can be used for discovering the locations of state stores within a single KafkaStreams application";
+
+    /** {@code bootstrap.servers} */
+    public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
+
+    /** {@code buffered.records.per.partition} */
+    public static final String BUFFERED_RECORDS_PER_PARTITION_CONFIG = "buffered.records.per.partition";
+    private static final String BUFFERED_RECORDS_PER_PARTITION_DOC = "The maximum number of records to buffer per partition.";
+
+    /** {@code cache.max.bytes.buffering} */
+    public static final String CACHE_MAX_BYTES_BUFFERING_CONFIG = "cache.max.bytes.buffering";
+    private static final String CACHE_MAX_BYTES_BUFFERING_DOC = "Maximum number of memory bytes to be used for buffering across all threads";
+
+    /** {@code client.id} */
+    public static final String CLIENT_ID_CONFIG = CommonClientConfigs.CLIENT_ID_CONFIG;
+    private static final String CLIENT_ID_DOC = "An ID prefix string used for the client IDs of internal consumer, producer and restore-consumer," +
+        " with pattern '<client.id>-StreamThread-<threadSequenceNumber>-<consumer|producer|restore-consumer>'.";
+
+    /** {@code commit.interval.ms} */
+    public static final String COMMIT_INTERVAL_MS_CONFIG = "commit.interval.ms";
+    private static final String COMMIT_INTERVAL_MS_DOC = "The frequency with which to save the position of the processor." +
+        " (Note, if 'processing.guarantee' is set to '" + EXACTLY_ONCE + "', the default value is " + EOS_DEFAULT_COMMIT_INTERVAL_MS + "," +
+        " otherwise the default value is " + DEFAULT_COMMIT_INTERVAL_MS + ".";
+
+    /** {@code connections.max.idle.ms} */
+    public static final String CONNECTIONS_MAX_IDLE_MS_CONFIG = CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG;
+
+    /**
+     * {@code default.deserialization.exception.handler}
+     */
+    public static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.deserialization.exception.handler";
+    private static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.DeserializationExceptionHandler</code> interface.";
+
+    /**
+     * {@code default.production.exception.handler}
+     */
+    public static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.production.exception.handler";
+    private static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.ProductionExceptionHandler</code> interface.";
+
+    /**
+     * {@code default.windowed.key.serde.inner}
+     */
+    public static final String DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS = "default.windowed.key.serde.inner";
+
+    /**
+     * {@code default.windowed.value.serde.inner}
+     */
+    public static final String DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS = "default.windowed.value.serde.inner";
+
+    /** {@code default key.serde} */
+    public static final String DEFAULT_KEY_SERDE_CLASS_CONFIG = "default.key.serde";
+    private static final String DEFAULT_KEY_SERDE_CLASS_DOC = " Default serializer / deserializer class for key that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
+            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
+            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
+
+    /** {@code default value.serde} */
+    public static final String DEFAULT_VALUE_SERDE_CLASS_CONFIG = "default.value.serde";
+    private static final String DEFAULT_VALUE_SERDE_CLASS_DOC = "Default serializer / deserializer class for value that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
+            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
+            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
+
+    /** {@code default.timestamp.extractor} */
+    public static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG = "default.timestamp.extractor";
+    private static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC = "Default timestamp extractor class that implements the <code>org.apache.kafka.streams.processor.TimestampExtractor</code> interface.";
+
+    /** {@code metadata.max.age.ms} */
+    public static final String METADATA_MAX_AGE_CONFIG = CommonClientConfigs.METADATA_MAX_AGE_CONFIG;
+
+    /** {@code metrics.num.samples} */
+    public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;
+
+    /** {@code metrics.record.level} */
+    public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;
+
+    /** {@code metric.reporters} */
+    public static final String METRIC_REPORTER_CLASSES_CONFIG = CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG;
+
+    /** {@code metrics.sample.window.ms} */
+    public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
+
+    /** {@code num.standby.replicas} */
+    public static final String NUM_STANDBY_REPLICAS_CONFIG = "num.standby.replicas";
+    private static final String NUM_STANDBY_REPLICAS_DOC = "The number of standby replicas for each task.";
+
+    /** {@code num.stream.threads} */
+    public static final String NUM_STREAM_THREADS_CONFIG = "num.stream.threads";
+    private static final String NUM_STREAM_THREADS_DOC = "The number of threads to execute stream processing.";
+
+    /** {@code partition.grouper} */
+    public static final String PARTITION_GROUPER_CLASS_CONFIG = "partition.grouper";
+    private static final String PARTITION_GROUPER_CLASS_DOC = "Partition grouper class that implements the <code>org.apache.kafka.streams.processor.PartitionGrouper</code> interface.";
+
+    /** {@code poll.ms} */
+    public static final String POLL_MS_CONFIG = "poll.ms";
+    private static final String POLL_MS_DOC = "The amount of time in milliseconds to block waiting for input.";
+
+    /** {@code processing.guarantee} */
+    public static final String PROCESSING_GUARANTEE_CONFIG = "processing.guarantee";
+    private static final String PROCESSING_GUARANTEE_DOC = "The processing guarantee that should be used. Possible values are <code>" + AT_LEAST_ONCE + "</code> (default) and <code>" + EXACTLY_ONCE + "</code>. " +
+        "Note that exactly-once processing requires a cluster of at least three brokers by default what is the recommended setting for production; for development you can change this, by adjusting broker setting `transaction.state.log.replication.factor`.";
+
+    /** {@code receive.buffer.bytes} */
+    public static final String RECEIVE_BUFFER_CONFIG = CommonClientConfigs.RECEIVE_BUFFER_CONFIG;
+
+    /** {@code reconnect.backoff.ms} */
+    public static final String RECONNECT_BACKOFF_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MS_CONFIG;
+
+    /** {@code reconnect.backoff.max} */
+    public static final String RECONNECT_BACKOFF_MAX_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_CONFIG;
+
+    /** {@code replication.factor} */
+    public static final String REPLICATION_FACTOR_CONFIG = "replication.factor";
+    private static final String REPLICATION_FACTOR_DOC = "The replication factor for change log topics and repartition topics created by the stream processing application.";
+
+    /** {@code request.timeout.ms} */
+    public static final String REQUEST_TIMEOUT_MS_CONFIG = CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG;
+
+    /** {@code retries} */
+    public static final String RETRIES_CONFIG = CommonClientConfigs.RETRIES_CONFIG;
+
+    /** {@code retry.backoff.ms} */
+    public static final String RETRY_BACKOFF_MS_CONFIG = CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG;
+
+    /** {@code rocksdb.config.setter} */
+    public static final String ROCKSDB_CONFIG_SETTER_CLASS_CONFIG = "rocksdb.config.setter";
+    private static final String ROCKSDB_CONFIG_SETTER_CLASS_DOC = "A Rocks DB config setter class or class name that implements the <code>org.apache.kafka.streams.state.RocksDBConfigSetter</code> interface";
+
+    /** {@code security.protocol} */
+    public static final String SECURITY_PROTOCOL_CONFIG = CommonClientConfigs.SECURITY_PROTOCOL_CONFIG;
+
+    /** {@code send.buffer.bytes} */
+    public static final String SEND_BUFFER_CONFIG = CommonClientConfigs.SEND_BUFFER_CONFIG;
+
+    /** {@code state.cleanup.delay} */
+    public static final String STATE_CLEANUP_DELAY_MS_CONFIG = "state.cleanup.delay.ms";
+    private static final String STATE_CLEANUP_DELAY_MS_DOC = "The amount of time in milliseconds to wait before deleting state when a partition has migrated. Only state directories that have not been modified for at least state.cleanup.delay.ms will be removed";
+
+    /** {@code state.dir} */
+    public static final String STATE_DIR_CONFIG = "state.dir";
+    private static final String STATE_DIR_DOC = "Directory location for state store.";
+
+    /** {@code upgrade.from} */
+    public static final String UPGRADE_FROM_CONFIG = "upgrade.from";
+    public static final String UPGRADE_FROM_DOC = "Allows upgrading from versions 0.10.0/0.10.1/0.10.2/0.11.0/1.0/1.1 to version 1.2 (or newer) in a backward compatible way. " +
+        "When upgrading from 1.2 to a newer version it is not required to specify this config." +
+        "Default is null. Accepted values are \"" + UPGRADE_FROM_0100 + "\", \"" + UPGRADE_FROM_0101 + "\", \"" + UPGRADE_FROM_0102 + "\", \"" + UPGRADE_FROM_0110 + "\", \"" + UPGRADE_FROM_10 + "\", \"" + UPGRADE_FROM_11 + "\" (for upgrading from the corresponding old version).";
+
+    /** {@code windowstore.changelog.additional.retention.ms} */
+    public static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG = "windowstore.changelog.additional.retention.ms";
+    private static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC = "Added to a windows maintainMs to ensure data is not deleted from the log prematurely. Allows for clock drift. Default is 1 day";
+
+    private static final String[] NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS = new String[] {ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG};
+    private static final String[] NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS = new String[] {ConsumerConfig.ISOLATION_LEVEL_CONFIG};
+    private static final String[] NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS = new String[] {ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG,
+                                                                                        ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION};
+
+    static {
+        CONFIG = new ConfigDef()
+
+            // HIGH
+
+            .define(APPLICATION_ID_CONFIG, // required with no default value
+                    Type.STRING,
+                    Importance.HIGH,
+                    APPLICATION_ID_DOC)
+            .define(BOOTSTRAP_SERVERS_CONFIG, // required with no default value
+                    Type.LIST,
+                    Importance.HIGH,
+                    CommonClientConfigs.BOOTSTRAP_SERVERS_DOC)
+            .define(REPLICATION_FACTOR_CONFIG,
+                    Type.INT,
+                    1,
+                    Importance.HIGH,
+                    REPLICATION_FACTOR_DOC)
+            .define(STATE_DIR_CONFIG,
+                    Type.STRING,
+                    "/tmp/kafka-streams",
+                    Importance.HIGH,
+                    STATE_DIR_DOC)
+
+            // MEDIUM
+
+            .define(CACHE_MAX_BYTES_BUFFERING_CONFIG,
+                    Type.LONG,
+                    10 * 1024 * 1024L,
+                    atLeast(0),
+                    Importance.MEDIUM,
+                    CACHE_MAX_BYTES_BUFFERING_DOC)
+            .define(CLIENT_ID_CONFIG,
+                    Type.STRING,
+                    "",
+                    Importance.MEDIUM,
+                    CLIENT_ID_DOC)
+            .define(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                    Type.CLASS,
+                    LogAndFailExceptionHandler.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC)
+            .define(DEFAULT_KEY_SERDE_CLASS_CONFIG,
+                    Type.CLASS,
+                    Serdes.ByteArraySerde.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_KEY_SERDE_CLASS_DOC)
+            .define(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                    Type.CLASS,
+                    DefaultProductionExceptionHandler.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC)
+            .define(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG,
+                    Type.CLASS,
+                    FailOnInvalidTimestamp.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC)
+            .define(DEFAULT_VALUE_SERDE_CLASS_CONFIG,
+                    Type.CLASS,
+                    Serdes.ByteArraySerde.class.getName(),
+                    Importance.MEDIUM,
+                    DEFAULT_VALUE_SERDE_CLASS_DOC)
+            .define(NUM_STANDBY_REPLICAS_CONFIG,
+                    Type.INT,
+                    0,
+                    Importance.MEDIUM,
+                    NUM_STANDBY_REPLICAS_DOC)
+            .define(NUM_STREAM_THREADS_CONFIG,
+                    Type.INT,
+                    1,
+                    Importance.MEDIUM,
+                    NUM_STREAM_THREADS_DOC)
+            .define(PROCESSING_GUARANTEE_CONFIG,
+                    Type.STRING,
+                    AT_LEAST_ONCE,
+                    in(AT_LEAST_ONCE, EXACTLY_ONCE),
+                    Importance.MEDIUM,
+                    PROCESSING_GUARANTEE_DOC)
+            .define(SECURITY_PROTOCOL_CONFIG,
+                    Type.STRING,
+                    CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
+                    Importance.MEDIUM,
+                    CommonClientConfigs.SECURITY_PROTOCOL_DOC)
+
+            // LOW
+
+            .define(APPLICATION_SERVER_CONFIG,
+                    Type.STRING,
+                    "",
+                    Importance.LOW,
+                    APPLICATION_SERVER_DOC)
+            .define(BUFFERED_RECORDS_PER_PARTITION_CONFIG,
+                    Type.INT,
+                    1000,
+                    Importance.LOW,
+                    BUFFERED_RECORDS_PER_PARTITION_DOC)
+            .define(COMMIT_INTERVAL_MS_CONFIG,
+                    Type.LONG,
+                    DEFAULT_COMMIT_INTERVAL_MS,
+                    Importance.LOW,
+                    COMMIT_INTERVAL_MS_DOC)
+            .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
+                    ConfigDef.Type.LONG,
+                    9 * 60 * 1000L,
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
+            .define(METADATA_MAX_AGE_CONFIG,
+                    ConfigDef.Type.LONG,
+                    5 * 60 * 1000L,
+                    atLeast(0),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.METADATA_MAX_AGE_DOC)
+            .define(METRICS_NUM_SAMPLES_CONFIG,
+                    Type.INT,
+                    2,
+                    atLeast(1),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_NUM_SAMPLES_DOC)
+            .define(METRIC_REPORTER_CLASSES_CONFIG,
+                    Type.LIST,
+                    "",
+                    Importance.LOW,
+                    CommonClientConfigs.METRIC_REPORTER_CLASSES_DOC)
+            .define(METRICS_RECORDING_LEVEL_CONFIG,
+                    Type.STRING,
+                    Sensor.RecordingLevel.INFO.toString(),
+                    in(Sensor.RecordingLevel.INFO.toString(), Sensor.RecordingLevel.DEBUG.toString()),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_RECORDING_LEVEL_DOC)
+            .define(METRICS_SAMPLE_WINDOW_MS_CONFIG,
+                    Type.LONG,
+                    30000L,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_DOC)
+            .define(PARTITION_GROUPER_CLASS_CONFIG,
+                    Type.CLASS,
+                    DefaultPartitionGrouper.class.getName(),
+                    Importance.LOW,
+                    PARTITION_GROUPER_CLASS_DOC)
+            .define(POLL_MS_CONFIG,
+                    Type.LONG,
+                    100L,
+                    Importance.LOW,
+                    POLL_MS_DOC)
+            .define(RECEIVE_BUFFER_CONFIG,
+                    Type.INT,
+                    32 * 1024,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.RECEIVE_BUFFER_DOC)
+            .define(RECONNECT_BACKOFF_MS_CONFIG,
+                    Type.LONG,
+                    50L,
+                    atLeast(0L),
+                    Importance.LOW,
+                    CommonClientConfigs.RECONNECT_BACKOFF_MS_DOC)
+            .define(RECONNECT_BACKOFF_MAX_MS_CONFIG,
+                    Type.LONG,
+                    1000L,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
+            .define(RETRIES_CONFIG,
+                    Type.INT,
+                    0,
+                    between(0, Integer.MAX_VALUE),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RETRIES_DOC)
+            .define(RETRY_BACKOFF_MS_CONFIG,
+                    Type.LONG,
+                    100L,
+                    atLeast(0L),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.RETRY_BACKOFF_MS_DOC)
+            .define(REQUEST_TIMEOUT_MS_CONFIG,
+                    Type.INT,
+                    40 * 1000,
+                    atLeast(0),
+                    ConfigDef.Importance.LOW,
+                    CommonClientConfigs.REQUEST_TIMEOUT_MS_DOC)
+            .define(ROCKSDB_CONFIG_SETTER_CLASS_CONFIG,
+                    Type.CLASS,
+                    null,
+                    Importance.LOW,
+                    ROCKSDB_CONFIG_SETTER_CLASS_DOC)
+            .define(SEND_BUFFER_CONFIG,
+                    Type.INT,
+                    128 * 1024,
+                    atLeast(0),
+                    Importance.LOW,
+                    CommonClientConfigs.SEND_BUFFER_DOC)
+            .define(STATE_CLEANUP_DELAY_MS_CONFIG,
+                    Type.LONG,
+                    10 * 60 * 1000L,
+                    Importance.LOW,
+                    STATE_CLEANUP_DELAY_MS_DOC)
+            .define(UPGRADE_FROM_CONFIG,
+                    ConfigDef.Type.STRING,
+                    null,
+                    in(null, UPGRADE_FROM_0100, UPGRADE_FROM_0101, UPGRADE_FROM_0102, UPGRADE_FROM_0110, UPGRADE_FROM_10, UPGRADE_FROM_11),
+                    Importance.LOW,
+                    UPGRADE_FROM_DOC)
+            .define(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG,
+                    Type.LONG,
+                    24 * 60 * 60 * 1000L,
+                    Importance.LOW,
+                    WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC);
+    }
+
+    // this is the list of configs for underlying clients
+    // that streams prefer different default values
+    private static final Map<String, Object> PRODUCER_DEFAULT_OVERRIDES;
+    static {
+        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>();
+        tempProducerDefaultOverrides.put(ProducerConfig.LINGER_MS_CONFIG, "100");
+        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, 10);
+
+        PRODUCER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> PRODUCER_EOS_OVERRIDES;
+    static {
+        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>(PRODUCER_DEFAULT_OVERRIDES);
+        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
+        tempProducerDefaultOverrides.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+
+        PRODUCER_EOS_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> CONSUMER_DEFAULT_OVERRIDES;
+    static {
+        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>();
+        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1000");
+        tempConsumerDefaultOverrides.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        tempConsumerDefaultOverrides.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        tempConsumerDefaultOverrides.put("internal.leave.group.on.close", false);
+        // MAX_POLL_INTERVAL_MS_CONFIG needs to be large for streams to handle cases when
+        // streams is recovering data from state stores. We may set it to Integer.MAX_VALUE since
+        // the streams code itself catches most exceptions and acts accordingly without needing
+        // this timeout. Note however that deadlocks are not detected (by definition) so we
+        // are losing the ability to detect them by setting this value to large. Hopefully
+        // deadlocks happen very rarely or never.
+        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
+        CONSUMER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
+    }
+
+    private static final Map<String, Object> CONSUMER_EOS_OVERRIDES;
+    static {
+        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>(CONSUMER_DEFAULT_OVERRIDES);
+        tempConsumerDefaultOverrides.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, READ_COMMITTED.name().toLowerCase(Locale.ROOT));
+        CONSUMER_EOS_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
+    }
+
+    public static class InternalConfig {
+        public static final String TASK_MANAGER_FOR_PARTITION_ASSIGNOR = "__task.manager.instance__";
+    }
+
+    /**
+     * Prefix a property with {@link #CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String consumerPrefix(final String consumerProp) {
+        return CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #MAIN_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig main consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #MAIN_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String mainConsumerPrefix(final String consumerProp) {
+        return MAIN_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #RESTORE_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig restore consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #RESTORE_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String restoreConsumerPrefix(final String consumerProp) {
+        return RESTORE_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #GLOBAL_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig global consumer configs}
+     * from other client configs.
+     *
+     * @param consumerProp the consumer property to be masked
+     * @return {@link #GLOBAL_CONSUMER_PREFIX} + {@code consumerProp}
+     */
+    public static String globalConsumerPrefix(final String consumerProp) {
+        return GLOBAL_CONSUMER_PREFIX + consumerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #PRODUCER_PREFIX}. This is used to isolate {@link ProducerConfig producer configs}
+     * from other client configs.
+     *
+     * @param producerProp the producer property to be masked
+     * @return PRODUCER_PREFIX + {@code producerProp}
+     */
+    public static String producerPrefix(final String producerProp) {
+        return PRODUCER_PREFIX + producerProp;
+    }
+
+    /**
+     * Prefix a property with {@link #ADMIN_CLIENT_PREFIX}. This is used to isolate {@link AdminClientConfig admin configs}
+     * from other client configs.
+     *
+     * @param adminClientProp the admin client property to be masked
+     * @return ADMIN_CLIENT_PREFIX + {@code adminClientProp}
+     */
+    public static String adminClientPrefix(final String adminClientProp) {
+        return ADMIN_CLIENT_PREFIX + adminClientProp;
+    }
+
+    /**
+     * Prefix a property with {@link #TOPIC_PREFIX}
+     * used to provide default topic configs to be applied when creating internal topics.
+     *
+     * @param topicProp the topic property to be masked
+     * @return TOPIC_PREFIX + {@code topicProp}
+     */
+    public static String topicPrefix(final String topicProp) {
+        return TOPIC_PREFIX + topicProp;
+    }
+
+    /**
+     * Return a copy of the config definition.
+     *
+     * @return a copy of the config definition
+     */
+    public static ConfigDef configDef() {
+        return new ConfigDef(CONFIG);
+    }
+
+    /**
+     * Create a new {@code StreamsConfig} using the given properties.
+     *
+     * @param props properties that specify Kafka Streams and internal consumer/producer configuration
+     */
+    public StreamsConfig(final Map<?, ?> props) {
+        super(CONFIG, props);
+        eosEnabled = EXACTLY_ONCE.equals(getString(PROCESSING_GUARANTEE_CONFIG));
+    }
+
+    @Override
+    protected Map<String, Object> postProcessParsedConfig(final Map<String, Object> parsedValues) {
+        final Map<String, Object> configUpdates =
+            CommonClientConfigs.postProcessReconnectBackoffConfigs(this, parsedValues);
+
+        final boolean eosEnabled = EXACTLY_ONCE.equals(parsedValues.get(PROCESSING_GUARANTEE_CONFIG));
+        if (eosEnabled && !originals().containsKey(COMMIT_INTERVAL_MS_CONFIG)) {
+            log.debug("Using {} default value of {} as exactly once is enabled.",
+                    COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
+            configUpdates.put(COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
+        }
+
+        return configUpdates;
+    }
+
+    private Map<String, Object> getCommonConsumerConfigs() {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(CONSUMER_PREFIX, ConsumerConfig.configNames());
+
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS);
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS);
+
+        final Map<String, Object> consumerProps = new HashMap<>(eosEnabled ? CONSUMER_EOS_OVERRIDES : CONSUMER_DEFAULT_OVERRIDES);
+        consumerProps.putAll(getClientCustomProps());
+        consumerProps.putAll(clientProvidedProps);
+
+        // bootstrap.servers should be from StreamsConfig
+        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
+
+        return consumerProps;
+    }
+
+    private void checkIfUnexpectedUserSpecifiedConsumerConfig(final Map<String, Object> clientProvidedProps, final String[] nonConfigurableConfigs) {
+        // Streams does not allow users to configure certain consumer/producer configurations, for example,
+        // enable.auto.commit. In cases where user tries to override such non-configurable
+        // consumer/producer configurations, log a warning and remove the user defined value from the Map.
+        // Thus the default values for these consumer/producer configurations that are suitable for
+        // Streams will be used instead.
+        final Object maxInflightRequests = clientProvidedProps.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
+        if (eosEnabled && maxInflightRequests != null && 5 < (int) maxInflightRequests) {
+            throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + " can't exceed 5 when using the idempotent producer");
+        }
+        for (final String config: nonConfigurableConfigs) {
+            if (clientProvidedProps.containsKey(config)) {
+                final String eosMessage =  PROCESSING_GUARANTEE_CONFIG + " is set to " + EXACTLY_ONCE + ". Hence, ";
+                final String nonConfigurableConfigMessage = "Unexpected user-specified %s config: %s found. %sUser setting (%s) will be ignored and the Streams default setting (%s) will be used ";
+
+                if (CONSUMER_DEFAULT_OVERRIDES.containsKey(config)) {
+                    if (!clientProvidedProps.get(config).equals(CONSUMER_DEFAULT_OVERRIDES.get(config))) {
+                        log.warn(String.format(nonConfigurableConfigMessage, "consumer", config, "", clientProvidedProps.get(config),  CONSUMER_DEFAULT_OVERRIDES.get(config)));
+                        clientProvidedProps.remove(config);
+                    }
+                } else if (eosEnabled) {
+                    if (CONSUMER_EOS_OVERRIDES.containsKey(config)) {
+                        if (!clientProvidedProps.get(config).equals(CONSUMER_EOS_OVERRIDES.get(config))) {
+                            log.warn(String.format(nonConfigurableConfigMessage,
+                                    "consumer", config, eosMessage, clientProvidedProps.get(config), CONSUMER_EOS_OVERRIDES.get(config)));
+                            clientProvidedProps.remove(config);
+                        }
+                    } else if (PRODUCER_EOS_OVERRIDES.containsKey(config)) {
+                        if (!clientProvidedProps.get(config).equals(PRODUCER_EOS_OVERRIDES.get(config))) {
+                            log.warn(String.format(nonConfigurableConfigMessage,
+                                    "producer", config, eosMessage, clientProvidedProps.get(config), PRODUCER_EOS_OVERRIDES.get(config)));
+                            clientProvidedProps.remove(config);
+                        }
+                    }
+                }
             }
-          }
-        } else {
-          target = null;
-          // wait for the region to be initialized fixes bug 44652
-          r.waitOnInitialization(r.initializationLatchBeforeGetInitialImage);
-          target = r.getOwnerForKey(key);
 
-          if (target == null || target.equals(this.txMgr.getDM().getId())) {
-            this.realDeal = new TXState(this, false);
-          } else {
-            this.realDeal = new PeerTXStateStub(this, target, onBehalfOfClientMember);
-          }
         }
-      }
-      if (logger.isDebugEnabled()) {
-        logger.debug("Built a new TXState: {} me:{}", this.realDeal, this.txMgr.getDM().getId());
-      }
     }
-    return this.realDeal;
-  }
 
-  public TXStateInterface getRealDeal(DistributedMember t) {
-    assert t != null;
-    if (this.realDeal == null) {
-      this.target = t;
-      if (target.equals(getCache().getDistributedSystem().getDistributedMember())) {
-        this.realDeal = new TXState(this, false);
-      } else {
-        /*
-         * txtodo: // what to do!! We don't know if this is client or server!!!
-         */
-        this.realDeal = new PeerTXStateStub(this, target, onBehalfOfClientMember);
-      }
-      if (logger.isDebugEnabled()) {
-        logger.debug("Built a new TXState: {} me:{}", this.realDeal, this.txMgr.getDM().getId());
-      }
+    /**
+     * Get the configs to the {@link KafkaConsumer consumer}.
+     * Properties using the prefix {@link #CONSUMER_PREFIX} will be used in favor over their non-prefixed versions
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     *
+     * @param groupId      consumer groupId
+     * @param clientId     clientId
+     * @return Map of the consumer configuration.
+     * @Deprecated use {@link StreamsConfig#getMainConsumerConfigs(String, String)}
+     */
+    @Deprecated
+    public Map<String, Object> getConsumerConfigs(final String groupId,
+                                                  final String clientId) {
+        return getMainConsumerConfigs(groupId, clientId);
     }
-    return this.realDeal;
-  }
 
-  public TXStateProxyImpl(TXManagerImpl managerImpl, TXId id,
-      InternalDistributedMember clientMember) {
-    this.txMgr = managerImpl;
-    this.txId = id;
-    this.isJTA = false;
-    this.onBehalfOfClientMember = clientMember;
-  }
-
-  public TXStateProxyImpl(TXManagerImpl managerImpl, TXId id, boolean isjta) {
-    this.txMgr = managerImpl;
-    this.txId = id;
-    this.isJTA = isjta;
-  }
-
-  protected void setTXIDForReplay(TXId id) {
-    this.txId = id;
-  }
-
-  public boolean isOnBehalfOfClient() {
-    return this.onBehalfOfClientMember != null;
-  }
-
-  public void setIsJTA(boolean isJTA) {
-    this.isJTA = isJTA;
-  }
-
-  public void checkJTA(String errmsg) throws IllegalStateException {
-    if (isJTA()) {
-      throw new IllegalStateException(errmsg);
-    }
-  }
-
-  @Override
-  public void precommit()
-      throws CommitConflictException, UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.Dist_TX_PRECOMMIT_NOT_SUPPORTED_IN_A_TRANSACTION
-            .toLocalizedString("precommit"));
-  }
-
-  public void commit() throws CommitConflictException {
-    boolean preserveTx = false;
-    try {
-      getRealDeal(null, null).commit();
-    } catch (UnsupportedOperationInTransactionException e) {
-      // fix for #42490
-      preserveTx = true;
-      throw e;
-    } finally {
-      inProgress = preserveTx;
-      if (this.synchRunnable != null) {
-        this.synchRunnable.abort();
-      }
-    }
-  }
-
-  private TransactionException getTransactionException(KeyInfo keyInfo, GemFireException e) {
-    if (isRealDealLocal() && !buckets.isEmpty() && !buckets.containsKey(keyInfo.getBucketId())) {
-      TransactionException ex = new TransactionDataNotColocatedException(
-          LocalizedStrings.PartitionedRegion_KEY_0_NOT_COLOCATED_WITH_TRANSACTION
-              .toLocalizedString(keyInfo.getKey()));
-      ex.initCause(e.getCause());
-      return ex;
-    }
-    Throwable ex = e;
-    while (ex != null) {
-      if (ex instanceof PrimaryBucketException) {
-        return new TransactionDataRebalancedException(
-            LocalizedStrings.PartitionedRegion_TRANSACTIONAL_DATA_MOVED_DUE_TO_REBALANCING
-                .toLocalizedString());
-      }
-      ex = ex.getCause();
-    }
-    return (TransactionException) e;
-  }
-
-  public boolean containsValueForKey(KeyInfo keyInfo, LocalRegion region) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(keyInfo, region).containsValueForKey(keyInfo, region);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  private void trackBucketForTx(KeyInfo keyInfo) {
-    if (keyInfo.getBucketId() >= 0) {
-      if (logger.isDebugEnabled()) {
-        logger.debug("adding bucket:{} for tx:{}", keyInfo.getBucketId(), getTransactionId());
-      }
-    }
-    if (keyInfo.getBucketId() >= 0) {
-      buckets.put(keyInfo.getBucketId(), Boolean.TRUE);
-    }
-  }
-
-  public void destroyExistingEntry(EntryEventImpl event, boolean cacheWrite,
-      Object expectedOldValue) throws EntryNotFoundException {
-    try {
-      this.operationCount++;
-      getRealDeal(event.getKeyInfo(), event.getLocalRegion()).destroyExistingEntry(event,
-          cacheWrite, expectedOldValue);
-      trackBucketForTx(event.getKeyInfo());
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public long getBeginTime() {
-    return getRealDeal(null, null).getBeginTime();
-  }
-
-  public Cache getCache() {
-    return txMgr.getCache();
-  }
-
-  public int getChanges() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getChanges();
-  }
-
-  public Object getDeserializedValue(KeyInfo keyInfo, LocalRegion localRegion, boolean updateStats,
-      boolean disableCopyOnRead, boolean preferCD, EntryEventImpl clientEvent,
-      boolean returnTombstones, boolean retainResult) {
-    Object val = getRealDeal(keyInfo, localRegion).getDeserializedValue(keyInfo, localRegion,
-        updateStats, disableCopyOnRead, preferCD, null, false, retainResult);
-    if (val != null) {
-      // fixes bug 51057: TXStateStub on client always returns null, so do not increment
-      // the operation count it will be incremented in findObject()
-      this.operationCount++;
-    }
-    return val;
-  }
-
-  public Entry getEntry(KeyInfo keyInfo, LocalRegion region, boolean allowTombstones) {
-    try {
-      this.operationCount++;
-      Entry retVal = getRealDeal(keyInfo, region).getEntry(keyInfo, region, allowTombstones);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  public TXEvent getEvent() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getEvent();
-  }
-
-  public List getEvents() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getEvents();
-  }
-
-  public Collection<LocalRegion> getRegions() {
-    assertBootstrapped();
-    return getRealDeal(null, null).getRegions();
-  }
-
-  public TransactionId getTransactionId() {
-    return txId;
-  }
-
-  public void invalidateExistingEntry(EntryEventImpl event, boolean invokeCallbacks,
-      boolean forceNewEntry) {
-    try {
-      this.operationCount++;
-      getRealDeal(event.getKeyInfo(), event.getLocalRegion()).invalidateExistingEntry(event,
-          invokeCallbacks, forceNewEntry);
-      trackBucketForTx(event.getKeyInfo());
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public boolean isInProgress() {
-    return inProgress;
-  }
-
-  @Override
-  public void setInProgress(boolean progress) {
-    this.inProgress = progress;
-  }
-
-  public boolean needsLargeModCount() {
-    assertBootstrapped();
-    return getRealDeal(null, null).needsLargeModCount();
-  }
-
-  public int nextModSerialNum() {
-    assertBootstrapped();
-    return getRealDeal(null, null).nextModSerialNum();
-  }
-
-  public TXRegionState readRegion(LocalRegion r) {
-    assertBootstrapped();
-    return getRealDeal(null, r).readRegion(r);
-  }
-
-  public void rmRegion(LocalRegion r) {
-    assertBootstrapped();
-    getRealDeal(null, r).rmRegion(r);
-  }
-
-  public void rollback() {
-    try {
-      getRealDeal(null, null).rollback();
-    } finally {
-      inProgress = false;
-      if (this.synchRunnable != null) {
-        this.synchRunnable.abort();
-      }
-    }
-  }
-
-  public boolean txPutEntry(EntryEventImpl event, boolean ifNew, boolean requireOldValue,
-      boolean checkResources, Object expectedOldValue) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(event.getKeyInfo(), (LocalRegion) event.getRegion())
-          .txPutEntry(event, ifNew, requireOldValue, checkResources, expectedOldValue);
-      trackBucketForTx(event.getKeyInfo());
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public TXEntryState txReadEntry(KeyInfo keyInfo, LocalRegion localRegion, boolean rememberRead,
-      boolean createTxEntryIfAbsent) {
-    try {
-      this.operationCount++;
-      TXEntryState retVal = getRealDeal(keyInfo, localRegion).txReadEntry(keyInfo, localRegion,
-          rememberRead, createTxEntryIfAbsent);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  public TXRegionState txReadRegion(LocalRegion localRegion) {
-    assertBootstrapped();
-    return getRealDeal(null, localRegion).txReadRegion(localRegion);
-  }
-
-  public TXRegionState txWriteRegion(LocalRegion localRegion, KeyInfo entryKey) {
-    return getRealDeal(entryKey, localRegion).txWriteRegion(localRegion, entryKey);
-  }
-
-  public TXRegionState writeRegion(LocalRegion r) {
-    assertBootstrapped();
-    return getRealDeal(null, r).writeRegion(r);
-  }
-
-  private void assertBootstrapped() {
-    assert realDeal != null;
-  }
-
-  public void afterCompletion(int status) {
-    assertBootstrapped();
-    try {
-      getRealDeal(null, null).afterCompletion(status);
-    } finally {
-      this.inProgress = false;
-      if (this.synchRunnable != null) {
-        this.synchRunnable.abort();
-      }
-    }
-  }
-
-  public void beforeCompletion() {
-    assertBootstrapped();
-    getRealDeal(null, null).beforeCompletion();
-  }
-
-  public boolean containsKey(KeyInfo keyInfo, LocalRegion localRegion) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(keyInfo, localRegion).containsKey(keyInfo, localRegion);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
-    }
-  }
-
-  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "UL_UNRELEASED_LOCK",
-      justification = "This method unlocks and then conditionally undoes the unlock in the finally-block. Review again at later time.")
-  public int entryCount(LocalRegion localRegion) {
-    // if size is the first operation in the transaction, then reset the txState
-    boolean resetTXState = this.realDeal == null;
-    TXStateProxy txp = null;
-    boolean txUnlocked = false;
-    if (resetTXState) {
-      txp = getTxMgr().pauseTransaction();
-    } else {
-      if (getLock().isHeldByCurrentThread()) {
-        txUnlocked = true; // bug #42945 - hang trying to compute size for PR
-        getLock().unlock();
-      }
-    }
-    try {
-      if (resetTXState) {
-        return localRegion.getSharedDataView().entryCount(localRegion);
-      }
-      return getRealDeal(null, localRegion).entryCount(localRegion);
-    } finally {
-      if (resetTXState) {
-        getTxMgr().unpauseTransaction(txp);
-      } else if (txUnlocked) {
-        getLock().lock();
-      }
-    }
-  }
-
-  public Object findObject(KeyInfo key, LocalRegion r, boolean isCreate, boolean generateCallbacks,
-      Object value, boolean disableCopyOnRead, boolean preferCD,
-      ClientProxyMembershipID requestingClient, EntryEventImpl clientEvent,
-      boolean returnTombstones) {
-    try {
-      this.operationCount++;
-      Object retVal = getRealDeal(key, r).findObject(key, r, isCreate, generateCallbacks, value,
-          disableCopyOnRead, preferCD, requestingClient, clientEvent, false);
-      trackBucketForTx(key);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(key, re);
-    }
-  }
-
-  public Set getAdditionalKeysForIterator(LocalRegion currRgn) {
-    if (this.realDeal == null) {
-      return null;
-    }
-    return getRealDeal(null, currRgn).getAdditionalKeysForIterator(currRgn);
-  }
-
-  protected final boolean restoreSetOperationTransactionBehavior =
-      SystemPropertyHelper.restoreSetOperationTransactionBehavior();
-
-  public Object getEntryForIterator(KeyInfo key, LocalRegion currRgn, boolean rememberReads,
-      boolean allowTombstones) {
-    boolean resetTxState = isTransactionInternalSuspendNeeded(currRgn);
-    TXStateProxy txp = null;
-    if (resetTxState) {
-      txp = getTxMgr().pauseTransaction();
-    }
-    try {
-      if (resetTxState) {
-        return currRgn.getSharedDataView().getEntry(key, currRgn, allowTombstones);
-      }
-      return getRealDeal(key, currRgn).getEntryForIterator(key, currRgn, rememberReads,
-          allowTombstones);
-    } finally {
-      if (resetTxState) {
-        getTxMgr().unpauseTransaction(txp);
-      }
-    }
-  }
-
-  private boolean isTransactionInternalSuspendNeeded(LocalRegion region) {
-    boolean resetTxState = this.realDeal == null
-        && (!region.canStoreDataLocally() || restoreSetOperationTransactionBehavior);
-    return resetTxState;
-  }
-
-  public Object getKeyForIterator(KeyInfo keyInfo, LocalRegion currRgn, boolean rememberReads,
-      boolean allowTombstones) {
-    boolean resetTxState = isTransactionInternalSuspendNeeded(currRgn);
-    TXStateProxy txp = null;
-    if (resetTxState) {
-      txp = getTxMgr().pauseTransaction();
-    }
-    try {
-      if (resetTxState) {
-        return currRgn.getSharedDataView().getKeyForIterator(keyInfo, currRgn, rememberReads,
-            allowTombstones);
-      }
-      return getRealDeal(keyInfo, currRgn).getKeyForIterator(keyInfo, currRgn, rememberReads,
-          allowTombstones);
-    } finally {
-      if (resetTxState) {
-        getTxMgr().unpauseTransaction(txp);
-      }
-    }
-  }
-
-  public Object getValueInVM(KeyInfo keyInfo, LocalRegion localRegion, boolean rememberRead) {
-    this.operationCount++;
-    return getRealDeal(keyInfo, localRegion).getValueInVM(keyInfo, localRegion, rememberRead);
-  }
-
-  public boolean isDeferredStats() {
-    assertBootstrapped();
-    return getRealDeal(null, null).isDeferredStats();
-  }
-
-  public boolean putEntry(EntryEventImpl event, boolean ifNew, boolean ifOld,
-      Object expectedOldValue, boolean requireOldValue, long lastModified,
-      boolean overwriteDestroyed) {
-    try {
-      this.operationCount++;
-      boolean retVal = getRealDeal(event.getKeyInfo(), event.getLocalRegion()).putEntry(event,
-          ifNew, ifOld, expectedOldValue, requireOldValue, lastModified, overwriteDestroyed);
-      trackBucketForTx(event.getKeyInfo());
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(event.getKeyInfo(), re);
-    }
-  }
-
-  public boolean isInProgressAndSameAs(TXStateInterface otherState) {
-    return isInProgress() && otherState == this;
-  }
-
-  public void setLocalTXState(TXStateInterface state) {
-    this.realDeal = state;
-  }
-
-  public Object getSerializedValue(LocalRegion localRegion, KeyInfo key, boolean doNotLockEntry,
-      ClientProxyMembershipID requestingClient, EntryEventImpl clientEvent,
-      boolean returnTombstones) throws DataLocationException {
-    this.operationCount++;
-    return getRealDeal(key, localRegion).getSerializedValue(localRegion, key, doNotLockEntry,
-        requestingClient, clientEvent, returnTombstones);
-  }
-
-  public boolean putEntryOnRemote(EntryEventImpl event, boolean ifNew, boolean ifOld,
-      Object expectedOldValue, boolean requireOldValue, long lastModified,
-      boolean overwriteDestroyed) throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
-    assert (tx instanceof TXState) : tx.getClass().getSimpleName();
-    return tx.putEntryOnRemote(event, ifNew, ifOld, expectedOldValue, requireOldValue, lastModified,
-        overwriteDestroyed);
-  }
-
-  public boolean isFireCallbacks() {
-    return getRealDeal(null, null).isFireCallbacks();
-  }
-
-  public void destroyOnRemote(EntryEventImpl event, boolean cacheWrite, Object expectedOldValue)
-      throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
-    assert (tx instanceof TXState);
-    tx.destroyOnRemote(event, cacheWrite, expectedOldValue);
-  }
-
-  public void invalidateOnRemote(EntryEventImpl event, boolean invokeCallbacks,
-      boolean forceNewEntry) throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(event.getKeyInfo(), event.getLocalRegion());
-    assert (tx instanceof TXState);
-    tx.invalidateOnRemote(event, invokeCallbacks, forceNewEntry);
-  }
-
-  public void checkSupportsRegionDestroy() throws UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.TXState_REGION_DESTROY_NOT_SUPPORTED_IN_A_TRANSACTION.toLocalizedString());
-  }
-
-  public void checkSupportsRegionInvalidate() throws UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.TXState_REGION_INVALIDATE_NOT_SUPPORTED_IN_A_TRANSACTION
-            .toLocalizedString());
-  }
-
-  @Override
-  public void checkSupportsRegionClear() throws UnsupportedOperationInTransactionException {
-    throw new UnsupportedOperationInTransactionException(
-        LocalizedStrings.TXState_REGION_CLEAR_NOT_SUPPORTED_IN_A_TRANSACTION.toLocalizedString());
-  }
-
-  public Set getBucketKeys(LocalRegion localRegion, int bucketId, boolean allowTombstones) {
-    boolean resetTxState = isTransactionInternalSuspendNeeded(localRegion);
-    TXStateProxy txp = null;
-    if (resetTxState) {
-      txp = getTxMgr().pauseTransaction();
-    }
-    try {
-      if (resetTxState) {
-        return localRegion.getSharedDataView().getBucketKeys(localRegion, bucketId, false);
-      }
-      return getRealDeal(null, localRegion).getBucketKeys(localRegion, bucketId, false);
-    } finally {
-      if (resetTxState) {
-        getTxMgr().unpauseTransaction(txp);
-      }
-    }
-  }
-
-  public Entry getEntryOnRemote(KeyInfo keyInfo, LocalRegion localRegion, boolean allowTombstones)
-      throws DataLocationException {
-    this.operationCount++;
-    TXStateInterface tx = getRealDeal(keyInfo, localRegion);
-    assert (tx instanceof TXState);
-    return tx.getEntryOnRemote(keyInfo, localRegion, allowTombstones);
-  }
-
-  public void forceLocalBootstrap() {
-    getRealDeal(null, null);
-  }
-
-  public DistributedMember getTarget() {
-    return this.target;
-  }
-
-  public void setTarget(DistributedMember target) {
-    assert this.target == null;
-    getRealDeal(target);
-  }
-
-  public Collection<?> getRegionKeysForIteration(LocalRegion currRegion) {
-    if (currRegion.isUsedForPartitionedRegionBucket()) {
-      return currRegion.getRegionKeysForIteration();
-    } else {
-      boolean resetTxState = isTransactionInternalSuspendNeeded(currRegion);
-      TXStateProxy txp = null;
-      if (resetTxState) {
-        txp = getTxMgr().pauseTransaction();
-      }
-      try {
-        if (resetTxState) {
-          return currRegion.getSharedDataView().getRegionKeysForIteration(currRegion);
+    /**
+     * Get the configs to the {@link KafkaConsumer main consumer}.
+     * Properties using the prefix {@link #MAIN_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #MAIN_CONSUMER_PREFIX)
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #MAIN_CONSUMER_PREFIX}, main consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param groupId      consumer groupId
+     * @param clientId     clientId
+     * @return Map of the consumer configuration.
+     */
+    public Map<String, Object> getMainConsumerConfigs(final String groupId,
+                                                      final String clientId) {
+        Map<String, Object> consumerProps = getCommonConsumerConfigs();
+
+        // Get main consumer override configs
+        Map<String, Object> mainConsumerProps = originalsWithPrefix(MAIN_CONSUMER_PREFIX);
+        for (Map.Entry<String, Object> entry: mainConsumerProps.entrySet()) {
+            consumerProps.put(entry.getKey(), entry.getValue());
         }
-        return getRealDeal(null, currRegion).getRegionKeysForIteration(currRegion);
-      } finally {
-        if (resetTxState) {
-          getTxMgr().unpauseTransaction(txp);
+
+        // add client id with stream client id prefix, and group id
+        consumerProps.put(APPLICATION_ID_CONFIG, groupId);
+        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        consumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-consumer");
+
+        // add configs required for stream partition assignor
+        consumerProps.put(UPGRADE_FROM_CONFIG, getString(UPGRADE_FROM_CONFIG));
+        consumerProps.put(REPLICATION_FACTOR_CONFIG, getInt(REPLICATION_FACTOR_CONFIG));
+        consumerProps.put(APPLICATION_SERVER_CONFIG, getString(APPLICATION_SERVER_CONFIG));
+        consumerProps.put(NUM_STANDBY_REPLICAS_CONFIG, getInt(NUM_STANDBY_REPLICAS_CONFIG));
+        consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, StreamsPartitionAssignor.class.getName());
+        consumerProps.put(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG, getLong(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG));
+
+        // add admin retries configs for creating topics
+        final AdminClientConfig adminClientDefaultConfig = new AdminClientConfig(getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames()));
+        consumerProps.put(adminClientPrefix(AdminClientConfig.RETRIES_CONFIG), adminClientDefaultConfig.getInt(AdminClientConfig.RETRIES_CONFIG));
+
+        // verify that producer batch config is no larger than segment size, then add topic configs required for creating topics
+        final Map<String, Object> topicProps = originalsWithPrefix(TOPIC_PREFIX, false);
+
+        if (topicProps.containsKey(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG))) {
+            final int segmentSize = Integer.parseInt(topicProps.get(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG)).toString());
+            final Map<String, Object> producerProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
+            final int batchSize;
+            if (producerProps.containsKey(ProducerConfig.BATCH_SIZE_CONFIG)) {
+                batchSize = Integer.parseInt(producerProps.get(ProducerConfig.BATCH_SIZE_CONFIG).toString());
+            } else {
+                final ProducerConfig producerDefaultConfig = new ProducerConfig(new Properties());
+                batchSize = producerDefaultConfig.getInt(ProducerConfig.BATCH_SIZE_CONFIG);
+            }
+
+            if (segmentSize < batchSize) {
+                throw new IllegalArgumentException(String.format("Specified topic segment size %d is is smaller than the configured producer batch size %d, this will cause produced batch not able to be appended to the topic",
+                        segmentSize,
+                        batchSize));
+            }
         }
-      }
+
+        consumerProps.putAll(topicProps);
+
+        return consumerProps;
     }
-  }
 
-  public boolean isCommitOnBehalfOfRemoteStub() {
-    return this.commitRequestedByOwner;
-  }
+    /**
+     * Get the configs for the {@link KafkaConsumer restore-consumer}.
+     * Properties using the prefix {@link #RESTORE_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #RESTORE_CONSUMER_PREFIX)
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #RESTORE_CONSUMER_PREFIX}, restore consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param clientId clientId
+     * @return Map of the restore consumer configuration.
+     */
+    public Map<String, Object> getRestoreConsumerConfigs(final String clientId) {
+        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
 
-  public boolean setCommitOnBehalfOfRemoteStub(boolean requestedByOwner) {
-    return this.commitRequestedByOwner = requestedByOwner;
-  }
+        // Get restore consumer override configs
+        Map<String, Object> restoreConsumerProps = originalsWithPrefix(RESTORE_CONSUMER_PREFIX);
+        for (Map.Entry<String, Object> entry: restoreConsumerProps.entrySet()) {
+            baseConsumerProps.put(entry.getKey(), entry.getValue());
+        }
 
-  public boolean isRealDealLocal() {
-    if (this.realDeal != null) {
-      return this.realDeal.isRealDealLocal();
-    } else {
-      // no real deal
-      return false;
+        // no need to set group id for a restore consumer
+        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
+        // add client id with stream client id prefix
+        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-restore-consumer");
+        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+
+        return baseConsumerProps;
     }
-  }
 
-  /** if there is local txstate, return it */
-  public TXState getLocalRealDeal() {
-    if (this.realDeal != null) {
-      if (this.realDeal.isRealDealLocal()) {
-        return (TXState) this.realDeal;
-      }
+    /**
+     * Get the configs for the {@link KafkaConsumer global consumer}.
+     * Properties using the prefix {@link #GLOBAL_CONSUMER_PREFIX} will be used in favor over
+     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
+     * (read the override precedence ordering in {@link #GLOBAL_CONSUMER_PREFIX)
+     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     * If not specified by {@link #GLOBAL_CONSUMER_PREFIX}, global consumer will share the general consumer configs
+     * prefixed by {@link #CONSUMER_PREFIX}.
+     *
+     * @param clientId clientId
+     * @return Map of the global consumer configuration.
+     */
+    public Map<String, Object> getGlobalConsumerConfigs(final String clientId) {
+        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
+
+        // Get global consumer override configs
+        Map<String, Object> globalConsumerProps = originalsWithPrefix(GLOBAL_CONSUMER_PREFIX);
+        for (Map.Entry<String, Object> entry: globalConsumerProps.entrySet()) {
+            baseConsumerProps.put(entry.getKey(), entry.getValue());
+        }
+
+        // no need to set group id for a global consumer
+        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
+        // add client id with stream client id prefix
+        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-global-consumer");
+        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+
+        return baseConsumerProps;
     }
-    return null;
-  }
 
-  public boolean hasRealDeal() {
-    return this.realDeal != null;
-  }
+    /**
+     * Get the configs for the {@link KafkaProducer producer}.
+     * Properties using the prefix {@link #PRODUCER_PREFIX} will be used in favor over their non-prefixed versions
+     * except in the case of {@link ProducerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
+     * version as we only support reading/writing from/to the same Kafka Cluster.
+     *
+     * @param clientId clientId
+     * @return Map of the producer configuration.
+     */
+    public Map<String, Object> getProducerConfigs(final String clientId) {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
 
-  @Override
-  public String toString() {
-    StringBuilder builder = new StringBuilder();
-    builder.append("TXStateProxyImpl@").append(System.identityHashCode(this)).append(" txId:")
-        .append(this.txId).append(" realDeal:").append(this.realDeal).append(" isJTA:")
-        .append(isJTA);
-    return builder.toString();
-  }
+        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS);
 
-  public InternalDistributedMember getOriginatingMember() {
-    if (this.realDeal == null) {
-      return null;
-    } else {
-      return this.realDeal.getOriginatingMember();
+        // generate producer configs from original properties and overridden maps
+        final Map<String, Object> props = new HashMap<>(eosEnabled ? PRODUCER_EOS_OVERRIDES : PRODUCER_DEFAULT_OVERRIDES);
+        props.putAll(getClientCustomProps());
+        props.putAll(clientProvidedProps);
+
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
+        // add client id with stream client id prefix
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-producer");
+
+        return props;
     }
-  }
 
-  public boolean isMemberIdForwardingRequired() {
-    if (this.realDeal == null) {
-      return false;
-    } else {
-      return this.realDeal.isMemberIdForwardingRequired();
+    /**
+     * Get the configs for the {@link org.apache.kafka.clients.admin.AdminClient admin client}.
+     * @param clientId clientId
+     * @return Map of the admin client configuration.
+     */
+    public Map<String, Object> getAdminConfigs(final String clientId) {
+        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames());
+
+        final Map<String, Object> props = new HashMap<>();
+        props.putAll(getClientCustomProps());
+        props.putAll(clientProvidedProps);
+
+        // add client id with stream client id prefix
+        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-admin");
+
+        return props;
     }
-  }
 
-  public TXCommitMessage getCommitMessage() {
-    if (this.realDeal == null) {
-      return null;
-    } else {
-      return this.realDeal.getCommitMessage();
+    private Map<String, Object> getClientPropsWithPrefix(final String prefix,
+                                                         final Set<String> configNames) {
+        final Map<String, Object> props = clientProps(configNames, originals());
+        props.putAll(originalsWithPrefix(prefix));
+        return props;
     }
-  }
 
-  public void postPutAll(DistributedPutAllOperation putallOp, VersionedObjectList successfulPuts,
-      LocalRegion region) {
-    if (putallOp.putAllData.length == 0) {
-      return;
+    /**
+     * Get a map of custom configs by removing from the originals all the Streams, Consumer, Producer, and AdminClient configs.
+     * Prefixed properties are also removed because they are already added by {@link #getClientPropsWithPrefix(String, Set)}.
+     * This allows to set a custom property for a specific client alone if specified using a prefix, or for all
+     * when no prefix is used.
+     *
+     * @return a map with the custom properties
+     */
+    private Map<String, Object> getClientCustomProps() {
+        final Map<String, Object> props = originals();
+        props.keySet().removeAll(CONFIG.names());
+        props.keySet().removeAll(ConsumerConfig.configNames());
+        props.keySet().removeAll(ProducerConfig.configNames());
+        props.keySet().removeAll(AdminClientConfig.configNames());
+        props.keySet().removeAll(originalsWithPrefix(CONSUMER_PREFIX, false).keySet());
+        props.keySet().removeAll(originalsWithPrefix(PRODUCER_PREFIX, false).keySet());
+        props.keySet().removeAll(originalsWithPrefix(ADMIN_CLIENT_PREFIX, false).keySet());
+        return props;
     }
-    region.getCancelCriterion().checkCancelInProgress(null); // fix for bug #43651
-    Object key = null;
-    if (putallOp.putAllData[0] != null) {
-      key = putallOp.putAllData[0].key;
+
+    /**
+     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_KEY_SERDE_CLASS_CONFIG key Serde
+     * class}.
+     *
+     * @return an configured instance of key Serde class
+     */
+    public Serde defaultKeySerde() {
+        Object keySerdeConfigSetting = get(DEFAULT_KEY_SERDE_CLASS_CONFIG);
+        try {
+            Serde<?> serde = getConfiguredInstance(DEFAULT_KEY_SERDE_CLASS_CONFIG, Serde.class);
+            serde.configure(originals(), true);
+            return serde;
+        } catch (final Exception e) {
+            throw new StreamsException(
+                String.format("Failed to configure key serde %s", keySerdeConfigSetting), e);
+        }
     }
-    KeyInfo ki = new KeyInfo(key, null, null);
-    TXStateInterface tsi = getRealDeal(ki, region);
-    tsi.postPutAll(putallOp, successfulPuts, region);
-  }
 
-  @Override
-  public void postRemoveAll(DistributedRemoveAllOperation op, VersionedObjectList successfulOps,
-      LocalRegion region) {
-    if (op.removeAllData.length == 0) {
-      return;
+    /**
+     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_VALUE_SERDE_CLASS_CONFIG value
+     * Serde class}.
+     *
+     * @return an configured instance of value Serde class
+     */
+    public Serde defaultValueSerde() {
+        Object valueSerdeConfigSetting = get(DEFAULT_VALUE_SERDE_CLASS_CONFIG);
+        try {
+            Serde<?> serde = getConfiguredInstance(DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serde.class);
+            serde.configure(originals(), false);
+            return serde;
+        } catch (final Exception e) {
+            throw new StreamsException(
+                String.format("Failed to configure value serde %s", valueSerdeConfigSetting), e);
+        }
     }
-    region.getCancelCriterion().checkCancelInProgress(null); // fix for bug #43651
-    Object key = null;
-    if (op.removeAllData[0] != null) {
-      key = op.removeAllData[0].key;
+
+    public TimestampExtractor defaultTimestampExtractor() {
+        return getConfiguredInstance(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG, TimestampExtractor.class);
     }
-    KeyInfo ki = new KeyInfo(key, null, null);
-    TXStateInterface tsi = getRealDeal(ki, region);
-    tsi.postRemoveAll(op, successfulOps, region);
-  }
 
-  public boolean isJCATransaction() {
-    return this.isJCATransaction;
-  }
-
-
-  public void setJCATransaction() {
-    this.isJCATransaction = true;
-  }
-
-  public Entry accessEntry(KeyInfo keyInfo, LocalRegion region) {
-    try {
-      this.operationCount++;
-      Entry retVal = getRealDeal(keyInfo, region).accessEntry(keyInfo, region);
-      trackBucketForTx(keyInfo);
-      return retVal;
-    } catch (TransactionDataRebalancedException | PrimaryBucketException re) {
-      throw getTransactionException(keyInfo, re);
+    public DeserializationExceptionHandler defaultDeserializationExceptionHandler() {
+        return getConfiguredInstance(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG, DeserializationExceptionHandler.class);
     }
-  }
 
-  public void suspend() {
-    if (this.realDeal != null) {
-      getRealDeal(null, null).suspend();
+    public ProductionExceptionHandler defaultProductionExceptionHandler() {
+        return getConfiguredInstance(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG, ProductionExceptionHandler.class);
     }
-  }
 
-  public void resume() {
-    if (this.realDeal != null) {
-      getRealDeal(null, null).resume();
+    /**
+     * Override any client properties in the original configs with overrides
+     *
+     * @param configNames The given set of configuration names.
+     * @param originals   The original configs to be filtered.
+     * @return client config with any overrides
+     */
+    private Map<String, Object> clientProps(final Set<String> configNames,
+                                            final Map<String, Object> originals) {
+        // iterate all client config names, filter out non-client configs from the original
+        // property map and use the overridden values when they are not specified by users
+        final Map<String, Object> parsed = new HashMap<>();
+        for (final String configName: configNames) {
+            if (originals.containsKey(configName)) {
+                parsed.put(configName, originals.get(configName));
+            }
+        }
+
+        return parsed;
     }
-  }
 
-  /** test hook - record a list of ops in the transaction */
-  public void recordTXOperation(ServerRegionDataAccess region, ServerRegionOperation op, Object key,
-      Object arguments[]) {
-    if (ClientTXStateStub.transactionRecordingEnabled()) {
-      getRealDeal(null, (LocalRegion) region.getRegion()).recordTXOperation(region, op, key,
-          arguments);
+    public static void main(final String[] args) {
+        System.out.println(CONFIG.toHtmlTable());
     }
-  }
-
-  @Override
-  public int operationCount() {
-    return this.operationCount;
-  }
-
-  /**
-   * increments the operation count by 1
-   */
-  public void incOperationCount() {
-    this.operationCount++;
-  }
-
-  @Override
-  public void updateEntryVersion(EntryEventImpl event) throws EntryNotFoundException {
-    // Do nothing. Not applicable for transactions.
-  }
-
-  public void close() {
-    if (this.realDeal != null) {
-      this.realDeal.close();
-    }
-  }
-
-  @Override
-  public boolean isTxState() {
-    return false;
-  }
-
-  @Override
-  public boolean isTxStateStub() {
-    return false;
-  }
-
-  @Override
-  public boolean isTxStateProxy() {
-    return true;
-  }
-
-  @Override
-  public boolean isDistTx() {
-    return false;
-  }
-
-  @Override
-  public boolean isCreatedOnDistTxCoordinator() {
-    return false;
-  }
-
-  @Override
-  public void updateProxyServer(InternalDistributedMember proxy) {
-    // only update in TXState if it has one
-    if (this.realDeal != null && this.realDeal.isRealDealLocal() && isOnBehalfOfClient()) {
-      ((TXState) this.realDeal).setProxyServer(proxy);
-    }
-  }
 }

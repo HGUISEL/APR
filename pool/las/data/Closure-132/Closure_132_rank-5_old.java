@@ -1,3 +1,4 @@
+package org.apache.hadoop.hive.ql.exec;
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -15,954 +16,630 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.tez.runtime.library.common.shuffle.orderedgrouped;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.TreeSet;
 
-import com.google.common.annotations.VisibleForTesting;
-import java.util.concurrent.atomic.AtomicInteger;
-import org.apache.commons.io.FilenameUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.classification.InterfaceAudience;
-import org.apache.hadoop.classification.InterfaceStability;
-import org.apache.hadoop.classification.InterfaceAudience.Private;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.ChecksumFileSystem;
-import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.LocalDirAllocator;
-import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.DataInputBuffer;
-import org.apache.hadoop.io.FileChunk;
-import org.apache.hadoop.io.RawComparator;
-import org.apache.hadoop.io.compress.CompressionCodec;
-import org.apache.hadoop.util.Progressable;
-import org.apache.tez.common.TezUtilsInternal;
-import org.apache.tez.common.counters.TaskCounter;
-import org.apache.tez.common.counters.TezCounter;
-import org.apache.tez.dag.api.TezUncheckedException;
-import org.apache.tez.runtime.api.InputContext;
-import org.apache.tez.runtime.library.api.TezRuntimeConfiguration;
-import org.apache.tez.runtime.library.common.ConfigUtils;
-import org.apache.tez.runtime.library.common.Constants;
-import org.apache.tez.runtime.library.common.InputAttemptIdentifier;
-import org.apache.tez.runtime.library.common.combine.Combiner;
-import org.apache.tez.runtime.library.common.sort.impl.IFile;
-import org.apache.tez.runtime.library.common.sort.impl.TezMerger;
-import org.apache.tez.runtime.library.common.sort.impl.TezRawKeyValueIterator;
-import org.apache.tez.runtime.library.common.sort.impl.IFile.Writer;
-import org.apache.tez.runtime.library.common.sort.impl.TezMerger.Segment;
-import org.apache.tez.runtime.library.common.task.local.output.TezTaskOutputFiles;
-import org.apache.tez.runtime.library.hadoop.compat.NullProgressable;
+import org.apache.hadoop.hive.SentryHiveConstants;
+import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.hive.metastore.api.PrincipalType;
+import org.apache.hadoop.hive.ql.DriverContext;
+import org.apache.hadoop.hive.ql.QueryPlan;
+import org.apache.hadoop.hive.ql.hooks.ReadEntity;
+import org.apache.hadoop.hive.ql.hooks.WriteEntity;
+import org.apache.hadoop.hive.ql.metadata.AuthorizationException;
+import org.apache.hadoop.hive.ql.metadata.HiveException;
+import org.apache.hadoop.hive.ql.plan.DDLWork;
+import org.apache.hadoop.hive.ql.plan.GrantDesc;
+import org.apache.hadoop.hive.ql.plan.GrantRevokeRoleDDL;
+import org.apache.hadoop.hive.ql.plan.HiveOperation;
+import org.apache.hadoop.hive.ql.plan.PrincipalDesc;
+import org.apache.hadoop.hive.ql.plan.PrivilegeDesc;
+import org.apache.hadoop.hive.ql.plan.PrivilegeObjectDesc;
+import org.apache.hadoop.hive.ql.plan.RevokeDesc;
+import org.apache.hadoop.hive.ql.plan.RoleDDLDesc;
+import org.apache.hadoop.hive.ql.plan.ShowGrantDesc;
+import org.apache.hadoop.hive.ql.plan.api.StageType;
+import org.apache.hadoop.hive.ql.security.authorization.Privilege.PrivilegeType;
+import org.apache.hadoop.hive.ql.session.SessionState;
+import org.apache.hadoop.hive.ql.session.SessionState.LogHelper;
+import org.apache.sentry.SentryUserException;
+import org.apache.sentry.binding.hive.HiveAuthzBindingHook;
+import org.apache.sentry.binding.hive.SentryOnFailureHookContext;
+import org.apache.sentry.binding.hive.SentryOnFailureHookContextImpl;
+import org.apache.sentry.binding.hive.authz.HiveAuthzBinding;
+import org.apache.sentry.binding.hive.conf.HiveAuthzConf;
+import org.apache.sentry.binding.hive.conf.HiveAuthzConf.AuthzConfVars;
+import org.apache.sentry.core.common.ActiveRoleSet;
+import org.apache.sentry.core.common.Authorizable;
+import org.apache.sentry.core.common.Subject;
+import org.apache.sentry.core.model.db.AccessURI;
+import org.apache.sentry.core.model.db.Database;
+import org.apache.sentry.core.model.db.Server;
+import org.apache.sentry.core.model.db.Table;
+import org.apache.sentry.core.model.db.AccessConstants;
+import org.apache.sentry.provider.db.SentryAccessDeniedException;
+import org.apache.sentry.provider.db.service.thrift.SentryPolicyServiceClient;
+import org.apache.sentry.provider.db.service.thrift.TSentryPrivilege;
+import org.apache.sentry.provider.db.service.thrift.TSentryRole;
+import org.apache.sentry.service.thrift.SentryServiceClientFactory;
+import org.apache.sentry.service.thrift.ServiceConstants.PrivilegeScope;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.common.base.Preconditions;
+import com.google.common.base.Splitter;
+import com.google.common.collect.Iterables;
+
+public class SentryGrantRevokeTask extends Task<DDLWork> implements Serializable {
+  private static final Logger LOG = LoggerFactory
+      .getLogger(SentryGrantRevokeTask.class);
+  private static final int RETURN_CODE_SUCCESS = 0;
+  private static final int RETURN_CODE_FAILURE = 1;
+  private static final Splitter DB_TBL_SPLITTER = Splitter.on(".").omitEmptyStrings().trimResults();
+  private static final int separator = Utilities.tabCode;
+  private static final int terminator = Utilities.newLineCode;
+  private static final long serialVersionUID = -7625118066790571999L;
+
+  private SentryServiceClientFactory sentryClientFactory;
+  private SentryPolicyServiceClient sentryClient;
+  private HiveConf conf;
+  private HiveAuthzBinding hiveAuthzBinding;
+  private HiveAuthzConf authzConf;
+  private String server;
+  private Subject subject;
+  private Set<String> subjectGroups;
+  private String ipAddress;
+  private HiveOperation stmtOperation;
 
 
-/**
- * Usage. Create instance. setInitialMemoryAvailable(long), configureAndStart()
- *
- */
-@InterfaceAudience.Private
-@InterfaceStability.Unstable
-@SuppressWarnings(value={"rawtypes"})
-public class MergeManager {
-  
-  private static final Log LOG = LogFactory.getLog(MergeManager.class);
+  public SentryGrantRevokeTask() {
+    this(new SentryServiceClientFactory());
+  }
+  public SentryGrantRevokeTask(SentryServiceClientFactory sentryClientFactory) {
+    super();
+    this.sentryClientFactory = sentryClientFactory;
 
-  private final Configuration conf;
-  private final FileSystem localFS;
-  private final FileSystem rfs;
-  private final LocalDirAllocator localDirAllocator;
-  
-  private final  TezTaskOutputFiles mapOutputFile;
-  private final Progressable nullProgressable = new NullProgressable();
-  private final Combiner combiner;  
-  
-  private final Set<MapOutput> inMemoryMergedMapOutputs = 
-    new TreeSet<MapOutput>(new MapOutput.MapOutputComparator());
-  private final IntermediateMemoryToMemoryMerger memToMemMerger;
+  }
 
-  private final Set<MapOutput> inMemoryMapOutputs = 
-    new TreeSet<MapOutput>(new MapOutput.MapOutputComparator());
-  private final InMemoryMerger inMemoryMerger;
 
-  @VisibleForTesting
-  final Set<FileChunk> onDiskMapOutputs = new TreeSet<FileChunk>();
-  @VisibleForTesting
-  final OnDiskMerger onDiskMerger;
-  
-  private final long memoryLimit;
-  private final int postMergeMemLimit;
-  private long usedMemory;
-  private long commitMemory;
-  private final int ioSortFactor;
-  private final long maxSingleShuffleLimit;
-  
-  private final int memToMemMergeOutputsThreshold; 
-  private final long mergeThreshold;
-  
-  private final long initialMemoryAvailable;
-
-  private final ExceptionReporter exceptionReporter;
-  
-  private final InputContext inputContext;
-
-  private final TezCounter spilledRecordsCounter;
-
-  private final TezCounter reduceCombineInputCounter;
-
-  private final TezCounter mergedMapOutputsCounter;
-  
-  private final TezCounter numMemToDiskMerges;
-  private final TezCounter numDiskToDiskMerges;
-  private final TezCounter additionalBytesWritten;
-  private final TezCounter additionalBytesRead;
-  
-  private final CompressionCodec codec;
-  
-  private volatile boolean finalMergeComplete = false;
-  
-  private final boolean ifileReadAhead;
-  private final int ifileReadAheadLength;
-  private final int ifileBufferSize;
-
-  private AtomicInteger mergeFileSequenceId = new AtomicInteger(0);
-
-  /**
-   * Construct the MergeManager. Must call start before it becomes usable.
-   */
-  public MergeManager(Configuration conf,
-                      FileSystem localFS,
-                      LocalDirAllocator localDirAllocator,  
-                      InputContext inputContext,
-                      Combiner combiner,
-                      TezCounter spilledRecordsCounter,
-                      TezCounter reduceCombineInputCounter,
-                      TezCounter mergedMapOutputsCounter,
-                      ExceptionReporter exceptionReporter,
-                      long initialMemoryAvailable,
-                      CompressionCodec codec,
-                      boolean ifileReadAheadEnabled,
-                      int ifileReadAheadLength) {
-    this.inputContext = inputContext;
+  @Override
+  public void initialize(HiveConf conf, QueryPlan queryPlan, DriverContext ctx) {
+    super.initialize(conf, queryPlan, driverContext);
     this.conf = conf;
-    this.localDirAllocator = localDirAllocator;
-    this.exceptionReporter = exceptionReporter;
-    this.initialMemoryAvailable = initialMemoryAvailable;
-    
-    this.combiner = combiner;
-
-    this.reduceCombineInputCounter = reduceCombineInputCounter;
-    this.spilledRecordsCounter = spilledRecordsCounter;
-    this.mergedMapOutputsCounter = mergedMapOutputsCounter;
-    this.mapOutputFile = new TezTaskOutputFiles(conf, inputContext.getUniqueIdentifier());
-    
-    this.localFS = localFS;
-    this.rfs = ((LocalFileSystem)localFS).getRaw();
-    
-    this.numDiskToDiskMerges = inputContext.getCounters().findCounter(TaskCounter.NUM_DISK_TO_DISK_MERGES);
-    this.numMemToDiskMerges = inputContext.getCounters().findCounter(TaskCounter.NUM_MEM_TO_DISK_MERGES);
-    this.additionalBytesWritten = inputContext.getCounters().findCounter(TaskCounter.ADDITIONAL_SPILLS_BYTES_WRITTEN);
-    this.additionalBytesRead = inputContext.getCounters().findCounter(TaskCounter.ADDITIONAL_SPILLS_BYTES_READ);
-
-    this.codec = codec;
-    this.ifileReadAhead = ifileReadAheadEnabled;
-    if (this.ifileReadAhead) {
-      this.ifileReadAheadLength = ifileReadAheadLength;
-    } else {
-      this.ifileReadAheadLength = 0;
-    }
-    this.ifileBufferSize = conf.getInt("io.file.buffer.size",
-        TezRuntimeConfiguration.TEZ_RUNTIME_IFILE_BUFFER_SIZE_DEFAULT);
-    
-    // Figure out initial memory req start
-    final float maxInMemCopyUse =
-      conf.getFloat(
-          TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_BUFFER_PERCENT, 
-          TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_BUFFER_PERCENT_DEFAULT);
-    if (maxInMemCopyUse > 1.0 || maxInMemCopyUse < 0.0) {
-      throw new IllegalArgumentException("Invalid value for " +
-          TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_BUFFER_PERCENT + ": " +
-          maxInMemCopyUse);
-    }
-
-    // Allow unit tests to fix Runtime memory
-    long memLimit = (long) (conf.getLong(Constants.TEZ_RUNTIME_TASK_MEMORY,
-        Math.min(inputContext.getTotalMemoryAvailableToTask(), Integer.MAX_VALUE)) * maxInMemCopyUse);
-
-    float maxRedPer = conf.getFloat(TezRuntimeConfiguration.TEZ_RUNTIME_INPUT_POST_MERGE_BUFFER_PERCENT,
-        TezRuntimeConfiguration.TEZ_RUNTIME_INPUT_BUFFER_PERCENT_DEFAULT);
-    if (maxRedPer > 1.0 || maxRedPer < 0.0) {
-      throw new TezUncheckedException(TezRuntimeConfiguration.TEZ_RUNTIME_INPUT_POST_MERGE_BUFFER_PERCENT + maxRedPer);
-    }
-    // TODO maxRedBuffer should be a long.
-    int maxRedBuffer = (int) Math.min(inputContext.getTotalMemoryAvailableToTask() * maxRedPer,
-        Integer.MAX_VALUE);
-    // Figure out initial memory req end
-    
-    if (this.initialMemoryAvailable < memLimit) {
-      this.memoryLimit = this.initialMemoryAvailable;
-    } else {
-      this.memoryLimit = memLimit;
-    }
-    
-    if (this.initialMemoryAvailable < maxRedBuffer) {
-      this.postMergeMemLimit = (int) this.initialMemoryAvailable;
-    } else {
-      this.postMergeMemLimit = maxRedBuffer;
-    }
-    
-    LOG.info("InitialRequest: ShuffleMem=" + memLimit + ", postMergeMem=" + maxRedBuffer
-        + ", RuntimeTotalAvailable=" + this.initialMemoryAvailable + ". Updated to: ShuffleMem="
-        + this.memoryLimit + ", postMergeMem: " + this.postMergeMemLimit);
-
-    this.ioSortFactor = 
-        conf.getInt(
-            TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_FACTOR, 
-            TezRuntimeConfiguration.TEZ_RUNTIME_IO_SORT_FACTOR_DEFAULT);
-    
-    final float singleShuffleMemoryLimitPercent =
-        conf.getFloat(
-            TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MEMORY_LIMIT_PERCENT,
-            TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MEMORY_LIMIT_PERCENT_DEFAULT);
-    if (singleShuffleMemoryLimitPercent <= 0.0f
-        || singleShuffleMemoryLimitPercent > 1.0f) {
-      throw new IllegalArgumentException("Invalid value for "
-          + TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MEMORY_LIMIT_PERCENT + ": "
-          + singleShuffleMemoryLimitPercent);
-    }
-
-    this.maxSingleShuffleLimit = 
-      (long)(memoryLimit * singleShuffleMemoryLimitPercent);
-    this.memToMemMergeOutputsThreshold = 
-            conf.getInt(
-                TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MEMTOMEM_SEGMENTS, 
-                ioSortFactor);
-    this.mergeThreshold = 
-        (long)(this.memoryLimit * 
-               conf.getFloat(
-                   TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MERGE_PERCENT, 
-                   TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_MERGE_PERCENT_DEFAULT));
-    LOG.info("MergerManager: memoryLimit=" + memoryLimit + ", " +
-             "maxSingleShuffleLimit=" + maxSingleShuffleLimit + ", " +
-             "mergeThreshold=" + mergeThreshold + ", " + 
-             "ioSortFactor=" + ioSortFactor + ", " +
-             "memToMemMergeOutputsThreshold=" + memToMemMergeOutputsThreshold);
-    
-    if (this.maxSingleShuffleLimit >= this.mergeThreshold) {
-      throw new RuntimeException("Invlaid configuration: "
-          + "maxSingleShuffleLimit should be less than mergeThreshold"
-          + "maxSingleShuffleLimit: " + this.maxSingleShuffleLimit
-          + ", mergeThreshold: " + this.mergeThreshold);
-    }
-    
-    boolean allowMemToMemMerge = 
-        conf.getBoolean(
-            TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_ENABLE_MEMTOMEM, 
-            TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_ENABLE_MEMTOMEM_DEFAULT);
-      if (allowMemToMemMerge) {
-        this.memToMemMerger = 
-          new IntermediateMemoryToMemoryMerger(this,
-                                               memToMemMergeOutputsThreshold);
-      } else {
-        this.memToMemMerger = null;
-      }
-      
-      this.inMemoryMerger = new InMemoryMerger(this);
-      
-      this.onDiskMerger = new OnDiskMerger(this);
   }
 
-  @Private
-  void configureAndStart() {
-    if (this.memToMemMerger != null) {
-      memToMemMerger.start();
-    }
-    this.inMemoryMerger.start();
-    this.onDiskMerger.start();
-  }
-
-  /**
-   * Exposing this to get an initial memory ask without instantiating the object.
-   */
-  @Private
-  static long getInitialMemoryRequirement(Configuration conf, long maxAvailableTaskMemory) {
-    final float maxInMemCopyUse =
-        conf.getFloat(
-            TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_BUFFER_PERCENT, 
-            TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_BUFFER_PERCENT_DEFAULT);
-      if (maxInMemCopyUse > 1.0 || maxInMemCopyUse < 0.0) {
-        throw new IllegalArgumentException("Invalid value for " +
-            TezRuntimeConfiguration.TEZ_RUNTIME_SHUFFLE_FETCH_BUFFER_PERCENT + ": " +
-            maxInMemCopyUse);
-      }
-
-      // Allow unit tests to fix Runtime memory
-      long memLimit = (long) (conf.getLong(Constants.TEZ_RUNTIME_TASK_MEMORY,
-          Math.min(maxAvailableTaskMemory, Integer.MAX_VALUE)) * maxInMemCopyUse);
-      
-      LOG.info("Initial Shuffle Memory Required: " + memLimit + ", based on INPUT_BUFFER_factor: " + maxInMemCopyUse);
-
-      float maxRedPer = conf.getFloat(TezRuntimeConfiguration.TEZ_RUNTIME_INPUT_POST_MERGE_BUFFER_PERCENT,
-          TezRuntimeConfiguration.TEZ_RUNTIME_INPUT_BUFFER_PERCENT_DEFAULT);
-      if (maxRedPer > 1.0 || maxRedPer < 0.0) {
-        throw new TezUncheckedException(TezRuntimeConfiguration.TEZ_RUNTIME_INPUT_POST_MERGE_BUFFER_PERCENT + maxRedPer);
-      }
-      // TODO maxRedBuffer should be a long.
-      int maxRedBuffer = (int) Math.min(maxAvailableTaskMemory * maxRedPer,
-          Integer.MAX_VALUE);
-      LOG.info("Initial Memory required for final merged output: " + maxRedBuffer + ", using factor: " + maxRedPer);
-
-      long reqMem = Math.max(maxRedBuffer, memLimit);
-      return reqMem;
-  }
-
-  public void waitForInMemoryMerge() throws InterruptedException {
-    inMemoryMerger.waitForMerge();
-  }
-  
-  private boolean canShuffleToMemory(long requestedSize) {
-    return (requestedSize < maxSingleShuffleLimit);
-  }
-
-  public synchronized void waitForShuffleToMergeMemory() throws InterruptedException {
-    while(usedMemory > memoryLimit) {
-      wait();
-    }
-  }
-
-  final private MapOutput stallShuffle = MapOutput.createWaitMapOutput(null);
-
-  public synchronized MapOutput reserve(InputAttemptIdentifier srcAttemptIdentifier, 
-                                             long requestedSize,
-                                             long compressedLength,
-                                             int fetcher
-                                             ) throws IOException {
-    if (!canShuffleToMemory(requestedSize)) {
-      LOG.info(srcAttemptIdentifier + ": Shuffling to disk since " + requestedSize + 
-               " is greater than maxSingleShuffleLimit (" + 
-               maxSingleShuffleLimit + ")");
-      return MapOutput.createDiskMapOutput(srcAttemptIdentifier, this, compressedLength, conf,
-          fetcher, true, mapOutputFile);
-    }
-    
-    // Stall shuffle if we are above the memory limit
-
-    // It is possible that all threads could just be stalling and not make
-    // progress at all. This could happen when:
-    //
-    // requested size is causing the used memory to go above limit &&
-    // requested size < singleShuffleLimit &&
-    // current used size < mergeThreshold (merge will not get triggered)
-    //
-    // To avoid this from happening, we allow exactly one thread to go past
-    // the memory limit. We check (usedMemory > memoryLimit) and not
-    // (usedMemory + requestedSize > memoryLimit). When this thread is done
-    // fetching, this will automatically trigger a merge thereby unlocking
-    // all the stalled threads
-    
-    if (usedMemory > memoryLimit) {
-      if (LOG.isDebugEnabled()) {
-        LOG.debug(srcAttemptIdentifier + ": Stalling shuffle since usedMemory (" + usedMemory
-            + ") is greater than memoryLimit (" + memoryLimit + ")." +
-            " CommitMemory is (" + commitMemory + ")");
-      }
-      return stallShuffle;
-    }
-    
-    // Allow the in-memory shuffle to progress
-    if (LOG.isDebugEnabled()) {
-      LOG.debug(srcAttemptIdentifier + ": Proceeding with shuffle since usedMemory ("
-          + usedMemory + ") is lesser than memoryLimit (" + memoryLimit + ")."
-          + "CommitMemory is (" + commitMemory + ")");
-    }
-    return unconditionalReserve(srcAttemptIdentifier, requestedSize, true);
-  }
-  
-  /**
-   * Unconditional Reserve is used by the Memory-to-Memory thread
-   */
-  private synchronized MapOutput unconditionalReserve(
-      InputAttemptIdentifier srcAttemptIdentifier, long requestedSize, boolean primaryMapOutput) throws
-      IOException {
-    usedMemory += requestedSize;
-    return MapOutput.createMemoryMapOutput(srcAttemptIdentifier, this, (int)requestedSize,
-        primaryMapOutput);
-  }
-  
-  synchronized void unreserve(long size) {
-    commitMemory -= size;
-    usedMemory -= size;
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Notifying unreserve : commitMemory=" + commitMemory + ", usedMemory=" + usedMemory
-          + ", mergeThreshold=" + mergeThreshold);
-    }
-    notifyAll();
-  }
-
-  public synchronized void closeInMemoryFile(MapOutput mapOutput) { 
-    inMemoryMapOutputs.add(mapOutput);
-    LOG.info("closeInMemoryFile -> map-output of size: " + mapOutput.getSize()
-        + ", inMemoryMapOutputs.size() -> " + inMemoryMapOutputs.size()
-        + ", commitMemory -> " + commitMemory + ", usedMemory ->" + usedMemory);
-
-    commitMemory+= mapOutput.getSize();
-
-    if (commitMemory >= mergeThreshold) {
-      startMemToDiskMerge();
-    }
-
-    // This should likely run a Combiner.
-    if (memToMemMerger != null) {
-      synchronized (memToMemMerger) {
-        if (!memToMemMerger.isInProgress() && 
-            inMemoryMapOutputs.size() >= memToMemMergeOutputsThreshold) {
-          memToMemMerger.startMerge(inMemoryMapOutputs);
-        }
-      }
-    }
-  }
-
-  private void startMemToDiskMerge() {
-    synchronized (inMemoryMerger) {
-      if (!inMemoryMerger.isInProgress()) {
-        LOG.info("Starting inMemoryMerger's merge since commitMemory=" +
-            commitMemory + " > mergeThreshold=" + mergeThreshold +
-            ". Current usedMemory=" + usedMemory);
-        inMemoryMapOutputs.addAll(inMemoryMergedMapOutputs);
-        inMemoryMergedMapOutputs.clear();
-        inMemoryMerger.startMerge(inMemoryMapOutputs);
-      }
-    }
-  }
-  
-  public synchronized void closeInMemoryMergedFile(MapOutput mapOutput) {
-    inMemoryMergedMapOutputs.add(mapOutput);
-    LOG.info("closeInMemoryMergedFile -> size: " + mapOutput.getSize() + 
-             ", inMemoryMergedMapOutputs.size() -> " + 
-             inMemoryMergedMapOutputs.size());
-  }
-  
-  public synchronized void closeOnDiskFile(FileChunk file) {
-    onDiskMapOutputs.add(file);
-
-    synchronized (onDiskMerger) {
-      if (!onDiskMerger.isInProgress() &&
-          onDiskMapOutputs.size() >= (2 * ioSortFactor - 1)) {
-        onDiskMerger.startMerge(onDiskMapOutputs);
-      }
-    }
-  }
-
-  /**
-   * Should <b>only</b> be used after the Shuffle phaze is complete, otherwise can
-   * return an invalid state since a merge may not be in progress dur to
-   * inadequate inputs
-   * 
-   * @return true if the merge process is complete, otherwise false
-   */
-  @Private
-  public boolean isMergeComplete() {
-    return finalMergeComplete;
-  }
-  
-  public TezRawKeyValueIterator close() throws Throwable {
-    // Wait for on-going merges to complete
-    if (memToMemMerger != null) { 
-      memToMemMerger.close();
-    }
-    inMemoryMerger.close();
-    onDiskMerger.close();
-    
-    List<MapOutput> memory = 
-      new ArrayList<MapOutput>(inMemoryMergedMapOutputs);
-    inMemoryMergedMapOutputs.clear();
-    memory.addAll(inMemoryMapOutputs);
-    inMemoryMapOutputs.clear();
-    List<FileChunk> disk = new ArrayList<FileChunk>(onDiskMapOutputs);
-    onDiskMapOutputs.clear();
-    TezRawKeyValueIterator kvIter = finalMerge(conf, rfs, memory, disk);
-    this.finalMergeComplete = true;
-    return kvIter;
-  }
-   
-  void runCombineProcessor(TezRawKeyValueIterator kvIter, Writer writer)
-      throws IOException, InterruptedException {
-    combiner.combine(kvIter, writer);
-  }
-
-  /**
-   * Merges multiple in-memory segment to another in-memory segment
-   */
-  private class IntermediateMemoryToMemoryMerger 
-  extends MergeThread<MapOutput> {
-    
-    public IntermediateMemoryToMemoryMerger(MergeManager manager, 
-                                            int mergeFactor) {
-      super(manager, mergeFactor, exceptionReporter);
-      setName("MemToMemMerger [" + TezUtilsInternal
-          .cleanVertexName(inputContext.getSourceVertexName()) + "]");
-      setDaemon(true);
-    }
-
-    @Override
-    public void merge(List<MapOutput> inputs) throws IOException {
-      if (inputs == null || inputs.size() == 0) {
-        return;
-      }
-
-
-      InputAttemptIdentifier dummyMapId = inputs.get(0).getAttemptIdentifier(); 
-      List<Segment> inMemorySegments = new ArrayList<Segment>();
-      long mergeOutputSize = 
-        createInMemorySegments(inputs, inMemorySegments, 0);
-      int noInMemorySegments = inMemorySegments.size();
-
-      MapOutput mergedMapOutputs =
-        unconditionalReserve(dummyMapId, mergeOutputSize, false);
-      
-      Writer writer = 
-        new InMemoryWriter(mergedMapOutputs.getArrayStream());
-
-      LOG.info("Initiating Memory-to-Memory merge with " + noInMemorySegments +
-               " segments of total-size: " + mergeOutputSize);
-
-      // Nothing will be materialized to disk because the sort factor is being
-      // set to the number of in memory segments.
-      // TODO Is this doing any combination ?
-      TezRawKeyValueIterator rIter = 
-        TezMerger.merge(conf, rfs,
-                       ConfigUtils.getIntermediateInputKeyClass(conf),
-                       ConfigUtils.getIntermediateInputValueClass(conf),
-                       inMemorySegments, inMemorySegments.size(),
-                       new Path(inputContext.getUniqueIdentifier()),
-                       (RawComparator)ConfigUtils.getIntermediateInputKeyComparator(conf),
-                       nullProgressable, null, null, null, null); 
-      TezMerger.writeFile(rIter, writer, nullProgressable, TezRuntimeConfiguration.TEZ_RUNTIME_RECORDS_BEFORE_PROGRESS_DEFAULT);
-      writer.close();
-
-      LOG.info(inputContext.getUniqueIdentifier() +  
-               " Memory-to-Memory merge of the " + noInMemorySegments +
-               " files in-memory complete.");
-
-      // Note the output of the merge
-      closeInMemoryMergedFile(mergedMapOutputs);
-    }
-  }
-  
-  /**
-   * Merges multiple in-memory segment to a disk segment
-   */
-  private class InMemoryMerger extends MergeThread<MapOutput> {
-    
-    public InMemoryMerger(MergeManager manager) {
-      super(manager, Integer.MAX_VALUE, exceptionReporter);
-      setName("MemtoDiskMerger [" + TezUtilsInternal
-          .cleanVertexName(inputContext.getSourceVertexName()) + "]");
-      setDaemon(true);
-    }
-    
-    @Override
-    public void merge(List<MapOutput> inputs) throws IOException, InterruptedException {
-      if (inputs == null || inputs.size() == 0) {
-        return;
-      }
-      
-      numMemToDiskMerges.increment(1);
-      
-      //name this output file same as the name of the first file that is 
-      //there in the current list of inmem files (this is guaranteed to
-      //be absent on the disk currently. So we don't overwrite a prev. 
-      //created spill). Also we need to create the output file now since
-      //it is not guaranteed that this file will be present after merge
-      //is called (we delete empty files as soon as we see them
-      //in the merge method)
-
-      //figure out the mapId 
-      InputAttemptIdentifier srcTaskIdentifier = inputs.get(0).getAttemptIdentifier();
-
-      List<Segment> inMemorySegments = new ArrayList<Segment>();
-      long mergeOutputSize = 
-        createInMemorySegments(inputs, inMemorySegments,0);
-      int noInMemorySegments = inMemorySegments.size();
-
-      // TODO Maybe track serialized vs deserialized bytes.
-      
-      // All disk writes done by this merge are overhead - due to the lac of
-      // adequate memory to keep all segments in memory.
-      Path outputPath = mapOutputFile.getInputFileForWrite(
-          srcTaskIdentifier.getInputIdentifier().getInputIndex(),
-          mergeOutputSize).suffix(Constants.MERGED_OUTPUT_PREFIX);
-
-      Writer writer = null;
-      long outFileLen = 0;
+  @Override
+  public int execute(DriverContext driverContext) {
+    try {
       try {
-        writer =
-            new Writer(conf, rfs, outputPath,
-                (Class)ConfigUtils.getIntermediateInputKeyClass(conf),
-                (Class)ConfigUtils.getIntermediateInputValueClass(conf),
-                codec, null, null);
+        this.sentryClient = sentryClientFactory.create(authzConf);
+      } catch (Exception e) {
+        String msg = "Error creating Sentry client: " + e.getMessage();
+        LOG.error(msg, e);
+        throw new RuntimeException(msg, e);
+      }
+      Preconditions.checkNotNull(hiveAuthzBinding, "HiveAuthzBinding cannot be null");
+      Preconditions.checkNotNull(authzConf, "HiveAuthConf cannot be null");
+      Preconditions.checkNotNull(subject, "Subject cannot be null");
+      server = Preconditions.checkNotNull(authzConf.get(AuthzConfVars.AUTHZ_SERVER_NAME.getVar()),
+          "Config " + AuthzConfVars.AUTHZ_SERVER_NAME.getVar() + " is required");
+      try {
+        if (work.getRoleDDLDesc() != null) {
+          return processRoleDDL(conf, console, sentryClient, subject.getName(),
+              hiveAuthzBinding, work.getRoleDDLDesc());
+        }
+        if (work.getGrantDesc() != null) {
+          return processGrantDDL(conf, console, sentryClient,
+              subject.getName(), server, work.getGrantDesc());
+        }
+        if (work.getRevokeDesc() != null) {
+          return processRevokeDDL(conf, console, sentryClient,
+              subject.getName(), server, work.getRevokeDesc());
+        }
+        if (work.getShowGrantDesc() != null) {
+          return processShowGrantDDL(conf, console, sentryClient, subject.getName(), server,
+              work.getShowGrantDesc());
+        }
+        if (work.getGrantRevokeRoleDDL() != null) {
+          return processGrantRevokeRoleDDL(conf, console, sentryClient,
+              subject.getName(), work.getGrantRevokeRoleDDL());
+        }
+        throw new AssertionError(
+            "Unknown command passed to Sentry Grant/Revoke Task");
+      } catch (SentryAccessDeniedException e) {
+        String csHooks = authzConf.get(
+            HiveAuthzConf.AuthzConfVars.AUTHZ_ONFAILURE_HOOKS.getVar(), "")
+            .trim();
+        SentryOnFailureHookContext hookContext = new SentryOnFailureHookContextImpl(
+            queryPlan.getQueryString(), new HashSet<ReadEntity>(),
+            new HashSet<WriteEntity>(), stmtOperation,
+            null, null, null, null, subject.getName(), ipAddress,
+            new AuthorizationException(e), conf);
+        HiveAuthzBindingHook.runFailureHook(hookContext, csHooks);
+        throw e; // rethrow the exception for logging
+      }
+    } catch(Throwable throwable) {
+      setException(throwable);
+      String msg = "Error processing Sentry command: " + throwable.getMessage();
+      LOG.error(msg, throwable);
+      console.printError(msg);
+      return RETURN_CODE_FAILURE;
+    } finally {
+      if (sentryClient != null) {
+        sentryClient.close();
+      }
+    }
+  }
 
-        TezRawKeyValueIterator rIter = null;
-        LOG.info("Initiating in-memory merge with " + noInMemorySegments + 
-            " segments...");
+  public void setAuthzConf(HiveAuthzConf authzConf) {
+    Preconditions.checkState(this.authzConf == null,
+        "setAuthzConf should only be called once: " + this.authzConf);
+    this.authzConf = authzConf;
+  }
+  public void setHiveAuthzBinding(HiveAuthzBinding hiveAuthzBinding) {
+    Preconditions.checkState(this.hiveAuthzBinding == null,
+        "setHiveAuthzBinding should only be called once: " + this.hiveAuthzBinding);
+    this.hiveAuthzBinding = hiveAuthzBinding;
+  }
+  public void setSubject(Subject subject) {
+    Preconditions.checkState(this.subject == null,
+        "setSubject should only be called once: " + this.subject);
+    this.subject = subject;
+  }
+  public void setSubjectGroups(Set<String> subjectGroups) {
+    Preconditions.checkState(this.subjectGroups == null,
+        "setSubjectGroups should only be called once: " + this.subjectGroups);
+    this.subjectGroups = subjectGroups;
+  }
 
-        // Nothing actually materialized to disk - controlled by setting sort-factor to #segments.
-        rIter = TezMerger.merge(conf, rfs,
-            (Class)ConfigUtils.getIntermediateInputKeyClass(conf),
-            (Class)ConfigUtils.getIntermediateInputValueClass(conf),
-            inMemorySegments, inMemorySegments.size(),
-            new Path(inputContext.getUniqueIdentifier()),
-            (RawComparator)ConfigUtils.getIntermediateInputKeyComparator(conf),
-            nullProgressable, spilledRecordsCounter, null, additionalBytesRead, null);
-        // spilledRecordsCounter is tracking the number of keys that will be
-        // read from each of the segments being merged - which is essentially
-        // what will be written to disk.
+  public void setIpAddress(String ipAddress) {
+    this.ipAddress = ipAddress;
+  }
 
-        if (null == combiner) {
-          TezMerger.writeFile(rIter, writer, nullProgressable, TezRuntimeConfiguration.TEZ_RUNTIME_RECORDS_BEFORE_PROGRESS_DEFAULT);
+  public void setOperation(HiveOperation stmtOperation) {
+    this.stmtOperation = stmtOperation;
+  }
+
+  private int processRoleDDL(HiveConf conf, LogHelper console,
+      SentryPolicyServiceClient sentryClient, String subject,
+      HiveAuthzBinding hiveAuthzBinding, RoleDDLDesc desc)
+          throws SentryUserException {
+    RoleDDLDesc.RoleOperation operation = desc.getOperation();
+    DataOutputStream outStream = null;
+    String name = desc.getName();
+    try {
+      if (operation.equals(RoleDDLDesc.RoleOperation.SET_ROLE)) {
+        hiveAuthzBinding.setActiveRoleSet(name);
+        return RETURN_CODE_SUCCESS;
+      } else if (operation.equals(RoleDDLDesc.RoleOperation.CREATE_ROLE)) {
+        sentryClient.createRole(subject, name);
+        return RETURN_CODE_SUCCESS;
+      } else if (operation.equals(RoleDDLDesc.RoleOperation.DROP_ROLE)) {
+        sentryClient.dropRole(subject, name);
+        return RETURN_CODE_SUCCESS;
+      } else if (operation.equals(RoleDDLDesc.RoleOperation.SHOW_ROLE_GRANT)) {
+        Set<TSentryRole> roles;
+        PrincipalType principalType = desc.getPrincipalType();
+        if (principalType != PrincipalType.GROUP) {
+          String msg = SentryHiveConstants.GRANT_REVOKE_NOT_SUPPORTED_FOR_PRINCIPAL + principalType;
+          throw new HiveException(msg);
+        }
+        roles = sentryClient.listRolesByGroupName(subject, desc.getName() );
+        writeToFile(writeRoleGrantsInfo(roles), desc.getResFile());
+        return RETURN_CODE_SUCCESS;
+      } else if(operation.equals(RoleDDLDesc.RoleOperation.SHOW_ROLES)) {
+        Set<TSentryRole> roles = sentryClient.listRoles(subject, subjectGroups);
+        writeToFile(writeRolesInfo(roles), desc.getResFile());
+        return RETURN_CODE_SUCCESS;
+      } else if(operation.equals(RoleDDLDesc.RoleOperation.SHOW_CURRENT_ROLE)) {
+        ActiveRoleSet roleSet = hiveAuthzBinding.getActiveRoleSet();
+        if( roleSet.isAll()) {
+          Set<TSentryRole> roles = sentryClient.listRoles(subject, subjectGroups);
+          writeToFile(writeRolesInfo(roles), desc.getResFile());
+          return RETURN_CODE_SUCCESS;
         } else {
-          // TODO Counters for Combine
-          runCombineProcessor(rIter, writer);
+          Set<String> roles = roleSet.getRoles();
+          writeToFile(writeActiveRolesInfo(roles), desc.getResFile());
+          return RETURN_CODE_SUCCESS;
         }
-        writer.close();
-        additionalBytesWritten.increment(writer.getCompressedLength());
-        writer = null;
-
-        outFileLen = localFS.getFileStatus(outputPath).getLen();
-        LOG.info(inputContext.getUniqueIdentifier() +
-            " Merge of the " + noInMemorySegments +
-            " files in-memory complete." +
-            " Local file is " + outputPath + " of size " +
-            outFileLen);
-      } catch (IOException e) { 
-        //make sure that we delete the ondisk file that we created 
-        //earlier when we invoked cloneFileAttributes
-        localFS.delete(outputPath, true);
-        throw e;
-      } finally {
-        if (writer != null) {
-          writer.close();
-        }
-      }
-
-      // Note the output of the merge
-      closeOnDiskFile(new FileChunk(outputPath, 0, outFileLen));
-    }
-
-  }
-
-  /**
-   * Merges multiple on-disk segments
-   */
-  @VisibleForTesting
-  class OnDiskMerger extends MergeThread<FileChunk> {
-
-    public OnDiskMerger(MergeManager manager) {
-      super(manager, ioSortFactor, exceptionReporter);
-      setName("DiskToDiskMerger [" + TezUtilsInternal
-          .cleanVertexName(inputContext.getSourceVertexName()) + "]");
-      setDaemon(true);
-    }
-    
-    @Override
-    public void merge(List<FileChunk> inputs) throws IOException {
-      // sanity check
-      if (inputs == null || inputs.isEmpty()) {
-        LOG.info("No ondisk files to merge...");
-        return;
-      }
-      numDiskToDiskMerges.increment(1);
-      
-      long approxOutputSize = 0;
-      int bytesPerSum = 
-        conf.getInt("io.bytes.per.checksum", 512);
-      
-      LOG.info("OnDiskMerger: We have  " + inputs.size() + 
-               " map outputs on disk. Triggering merge...");
-
-      List<Segment> inputSegments = new ArrayList<Segment>(inputs.size());
-
-      // 1. Prepare the list of files to be merged.
-      for (FileChunk fileChunk : inputs) {
-        final long offset = fileChunk.getOffset();
-        final long size = fileChunk.getLength();
-        final boolean preserve = fileChunk.isLocalFile();
-        final Path file = fileChunk.getPath();
-        approxOutputSize += size;
-        Segment segment = new Segment(conf, rfs, file, offset, size, codec, ifileReadAhead,
-            ifileReadAheadLength, ifileBufferSize, preserve);
-        inputSegments.add(segment);
-      }
-
-      // add the checksum length
-      approxOutputSize += 
-        ChecksumFileSystem.getChecksumLength(approxOutputSize, bytesPerSum);
-
-      // 2. Start the on-disk merge process
-      FileChunk file0 = inputs.get(0);
-      String namePart;
-      if (file0.isLocalFile()) {
-        // This is setup the same way a type DISK MapOutput is setup when fetching.
-        namePart = mapOutputFile.getSpillFileName(
-            file0.getInputAttemptIdentifier().getInputIdentifier().getInputIndex());
-
       } else {
-        namePart = file0.getPath().getName().toString();
+        throw new HiveException("Unknown role operation "
+            + operation.getOperationName());
       }
-
-      // namePart includes the suffix of the file. We need to remove it.
-      namePart = FilenameUtils.removeExtension(namePart);
-      Path outputPath = localDirAllocator.getLocalPathForWrite(namePart, approxOutputSize, conf);
-      outputPath = outputPath.suffix(Constants.MERGED_OUTPUT_PREFIX + mergeFileSequenceId.getAndIncrement());
-
-      Writer writer =
-        new Writer(conf, rfs, outputPath, 
-                        (Class)ConfigUtils.getIntermediateInputKeyClass(conf), 
-                        (Class)ConfigUtils.getIntermediateInputValueClass(conf),
-                        codec, null, null);
-      Path tmpDir = new Path(inputContext.getUniqueIdentifier());
-      try {
-        TezRawKeyValueIterator iter = TezMerger.merge(conf, rfs,
-            (Class)ConfigUtils.getIntermediateInputKeyClass(conf),
-            (Class)ConfigUtils.getIntermediateInputValueClass(conf),
-            inputSegments,
-            ioSortFactor, tmpDir,
-            (RawComparator)ConfigUtils.getIntermediateInputKeyComparator(conf),
-            nullProgressable, true, spilledRecordsCounter, null,
-            mergedMapOutputsCounter, null);
-
-        // TODO Maybe differentiate between data written because of Merges and
-        // the finalMerge (i.e. final mem available may be different from
-        // initial merge mem)
-        TezMerger.writeFile(iter, writer, nullProgressable, TezRuntimeConfiguration.TEZ_RUNTIME_RECORDS_BEFORE_PROGRESS_DEFAULT);
-        writer.close();
-        additionalBytesWritten.increment(writer.getCompressedLength());
-      } catch (IOException e) {
-        localFS.delete(outputPath, true);
-        throw e;
-      }
-
-      final long outputLen = localFS.getFileStatus(outputPath).getLen();
-      closeOnDiskFile(new FileChunk(outputPath, 0, outputLen));
-
-      LOG.info(inputContext.getUniqueIdentifier() +
-          " Finished merging " + inputs.size() + 
-          " map output files on disk of total-size " + 
-          approxOutputSize + "." + 
-          " Local output file is " + outputPath + " of size " +
-          outputLen);
-    }
-  }
-  
-  private long createInMemorySegments(List<MapOutput> inMemoryMapOutputs,
-                                      List<Segment> inMemorySegments, 
-                                      long leaveBytes
-                                      ) throws IOException {
-    long totalSize = 0L;
-    // We could use fullSize could come from the RamManager, but files can be
-    // closed but not yet present in inMemoryMapOutputs
-    long fullSize = 0L;
-    for (MapOutput mo : inMemoryMapOutputs) {
-      fullSize += mo.getMemory().length;
-    }
-    while(fullSize > leaveBytes) {
-      MapOutput mo = inMemoryMapOutputs.remove(0);
-      byte[] data = mo.getMemory();
-      long size = data.length;
-      totalSize += size;
-      fullSize -= size;
-      IFile.Reader reader = new InMemoryReader(MergeManager.this, 
-                                                   mo.getAttemptIdentifier(),
-                                                   data, 0, (int)size);
-      inMemorySegments.add(new Segment(reader, true, 
-                                            (mo.isPrimaryMapOutput() ? 
-                                            mergedMapOutputsCounter : null)));
-    }
-    return totalSize;
-  }
-
-  class RawKVIteratorReader extends IFile.Reader {
-
-    private final TezRawKeyValueIterator kvIter;
-
-    public RawKVIteratorReader(TezRawKeyValueIterator kvIter, long size)
-        throws IOException {
-      super(null, size, null, spilledRecordsCounter, null, ifileReadAhead,
-          ifileReadAheadLength, ifileBufferSize);
-      this.kvIter = kvIter;
-    }
-    @Override
-    public KeyState readRawKey(DataInputBuffer key) throws IOException {
-      if (kvIter.next()) {
-        final DataInputBuffer kb = kvIter.getKey();
-        final int kp = kb.getPosition();
-        final int klen = kb.getLength() - kp;
-        key.reset(kb.getData(), kp, klen);
-        bytesRead += klen;
-        return KeyState.NEW_KEY;
-      }
-      return KeyState.NO_KEY;
-    }
-    public void nextRawValue(DataInputBuffer value) throws IOException {
-      final DataInputBuffer vb = kvIter.getValue();
-      final int vp = vb.getPosition();
-      final int vlen = vb.getLength() - vp;
-      value.reset(vb.getData(), vp, vlen);
-      bytesRead += vlen;
-    }
-    public long getPosition() throws IOException {
-      return bytesRead;
-    }
-
-    public void close() throws IOException {
-      kvIter.close();
+    } catch (HiveException e) {
+      String msg = "Error in role operation "
+          + operation.getOperationName() + " on role name "
+          + name + ", error message " + e.getMessage();
+      LOG.warn(msg, e);
+      console.printError(msg);
+      return RETURN_CODE_FAILURE;
+    } catch (IOException e) {
+      String msg = "IO Error in role operation " + e.getMessage();
+      LOG.info(msg, e);
+      console.printError(msg);
+      return RETURN_CODE_FAILURE;
+    } finally {
+      closeQuiet(outStream);
     }
   }
 
-  private TezRawKeyValueIterator finalMerge(Configuration job, FileSystem fs,
-                                       List<MapOutput> inMemoryMapOutputs,
-                                       List<FileChunk> onDiskMapOutputs
-                                       ) throws IOException {
-    LOG.info("finalMerge called with " + 
-             inMemoryMapOutputs.size() + " in-memory map-outputs and " + 
-             onDiskMapOutputs.size() + " on-disk map-outputs");
-    
-    
-    
+  private int processGrantDDL(HiveConf conf, LogHelper console,
+      SentryPolicyServiceClient sentryClient, String subject,
+      String server, GrantDesc desc) throws SentryUserException {
+    return processGrantRevokeDDL(console, sentryClient, subject, 
+        server, true, desc.getPrincipals(), desc.getPrivileges(), desc.getPrivilegeSubjectDesc());
+  }
 
-    // merge config params
-    Class keyClass = (Class)ConfigUtils.getIntermediateInputKeyClass(job);
-    Class valueClass = (Class)ConfigUtils.getIntermediateInputValueClass(job);
-    final Path tmpDir = new Path(inputContext.getUniqueIdentifier());
-    final RawComparator comparator =
-      (RawComparator)ConfigUtils.getIntermediateInputKeyComparator(job);
 
-    // segments required to vacate memory
-    List<Segment> memDiskSegments = new ArrayList<Segment>();
-    long inMemToDiskBytes = 0;
-    boolean mergePhaseFinished = false;
-    if (inMemoryMapOutputs.size() > 0) {
-      int srcTaskId = inMemoryMapOutputs.get(0).getAttemptIdentifier().getInputIdentifier().getInputIndex();
-      inMemToDiskBytes = createInMemorySegments(inMemoryMapOutputs, 
-                                                memDiskSegments,
-                                                this.postMergeMemLimit);
-      final int numMemDiskSegments = memDiskSegments.size();
-      if (numMemDiskSegments > 0 &&
-            ioSortFactor > onDiskMapOutputs.size()) {
-        
-        // If we reach here, it implies that we have less than io.sort.factor
-        // disk segments and this will be incremented by 1 (result of the 
-        // memory segments merge). Since this total would still be 
-        // <= io.sort.factor, we will not do any more intermediate merges,
-        // the merge of all these disk segments would be directly fed to the
-        // reduce method
-        
-        mergePhaseFinished = true;
-        // must spill to disk, but can't retain in-mem for intermediate merge
-        final Path outputPath = 
-          mapOutputFile.getInputFileForWrite(srcTaskId,
-                                             inMemToDiskBytes).suffix(
-                                                 Constants.MERGED_OUTPUT_PREFIX);
-        final TezRawKeyValueIterator rIter = TezMerger.merge(job, fs, keyClass, valueClass,
-            memDiskSegments, numMemDiskSegments, tmpDir, comparator, nullProgressable,
-            spilledRecordsCounter, null, additionalBytesRead, null);
-        final Writer writer = new Writer(job, fs, outputPath,
-            keyClass, valueClass, codec, null, null);
-        try {
-          TezMerger.writeFile(rIter, writer, nullProgressable, TezRuntimeConfiguration.TEZ_RUNTIME_RECORDS_BEFORE_PROGRESS_DEFAULT);
-        } catch (IOException e) {
-          if (null != outputPath) {
-            try {
-              fs.delete(outputPath, true);
-            } catch (IOException ie) {
-              // NOTHING
+  private int processRevokeDDL(HiveConf conf, LogHelper console,
+      SentryPolicyServiceClient sentryClient, String subject,
+      String server, RevokeDesc desc) throws SentryUserException {
+    return processGrantRevokeDDL(console, sentryClient, subject, 
+        server, false, desc.getPrincipals(), desc.getPrivileges(),
+        desc.getPrivilegeSubjectDesc());
+  }
+
+  private int processShowGrantDDL(HiveConf conf, LogHelper console, SentryPolicyServiceClient sentryClient,
+      String subject, String server, ShowGrantDesc desc) throws SentryUserException{
+    PrincipalDesc principalDesc = desc.getPrincipalDesc();
+    PrivilegeObjectDesc hiveObjectDesc = desc.getHiveObj();
+    String principalName = principalDesc.getName();
+    Set<TSentryPrivilege> privileges;
+
+    try {
+      if (principalDesc.getType() != PrincipalType.ROLE) {
+        String msg = SentryHiveConstants.GRANT_REVOKE_NOT_SUPPORTED_FOR_PRINCIPAL + principalDesc.getType();
+        throw new HiveException(msg);
+      }
+
+      if (hiveObjectDesc == null) {
+        privileges = sentryClient.listPrivilegesByRoleName(subject, principalName, null);
+      } else {
+        SentryHivePrivilegeObjectDesc privSubjectDesc = toSentryHivePrivilegeObjectDesc(hiveObjectDesc);
+        List<Authorizable> authorizableHeirarchy = toAuthorizable(privSubjectDesc);
+        privileges = sentryClient.listPrivilegesByRoleName(subject, principalName, authorizableHeirarchy);
+      }
+      writeToFile(writeGrantInfo(privileges, principalName), desc.getResFile());
+      return RETURN_CODE_SUCCESS;
+    } catch (IOException e) {
+      String msg = "IO Error in show grant " + e.getMessage();
+      LOG.info(msg, e);
+      console.printError(msg);
+      return RETURN_CODE_FAILURE;
+    } catch (HiveException e) {
+      String msg = "Error in show grant operation, error message " + e.getMessage();
+      LOG.warn(msg, e);
+      console.printError(msg);
+      return RETURN_CODE_FAILURE;
+    }
+  }
+
+  private List<Authorizable> toAuthorizable(SentryHivePrivilegeObjectDesc privSubjectDesc) throws HiveException{
+    List<Authorizable> authorizableHeirarchy = new ArrayList<Authorizable>();
+    authorizableHeirarchy.add(new Server(server));
+    String dbName = null;
+    if (privSubjectDesc.getTable()) {
+      DatabaseTable dbTable = parseDBTable(privSubjectDesc.getObject());
+      dbName = dbTable.getDatabase();
+      String tableName = dbTable.getTable();
+      authorizableHeirarchy.add(new Table(tableName));
+      authorizableHeirarchy.add(new Database(dbName));
+
+    } else if (privSubjectDesc.getUri()) {
+      String uriPath = privSubjectDesc.getObject();
+      authorizableHeirarchy.add(new AccessURI(uriPath));
+    } else {
+      dbName = privSubjectDesc.getObject();
+      authorizableHeirarchy.add(new Database(dbName));
+    }
+    return authorizableHeirarchy;
+  }
+
+  private void writeToFile(String data, String file) throws IOException {
+    Path resFile = new Path(file);
+    FileSystem fs = resFile.getFileSystem(conf);
+    FSDataOutputStream out = fs.create(resFile);
+    try {
+      if (data != null && !data.isEmpty()) {
+        OutputStreamWriter writer = new OutputStreamWriter(out, "UTF-8");
+        writer.write(data);
+        writer.write((char) terminator);
+        writer.flush();
+      }
+    } finally {
+      closeQuiet(out);
+    }
+  }
+
+  private int processGrantRevokeRoleDDL(HiveConf conf, LogHelper console,
+      SentryPolicyServiceClient sentryClient, String subject,
+      GrantRevokeRoleDDL desc) throws SentryUserException {
+    try {
+      boolean grantRole = desc.getGrant();
+      List<PrincipalDesc> principals = desc.getPrincipalDesc();
+      List<String> roles = desc.getRoles();
+      for (PrincipalDesc principal : principals) {
+        if (principal.getType() != PrincipalType.GROUP) {
+          String msg = SentryHiveConstants.GRANT_REVOKE_NOT_SUPPORTED_FOR_PRINCIPAL +
+              principal.getType();
+          throw new HiveException(msg);
+        }
+        String groupName = principal.getName();
+        for (String roleName : roles) {
+          if (grantRole) {
+            sentryClient.grantRoleToGroup(subject, groupName, roleName);
+          } else {
+            sentryClient.revokeRoleFromGroup(subject, groupName, roleName);
+          }
+        }
+      }
+    } catch (HiveException e) {
+      String msg = "Error in grant/revoke operation, error message " + e.getMessage();
+      LOG.warn(msg, e);
+      console.printError(msg);
+      return RETURN_CODE_FAILURE;
+    }
+    return RETURN_CODE_SUCCESS;
+  }
+
+  static String writeGrantInfo(Set<TSentryPrivilege> privileges, String roleName) {
+    if (privileges == null || privileges.isEmpty()) {
+      return "";
+    }
+    StringBuilder builder = new StringBuilder();
+
+    for (TSentryPrivilege privilege : privileges) {
+
+      if (PrivilegeScope.URI.name().equalsIgnoreCase(
+          privilege.getPrivilegeScope())) {
+        appendNonNull(builder, privilege.getURI(), true);
+      } else if(PrivilegeScope.SERVER.name().equalsIgnoreCase(
+          privilege.getPrivilegeScope())) {
+        appendNonNull(builder, "*", true);//Db column would show * if it is a server level privilege
+      } else {
+        appendNonNull(builder, privilege.getDbName(), true);
+      }
+      appendNonNull(builder, privilege.getTableName());
+      appendNonNull(builder, null);//getPartValues()
+      appendNonNull(builder, null);//getColumnName()
+      appendNonNull(builder, roleName);//getPrincipalName()
+      appendNonNull(builder, "ROLE");//getPrincipalType()
+      appendNonNull(builder, privilege.getAction());
+      appendNonNull(builder, false);//isGrantOption()
+      appendNonNull(builder, privilege.getCreateTime() * 1000L);
+      appendNonNull(builder, privilege.getGrantorPrincipal());
+    }
+    LOG.info("builder.toString(): " + builder.toString());
+    return builder.toString();
+  }
+
+  static String writeRoleGrantsInfo(Set<TSentryRole> roleGrants) {
+    if (roleGrants == null || roleGrants.isEmpty()) {
+      return "";
+    }
+    StringBuilder builder = new StringBuilder();
+    for (TSentryRole roleGrant : roleGrants) {
+      appendNonNull(builder, roleGrant.getRoleName(), true);
+      appendNonNull(builder, false);//isGrantOption()
+      appendNonNull(builder, null);//roleGrant.getGrantTime() * 1000L
+      appendNonNull(builder, roleGrant.getGrantorPrincipal());
+    }
+    return builder.toString();
+  }
+
+  static String writeRolesInfo(Set<TSentryRole> roles) {
+    if (roles == null || roles.isEmpty()) {
+      return "";
+    }
+    StringBuilder builder = new StringBuilder();
+    for (TSentryRole roleGrant : roles) {
+      appendNonNull(builder, roleGrant.getRoleName(), true);
+    }
+    return builder.toString();
+  }
+
+  static String writeActiveRolesInfo(Set<String> roles) {
+    if (roles == null || roles.isEmpty()) {
+      return "";
+    }
+    StringBuilder builder = new StringBuilder();
+    for (String role : roles) {
+      appendNonNull(builder, role, true);
+    }
+    return builder.toString();
+  }
+
+  static StringBuilder appendNonNull(StringBuilder builder, Object value) {
+    return appendNonNull(builder, value, false);
+  }
+
+  static StringBuilder appendNonNull(StringBuilder builder, Object value, boolean firstColumn) {
+    if (!firstColumn) {
+      builder.append((char)separator);
+    } else if (builder.length() > 0) {
+      builder.append((char)terminator);
+    }
+    if (value != null) {
+      builder.append(value);
+    }
+    return builder;
+  }
+
+  private static int processGrantRevokeDDL(LogHelper console,
+      SentryPolicyServiceClient sentryClient, String subject, String server,
+      boolean isGrant, List<PrincipalDesc> principals,
+      List<PrivilegeDesc> privileges,
+      PrivilegeObjectDesc privSubjectObjDesc) throws SentryUserException {
+    if (privileges == null || privileges.size() == 0) {
+      console.printError("No privilege found.");
+      return RETURN_CODE_FAILURE;
+    }
+
+    String dbName = null;
+    String tableName = null;
+    String uriPath = null;
+    String serverName = null;
+    try {
+      SentryHivePrivilegeObjectDesc privSubjectDesc = toSentryHivePrivilegeObjectDesc(privSubjectObjDesc);
+
+      if (privSubjectDesc == null) {
+        throw new HiveException("Privilege subject cannot be null");
+      }
+      if (privSubjectDesc.getPartSpec() != null) {
+        throw new HiveException(SentryHiveConstants.PARTITION_PRIVS_NOT_SUPPORTED);
+      }
+      String obj = privSubjectDesc.getObject();
+      if (privSubjectDesc.getTable()) {
+        DatabaseTable dbTable = parseDBTable(obj);
+        dbName = dbTable.getDatabase();
+        tableName = dbTable.getTable();
+      } else if (privSubjectDesc.getUri()) {
+        uriPath = privSubjectDesc.getObject();
+      } else if (privSubjectDesc.getServer()) {
+        serverName = privSubjectDesc.getObject();
+      } else {
+        dbName = privSubjectDesc.getObject();
+      }
+      for (PrivilegeDesc privDesc : privileges) {
+        List<String> columns = privDesc.getColumns();
+        if (columns != null && !columns.isEmpty()) {
+          throw new HiveException(SentryHiveConstants.COLUMN_PRIVS_NOT_SUPPORTED);
+        }
+        if (!SentryHiveConstants.ALLOWED_PRIVS.contains(privDesc.getPrivilege().getPriv())) {
+          String msg = SentryHiveConstants.PRIVILEGE_NOT_SUPPORTED + privDesc.getPrivilege().getPriv();
+          throw new HiveException(msg);
+        }
+      }
+      for (PrincipalDesc princ : principals) {
+        if (princ.getType() != PrincipalType.ROLE) {
+          String msg = SentryHiveConstants.GRANT_REVOKE_NOT_SUPPORTED_FOR_PRINCIPAL + princ.getType();
+          throw new HiveException(msg);
+        }
+        for (PrivilegeDesc privDesc : privileges) {
+          if (isGrant) {
+            if (serverName != null) {
+              sentryClient.grantServerPrivilege(subject, princ.getName(), serverName);
+            } else if (uriPath != null) {
+              sentryClient.grantURIPrivilege(subject, princ.getName(), server, uriPath);
+            } else if (tableName == null) {
+              sentryClient.grantDatabasePrivilege(subject, princ.getName(), server, dbName);
+            } else {
+              sentryClient.grantTablePrivilege(subject, princ.getName(), server, dbName,
+                  tableName, toSentryAction(privDesc.getPrivilege().getPriv()));
+            }
+          } else {
+            if (serverName != null) {
+              sentryClient.revokeServerPrivilege(subject, princ.getName(), serverName);
+            } else if (uriPath != null) {
+              sentryClient.revokeURIPrivilege(subject, princ.getName(), server, uriPath);
+            } else if (tableName == null) {
+              sentryClient.revokeDatabasePrivilege(subject, princ.getName(), server, dbName);
+            } else {
+              sentryClient.revokeTablePrivilege(subject, princ.getName(), server, dbName,
+                  tableName, toSentryAction(privDesc.getPrivilege().getPriv()));
             }
           }
-          throw e;
-        } finally {
-          if (null != writer) {
-            writer.close();
-            additionalBytesWritten.increment(writer.getCompressedLength());
-          }
         }
-
-        final FileStatus fStatus = localFS.getFileStatus(outputPath);
-        // add to list of final disk outputs.
-        onDiskMapOutputs.add(new FileChunk(outputPath, 0, fStatus.getLen()));
-
-        LOG.info("Merged " + numMemDiskSegments + " segments, " +
-                 inMemToDiskBytes + " bytes to disk to satisfy " +
-                 "reduce memory limit");
-        inMemToDiskBytes = 0;
-        memDiskSegments.clear();
-      } else if (inMemToDiskBytes != 0) {
-        LOG.info("Keeping " + numMemDiskSegments + " segments, " +
-                 inMemToDiskBytes + " bytes in memory for " +
-                 "intermediate, on-disk merge");
       }
+      return RETURN_CODE_SUCCESS;
+    } catch (HiveException e) {
+      String msg = "Error in grant/revoke operation, error message " + e.getMessage();
+      LOG.warn(msg, e);
+      console.printError(msg);
+      return RETURN_CODE_FAILURE;
     }
+  }
 
-    // segments on disk
-    List<Segment> diskSegments = new ArrayList<Segment>();
-    long onDiskBytes = inMemToDiskBytes;
-    FileChunk[] onDisk = onDiskMapOutputs.toArray(new FileChunk[onDiskMapOutputs.size()]);
-    for (FileChunk fileChunk : onDisk) {
-      final long fileLength = fileChunk.getLength();
-      onDiskBytes += fileLength;
-      LOG.debug("Disk file: " + fileChunk.getPath() + " Length is " + fileLength);
-
-      final Path file = fileChunk.getPath();
-      TezCounter counter =
-          file.toString().endsWith(Constants.MERGED_OUTPUT_PREFIX) ? null : mergedMapOutputsCounter;
-
-      final long fileOffset = fileChunk.getOffset();
-      final boolean preserve = fileChunk.isLocalFile();
-      diskSegments.add(new Segment(job, fs, file, fileOffset, fileLength, codec, ifileReadAhead,
-                                   ifileReadAheadLength, ifileBufferSize, preserve, counter));
+  private static SentryHivePrivilegeObjectDesc toSentryHivePrivilegeObjectDesc(PrivilegeObjectDesc privSubjectObjDesc)
+    throws HiveException{
+    if (!(privSubjectObjDesc instanceof SentryHivePrivilegeObjectDesc)) {
+      throw new HiveException(
+          "Privilege subject not parsed correctly by Sentry");
     }
-    LOG.info("Merging " + onDisk.length + " files, " +
-             onDiskBytes + " bytes from disk");
-    Collections.sort(diskSegments, new Comparator<Segment>() {
-      public int compare(Segment o1, Segment o2) {
-        if (o1.getLength() == o2.getLength()) {
-          return 0;
-        }
-        return o1.getLength() < o2.getLength() ? -1 : 1;
-      }
-    });
+    return (SentryHivePrivilegeObjectDesc) privSubjectObjDesc;
+  }
 
-    // build final list of segments from merged backed by disk + in-mem
-    List<Segment> finalSegments = new ArrayList<Segment>();
-    long inMemBytes = createInMemorySegments(inMemoryMapOutputs, 
-                                             finalSegments, 0);
-    LOG.info("Merging " + finalSegments.size() + " segments, " +
-             inMemBytes + " bytes from memory into reduce");
-    if (0 != onDiskBytes) {
-      final int numInMemSegments = memDiskSegments.size();
-      diskSegments.addAll(0, memDiskSegments);
-      memDiskSegments.clear();
-      TezRawKeyValueIterator diskMerge = TezMerger.merge(
-          job, fs, keyClass, valueClass, codec, diskSegments,
-          ioSortFactor, numInMemSegments, tmpDir, comparator,
-          nullProgressable, false, spilledRecordsCounter, null, additionalBytesRead, null);
-      diskSegments.clear();
-      if (0 == finalSegments.size()) {
-        return diskMerge;
-      }
-      finalSegments.add(new Segment(
-            new RawKVIteratorReader(diskMerge, onDiskBytes), true));
+  private static String toSentryAction(PrivilegeType privilegeType) {
+    if (PrivilegeType.ALL.equals(privilegeType)) {
+      return AccessConstants.ALL;
+    } else {
+      return privilegeType.name();
     }
-    // This is doing nothing but creating an iterator over the segments.
-    return TezMerger.merge(job, fs, keyClass, valueClass,
-                 finalSegments, finalSegments.size(), tmpDir,
-                 comparator, nullProgressable, spilledRecordsCounter, null,
-                 additionalBytesRead, null);
+  }
+
+  private static DatabaseTable parseDBTable(String obj) throws HiveException {
+    String[] dbTab = Iterables.toArray(DB_TBL_SPLITTER.split(obj), String.class);
+    if (dbTab.length == 2) {
+      return new DatabaseTable(dbTab[0], dbTab[1]);
+    } else if (dbTab.length == 1){
+      return new DatabaseTable(SessionState.get().getCurrentDatabase(), obj);
+    } else {
+      String msg = "Malformed database.table '" + obj + "'";
+      throw new HiveException(msg);
+    }
+  }
+
+  private static class DatabaseTable {
+    private final String database;
+    private final String table;
+    public DatabaseTable(String database, String table) {
+      this.database = database;
+      this.table = table;
+    }
+    public String getDatabase() {
+      return database;
+    }
+    public String getTable() {
+      return table;
+    }
+  }
+
+  /**
+   * Close to be used in the try block of a try-catch-finally
+   * statement. Returns null so the close/set to null idiom can be
+   * completed in a single line.
+   */
+  private static DataOutputStream close(DataOutputStream out)
+      throws IOException {
+    if (out != null) {
+      out.close();
+    }
+    return null;
+  }
+  /**
+   * Close to be used in the finally block of a try-catch-finally
+   * statement.
+   */
+  private static void closeQuiet(DataOutputStream out) {
+    try {
+      close(out);
+    } catch (IOException e) {
+      LOG.warn("Error closing output stream", e);
+    }
+  }
+
+  @Override
+  public boolean requireLock() {
+    return false;
+  }
+
+  @Override
+  public StageType getType() {
+    return StageType.DDL;
+  }
+
+  @Override
+  public String getName() {
+    return "SENTRY";
   }
 }
