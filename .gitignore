@@ -34,3 +34,6 @@ hs_err_pid*
 
 # ignore confix outputs
 */confix/results/*
+
+# ignore las output data
+*/pool/las/data_all_changes/*
