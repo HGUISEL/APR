@@ -1,6 +1,7 @@
 com/github/thwak/confix/junit/TestRunnerBuilder.class
 com/github/thwak/confix/pool/Requirements.class
 com/github/thwak/confix/patch/FLFreqPatchStrategy.class
+com/github/thwak/confix/main/ConFix$2.class
 com/github/thwak/confix/patch/FLFreqPatchStrategy$1.class
 com/github/thwak/confix/coverage/CoverageManager$1.class
 com/github/thwak/confix/patch/PatchUtils$ScoreFreqComparator.class

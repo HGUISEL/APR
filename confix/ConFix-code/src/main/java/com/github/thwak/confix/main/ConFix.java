@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
+import java.util.Comparator;
 
 import com.github.thwak.confix.coverage.CoverageManager;
 import com.github.thwak.confix.coverage.TestResult;
@@ -150,19 +151,18 @@ public class ConFix {
 			System.out.println("\n// ======= STEP 2-2. Create Patcher ======= //");
 			patcher = pStrategy.patcher();
 			if (patcher == null){
-				startTime = setTimer();
-				randomSeed = setRandomSeed(startTime);
-				if (flMetric.compareTo("perfect") == 0) {
-					pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
-							cStrategyKey, sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
-				} else {
-					pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
-							cStrategyKey, sourceDir, compileClassPathEntries);
-				}
-				pStrategy.finishUpdate();
-				IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
-				continue ;
-				//break;
+				// randomSeed = setRandomSeed(setTimer());
+				// if (flMetric.compareTo("perfect") == 0) {
+				// 	pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+				// 			cStrategyKey, sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
+				// } else {
+				// 	pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+				// 			cStrategyKey, sourceDir, compileClassPathEntries);
+				// }
+				// pStrategy.finishUpdate();
+				// IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
+				// continue ;
+				break;
 			}
 				
 
@@ -186,6 +186,13 @@ public class ConFix {
 				PatchInfo info = new PatchInfo(targetClass, change, loc);
 				try {
 					returnCode = patcher.apply(loc, change, info);
+					//TE
+					System.out.println("Fix Location");
+					System.out.println(loc);
+					System.out.println("Applied Change");
+					System.out.println(change);
+					System.out.println("Return Code");
+					System.out.println(returnCode);
 				} catch (Exception e) {
 					if (DEBUG) {
 						System.out.println("Change Application Error.");
@@ -338,7 +345,7 @@ public class ConFix {
 		// TE
 		// We load new Changepool for each run
 		ChangePoolGenerator changePoolGenerator = new ChangePoolGenerator();
-		changePoolGenerator.collect(cleanFiles, buggyFiles);
+		changePoolGenerator.collect(buggyFiles,cleanFiles);
 		pool = changePoolGenerator.pool;
 		pool.poolName = "SimFinPool";
 		pool.maxLoadCount = maxPoolLoad;
@@ -617,7 +624,7 @@ public class ConFix {
 		pStrategyKey = PatchUtils.getStringProperty(props, "patch.strategy", "flfreq");
 		cStrategyKey = PatchUtils.getStringProperty(props, "concretize.strategy", "tc");
 		flMetric = PatchUtils.getStringProperty(props, "fl.metric", "ochiai");
-		projectName = PatchUtils.getStringProperty(props, "projectNmae", "Closure");
+		projectName = PatchUtils.getStringProperty(props, "projectName", "Closure");
 		bugId = PatchUtils.getStringProperty(props, "bugId", "3");
 		pFaultyLine = Integer.parseInt(PatchUtils.getStringProperty(props, "pFaultyLine", "1"));
 		pFaultyClass = PatchUtils.getStringProperty(props, "pFaultyClass", "");
@@ -628,12 +635,40 @@ public class ConFix {
 	}
 
 	public static void createFileLists(String projectName, String bugId) {
-		File dir = new File("../../../pool/las/data/" + projectName + "-" + bugId);
+		File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data/" + projectName + "-" + bugId);
 		// File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data");
 		File[] directoryListing = dir.listFiles();
+		//System.out.println("File list size: "+directoryListing.length()) ;
+
+		Arrays.sort(directoryListing, new Comparator<File>() {
+            @Override
+            public int compare(File o1, File o2) {
+                int n1 = extractNumber(o1.getName());
+                int n2 = extractNumber(o2.getName());
+                return n1 - n2;
+            }
+
+            private int extractNumber(String name) {
+                int i = 0;
+                try {
+                    int s = name.indexOf('-')+1;
+                    int e = name.lastIndexOf('_');
+                    String number = name.substring(s, e);
+                    i = Integer.parseInt(number);
+                } catch(Exception e) {
+                    i = 0; // if filename does not match the format
+                           // then default to 0
+                }
+                return i;
+            }
+        });
+
+
 		if (directoryListing != null) {
 			for (File child : directoryListing) {
+				
 				try {
+					System.out.println("Child path: "+child.getCanonicalPath()) ;
 					String[] childPath = child.getCanonicalPath().split("data/"); // "data/"" 뒤에는 파일 이름이 붙는다.
 					if (childPath[1].indexOf("new") > 0) {
 						cleanFiles.add(child);
@@ -654,4 +689,7 @@ public class ConFix {
 		coverage = (CoverageManager) IOUtils.readObject("coverage-info.obj");
 		System.out.println("Done.");
 	}
+
+
 }
+

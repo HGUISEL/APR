@@ -81,11 +81,11 @@ public class JavaASTParser {
         return compilationUnit;
     }
 
-    public HashMap<String, Integer> getnodeCountMap() {
+    public HashMap<String, Integer> getNodeCountMap() {
         return nodeCountMap;
     }
 
-    public HashMap<String, Set<String>> getparentCollectionMap() {
+    public HashMap<String, Set<String>> getParentCollectionMap() {
         return parentCollectionMap;
     }
 

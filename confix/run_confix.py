@@ -16,11 +16,11 @@ def main(argv):
     target_bug_list.sort()
 
     for target_bug in target_bug_list:
-        # target_bug="Math-59"
+        #target_bug="Math-59"
         target_project, target_id = target_bug.split('-')
 
         perfect_info = pd.read_csv("../pool/commit_collector/inputs/"+target_project+".csv",
-                                   names=['D4J_ID', 'faulty_path', 'faulty_line', 'dummy'])
+                                   names=['D4J_ID', 'faulty_path', 'fix_faulty_line', 'blame_faulty_line', 'dummy'])
         perfect_info_csv = perfect_info.values
         perfect_faulty_path = ""
         perfect_faulty_line = ""
@@ -72,7 +72,7 @@ def main(argv):
 
         # rm -rf ${PROJ_NAME_LIST[$i]}-${j}
 
-        # break
+        #break
 
 
 if __name__ == '__main__':

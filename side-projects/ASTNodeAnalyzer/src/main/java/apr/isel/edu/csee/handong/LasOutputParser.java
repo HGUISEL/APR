@@ -12,13 +12,15 @@ import java.util.*;
 
 public class LasOutputParser{
 
+    public List<String> lines = new ArrayList<String>();
+
     public HashMap<String,Integer> nodeCountMap = new HashMap<String, Integer>(103);
     public HashMap<String,Set<String>> parentCollectionMap = new HashMap<String,Set<String>>(103);
+    public List<String> changes = new ArrayList<String>();
     
-    LasOutputParser(String lasOutputPath){
-        BufferedReader reader;
-        List<String> lines = new ArrayList<String>();
+    LasOutputParser(String lasOutputPath){ //modify this to read actual LAS_output.csv
 
+        BufferedReader reader;
         try {
             reader = new BufferedReader(new FileReader(lasOutputPath));
             String line = reader.readLine();
@@ -31,13 +33,22 @@ public class LasOutputParser{
             e.printStackTrace();
         }
 
+    }
+
+    LasOutputParser(List<String> lasResult){ // when a pure las results of a single patch is given
+        this.lines = lasResult;
+    }
+
+
+
+    public void parseNodes(){
         String type = "";
         String node = "";
         String location = new String();
         String buffer = new String();
         String[] buf ;
 
-        for(String line: lines){
+        for(String line: this.lines){
             buf = line.split("\t") ;
             if(buf.length == 1) break; // end of LAS result
             type = buf[0] ;
@@ -71,36 +82,45 @@ public class LasOutputParser{
                 parentSet.add(location);
                 parentCollectionMap.put(node, parentSet);
             }
+
+            changes.add(type+" "+node+" "+location);
         } 
 
-        // System.out.println("=================Occurences===================");
-        // Iterator<String> iter = nodeCountMap.keySet().iterator(); 
-        // while(iter.hasNext()) { 
-        //     String key = iter.next();
-        //     Integer value = nodeCountMap.get(key); 
-        //     System.out.println(key + " : " + value.intValue()); 
-        // }
+    }
 
-        // System.out.println("=================Contexts===================");
-        // iter = parentCollectionMap.keySet().iterator(); 
-        // while(iter.hasNext()) { 
-        //     String key = iter.next();
-        //     Set<String> valueSet = parentCollectionMap.get(key);
-        //     System.out.print("for "+key+":");
-        //     Iterator<String> setIter = valueSet.iterator();
-        //     while(setIter.hasNext()){
-        //         System.out.print(setIter.next()+", ");
-        //     }
-        //     System.out.println(" ");
-        // }
+    public void printNodes(){
+        System.out.println("=================Occurences===================");
+        Iterator<String> iter = nodeCountMap.keySet().iterator(); 
+        while(iter.hasNext()) { 
+            String key = iter.next();
+            Integer value = nodeCountMap.get(key); 
+            System.out.println(key + " : " + value.intValue()); 
+        }
+
+        System.out.println("=================Contexts===================");
+        iter = parentCollectionMap.keySet().iterator(); 
+        while(iter.hasNext()) { 
+            String key = iter.next();
+            Set<String> valueSet = parentCollectionMap.get(key);
+            System.out.print("for "+key+":");
+            Iterator<String> setIter = valueSet.iterator();
+            while(setIter.hasNext()){
+                System.out.print(setIter.next()+", ");
+            }
+            System.out.println(" ");
+        }
 
     }
 
-    public HashMap<String, Integer> getnodeCountMap() {
-        return nodeCountMap;
+    public HashMap<String, Integer> getNodeCountMap() {
+        return this.nodeCountMap;
     }
 
-    public HashMap<String, Set<String>> getparentCollectionMap() {
-        return parentCollectionMap;
+    public HashMap<String, Set<String>> getParentCollectionMap() {
+        return this.parentCollectionMap;
+    }
+
+    public List<String> getChanges(){
+        return this.changes;
     }
 }

@@ -24,6 +24,8 @@ public class ChangePoolGenerator {
 	}
 
 	public void collect(Script script) {
+		System.out.println(script.toString()) ;
+
 		for (Change c : script.changes.keySet()) {
 			ContextIdentifier identifier = pool.getIdentifier();
 			List<EditOp> ops = script.changes.get(c);
@@ -33,12 +35,26 @@ public class ChangePoolGenerator {
 				if (c.type.compareTo(Change.INSERT) == 0) {
 					Change revChange = new Change(c.id, Change.DELETE, c.node, c.location);
 					pool.add(context, revChange);
+
+					System.out.println("Added Change type: " + revChange.type);
+					System.out.println("Added Change node: " + revChange.node.value);
+					System.out.println("Added Change location: " + revChange.location.value);
+					System.out.println("Added Change Context: " + context.toString()+"\n");
 				}
 				if (c.type.compareTo(Change.DELETE) == 0) {
 					Change revChange = new Change(c.id, Change.INSERT, c.node, c.location);
 					pool.add(context, revChange);
+
+					System.out.println("Added Change type: " + revChange.type);
+					System.out.println("Added Change node: " + revChange.node.value);
+					System.out.println("Added Change location: " + revChange.location.value);
+					System.out.println("Added Change Context: " + context.toString()+"\n");
 				}
 				pool.add(context, c);
+				System.out.println("Added Change type: " + c.type);
+				System.out.println("Added Change node: " + c.node.value);
+				System.out.println("Added Change location: " + c.location.value);
+				System.out.println("Added Change Context: " + context.toString()+"\n");
 			}
 			
 		}
@@ -65,13 +81,23 @@ public class ChangePoolGenerator {
 	}
 
 	public void collect(List<File> bugFiles, List<File> cleanFiles) {
+		System.out.println("bugFiles size: "+bugFiles.size());
+		System.out.println("cleanFiles size: "+cleanFiles.size());
 		try {
 			for (int i = 0; i < bugFiles.size(); i++) {
 				// Generate EditScript from before and after.
 				String oldCode = IOUtils.readFile(bugFiles.get(i));
 				String newCode = IOUtils.readFile(cleanFiles.get(i));
+
+				System.out.println("First letter of old code: "+oldCode.charAt(0));
+				System.out.println("First letter of new code: "+newCode.charAt(0));
+
 				Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i));
 				Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i));
+
+				if(before == null || after == null)
+					System.out.println("Tree is null");
+
 				EditScript editScript = ScriptGenerator.generateScript(before, after);
 				// Convert EditScript to Script.
 				editScript = Converter.filter(editScript);
@@ -84,3 +110,4 @@ public class ChangePoolGenerator {
 		}
 	}
 }
+
