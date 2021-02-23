@@ -1,360 +1,343 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.openejb.core.ivm;
-
-import java.io.IOException;
-import java.io.ObjectStreamException;
-import java.io.Serializable;
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectOutputStream;
-import java.io.ByteArrayInputStream;
-import java.io.ObjectInputStream;
-import java.lang.reflect.Method;
-import java.lang.ref.WeakReference;
-import java.rmi.NoSuchObjectException;
-import java.rmi.RemoteException;
-import java.util.HashSet;
-import java.util.Hashtable;
-import java.util.Properties;
-
-import javax.ejb.EJBException;
-
-import org.apache.openejb.RpcContainer;
-import org.apache.openejb.InterfaceType;
-import org.apache.openejb.spi.SecurityService;
-import org.apache.openejb.spi.ContainerSystem;
-import org.apache.openejb.loader.SystemInstance;
-import org.apache.openejb.core.CoreDeploymentInfo;
-import org.apache.openejb.core.ThreadContext;
-import org.apache.openejb.util.proxy.InvocationHandler;
-import org.apache.openejb.util.proxy.ProxyManager;
-
-public abstract class BaseEjbProxyHandler implements InvocationHandler, Serializable {
-    protected static final Hashtable liveHandleRegistry = new Hashtable();
-
-    public final Object deploymentID;
-
-    public final Object primaryKey;
-
-    public boolean inProxyMap = false;
-
-    private transient WeakReference<CoreDeploymentInfo> deploymentInfo;
-
-    public transient RpcContainer container;
-
-    protected boolean isInvalidReference = false;
-
-    /*
-    * The EJB 1.1 specification requires that arguments and return values between beans adhere to the
-    * Java RMI copy semantics which requires that the all arguments be passed by value (copied) and 
-    * never passed as references.  However, it is possible for the system administrator to turn off the
-    * copy operation so that arguments and return values are passed by reference as performance optimization.
-    * Simply setting the org.apache.openejb.core.EnvProps.INTRA_VM_COPY property to FALSE will cause this variable to
-    * set to false, and therefor bypass the copy operations in the invoke( ) method of this class; arguments
-    * and return values will be passed by reference not value. 
-    *
-    * This property is, by default, always TRUE but it can be changed to FALSE by setting it as a System property
-    * or a property of the Property argument when invoking OpenEJB.init(props).  This variable is set to that
-    * property in the static block for this class.
-    */
-    protected boolean doIntraVmCopy;
-    private boolean isLocal;
-    protected final InterfaceType interfaceType;
-
-    public BaseEjbProxyHandler(RpcContainer container, Object pk, Object depID, InterfaceType interfaceType) {
-        this.interfaceType = interfaceType;
-        this.container = container;
-        this.primaryKey = pk;
-        this.deploymentID = depID;
-        this.setDeploymentInfo((CoreDeploymentInfo) container.getDeploymentInfo(depID));
-
-        Properties properties = SystemInstance.get().getProperties();
-        String value = properties.getProperty("openejb.localcopy");
-        if (value == null) {
-            value = properties.getProperty(org.apache.openejb.core.EnvProps.INTRA_VM_COPY);
-        }
-        doIntraVmCopy = value == null || !value.equalsIgnoreCase("FALSE");
-    }
-
-    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException, NoSuchMethodException {
-
-        in.defaultReadObject();
-
-        ContainerSystem containerSystem = SystemInstance.get().getComponent(ContainerSystem.class);
-        setDeploymentInfo((CoreDeploymentInfo) containerSystem.getDeploymentInfo(deploymentID));
-        container = (RpcContainer) getDeploymentInfo().getContainer();
-    }
-
-    protected void checkAuthorization(Method method) throws org.apache.openejb.OpenEJBException {
-        Object caller = getThreadSpecificSecurityIdentity();
-        boolean authorized = getSecurityService().isCallerAuthorized(caller, getDeploymentInfo().getAuthorizedRoles(method));
-        if (!authorized)
-            throw new org.apache.openejb.ApplicationException(new RemoteException("Unauthorized Access by Principal Denied"));
-    }
-
-    private SecurityService getSecurityService() {
-        return SystemInstance.get().getComponent(SecurityService.class);
-    }
-
-    protected Object getThreadSpecificSecurityIdentity() {
-        ThreadContext context = ThreadContext.getThreadContext();
-        if (context != null) {
-            return context.getSecurityIdentity();
-        } else {
-            return getSecurityService().getSecurityIdentity();
-        }
-    }
-
-    public void setIntraVmCopyMode(boolean on) {
-        doIntraVmCopy = on;
-    }
-
-    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        if (isInvalidReference) throw new NoSuchObjectException("reference is invalid");
-        getDeploymentInfo(); // will throw an exception if app has been undeployed.
-
-        if (method.getDeclaringClass() == Object.class) {
-            final String methodName = method.getName();
-
-            if (methodName.equals("toString")) return toString();
-            else if (methodName.equals("equals")) return equals(args[0]) ? Boolean.TRUE : Boolean.FALSE;
-            else if (methodName.equals("hashCode")) return new Integer(hashCode());
-            else
-                throw new UnsupportedOperationException("Unkown method: " + method);
-        } else if (method.getDeclaringClass() == IntraVmProxy.class) {
-            final String methodName = method.getName();
-
-            if (methodName.equals("writeReplace")) return _writeReplace(proxy);
-            else
-                throw new UnsupportedOperationException("Unkown method: " + method);
-        }
-//        /* Preserve the context
-//            When entering a container the ThreadContext will change to match the context of
-//            the bean being serviced. That changes the current context of the calling bean,
-//            so the context must be preserved and then resourced after request is serviced.
-//            The context is restored in the finnaly clause below.
+// Copyright 2006, 2007, 2008, 2009, 2010 The Apache Software Foundation
 //
-//            We could have same some typing by obtaining a ref to the ThreadContext and then
-//            setting the current ThreadContext to null, but this results in more object creation
-//            since the container will create a new context on the invoke( ) operation if the current
-//            context is null. Getting the context values and resetting them reduces object creation.
-//            It's ugly but performant.
-//        */
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//        ThreadContext cntext = null;
-//        CoreDeploymentInfo depInfo = null;
-//        Object prmryKey = null;
-//        Operation crrntOperation = null;
-//        Object scrtyIdentity = null;
-//        boolean cntextValid = false;
-//        cntext = ThreadContext.getThreadContext();
-//        if (cntext.valid()) {
-//            depInfo = cntext.getDeploymentInfo();
-//            prmryKey = cntext.getPrimaryKey();
-//            crrntOperation = cntext.getCurrentOperation();
-//            scrtyIdentity = cntext.getSecurityIdentity();
-//            cntextValid = true;
-//        }
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-        String jndiEnc = System.getProperty(javax.naming.Context.URL_PKG_PREFIXES);
-//        System.setProperty(javax.naming.Context.URL_PKG_PREFIXES,"org.apache.openejb.core.ivm.naming");
+package org.apache.tapestry5.internal.services;
 
-        try {
-            if (doIntraVmCopy == true) {// copy arguments as required by the specification
+import javassist.CtClass;
+import org.apache.tapestry5.internal.structure.ComponentPageElement;
+import org.apache.tapestry5.internal.structure.InternalComponentResourcesImpl;
+import org.apache.tapestry5.internal.structure.Page;
+import org.apache.tapestry5.ioc.Location;
+import org.apache.tapestry5.ioc.Messages;
+import org.apache.tapestry5.ioc.Resource;
+import org.apache.tapestry5.ioc.internal.util.CollectionFactory;
+import org.apache.tapestry5.ioc.internal.util.InternalUtils;
+import org.apache.tapestry5.ioc.internal.util.MessagesImpl;
+import org.apache.tapestry5.ioc.services.ClassFabUtils;
+import org.apache.tapestry5.runtime.Component;
+import org.apache.tapestry5.runtime.RenderCommand;
+import org.apache.tapestry5.services.TransformMethodSignature;
 
-                if (args != null && args.length > 0) {
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
 
-                    IntraVmCopyMonitor.preCopyOperation();
-                    args = copyArgs(args);
+public class ServicesMessages
+{
+    private static final Messages MESSAGES = MessagesImpl.forClass(ServicesMessages.class);
 
-                    IntraVmCopyMonitor.postCopyOperation();
-                }
-                Object returnObj = _invoke(proxy, method, args);
-
-                IntraVmCopyMonitor.preCopyOperation();
-                returnObj = copyObj(returnObj);
-                return returnObj;
-
-            } else {
-                try {
-                    /*
-                         * The EJB 1.1 specification requires that arguments and return values between beans adhere to the
-                         * Java RMI copy semantics which requires that the all arguments be passed by value (copied) and
-                         * never passed as references.  However, it is possible for the system administrator to turn off the
-                         * copy operation so that arguments and return values are passed by reference as a performance optimization.
-                         * Simply setting the org.apache.openejb.core.EnvProps.INTRA_VM_COPY property to FALSE will cause
-                         * IntraVM to bypass the copy operations; arguments and return values will be passed by reference not value.
-                         * This property is, by default, always TRUE but it can be changed to FALSE by setting it as a System property
-                         * or a property of the Property argument when invoking OpenEJB.init(props).  The doIntraVmCopy variable is set to that
-                         * property in the static block for this class.
-                         */
-
-                    return _invoke(proxy, method, args);
-                } catch (RemoteException e) {
-                    if (this.isLocal()) {
-                        throw new EJBException(e.getMessage()).initCause(e.getCause());
-                    } else {
-                        throw e;
-                    }
-                } catch (Throwable t) {
-                    t.printStackTrace();
-                    Class[] etypes = method.getExceptionTypes();
-                    for (int i = 0; i < etypes.length; i++) {
-
-                        if (etypes[i].isAssignableFrom(t.getClass())) {
-                            throw t;
-                        }
-                    }
-                    // Exception is undeclared
-                    // Try and find a runtime exception in there
-                    while (t.getCause() != null && !(t instanceof RuntimeException)) {
-                        t = t.getCause();
-                    }
-                    throw t;
-                }
-            }
-        } finally {
-//            System.setProperty(javax.naming.Context.URL_PKG_PREFIXES, jndiEnc);
-
-//            if (cntextValid) {
-//                cntext.set(depInfo, prmryKey, scrtyIdentity);
-//                cntext.setCurrentOperation(crrntOperation);
-//            }
-            if (doIntraVmCopy == true) {
-
-                IntraVmCopyMonitor.postCopyOperation();
-            }
-        }
+    public static String duplicateContribution(Object conflict, Class contributionType, Object existing)
+    {
+        return MESSAGES.format("duplicate-contribution", conflict, contributionType.getName(), existing);
     }
 
-    public String toString() {
-        String name = null;
-        try {
-            name = getProxyInfo().getInterface().getName();
-        } catch (Exception e) {
-        }
-        return "proxy=" + name + ";deployment=" + this.deploymentID + ";pk=" + this.primaryKey;
+    public static String markupWriterNoCurrentElement()
+    {
+        return MESSAGES.get("markup-writer-no-current-element");
     }
 
-    public int hashCode() {
-        if (primaryKey == null) {
-
-            return deploymentID.hashCode();
-        } else {
-            return primaryKey.hashCode();
-        }
+    public static String errorAddingMethod(CtClass ctClass, String methodName, Throwable cause)
+    {
+        return MESSAGES.format("error-adding-method", ctClass.getName(), methodName, cause);
     }
 
-    public boolean equals(Object obj) {
-        try {
-            obj = ProxyManager.getInvocationHandler(obj);
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
-        BaseEjbProxyHandler other = (BaseEjbProxyHandler) obj;
-        if (primaryKey == null) {
-            return other.primaryKey == null && deploymentID.equals(other.deploymentID);
-        } else {
-            return primaryKey.equals(other.primaryKey) && deploymentID.equals(other.deploymentID);
-        }
+    public static String classNotTransformed(String className)
+    {
+        return MESSAGES.format("class-not-transformed", className);
     }
 
-    protected abstract Object _invoke(Object proxy, Method method, Object[] args) throws Throwable;
-
-    protected Object[] copyArgs(Object[] objects) throws IOException, ClassNotFoundException {
-        /* 
-            while copying the arguments is necessary. Its not necessary to copy the array itself,
-            because they array is created by the Proxy implementation for the sole purpose of 
-            packaging the arguments for the InvocationHandler.invoke( ) method. Its ephemeral
-            and their for doesn't need to be copied.
-        */
-
-        for (int i = 0; i < objects.length; i++) {
-            objects[i] = copyObj(objects[i]);
-        }
-
-        return objects;
+    public static String missingTemplateResource(Resource resource)
+    {
+        return MESSAGES.format("missing-template-resource", resource);
     }
 
-    /* change dereference to copy */
-    protected Object copyObj(Object object) throws IOException, ClassNotFoundException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream(128);
-        ObjectOutputStream out = new ObjectOutputStream(baos);
-        out.writeObject(object);
-        out.close();
-
-        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-        ObjectInputStream in = new ObjectInputStream(bais);
-        Object obj = in.readObject();
-        return obj;
+    public static String contentInsideBodyNotAllowed(Location location)
+    {
+        return MESSAGES.format("content-inside-body-not-allowed", location);
     }
 
-    public void invalidateReference() {
-        this.container = null;
-        this.setDeploymentInfo(null);
-        this.isInvalidReference = true;
+    public static String methodCompileError(TransformMethodSignature signature, String methodBody, Throwable cause)
+    {
+        return MESSAGES.format("method-compile-error", signature, methodBody, cause);
     }
 
-    protected static void invalidateAllHandlers(Object key) {
-        HashSet<BaseEjbProxyHandler> set = (HashSet) liveHandleRegistry.remove(key);
-        if (set == null) return;
-        synchronized (set) {
-            for (BaseEjbProxyHandler handler : set) {
-                handler.invalidateReference();
-            }
-        }
+    public static String renderQueueError(RenderCommand command, Throwable cause)
+    {
+        return MESSAGES.format("render-queue-error", command, cause);
     }
 
-    protected abstract Object _writeReplace(Object proxy) throws ObjectStreamException;
-
-    protected static void registerHandler(Object key, BaseEjbProxyHandler handler) {
-        HashSet set = (HashSet) liveHandleRegistry.get(key);
-        if (set != null) {
-            synchronized (set) {
-                set.add(handler);
-            }
-        } else {
-            set = new HashSet();
-            set.add(handler);
-            liveHandleRegistry.put(key, set);
-        }
+    public static String readOnlyField(String className, String fieldName)
+    {
+        return MESSAGES.format("read-only-field", className, fieldName);
     }
 
-    public abstract org.apache.openejb.ProxyInfo getProxyInfo();
-
-    public boolean isLocal() {
-        return isLocal;
+    public static String nonPrivateFields(String className, List<String> names)
+    {
+        return MESSAGES.format("non-private-fields", className, InternalUtils.joinSorted(names));
     }
 
-    public void setLocal(boolean isLocal) {
-        this.isLocal = isLocal;
-        this.doIntraVmCopy = !isLocal;
+    public static String bindingSourceFailure(String expression, Throwable cause)
+    {
+        return MESSAGES.format("binding-source-failure", expression, cause);
     }
 
-    public CoreDeploymentInfo getDeploymentInfo() {
-        CoreDeploymentInfo info = deploymentInfo.get();
-        if (info == null|| info.isDestroyed()){
-            invalidateReference();
-            throw new IllegalStateException("Bean '"+deploymentID+"' has been undeployed.");
-        }
-        return info;
+    public static String contextIndexOutOfRange(String methodDescription)
+    {
+        return MESSAGES.format("context-index-out-of-range", methodDescription);
     }
 
-    public void setDeploymentInfo(CoreDeploymentInfo deploymentInfo) {
-        this.deploymentInfo = new WeakReference<CoreDeploymentInfo>(deploymentInfo);
+    public static String pageNameUnresolved(String pageClassName)
+    {
+        return MESSAGES.format("page-name-unresolved", pageClassName);
+    }
+
+    public static String exceptionInMethodParameter(String methodDescription, int index, Throwable cause)
+    {
+        return MESSAGES.format("exception-in-method-parameter", methodDescription, index + 1, cause);
+    }
+
+    public static String componentEventIsAborted(String methodDescription)
+    {
+        return MESSAGES.format("component-event-is-aborted", methodDescription);
+    }
+
+    public static String parameterNameMustBeUnique(String parameterName, String parameterValue)
+    {
+        return MESSAGES.format("parameter-name-must-be-unique", parameterName, parameterValue);
+    }
+
+    public static String pageIsDirty(Object page)
+    {
+        return MESSAGES.format("page-is-dirty", page);
+    }
+
+    public static String componentInstanceIsNotAPage(Component result)
+    {
+        return MESSAGES.format("component-instance-is-not-a-page", result.getComponentResources().getCompleteId());
+    }
+
+    public static String failureReadingMessages(Resource url, Throwable cause)
+    {
+        return MESSAGES.format("failure-reading-messages", url, cause);
+    }
+
+    public static String unknownAssetPrefix(String path)
+    {
+        return MESSAGES.format("unknown-asset-prefix", path);
+    }
+
+    public static String assetDoesNotExist(Resource resource)
+    {
+        return MESSAGES.format("asset-does-not-exist", resource);
+    }
+
+    public static String wrongAssetDigest(Resource resource)
+    {
+        return MESSAGES.format("wrong-asset-digest", resource.getPath());
+    }
+
+    public static String unknownValidatorType(String validatorType, List<String> knownValidatorTypes)
+    {
+        return MESSAGES.format("unknown-validator-type", validatorType, InternalUtils.join(knownValidatorTypes));
+    }
+
+    public static String validatorSpecificationParseError(int cursor, String specification)
+    {
+        return MESSAGES.format("validator-specification-parse-error", specification.charAt(cursor), cursor + 1,
+                specification);
+    }
+
+    public static String mixinsInvalidWithoutIdOrType(String elementName)
+    {
+        return MESSAGES.format("mixins-invalid-without-id-or-type", elementName);
+    }
+
+    public static String missingFromEnvironment(Class type, Collection<Class> availableTypes)
+    {
+        List<String> types = CollectionFactory.newList();
+
+        for (Class c : availableTypes)
+            types.add(c.getName());
+
+        return MESSAGES.format("missing-from-environment", type.getName(), InternalUtils.joinSorted(types));
+    }
+
+    public static String invalidComponentEventResult(Object result, Collection<Class> configuredResultTypes)
+    {
+        List<String> classNames = CollectionFactory.newList();
+
+        for (Class c : configuredResultTypes)
+            classNames.add(c.getName());
+
+        return MESSAGES.format("invalid-component-event-result", result, ClassFabUtils.toJavaClassName(result
+                .getClass()), InternalUtils.joinSorted(classNames));
+    }
+
+    public static String undefinedTapestryAttribute(String elementName, String attributeName,
+            String allowedAttributeName)
+    {
+        return MESSAGES.format("undefined-tapestry-attribute", elementName, attributeName, allowedAttributeName);
+    }
+
+    public static String parameterElementNameRequired()
+    {
+        return MESSAGES.get("parameter-element-name-required");
+    }
+
+    public static String missingApplicationStatePersistenceStrategy(String name, Collection<String> availableNames)
+    {
+        return MESSAGES.format("missing-application-state-persistence-strategy", name, InternalUtils
+                .joinSorted(availableNames));
+    }
+
+    public static String requestException(Throwable cause)
+    {
+        return MESSAGES.format("request-exception", cause);
+    }
+
+    public static String componentRecursion(String componentClassName)
+    {
+        return MESSAGES.format("component-recursion", componentClassName);
+    }
+
+    public static String clientStateMustBeSerializable(Object newValue)
+    {
+        return MESSAGES.format("client-state-must-be-serializable", newValue);
+    }
+
+    public static String corruptClientState()
+    {
+        return MESSAGES.get("corrupt-client-state");
+    }
+
+    public static String unclosedAttributeExpression(String expression)
+    {
+        return MESSAGES.format("unclosed-attribute-expression", expression);
+    }
+
+    public static String noDisplayForDataType(String datatype)
+    {
+        return MESSAGES.format("no-display-for-data-type", datatype);
+    }
+
+    public static String noEditForDataType(String datatype)
+    {
+        return MESSAGES.format("no-edit-for-data-type", datatype);
+    }
+
+    public static String missingValidatorConstraint(String validatorType, Class type, String perFormMessageKey,
+            String generalMessageKey)
+    {
+        return MESSAGES.format("missing-validator-constraint", validatorType, type.getName(), perFormMessageKey,
+                generalMessageKey);
+    }
+
+    public static String resourcesAccessForbidden(String URI)
+    {
+        return MESSAGES.format("resource-access-forbidden", URI);
+    }
+
+    public static String noMarkupFromPageRender(Page page)
+    {
+        return MESSAGES.format("no-markup-from-page-render", page.getName());
+    }
+
+    public static String baseClassInWrongPackage(String parentClassName, String className, String suggestedPackage)
+    {
+        return MESSAGES.format("base-class-in-wrong-package", parentClassName, className, suggestedPackage);
+    }
+
+    public static String invalidId(String messageKey, String idValue)
+    {
+        return MESSAGES.format(messageKey, idValue);
+    }
+
+    public static String attributeNotAllowed(String elementName)
+    {
+        return MESSAGES.format("attribute-not-allowed", elementName);
+    }
+
+    public static String pagePoolExausted(String pageName, Locale locale, int hardLimit)
+    {
+        return MESSAGES.format("page-pool-exausted", pageName, locale.toString(), hardLimit);
+    }
+
+    public static String noTranslatorForType(Class valueType, Collection<String> typeNames)
+    {
+        return MESSAGES.format("no-translator-for-type", ClassFabUtils.toJavaClassName(valueType), InternalUtils
+                .joinSorted(typeNames));
+    }
+
+    public static String emptyBinding(String parameterName)
+    {
+        return MESSAGES.format("parameter-binding-must-not-be-empty", parameterName);
+    }
+
+    public static String noSuchMethod(Class clazz, String methodName)
+    {
+        return MESSAGES.format("no-such-method", ClassFabUtils.toJavaClassName(clazz), methodName);
+    }
+
+    public static String forbidInstantiateComponentClass(String className)
+    {
+        return MESSAGES.format("forbid-instantiate-component-class", className);
+    }
+
+    public static String eventNotHandled(ComponentPageElement element, String eventName)
+    {
+        return MESSAGES.format("event-not-handled", eventName, element.getCompleteId());
+    }
+
+    public static String documentMissingHTMLRoot(String rootElementName)
+    {
+        return MESSAGES.format("document-missing-html-root", rootElementName);
+    }
+
+    public static String addNewMethodConflict(TransformMethodSignature signature)
+    {
+        return MESSAGES.format("add-new-method-conflict", signature);
+    }
+
+    public static String parameterElementDoesNotAllowAttributes()
+    {
+        return MESSAGES.get("parameter-element-does-not-allow-attributes");
+    }
+
+    public static String invalidPathForLibraryNamespace(String URI)
+    {
+        return MESSAGES.format("invalid-path-for-library-namespace", URI);
+    }
+
+    public static String literalConduitNotUpdateable()
+    {
+        return MESSAGES.get("literal-conduit-not-updateable");
+    }
+
+    public static String requestRewriteReturnedNull()
+    {
+        return MESSAGES.get("request-rewrite-returned-null");
+    }
+
+    public static String linkRewriteReturnedNull()
+    {
+        return MESSAGES.get("link-rewrite-returned-null");
+    }
+
+    public static String markupWriterAttributeNameOrValueOmitted(String element, Object[] namesAndValues)
+    {
+        return MESSAGES.format("markup-writer-attribute-name-or-value-omitted", element, InternalUtils.join(Arrays
+                .asList(namesAndValues)));
     }
 }

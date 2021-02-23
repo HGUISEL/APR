@@ -131,7 +131,7 @@ public class UnivariateRealSolverUtils {
      /**
      * This method attempts to find two values a and b satisfying <ul>
      * <li> <code> lowerBound <= a < initial < b <= upperBound</code> </li>
-     * <li> <code> f(a) * f(b) < 0 </code> </li>
+     * <li> <code> f(a) * f(b) <= 0 </code> </li>
      * </ul>
      * If f is continuous on <code>[a,b],</code> this means that <code>a</code>
      * and <code>b</code> bracket a root of f.
@@ -141,7 +141,7 @@ public class UnivariateRealSolverUtils {
      * function at <code>a</code> and <code>b</code> and keeps moving
      * the endpoints out by one unit each time through a loop that terminates 
      * when one of the following happens: <ul>
-     * <li> <code> f(a) * f(b) < 0 </code> --  success!</li>
+     * <li> <code> f(a) * f(b) <= 0 </code> --  success!</li>
      * <li> <code> a = lower </code> and <code> b = upper</code> 
      * -- ConvergenceException </li>
      * <li> <code> maximumIterations</code> iterations elapse 

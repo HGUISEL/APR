@@ -1,12 +1,13 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,948 +15,700 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.drill.exec.physical.impl.project;
 
-package org.apache.openejb.config;
-
-import org.apache.openejb.OpenEJBException;
-import org.apache.openejb.cdi.CompositeBeans;
-import org.apache.openejb.config.sys.JSonConfigReader;
-import org.apache.openejb.config.sys.JaxbOpenejb;
-import org.apache.openejb.config.sys.Resource;
-import org.apache.openejb.config.sys.Resources;
-import org.apache.openejb.core.ParentClassLoaderFinder;
-import org.apache.openejb.jee.ApplicationClient;
-import org.apache.openejb.jee.Beans;
-import org.apache.openejb.jee.Connector;
-import org.apache.openejb.jee.Connector10;
-import org.apache.openejb.jee.EjbJar;
-import org.apache.openejb.jee.FacesConfig;
-import org.apache.openejb.jee.HandlerChains;
-import org.apache.openejb.jee.JavaWsdlMapping;
-import org.apache.openejb.jee.JaxbJavaee;
-import org.apache.openejb.jee.Keyable;
-import org.apache.openejb.jee.Listener;
-import org.apache.openejb.jee.TldTaglib;
-import org.apache.openejb.jee.WebApp;
-import org.apache.openejb.jee.WebFragment;
-import org.apache.openejb.jee.Webservices;
-import org.apache.openejb.jee.bval.ValidationConfigType;
-import org.apache.openejb.jee.jpa.EntityMappings;
-import org.apache.openejb.jee.jpa.fragment.PersistenceFragment;
-import org.apache.openejb.jee.jpa.fragment.PersistenceUnitFragment;
-import org.apache.openejb.jee.jpa.unit.JaxbPersistenceFactory;
-import org.apache.openejb.jee.jpa.unit.Persistence;
-import org.apache.openejb.jee.jpa.unit.PersistenceUnit;
-import org.apache.openejb.jee.oejb2.GeronimoEjbJarType;
-import org.apache.openejb.jee.oejb2.JaxbOpenejbJar2;
-import org.apache.openejb.jee.oejb2.OpenejbJarType;
-import org.apache.openejb.jee.oejb3.JaxbOpenejbJar3;
-import org.apache.openejb.jee.oejb3.OpenejbJar;
-import org.apache.openejb.loader.IO;
-import org.apache.openejb.loader.SystemInstance;
-import org.apache.openejb.sxc.ApplicationClientXml;
-import org.apache.openejb.sxc.EjbJarXml;
-import org.apache.openejb.sxc.FacesConfigXml;
-import org.apache.openejb.sxc.HandlerChainsXml;
-import org.apache.openejb.sxc.TldTaglibXml;
-import org.apache.openejb.sxc.WebXml;
-import org.apache.openejb.sxc.WebservicesXml;
-import org.apache.openejb.util.LengthInputStream;
-import org.apache.openejb.util.LogCategory;
-import org.apache.openejb.util.Logger;
-import org.apache.openejb.util.Saxs;
-import org.apache.openejb.util.URLs;
-import org.xml.sax.Attributes;
-import org.xml.sax.InputSource;
-import org.xml.sax.SAXException;
-import org.xml.sax.helpers.DefaultHandler;
-
-import javax.xml.bind.JAXBElement;
-import javax.xml.bind.JAXBException;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.parsers.SAXParser;
-import javax.xml.parsers.SAXParserFactory;
-import java.io.ByteArrayInputStream;
-import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.util.Collection;
-import java.util.Iterator;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
-public class ReadDescriptors implements DynamicDeployer {
-    private static final Logger logger = Logger.getInstance(LogCategory.OPENEJB_STARTUP, ReadDescriptors.class);
+import org.apache.commons.collections.map.CaseInsensitiveMap;
+import org.apache.drill.common.expression.ConvertExpression;
+import org.apache.drill.common.expression.ErrorCollector;
+import org.apache.drill.common.expression.ErrorCollectorImpl;
+import org.apache.drill.common.expression.ExpressionPosition;
+import org.apache.drill.common.expression.FieldReference;
+import org.apache.drill.common.expression.FunctionCall;
+import org.apache.drill.common.expression.FunctionCallFactory;
+import org.apache.drill.common.expression.LogicalExpression;
+import org.apache.drill.common.expression.PathSegment.NameSegment;
+import org.apache.drill.common.expression.SchemaPath;
+import org.apache.drill.common.expression.ValueExpressions;
+import org.apache.drill.common.expression.fn.CastFunctions;
+import org.apache.drill.common.logical.data.NamedExpression;
+import org.apache.drill.common.types.TypeProtos.MinorType;
+import org.apache.drill.common.types.Types;
+import org.apache.drill.exec.exception.ClassTransformationException;
+import org.apache.drill.exec.exception.SchemaChangeException;
+import org.apache.drill.exec.expr.ClassGenerator;
+import org.apache.drill.exec.expr.ClassGenerator.HoldingContainer;
+import org.apache.drill.exec.expr.CodeGenerator;
+import org.apache.drill.exec.expr.DrillFuncHolderExpr;
+import org.apache.drill.exec.expr.ExpressionTreeMaterializer;
+import org.apache.drill.exec.expr.TypeHelper;
+import org.apache.drill.exec.expr.ValueVectorReadExpression;
+import org.apache.drill.exec.expr.ValueVectorWriteExpression;
+import org.apache.drill.exec.expr.fn.DrillComplexWriterFuncHolder;
+import org.apache.drill.exec.memory.OutOfMemoryException;
+import org.apache.drill.exec.ops.FragmentContext;
+import org.apache.drill.exec.physical.config.Project;
+import org.apache.drill.exec.planner.StarColumnHelper;
+import org.apache.drill.exec.record.AbstractSingleRecordBatch;
+import org.apache.drill.exec.record.BatchSchema.SelectionVectorMode;
+import org.apache.drill.exec.record.MaterializedField;
+import org.apache.drill.exec.record.RecordBatch;
+import org.apache.drill.exec.record.TransferPair;
+import org.apache.drill.exec.record.TypedFieldId;
+import org.apache.drill.exec.record.VectorContainer;
+import org.apache.drill.exec.record.VectorWrapper;
+import org.apache.drill.exec.vector.AllocationHelper;
+import org.apache.drill.exec.vector.FixedWidthVector;
+import org.apache.drill.exec.vector.ValueVector;
+import org.apache.drill.exec.vector.complex.writer.BaseWriter.ComplexWriter;
 
-    private static final boolean ROOT_URL_FROM_WEBINF = SystemInstance.get().getOptions().get("openejb.jpa.root-url-from-webinf", false);
+import com.carrotsearch.hppc.IntOpenHashSet;
+import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 
-    public static final TldTaglib SKIP_TAGLIB = new TldTaglib();
+public class ProjectRecordBatch extends AbstractSingleRecordBatch<Project> {
+  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ProjectRecordBatch.class);
 
-    @SuppressWarnings({"unchecked"})
-    public AppModule deploy(final AppModule appModule) throws OpenEJBException {
-        for (final EjbModule ejbModule : appModule.getEjbModules()) {
+  private Projector projector;
+  private List<ValueVector> allocationVectors;
+  private List<ComplexWriter> complexWriters;
+  private boolean hasRemainder = false;
+  private int remainderIndex = 0;
+  private int recordCount;
 
-            if (ejbModule.getEjbJar() == null) {
-                readEjbJar(ejbModule, appModule);
-            }
+  private static final String EMPTY_STRING = "";
+  private boolean first = true;
 
-            if (ejbModule.getOpenejbJar() == null) {
-                readOpenejbJar(ejbModule);
-            }
+  private class ClassifierResult {
+    public boolean isStar = false;
+    public List<String> outputNames;
+    public String prefix = "";
+    public HashMap<String, Integer> prefixMap = Maps.newHashMap();
+    public CaseInsensitiveMap outputMap = new CaseInsensitiveMap();
+    private final CaseInsensitiveMap sequenceMap = new CaseInsensitiveMap();
 
-            if (ejbModule.getBeans() == null) {
-                readBeans(ejbModule);
-            }
+    private void clear() {
+      isStar = false;
+      prefix = "";
+      if (outputNames != null) {
+        outputNames.clear();
+      }
 
-            readValidationConfigType(ejbModule);
-            readCmpOrm(ejbModule);
-            readResourcesXml(ejbModule);
+      // note:  don't clear the internal maps since they have cumulative data..
+    }
+  }
+
+  public ProjectRecordBatch(final Project pop, final RecordBatch incoming, final FragmentContext context) throws OutOfMemoryException {
+    super(pop, context, incoming);
+  }
+
+  @Override
+  public int getRecordCount() {
+    return recordCount;
+  }
+
+
+  @Override
+  protected void killIncoming(final boolean sendUpstream) {
+    super.killIncoming(sendUpstream);
+    hasRemainder = false;
+  }
+
+
+  @Override
+  public IterOutcome innerNext() {
+    if (hasRemainder) {
+      handleRemainder();
+      return IterOutcome.OK;
+    }
+    return super.innerNext();
+  }
+
+  @Override
+  public VectorContainer getOutgoingContainer() {
+    return this.container;
+  }
+
+  @Override
+  protected IterOutcome doWork() {
+    int incomingRecordCount = incoming.getRecordCount();
+
+    if (first && incomingRecordCount == 0) {
+      if (complexWriters != null) {
+        IterOutcome next = null;
+        while (incomingRecordCount == 0) {
+          next = next(incoming);
+          if (next == IterOutcome.OUT_OF_MEMORY) {
+            outOfMemory = true;
+            return next;
+          } else if (next != IterOutcome.OK && next != IterOutcome.OK_NEW_SCHEMA) {
+            return next;
+          }
+          incomingRecordCount = incoming.getRecordCount();
         }
-
-        for (final ClientModule clientModule : appModule.getClientModules()) {
-            readAppClient(clientModule, appModule);
-            readValidationConfigType(clientModule);
-            readResourcesXml(clientModule);
+        if (next == IterOutcome.OK_NEW_SCHEMA) {
+          try {
+            setupNewSchema();
+          } catch (final SchemaChangeException e) {
+            throw new RuntimeException(e);
+          }
         }
+      }
+    }
+    first = false;
 
-        for (final ConnectorModule connectorModule : appModule.getConnectorModules()) {
-            readConnector(connectorModule, appModule);
-            readValidationConfigType(connectorModule);
-            readResourcesXml(connectorModule);
-        }
+    container.zeroVectors();
 
-        for (final WebModule webModule : appModule.getWebModules()) {
-            readWebApp(webModule, appModule);
-            readValidationConfigType(webModule);
-            readResourcesXml(webModule);
-        }
-
-        final List<Object> persistenceUrls = (List<Object>) appModule.getAltDDs().get("persistence.xml");
-        if (persistenceUrls != null) {
-            for (final Object persistenceUrl : persistenceUrls) {
-                final boolean url = persistenceUrl instanceof URL;
-                final Source source = getSource(persistenceUrl);
-
-                final String moduleName;
-                final String path;
-                final String rootUrl;
-                if (url) {
-                    final URL pUrl = (URL) persistenceUrl;
-                    File file = URLs.toFile(pUrl);
-                    path = file.getAbsolutePath();
-
-                    if (file.getName().endsWith("persistence.xml")) {
-                        final File parentFile = file.getParentFile();
-                        final String parent = parentFile.getName();
-                        if (parent.equalsIgnoreCase("WEB-INF") || parent.equalsIgnoreCase("META-INF")) {
-                            file = parentFile.getParentFile();
-                        } else { // we don't really know so simply go back (users will often put persistence.xml in root resource folder with arquillian)
-                            file = file.getParentFile();
-                        }
-                    }
-                    moduleName = file.toURI().toString();
-
-                    String tmpRootUrl = moduleName;
-
-                    final String extForm = pUrl.toExternalForm();
-                    if (extForm.contains("WEB-INF/classes/META-INF/")) {
-                        if (!ROOT_URL_FROM_WEBINF) {
-                            tmpRootUrl = extForm.substring(0, extForm.indexOf("/META-INF"));
-                        } else {
-                            tmpRootUrl = extForm.substring(0, extForm.indexOf("/classes/META-INF"));
-                        }
-                    }
-                    if (tmpRootUrl.endsWith(".war")) {
-                        tmpRootUrl = tmpRootUrl.substring(0, tmpRootUrl.length() - ".war".length());
-                    }
-                    rootUrl = tmpRootUrl;
-                } else {
-                    moduleName = "";
-                    rootUrl = "";
-                    path = null;
-                }
-
-                try {
-                    final Persistence persistence = JaxbPersistenceFactory.getPersistence(Persistence.class, source.get());
-                    final PersistenceModule persistenceModule = new PersistenceModule(appModule, rootUrl, persistence);
-                    persistenceModule.getWatchedResources().add(moduleName);
-                    if (url && "file".equals(((URL) persistenceUrl).getProtocol())) {
-                        persistenceModule.getWatchedResources().add(path);
-                    }
-                    appModule.addPersistenceModule(persistenceModule);
-                } catch (final Exception e1) {
-                    DeploymentLoader.logger.error("Unable to load Persistence Unit from EAR: " + appModule.getJarLocation() + ", module: " + moduleName + ". Exception: " + e1.getMessage(), e1);
-                }
-            }
-        }
-
-        final List<URL> persistenceFragmentUrls = (List<URL>) appModule.getAltDDs().get("persistence-fragment.xml");
-        if (persistenceFragmentUrls != null) {
-            for (final URL persistenceFragmentUrl : persistenceFragmentUrls) {
-                try {
-                    final PersistenceFragment persistenceFragment = JaxbPersistenceFactory.getPersistence(PersistenceFragment.class, persistenceFragmentUrl);
-                    // merging
-                    for (final PersistenceUnitFragment fragmentUnit : persistenceFragment.getPersistenceUnitFragment()) {
-                        for (final PersistenceModule persistenceModule : appModule.getPersistenceModules()) {
-                            final Persistence persistence = persistenceModule.getPersistence();
-                            for (final PersistenceUnit unit : persistence.getPersistenceUnit()) {
-                                if (!fragmentUnit.getName().equals(unit.getName())) {
-                                    continue;
-                                }
-
-                                if (!persistenceFragment.getVersion().equals(persistence.getVersion())) {
-                                    logger.error("persistence unit version and fragment version are different, fragment will be ignored");
-                                    continue;
-                                }
-
-                                if ("file".equals(persistenceFragmentUrl.getProtocol())) {
-                                    persistenceModule.getWatchedResources().add(URLs.toFile(persistenceFragmentUrl).getAbsolutePath());
-                                }
-
-                                for (final String clazz : fragmentUnit.getClazz()) {
-                                    if (!unit.getClazz().contains(clazz)) {
-                                        logger.info("Adding class " + clazz + " to persistence unit " + fragmentUnit.getName());
-                                        unit.getClazz().add(clazz);
-                                    }
-                                }
-                                for (final String mappingFile : fragmentUnit.getMappingFile()) {
-                                    if (!unit.getMappingFile().contains(mappingFile)) {
-                                        logger.info("Adding mapping file " + mappingFile + " to persistence unit " + fragmentUnit.getName());
-                                        unit.getMappingFile().add(mappingFile);
-                                    }
-                                }
-                                for (final String jarFile : fragmentUnit.getJarFile()) {
-                                    if (!unit.getJarFile().contains(jarFile)) {
-                                        logger.info("Adding jar file " + jarFile + " to persistence unit " + fragmentUnit.getName());
-                                        unit.getJarFile().add(jarFile);
-                                    }
-                                }
-                                if (fragmentUnit.isExcludeUnlistedClasses()) {
-                                    unit.setExcludeUnlistedClasses(true);
-                                    logger.info("Excluding unlisted classes for persistence unit " + fragmentUnit.getName());
-                                } // else let the main persistence unit decide
-                            }
-                        }
-                    }
-                } catch (final Exception e1) {
-                    DeploymentLoader.logger.error("Unable to load Persistence Unit Fragment from EAR: " + appModule.getJarLocation() + ", fragment: " + persistenceFragmentUrl.toString() + ". Exception: " + e1.getMessage(), e1);
-                }
-            }
-        }
-
-        return appModule;
+    if (!doAlloc()) {
+      outOfMemory = true;
+      return IterOutcome.OUT_OF_MEMORY;
     }
 
-    public static void readResourcesXml(final Module module) {
-        { // xml
-            final Source url = getSource(module.getAltDDs().get("resources.xml"));
-            if (url != null) {
-                try {
-                    final Resources openejb = JaxbOpenejb.unmarshal(Resources.class, url.get());
-                    module.initResources(check(openejb));
-                } catch (final Exception e) {
-                    logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
-                }
-            }
-        }
-        { // json
-            final Source url = getSource(module.getAltDDs().get("resources.json"));
-            if (url != null) {
-                try {
-                    final Resources openejb = JSonConfigReader.read(Resources.class, url.get());
-                    module.initResources(check(openejb));
-                } catch (final Exception e) {
-                    logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
-                }
-            }
-        }
+    final int outputRecords = projector.projectRecords(0, incomingRecordCount, 0);
+    if (outputRecords < incomingRecordCount) {
+      setValueCount(outputRecords);
+      hasRemainder = true;
+      remainderIndex = outputRecords;
+      this.recordCount = remainderIndex;
+    } else {
+      setValueCount(incomingRecordCount);
+      for(final VectorWrapper<?> v: incoming) {
+        v.clear();
+      }
+      this.recordCount = outputRecords;
+    }
+    // In case of complex writer expression, vectors would be added to batch run-time.
+    // We have to re-build the schema.
+    if (complexWriters != null) {
+      container.buildSchema(SelectionVectorMode.NONE);
     }
 
-    public static Resources check(final Resources resources) {
-        final List<Resource> resourceList = resources.getResource();
-        for (final Resource resource : resourceList) {
-            if (resource.getClassName() != null) {
-                try {
-                    ParentClassLoaderFinder.Helper.get().loadClass(resource.getClassName());
-                    continue;
-                } catch (Exception e) {
-                    // ignore if this class is not found in the classloader
-                }
+    return IterOutcome.OK;
+  }
 
-                // if the resource class cannot be loaded,
-                // set the lazy property to true
-                // and the app classloader property to true
+  private void handleRemainder() {
+    final int remainingRecordCount = incoming.getRecordCount() - remainderIndex;
+    if (!doAlloc()) {
+      outOfMemory = true;
+      return;
+    }
+    final int projRecords = projector.projectRecords(remainderIndex, remainingRecordCount, 0);
+    if (projRecords < remainingRecordCount) {
+      setValueCount(projRecords);
+      this.recordCount = projRecords;
+      remainderIndex += projRecords;
+    } else {
+      setValueCount(remainingRecordCount);
+      hasRemainder = false;
+      remainderIndex = 0;
+      for (final VectorWrapper<?> v : incoming) {
+        v.clear();
+      }
+      this.recordCount = remainingRecordCount;
+    }
+    // In case of complex writer expression, vectors would be added to batch run-time.
+    // We have to re-build the schema.
+    if (complexWriters != null) {
+      container.buildSchema(SelectionVectorMode.NONE);
+    }
+  }
 
-                final Boolean lazySpecified = Boolean.valueOf(resource.getProperties().getProperty("Lazy", "false"));
+  public void addComplexWriter(final ComplexWriter writer) {
+    complexWriters.add(writer);
+  }
 
-                resource.getProperties().setProperty("Lazy", "true");
-                resource.getProperties().setProperty("UseAppClassLoader", "true");
-
-                if (!lazySpecified) {
-                    resource.getProperties().setProperty("InitializeAfterDeployment", "true");
-                }
-            }
-        }
-
-        return resources;
+  private boolean doAlloc() {
+    //Allocate vv in the allocationVectors.
+    for (final ValueVector v : this.allocationVectors) {
+      AllocationHelper.allocateNew(v, incoming.getRecordCount());
     }
 
-    private void readValidationConfigType(final Module module) throws OpenEJBException {
-        if (module.getValidationConfig() != null) {
-            return;
-        }
-
-        final Source value = getSource(module.getAltDDs().get("validation.xml"));
-        if (value != null) {
-            try {
-                final ValidationConfigType validationConfigType = JaxbOpenejb.unmarshal(ValidationConfigType.class, value.get(), false);
-                module.setValidationConfig(validationConfigType);
-            } catch (final Exception e) {
-                logger.warning("can't read validation.xml to construct a validation factory, it will be ignored");
-            }
-        }
+    //Allocate vv for complexWriters.
+    if (complexWriters == null) {
+      return true;
     }
 
-    private void readOpenejbJar(final EjbModule ejbModule) throws OpenEJBException {
-        final Source source = getSource(ejbModule.getAltDDs().get("openejb-jar.xml"));
-
-        if (source != null) {
-            try {
-                // Attempt to parse it first as a v3 descriptor
-                final OpenejbJar openejbJar = JaxbOpenejbJar3.unmarshal(OpenejbJar.class, source.get()).postRead();
-                ejbModule.setOpenejbJar(openejbJar);
-            } catch (final Exception v3ParsingException) {
-                // Attempt to parse it second as a v2 descriptor
-                final OpenejbJar openejbJar = new OpenejbJar();
-                ejbModule.setOpenejbJar(openejbJar);
-
-                try {
-                    final JAXBElement element = (JAXBElement) JaxbOpenejbJar2.unmarshal(OpenejbJarType.class, source.get());
-                    final OpenejbJarType o2 = (OpenejbJarType) element.getValue();
-                    ejbModule.getAltDDs().put("openejb-jar.xml", o2);
-
-                    final GeronimoEjbJarType g2 = OpenEjb2Conversion.convertToGeronimoOpenejbXml(o2);
-
-                    ejbModule.getAltDDs().put("geronimo-openejb.xml", g2);
-                } catch (final Exception v2ParsingException) {
-                    // Now we have to determine which error to throw; the v3 file exception or the fallback v2 file exception.
-                    final Exception[] realIssue = {v3ParsingException};
-
-                    try {
-                        final SAXParserFactory factory = Saxs.namespaceAwareFactory();
-                        final SAXParser parser = factory.newSAXParser();
-                        parser.parse(source.get(), new DefaultHandler() {
-                            public void startElement(final String uri, final String localName, final String qName, final Attributes attributes) throws SAXException {
-                                if (localName.equals("environment")) {
-                                    realIssue[0] = v2ParsingException;
-                                    throw new SAXException("Throw exception to stop parsing");
-                                }
-                                if (uri == null) {
-                                    return;
-                                }
-                                if (uri.contains("openejb-jar-2.") || uri.contains("geronimo.apache.org/xml/ns")) {
-                                    realIssue[0] = v2ParsingException;
-                                    throw new SAXException("Throw exception to stop parsing");
-                                }
-                            }
-                        });
-                    } catch (final Exception dontCare) {
-                        // no-op
-                    }
-
-                    String filePath = "<error: could not be written>";
-                    try {
-                        File tempFile;
-                        try {
-                            tempFile = File.createTempFile("openejb-jar-", ".xml");
-                        } catch (final Throwable e) {
-                            final File tmp = new File("tmp");
-                            if (!tmp.exists() && !tmp.mkdirs()) {
-                                throw new IOException("Failed to create local tmp directory: " + tmp.getAbsolutePath());
-                            }
-
-                            tempFile = File.createTempFile("openejb-jar-", ".xml", tmp);
-                        }
-                        try {
-                            IO.copy(source.get(), tempFile);
-                        } catch (final IOException e) {
-                            // no-op
-                        }
-                        filePath = tempFile.getAbsolutePath();
-                    } catch (final IOException e) {
-                        // no-op
-                    }
-
-                    final Exception e = realIssue[0];
-                    if (e instanceof SAXException) {
-                        throw new OpenEJBException("Cannot parse the openejb-jar.xml. Xml content written to: " + filePath, e);
-                    } else if (e instanceof JAXBException) {
-                        throw new OpenEJBException("Cannot unmarshall the openejb-jar.xml. Xml content written to: " + filePath, e);
-                    } else if (e instanceof IOException) {
-                        throw new OpenEJBException("Cannot read the openejb-jar.xml.", e);
-                    } else {
-                        throw new OpenEJBException("Encountered unknown error parsing the openejb-jar.xml.", e);
-                    }
-                }
-            }
-        }
-
-        final Source source1 = getSource(ejbModule.getAltDDs().get("geronimo-openejb.xml"));
-        if (source1 != null) {
-            try {
-                GeronimoEjbJarType geronimoEjbJarType = null;
-                final Object o = JaxbOpenejbJar2.unmarshal(GeronimoEjbJarType.class, source1.get());
-                if (o instanceof GeronimoEjbJarType) {
-                    geronimoEjbJarType = (GeronimoEjbJarType) o;
-                } else if (o instanceof JAXBElement) {
-                    final JAXBElement element = (JAXBElement) o;
-                    geronimoEjbJarType = (GeronimoEjbJarType) element.getValue();
-                }
-                if (geronimoEjbJarType != null) {
-                    final Object nested = geronimoEjbJarType.getOpenejbJar();
-                    if (nested != null && nested instanceof OpenejbJar) {
-                        final OpenejbJar existingOpenejbJar = ejbModule.getOpenejbJar();
-                        if (existingOpenejbJar == null || existingOpenejbJar.getEjbDeploymentCount() <= 0) {
-                            final OpenejbJar openejbJar = (OpenejbJar) nested;
-                            ejbModule.getAltDDs().put("openejb-jar.xml", openejbJar);
-                            ejbModule.setOpenejbJar(openejbJar);
-                        }
-                    }
-                    ejbModule.getAltDDs().put("geronimo-openejb.xml", geronimoEjbJarType);
-                }
-            } catch (final Exception e) {
-                throw new OpenEJBException("Failed parsing geronimo-openejb.xml", e);
-            }
-        }
-
+    for (final ComplexWriter writer : complexWriters) {
+      writer.allocate();
     }
 
-    private void readAppClient(final ClientModule clientModule, final AppModule appModule) throws OpenEJBException {
-        if (clientModule.getApplicationClient() != null) {
-            return;
+    return true;
+  }
+
+  private void setValueCount(final int count) {
+    for (final ValueVector v : allocationVectors) {
+      final ValueVector.Mutator m = v.getMutator();
+      m.setValueCount(count);
+    }
+
+    if (complexWriters == null) {
+      return;
+    }
+
+    for (final ComplexWriter writer : complexWriters) {
+      writer.setValueCount(count);
+    }
+  }
+
+  /** hack to make ref and full work together... need to figure out if this is still necessary. **/
+  private FieldReference getRef(final NamedExpression e) {
+    return e.getRef();
+  }
+
+  private boolean isAnyWildcard(final List<NamedExpression> exprs) {
+    for (final NamedExpression e : exprs) {
+      if (isWildcard(e)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean isWildcard(final NamedExpression ex) {
+    if ( !(ex.getExpr() instanceof SchemaPath)) {
+      return false;
+    }
+    final NameSegment expr = ((SchemaPath)ex.getExpr()).getRootSegment();
+    return expr.getPath().contains(StarColumnHelper.STAR_COLUMN);
+  }
+
+  @Override
+  protected boolean setupNewSchema() throws SchemaChangeException {
+    if (allocationVectors != null) {
+      for (final ValueVector v : allocationVectors) {
+        v.clear();
+      }
+    }
+    this.allocationVectors = Lists.newArrayList();
+    if (complexWriters != null) {
+      container.clear();
+    } else {
+      container.zeroVectors();
+    }
+    final List<NamedExpression> exprs = getExpressionList();
+    final ErrorCollector collector = new ErrorCollectorImpl();
+    final List<TransferPair> transfers = Lists.newArrayList();
+
+    final ClassGenerator<Projector> cg = CodeGenerator.getRoot(Projector.TEMPLATE_DEFINITION, context.getFunctionRegistry());
+
+    final IntOpenHashSet transferFieldIds = new IntOpenHashSet();
+
+    final boolean isAnyWildcard = isAnyWildcard(exprs);
+
+    final ClassifierResult result = new ClassifierResult();
+    final boolean classify = isClassificationNeeded(exprs);
+
+    for (int i = 0; i < exprs.size(); i++) {
+      final NamedExpression namedExpression = exprs.get(i);
+      result.clear();
+
+      if (classify && namedExpression.getExpr() instanceof SchemaPath) {
+        classifyExpr(namedExpression, incoming, result);
+
+        if (result.isStar) {
+          // The value indicates which wildcard we are processing now
+          final Integer value = result.prefixMap.get(result.prefix);
+          if (value != null && value.intValue() == 1) {
+            int k = 0;
+            for (final VectorWrapper<?> wrapper : incoming) {
+              final ValueVector vvIn = wrapper.getValueVector();
+              if (k > result.outputNames.size()-1) {
+                assert false;
+              }
+              final String name = result.outputNames.get(k++);  // get the renamed column names
+              if (name == EMPTY_STRING) {
+                continue;
+              }
+              final FieldReference ref = new FieldReference(name);
+              final ValueVector vvOut = container.addOrGet(MaterializedField.create(ref, vvIn.getField().getType()));
+              final TransferPair tp = vvIn.makeTransferPair(vvOut);
+              transfers.add(tp);
+            }
+          } else if (value != null && value.intValue() > 1) { // subsequent wildcards should do a copy of incoming valuevectors
+            int k = 0;
+            for (final VectorWrapper<?> wrapper : incoming) {
+              final ValueVector vvIn = wrapper.getValueVector();
+              final SchemaPath originalPath = vvIn.getField().getPath();
+              if (k > result.outputNames.size()-1) {
+                assert false;
+              }
+              final String name = result.outputNames.get(k++);  // get the renamed column names
+              if (name == EMPTY_STRING) {
+                continue;
+              }
+
+              final LogicalExpression expr = ExpressionTreeMaterializer.materialize(originalPath, incoming, collector, context.getFunctionRegistry() );
+              if (collector.hasErrors()) {
+                throw new SchemaChangeException(String.format("Failure while trying to materialize incoming schema.  Errors:\n %s.", collector.toErrorString()));
+              }
+
+              final MaterializedField outputField = MaterializedField.create(name, expr.getMajorType());
+              final ValueVector vv = container.addOrGet(outputField, callBack);
+              allocationVectors.add(vv);
+              final TypedFieldId fid = container.getValueVectorId(outputField.getPath());
+              final ValueVectorWriteExpression write = new ValueVectorWriteExpression(fid, expr, true);
+              final HoldingContainer hc = cg.addExpr(write);
+            }
+          }
+          continue;
+        }
+      } else {
+        // For the columns which do not needed to be classified,
+        // it is still necessary to ensure the output column name is unique
+        result.outputNames = Lists.newArrayList();
+        final String outputName = getRef(namedExpression).getRootSegment().getPath();
+        addToResultMaps(outputName, result, true);
+      }
+
+      String outputName = getRef(namedExpression).getRootSegment().getPath();
+      if (result != null && result.outputNames != null && result.outputNames.size() > 0) {
+        boolean isMatched = false;
+        for (int j = 0; j < result.outputNames.size(); j++) {
+          if (!result.outputNames.get(j).equals(EMPTY_STRING)) {
+            outputName = result.outputNames.get(j);
+            isMatched = true;
+            break;
+          }
         }
 
-        final Object data = clientModule.getAltDDs().get("application-client.xml");
-        if (data instanceof ApplicationClient) {
-            clientModule.setApplicationClient((ApplicationClient) data);
-        } else if (data instanceof URL) {
-            final URL url = (URL) data;
-            final ApplicationClient applicationClient = readApplicationClient(url);
-            clientModule.setApplicationClient(applicationClient);
+        if(!isMatched) {
+          continue;
+        }
+      }
+
+      final LogicalExpression expr = ExpressionTreeMaterializer.materialize(namedExpression.getExpr(), incoming, collector, context.getFunctionRegistry(), true);
+      final MaterializedField outputField = MaterializedField.create(outputName, expr.getMajorType());
+      if (collector.hasErrors()) {
+        throw new SchemaChangeException(String.format("Failure while trying to materialize incoming schema.  Errors:\n %s.", collector.toErrorString()));
+      }
+
+      // add value vector to transfer if direct reference and this is allowed, otherwise, add to evaluation stack.
+      if (expr instanceof ValueVectorReadExpression && incoming.getSchema().getSelectionVectorMode() == SelectionVectorMode.NONE
+          && !((ValueVectorReadExpression) expr).hasReadPath()
+          && !isAnyWildcard
+          && !transferFieldIds.contains(((ValueVectorReadExpression) expr).getFieldId().getFieldIds()[0])) {
+
+        final ValueVectorReadExpression vectorRead = (ValueVectorReadExpression) expr;
+        final TypedFieldId id = vectorRead.getFieldId();
+        final ValueVector vvIn = incoming.getValueAccessorById(id.getIntermediateClass(), id.getFieldIds()).getValueVector();
+        Preconditions.checkNotNull(incoming);
+
+        final FieldReference ref = getRef(namedExpression);
+        final ValueVector vvOut = container.addOrGet(MaterializedField.create(ref, vectorRead.getMajorType()));
+        final TransferPair tp = vvIn.makeTransferPair(vvOut);
+        transfers.add(tp);
+        transferFieldIds.add(vectorRead.getFieldId().getFieldIds()[0]);
+      } else if (expr instanceof DrillFuncHolderExpr &&
+          ((DrillFuncHolderExpr) expr).isComplexWriterFuncHolder())  {
+        // Need to process ComplexWriter function evaluation.
+        // Lazy initialization of the list of complex writers, if not done yet.
+        if (complexWriters == null) {
+          complexWriters = Lists.newArrayList();
         } else {
-            if (!clientModule.isEjbModuleGenerated()) {
-                DeploymentLoader.logger.debug("No application-client.xml found assuming annotations present: " + appModule.getJarLocation() + ", module: " + clientModule.getModuleId());
-                clientModule.setApplicationClient(new ApplicationClient());
-            }
+          complexWriters.clear();
         }
+
+        // The reference name will be passed to ComplexWriter, used as the name of the output vector from the writer.
+        ((DrillComplexWriterFuncHolder) ((DrillFuncHolderExpr) expr).getHolder()).setReference(namedExpression.getRef());
+        cg.addExpr(expr);
+      } else{
+        // need to do evaluation.
+        final ValueVector vector = container.addOrGet(outputField, callBack);
+        allocationVectors.add(vector);
+        final TypedFieldId fid = container.getValueVectorId(outputField.getPath());
+        final boolean useSetSafe = !(vector instanceof FixedWidthVector);
+        final ValueVectorWriteExpression write = new ValueVectorWriteExpression(fid, expr, useSetSafe);
+        final HoldingContainer hc = cg.addExpr(write);
+
+        logger.debug("Added eval for project expression.");
+      }
     }
 
-    public void readEjbJar(final EjbModule ejbModule, final AppModule appModule) throws OpenEJBException {
-        if (ejbModule.getEjbJar() != null) {
-            return;
+    try {
+      this.projector = context.getImplementationClass(cg.getCodeGenerator());
+      projector.setup(context, incoming, this, transfers);
+    } catch (ClassTransformationException | IOException e) {
+      throw new SchemaChangeException("Failure while attempting to load generated class", e);
+    }
+    if (container.isSchemaChanged()) {
+      container.buildSchema(SelectionVectorMode.NONE);
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  private List<NamedExpression> getExpressionList() {
+    if (popConfig.getExprs() != null) {
+      return popConfig.getExprs();
+    }
+
+    final List<NamedExpression> exprs = Lists.newArrayList();
+    for (final MaterializedField field : incoming.getSchema()) {
+      if (Types.isComplex(field.getType()) || Types.isRepeated(field.getType())) {
+        final LogicalExpression convertToJson = FunctionCallFactory.createConvert(ConvertExpression.CONVERT_TO, "JSON", field.getPath(), ExpressionPosition.UNKNOWN);
+        final String castFuncName = CastFunctions.getCastFunc(MinorType.VARCHAR);
+        final List<LogicalExpression> castArgs = Lists.newArrayList();
+        castArgs.add(convertToJson);  //input_expr
+        /*
+         * We are implicitly casting to VARCHAR so we don't have a max length,
+         * using an arbitrary value. We trim down the size of the stored bytes
+         * to the actual size so this size doesn't really matter.
+         */
+        castArgs.add(new ValueExpressions.LongExpression(TypeHelper.VARCHAR_DEFAULT_CAST_LEN, null)); //
+        final FunctionCall castCall = new FunctionCall(castFuncName, castArgs, ExpressionPosition.UNKNOWN);
+        exprs.add(new NamedExpression(castCall, new FieldReference(field.getPath())));
+      } else {
+        exprs.add(new NamedExpression(field.getPath(), new FieldReference(field.getPath())));
+      }
+    }
+    return exprs;
+  }
+
+  private boolean isClassificationNeeded(final List<NamedExpression> exprs) {
+    boolean needed = false;
+    for (int i = 0; i < exprs.size(); i++) {
+      final NamedExpression ex = exprs.get(i);
+      if (!(ex.getExpr() instanceof SchemaPath)) {
+        continue;
+      }
+      final NameSegment expr = ((SchemaPath) ex.getExpr()).getRootSegment();
+      final NameSegment ref = ex.getRef().getRootSegment();
+      final boolean refHasPrefix = ref.getPath().contains(StarColumnHelper.PREFIX_DELIMITER);
+      final boolean exprContainsStar = expr.getPath().contains(StarColumnHelper.STAR_COLUMN);
+
+      if (refHasPrefix || exprContainsStar) {
+        needed = true;
+        break;
+      }
+    }
+    return needed;
+  }
+
+  private String getUniqueName(final String name, final ClassifierResult result) {
+    final Integer currentSeq = (Integer) result.sequenceMap.get(name);
+    if (currentSeq == null) { // name is unique, so return the original name
+      final Integer n = -1;
+      result.sequenceMap.put(name, n);
+      return name;
+    }
+    // create a new name
+    final Integer newSeq = currentSeq + 1;
+    final String newName = name + newSeq;
+    result.sequenceMap.put(name, newSeq);
+    result.sequenceMap.put(newName, -1);
+
+    return newName;
+  }
+
+  /**
+  * Helper method to ensure unique output column names. If allowDupsWithRename is set to true, the original name
+  * will be appended with a suffix number to ensure uniqueness. Otherwise, the original column would not be renamed even
+  * even if it has been used
+  *
+  * @param origName            the original input name of the column
+  * @param result              the data structure to keep track of the used names and decide what output name should be
+  *                            to ensure uniqueness
+  * @Param allowDupsWithRename if the original name has been used, is renaming allowed to ensure output name unique
+  */
+  private void addToResultMaps(final String origName, final ClassifierResult result, final boolean allowDupsWithRename) {
+    String name = origName;
+    if (allowDupsWithRename) {
+      name = getUniqueName(origName, result);
+    }
+    if (!result.outputMap.containsKey(name)) {
+      result.outputNames.add(name);
+      result.outputMap.put(name,  name);
+    } else {
+      result.outputNames.add(EMPTY_STRING);
+    }
+  }
+
+  private void classifyExpr(final NamedExpression ex, final RecordBatch incoming, final ClassifierResult result)  {
+    final NameSegment expr = ((SchemaPath)ex.getExpr()).getRootSegment();
+    final NameSegment ref = ex.getRef().getRootSegment();
+    final boolean exprHasPrefix = expr.getPath().contains(StarColumnHelper.PREFIX_DELIMITER);
+    final boolean refHasPrefix = ref.getPath().contains(StarColumnHelper.PREFIX_DELIMITER);
+    final boolean exprIsStar = expr.getPath().equals(StarColumnHelper.STAR_COLUMN);
+    final boolean refContainsStar = ref.getPath().contains(StarColumnHelper.STAR_COLUMN);
+    final boolean exprContainsStar = expr.getPath().contains(StarColumnHelper.STAR_COLUMN);
+    final boolean refEndsWithStar = ref.getPath().endsWith(StarColumnHelper.STAR_COLUMN);
+
+    String exprPrefix = EMPTY_STRING;
+    String exprSuffix = expr.getPath();
+
+    if (exprHasPrefix) {
+      // get the prefix of the expr
+      final String[] exprComponents = expr.getPath().split(StarColumnHelper.PREFIX_DELIMITER, 2);
+      assert(exprComponents.length == 2);
+      exprPrefix = exprComponents[0];
+      exprSuffix = exprComponents[1];
+      result.prefix = exprPrefix;
+    }
+
+    boolean exprIsFirstWildcard = false;
+    if (exprContainsStar) {
+      result.isStar = true;
+      final Integer value = (Integer) result.prefixMap.get(exprPrefix);
+      if (value == null) {
+        final Integer n = 1;
+        result.prefixMap.put(exprPrefix, n);
+        exprIsFirstWildcard = true;
+      } else {
+        final Integer n = value + 1;
+        result.prefixMap.put(exprPrefix, n);
+      }
+    }
+
+    final int incomingSchemaSize = incoming.getSchema().getFieldCount();
+
+    // for debugging..
+    // if (incomingSchemaSize > 9) {
+    // assert false;
+    // }
+
+    // input is '*' and output is 'prefix_*'
+    if (exprIsStar && refHasPrefix && refEndsWithStar) {
+      final String[] components = ref.getPath().split(StarColumnHelper.PREFIX_DELIMITER, 2);
+      assert(components.length == 2);
+      final String prefix = components[0];
+      result.outputNames = Lists.newArrayList();
+      for(final VectorWrapper<?> wrapper : incoming) {
+        final ValueVector vvIn = wrapper.getValueVector();
+        final String name = vvIn.getField().getPath().getRootSegment().getPath();
+
+        // add the prefix to the incoming column name
+        final String newName = prefix + StarColumnHelper.PREFIX_DELIMITER + name;
+        addToResultMaps(newName, result, false);
+      }
+    }
+    // input and output are the same
+    else if (expr.getPath().equals(ref.getPath()) && (!exprContainsStar || exprIsFirstWildcard)) {
+      if (exprContainsStar && exprHasPrefix) {
+        assert exprPrefix != null;
+
+        int k = 0;
+        result.outputNames = Lists.newArrayListWithCapacity(incomingSchemaSize);
+        for (int j=0; j < incomingSchemaSize; j++) {
+          result.outputNames.add(EMPTY_STRING);  // initialize
         }
 
-        final Source data = getSource(ejbModule.getAltDDs().get("ejb-jar.xml"));
-        if (data != null) {
-            try {
-                final EjbJar ejbJar = readEjbJar(data.get());
-                ejbModule.setEjbJar(ejbJar);
-            } catch (final IOException e) {
-                throw new OpenEJBException(e);
+        for (final VectorWrapper<?> wrapper : incoming) {
+          final ValueVector vvIn = wrapper.getValueVector();
+          final String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
+          // get the prefix of the name
+          final String[] nameComponents = incomingName.split(StarColumnHelper.PREFIX_DELIMITER, 2);
+          // if incoming valuevector does not have a prefix, ignore it since this expression is not referencing it
+          if (nameComponents.length <= 1) {
+            k++;
+            continue;
+          }
+          final String namePrefix = nameComponents[0];
+          if (exprPrefix.equals(namePrefix)) {
+            final String newName = incomingName;
+            if (!result.outputMap.containsKey(newName)) {
+              result.outputNames.set(k, newName);
+              result.outputMap.put(newName,  newName);
             }
+          }
+          k++;
+        }
+      } else {
+        result.outputNames = Lists.newArrayList();
+        if (exprContainsStar) {
+          for (final VectorWrapper<?> wrapper : incoming) {
+            final ValueVector vvIn = wrapper.getValueVector();
+            final String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
+            if (refContainsStar) {
+              addToResultMaps(incomingName, result, true); // allow dups since this is likely top-level project
+            } else {
+              addToResultMaps(incomingName, result, false);
+            }
+          }
         } else {
-            DeploymentLoader.logger.debug("No ejb-jar.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + ejbModule.getModuleId());
-            ejbModule.setEjbJar(new EjbJar());
+          final String newName = expr.getPath();
+          if (!refHasPrefix && !exprHasPrefix) {
+            addToResultMaps(newName, result, true); // allow dups since this is likely top-level project
+          } else {
+            addToResultMaps(newName, result, false);
+          }
         }
+      }
     }
 
-    private static void checkDuplicatedByBeansXml(final List<String> list, final List<String> duplicated) {
-        final Iterator<String> it = list.iterator();
-        while (it.hasNext()) {
-            final String str = it.next();
-            if (list.indexOf(str) != list.lastIndexOf(str)) {
-                duplicated.add(str);
-            }
-        }
+    // input is wildcard and it is not the first wildcard
+    else if(exprIsStar) {
+      result.outputNames = Lists.newArrayList();
+      for (final VectorWrapper<?> wrapper : incoming) {
+        final ValueVector vvIn = wrapper.getValueVector();
+        final String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
+        addToResultMaps(incomingName, result, true); // allow dups since this is likely top-level project
+      }
     }
 
-    public static void checkDuplicatedByBeansXml(final Beans beans, final Beans complete) {
-        checkDuplicatedByBeansXml(beans.getAlternativeClasses(), complete.getDuplicatedAlternatives().getClasses());
-        checkDuplicatedByBeansXml(beans.getAlternativeStereotypes(), complete.getDuplicatedAlternatives().getStereotypes());
-        checkDuplicatedByBeansXml(beans.getDecorators(), complete.getDuplicatedDecorators());
-        checkDuplicatedByBeansXml(beans.getInterceptors(), complete.getDuplicatedInterceptors());
+    // only the output has prefix
+    else if (!exprHasPrefix && refHasPrefix) {
+      result.outputNames = Lists.newArrayList();
+      final String newName = ref.getPath();
+      addToResultMaps(newName, result, false);
     }
+    // input has prefix but output does not
+    else if (exprHasPrefix && !refHasPrefix) {
+      int k = 0;
+      result.outputNames = Lists.newArrayListWithCapacity(incomingSchemaSize);
+      for (int j=0; j < incomingSchemaSize; j++) {
+        result.outputNames.add(EMPTY_STRING);  // initialize
+      }
 
-    private void readBeans(final EjbModule ejbModule) throws OpenEJBException {
-        if (ejbModule.getBeans() != null) {
-            return;
+      for (final VectorWrapper<?> wrapper : incoming) {
+        final ValueVector vvIn = wrapper.getValueVector();
+        final String name = vvIn.getField().getPath().getRootSegment().getPath();
+        final String[] components = name.split(StarColumnHelper.PREFIX_DELIMITER, 2);
+        if (components.length <= 1)  {
+          k++;
+          continue;
         }
-
-        final Object raw = ejbModule.getAltDDs().get("beans.xml");
-        final Source data = getSource(raw);
-        if (data != null) {
-            try {
-                final Beans beans = readBeans(data.get());
-                checkDuplicatedByBeansXml(beans, beans);
-                if (UrlSource.class.isInstance(data)) {
-                    beans.setUri(UrlSource.class.cast(data).getUrl().toExternalForm());
-                } else {
-                    beans.setUri("jar:file://" + ejbModule.getModuleId() + "!/META-INF/beans.xml");
-                }
-                ejbModule.setBeans(beans);
-            } catch (final IOException e) {
-                throw new OpenEJBException(e);
-            }
-        } else if (raw instanceof Beans) {
-            ejbModule.setBeans((Beans) raw);
-        } else if (List.class.isInstance(raw)) {
-            final CompositeBeans compositeBeans = new CompositeBeans();
-            final List list = List.class.cast(raw);
-            if (!list.isEmpty()) {
-                for (final Object o : list) {
-                    try {
-                        final UrlSource urlSource = UrlSource.class.cast(o);
-                        mergeBeansXml(compositeBeans, readBeans(urlSource.get()), urlSource.getUrl());
-                    } catch (final IOException e) {
-                        throw new OpenEJBException(e);
-                    }
-                }
-                ejbModule.setBeans(compositeBeans);
-            }
-        }
-    }
-
-    private static Beans mergeBeansXml(final CompositeBeans current, final Beans beans, final URL url) {
-        current.mergeClasses(url, beans);
-        current.getScan().getExclude().addAll(beans.getScan().getExclude());
-
-        // check is done here since later we lost the data of the origin
-        ReadDescriptors.checkDuplicatedByBeansXml(beans, current);
-
-        final String beanDiscoveryMode = beans.getBeanDiscoveryMode();
-        current.getDiscoveryByUrl().put(url, beanDiscoveryMode == null ? "ALL" : beanDiscoveryMode);
-        return current;
-    }
-
-    // package scoped for testing
-    void readCmpOrm(final EjbModule ejbModule) throws OpenEJBException {
-        final Object data = ejbModule.getAltDDs().get("openejb-cmp-orm.xml");
-        if (data != null && !(data instanceof EntityMappings)) {
-            if (data instanceof URL) {
-                final URL url = (URL) data;
-                try {
-                    final EntityMappings entitymappings = (EntityMappings) JaxbJavaee.unmarshalJavaee(EntityMappings.class, IO.read(url));
-                    ejbModule.getAltDDs().put("openejb-cmp-orm.xml", entitymappings);
-                } catch (final SAXException e) {
-                    throw new OpenEJBException("Cannot parse the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-                } catch (final JAXBException e) {
-                    throw new OpenEJBException("Cannot unmarshall the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-                } catch (final IOException e) {
-                    throw new OpenEJBException("Cannot read the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-                } catch (final Exception e) {
-                    throw new OpenEJBException("Encountered unknown error parsing the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-                }
-            }
-        }
-    }
-
-    private void readConnector(final ConnectorModule connectorModule, final AppModule appModule) throws OpenEJBException {
-        if (connectorModule.getConnector() != null) {
-            return;
-        }
-
-        final Object data = connectorModule.getAltDDs().get("ra.xml");
-        if (data instanceof Connector) {
-            connectorModule.setConnector((Connector) data);
-        } else if (data instanceof URL) {
-            final URL url = (URL) data;
-            final Connector connector = readConnector(url);
-            connectorModule.setConnector(connector);
+        final String namePrefix = components[0];
+        final String nameSuffix = components[1];
+        if (exprPrefix.equals(namePrefix)) {
+          if (refContainsStar) {
+            // remove the prefix from the incoming column names
+            final String newName = getUniqueName(nameSuffix, result);  // for top level we need to make names unique
+            result.outputNames.set(k, newName);
+          } else if (exprSuffix.equals(nameSuffix)) {
+            // example: ref: $f1, expr: T0<PREFIX><column_name>
+            final String newName = ref.getPath();
+            result.outputNames.set(k, newName);
+          }
         } else {
-            DeploymentLoader.logger.debug("No ra.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + connectorModule.getModuleId());
-            connectorModule.setConnector(new Connector());
+          result.outputNames.add(EMPTY_STRING);
         }
+        k++;
+      }
     }
-
-    private void readWebApp(final WebModule webModule, final AppModule appModule) throws OpenEJBException {
-        if (webModule.getWebApp() != null) {
-            mergeWebFragments(webModule);
-            return;
-        }
-
-        final Object data = webModule.getAltDDs().get("web.xml");
-        if (data instanceof WebApp) {
-            webModule.setWebApp((WebApp) data);
-        } else if (data instanceof URL) {
-            final URL url = (URL) data;
-            final WebApp webApp = readWebApp(url);
-            webModule.setWebApp(webApp);
-        } else {
-            DeploymentLoader.logger.debug("No web.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + webModule.getModuleId());
-            webModule.setWebApp(new WebApp());
-        }
-
-        mergeWebFragments(webModule);
+    // input and output have prefixes although they could be different...
+    else if (exprHasPrefix && refHasPrefix) {
+      final String[] input = expr.getPath().split(StarColumnHelper.PREFIX_DELIMITER, 2);
+      assert(input.length == 2);
+      assert false : "Unexpected project expression or reference";  // not handled yet
     }
+    else {
+      // if the incoming schema's column name matches the expression name of the Project,
+      // then we just want to pick the ref name as the output column name
 
-    private void mergeWebFragments(final WebModule webModule) {
-        // web-fragment.xml, to get jndi entries to merge, other stuff is done by tomcat ATM
-        final Collection<URL> urls = Collection.class.cast(webModule.getAltDDs().get("web-fragment.xml"));
-        if (urls != null) {
-            for (final URL rawUrl : urls) {
-                if (rawUrl != null) {
-                    final Source url = getSource(rawUrl);
-                    try {
-                        final WebFragment webFragment = WebFragment.class.cast(JaxbJavaee.unmarshal(WebFragment.class, url.get(), false));
-
-                        // in tomcat if the env entry is already don't override it
-                        mergeOnlyMissingEntries(webModule.getWebApp().getPersistenceContextRefMap(), webFragment.getPersistenceContextRef());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getPersistenceUnitRefMap(), webFragment.getPersistenceUnitRef());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getMessageDestinationRefMap(), webFragment.getMessageDestinationRef());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getDataSourceMap(), webFragment.getDataSource());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getJMSConnectionFactoriesMap(), webFragment.getJMSConnectionFactories());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getEjbLocalRefMap(), webFragment.getEjbLocalRef());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getEjbRefMap(), webFragment.getEjbRef());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getServiceRefMap(), webFragment.getServiceRef());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getEnvEntryMap(), webFragment.getEnvEntry());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getResourceEnvRefMap(), webFragment.getResourceEnvRef());
-                        mergeOnlyMissingEntries(webModule.getWebApp().getResourceRefMap(), webFragment.getResourceRef());
-                    } catch (final Exception e) {
-                        logger.warning("can't read " + url.toString(), e);
-                    }
-                }
-            }
+      result.outputNames = Lists.newArrayList();
+      for (final VectorWrapper<?> wrapper : incoming) {
+        final ValueVector vvIn = wrapper.getValueVector();
+        final String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
+        if (expr.getPath().equals(incomingName)) {
+          final String newName = ref.getPath();
+          addToResultMaps(newName, result, true);
         }
+      }
     }
-
-    private static <A extends Keyable<String>> void mergeOnlyMissingEntries(final Map<String, A> existing, final Collection<A> news) {
-        for (final A entry : news) {
-            final String key = entry.getKey();
-            if (!existing.containsKey(key)) {
-                existing.put(key, entry);
-            }
-        }
-    }
-
-    public static ApplicationClient readApplicationClient(final URL url) throws OpenEJBException {
-        final ApplicationClient applicationClient;
-        try {
-            applicationClient = ApplicationClientXml.unmarshal(url);
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the application-client.xml file: " + url.toExternalForm(), e);
-        } catch (final JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the application-client.xml file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the application-client.xml file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the application-client.xml file: " + url.toExternalForm(), e);
-        }
-        return applicationClient;
-    }
-
-    public static EjbJar readEjbJar(final InputStream is) throws OpenEJBException {
-        try {
-            final String content = IO.slurp(is);
-            if (isEmptyEjbJar(new ByteArrayInputStream(content.getBytes()))) {
-                final String id = getId(new ByteArrayInputStream(content.getBytes()));
-                return new EjbJar(id);
-            }
-            return EjbJarXml.unmarshal(new ByteArrayInputStream(content.getBytes()));
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered error parsing the ejb-jar.xml", e); // file: " + url.toExternalForm(), e);
-        }
-    }
-
-    public static Beans readBeans(final InputStream inputStream) throws OpenEJBException {
-        try {
-            final String content = IO.slurp(inputStream).trim();
-            if (content.length() == 0) { // otherwise we want to read <beans /> attributes
-                final Beans beans = new Beans();
-                beans.setBeanDiscoveryMode("ALL"); // backward compatibility
-                return beans;
-            }
-            return (Beans) JaxbJavaee.unmarshalJavaee(Beans.class, new ByteArrayInputStream(content.getBytes()));
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the beans.xml", e);// file: " + url.toExternalForm(), e);
-        } catch (final JAXBException e) {
-            e.printStackTrace();
-            throw new OpenEJBException("Cannot unmarshall the beans.xml", e);// file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the beans.xml", e);// file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the beans.xml", e);// file: " + url.toExternalForm(), e);
-        }
-    }
-
-    private static boolean isEmptyEjbJar(final InputStream is) throws IOException, ParserConfigurationException, SAXException {
-        return isEmpty(is, "ejb-jar");
-    }
-
-    private static boolean isEmpty(final InputStream is, final String rootElement) throws IOException, ParserConfigurationException, SAXException {
-        final LengthInputStream in = new LengthInputStream(is);
-        final InputSource inputSource = new InputSource(in);
-
-        final SAXParser parser;
-
-        final Thread thread = Thread.currentThread();
-        final ClassLoader original = thread.getContextClassLoader();
-        thread.setContextClassLoader(Saxs.class.getClassLoader());
-        try {
-            parser = Saxs.namespaceAwareFactory().newSAXParser();
-        } finally {
-            thread.setContextClassLoader(original);
-        }
-
-        try {
-            parser.parse(inputSource, new DefaultHandler() {
-                public void startElement(final String uri, final String localName, final String qName, final Attributes att) throws SAXException {
-                    if (!localName.equals(rootElement)) {
-                        throw new SAXException(localName);
-                    }
-                }
-
-                public InputSource resolveEntity(final String publicId, final String systemId) throws IOException, SAXException {
-                    return new InputSource(new ByteArrayInputStream(new byte[0]));
-                }
-            });
-            return true;
-        } catch (final SAXException e) {
-            return in.getLength() == 0;
-        }
-    }
-
-    private static String getId(final InputStream is) {
-        final String[] id = {null};
-
-        try {
-            final LengthInputStream in = new LengthInputStream(is);
-            final InputSource inputSource = new InputSource(in);
-
-            final SAXParser parser = Saxs.namespaceAwareFactory().newSAXParser();
-
-            parser.parse(inputSource, new DefaultHandler() {
-                public void startElement(final String uri, final String localName, final String qName, final Attributes att) throws SAXException {
-                    id[0] = att.getValue("id");
-                }
-
-                public InputSource resolveEntity(final String publicId, final String systemId) throws IOException, SAXException {
-                    return new InputSource(new ByteArrayInputStream(new byte[0]));
-                }
-            });
-        } catch (final Exception e) {
-            // no-op
-        }
-
-        return id[0];
-    }
-
-    public static Webservices readWebservices(final URL url) throws OpenEJBException {
-        try {
-            return WebservicesXml.unmarshal(url);
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (final JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
-        }
-    }
-
-    public static HandlerChains readHandlerChains(final URL url) throws OpenEJBException {
-        try {
-            return HandlerChainsXml.unmarshal(url);
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (final JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
-        }
-    }
-
-    public static JavaWsdlMapping readJaxrpcMapping(final URL url) throws OpenEJBException {
-        final JavaWsdlMapping wsdlMapping;
-        try {
-            wsdlMapping = (JavaWsdlMapping) JaxbJavaee.unmarshalJavaee(JavaWsdlMapping.class, IO.read(url));
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the JaxRPC mapping file: " + url.toExternalForm(), e);
-        } catch (final JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the JaxRPC mapping file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the JaxRPC mapping file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the JaxRPC mapping file: " + url.toExternalForm(), e);
-        }
-        return wsdlMapping;
-    }
-
-    public static Connector readConnector(final URL url) throws OpenEJBException {
-        Connector connector;
-        try {
-            connector = (Connector) JaxbJavaee.unmarshalJavaee(Connector.class, IO.read(url));
-        } catch (final JAXBException e) {
-            try {
-                final Connector10 connector10 = (Connector10) JaxbJavaee.unmarshalJavaee(Connector10.class, IO.read(url));
-                connector = Connector.newConnector(connector10);
-            } catch (final ParserConfigurationException | SAXException e1) {
-                throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
-            } catch (final JAXBException e1) {
-                throw new OpenEJBException("Cannot unmarshall the ra.xml file: " + url.toExternalForm(), e);
-            } catch (final IOException e1) {
-                throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
-            }
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the ra.xml file: " + url.toExternalForm(), e);
-        }
-        return connector;
-    }
-
-    public static WebApp readWebApp(final URL url) throws OpenEJBException {
-        final WebApp webApp;
-        try {
-            webApp = WebXml.unmarshal(url);
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the web.xml file: " + url.toExternalForm(), e);
-        } catch (final JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the web.xml file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the web.xml file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the web.xml file: " + url.toExternalForm(), e);
-        }
-        return webApp;
-    }
-
-    public static TldTaglib readTldTaglib(final URL url) throws OpenEJBException {
-        // TOMEE-164 Optimization on reading built-in tld files
-        if (url.getPath().contains("jstl-1.2.jar") || (url.getPath().contains("taglibs-standard-") && url.getPath().contains(".jar!"))) {
-            return SKIP_TAGLIB;
-        }
-        if (url.getPath().contains("myfaces-impl")) { // we should return SKIP_TAGLIB too
-            final TldTaglib taglib = new TldTaglib();
-            final Listener listener = new Listener();
-            listener.setListenerClass("org.apache.myfaces.webapp.StartupServletContextListener");
-            taglib.getListener().add(listener);
-            return taglib;
-        }
-
-        try {
-            return TldTaglibXml.unmarshal(url);
-        } catch (final SAXException e) {
-            final String message = "Cannot parse the JSP tag library definition file: " + url.toExternalForm();
-            logger.warning(message);
-            logger.debug(message, e);
-        } catch (final JAXBException e) {
-            final String message = "Cannot unmarshall the JSP tag library definition file: " + url.toExternalForm();
-            logger.warning(message);
-            logger.debug(message, e);
-        } catch (final IOException e) {
-            final String message = "Cannot read the JSP tag library definition file: " + url.toExternalForm();
-            logger.warning(message);
-            logger.debug(message, e);
-        } catch (final Exception e) {
-            final String message = "Encountered unknown error parsing the JSP tag library definition file: " + url.toExternalForm();
-            logger.warning(message);
-            logger.debug(message, e);
-        }
-        return SKIP_TAGLIB;
-    }
-
-    public static FacesConfig readFacesConfig(final URL url) throws OpenEJBException {
-        try {
-            final Source src = getSource(url);
-            if (src == null) {
-                return new FacesConfig();
-            }
-
-            final String content = IO.slurp(src.get());
-            if (isEmpty(new ByteArrayInputStream(content.getBytes()), "faces-config")) {
-                return new FacesConfig();
-            }
-            return FacesConfigXml.unmarshal(new ByteArrayInputStream(content.getBytes()));
-        } catch (final SAXException e) {
-            throw new OpenEJBException("Cannot parse the faces configuration file: " + url.toExternalForm(), e);
-        } catch (final JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the faces configuration file: " + url.toExternalForm(), e);
-        } catch (final IOException e) {
-            throw new OpenEJBException("Cannot read the faces configuration file: " + url.toExternalForm(), e);
-        } catch (final Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the faces configuration file: " + url.toExternalForm(), e);
-        }
-    }
-
-    private static Source getSource(final Object o) {
-        if (o instanceof URL) {
-            return new UrlSource((URL) o);
-        }
-
-        if (o instanceof Source) {
-            return (Source) o;
-        }
-
-        if (o instanceof String) {
-            return new StringSource((String) o);
-        }
-
-        return null;
-    }
-
-    public interface Source {
-        InputStream get() throws IOException;
-    }
-
-    public static class UrlSource implements Source {
-        private final URL url;
-
-        public UrlSource(final URL url) {
-            this.url = url;
-        }
-
-        @Override
-        public InputStream get() throws IOException {
-            return IO.read(url);
-        }
-
-        public URL getUrl() {
-            return url;
-        }
-
-        @Override
-        public String toString() {
-            return "UrlSource{url=" + url + '}';
-        }
-    }
-
-    public static class StringSource implements Source {
-        private final byte[] bytes;
-        private final String toString;
-
-        public StringSource(final String content) {
-            toString = content;
-            bytes = content.getBytes();
-        }
-
-        @Override
-        public InputStream get() throws IOException {
-            return new ByteArrayInputStream(bytes);
-        }
-
-        @Override
-        public String toString() {
-            return "StringSource{content=" + toString + '}';
-        }
-    }
+  }
 }

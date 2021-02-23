@@ -16,8 +16,9 @@ def main(argv):
     target_bug_list.sort()
 
     for target_bug in target_bug_list:
-        #target_bug="Math-59"
+        target_bug="Math-59"
         target_project, target_id = target_bug.split('-')
+
 
         perfect_info = pd.read_csv("../pool/commit_collector/inputs/"+target_project+".csv",
                                    names=['D4J_ID', 'faulty_path', 'fix_faulty_line', 'blame_faulty_line', 'dummy'])
@@ -56,14 +57,15 @@ def main(argv):
                   + root+"/scripts/config.sh "+target_project+" "+target_id + " " + perfect_faulty_class + " " + perfect_faulty_line)
         print("Finish config!!")
 
-        os.system("cd "+current_bug_dir+" ; "
-                  + root+"/scripts/confix.sh . >>log.txt 2>&1")
+        # os.system("cd "+current_bug_dir+" ; "
+        #           + root+"/scripts/confix.sh . >>log.txt 2>&1")
 
-        print("Finish confix!!")
+        # print("Finish confix!!")
 
-        os.system("mkdir "+root+"/results/patches/"+target_bug)
-        os.system("cp -r "+current_bug_dir+"/patches/* " +
-                  root+"/results/patches/"+target_bug+"/")
+        # os.system("mkdir "+root+"/results/patches/"+target_bug)
+        # os.system("cp -r "+current_bug_dir+"/patches/* " +
+        #           root+"/results/patches/"+target_bug+"/")
+        
         # mkdir patch-logs
 
         # if [ -e ${PROJ_NAME_LIST[$i]}-${j}/patch_info ];then
@@ -72,7 +74,7 @@ def main(argv):
 
         # rm -rf ${PROJ_NAME_LIST[$i]}-${j}
 
-        #break
+        break
 
 
 if __name__ == '__main__':

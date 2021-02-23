@@ -23,12 +23,12 @@ def main(argv):
         os.system("mkdir "+proj_dir)
  
         # remove column "dummy" when input is updated
-        input_df = pd.read_csv(root+"/pool/commit_collector/inputs/"+project+".csv", names=["DefectsfJ ID","Faulty file path","faulty line","dummy"])
+        input_df = pd.read_csv(root+"/pool/commit_collector/inputs/"+project+".csv", names=["DefectsfJ ID","Faulty file path","fix faulty line","blame faulty line","dummy"])
         input_csv = input_df.values
 
         ## commit-db도 읽기
         ## path is where the D4J framework exists
-        commit_db = pd.read_csv("~/paths/defects4j/framework/projects/"+project+"/commit-db", names=["ID","buggy","clean","num","path"])
+        commit_db = pd.read_csv("~/paths/defects4j/framework/projects/"+project+"/commit-db", names=["ID","buggy","clean","num","link"])
         commit_db_csv = commit_db.values
         
 
@@ -40,6 +40,13 @@ def main(argv):
             header = ['Project','D4J ID','Faulty file path','faulty line','FIC_sha','BFIC_sha']
             csv_writer.writerow(header)
 
+            D4J_ID = ""
+            faulty_file_path = ""
+            fix_faulty_line = ""
+            blame_faulty_line = ""
+            FIC_sha = ""
+            BFIC_sha = ""
+
             for i in range(len(input_csv)):
                 
                 if i==0:
@@ -47,7 +54,8 @@ def main(argv):
                 
                 D4J_ID = input_csv[i][0]
                 faulty_file_path = input_csv[i][1]
-                faulty_line = input_csv[i][2]
+                fix_faulty_line = input_csv[i][2]
+                blame_faulty_line = input_csv[i][3]
 
                 buggy_sha = ""
 
@@ -60,7 +68,7 @@ def main(argv):
                 #os.system("cd "+project+"-"+D4J_ID)
                 os.system("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" checkout "+buggy_sha)
                 
-                git_stream = os.popen("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" blame -C -C -f -l -L "+str(faulty_line)+","+str(faulty_line)+" "+faulty_file_path)
+                git_stream = os.popen("git -C "+proj_dir+"/"+project+"-"+D4J_ID+" blame -C -C -f -l -L "+str(blame_faulty_line)+","+str(blame_faulty_line)+" "+faulty_file_path)
                 foo = str(git_stream.read()).split(' ')
                 FIC_sha = foo[0]
                 faulty_file_path = foo[1]
@@ -71,7 +79,7 @@ def main(argv):
                 BFIC_sha = str(git_stream.read()).split('\n')[0]
 
                 # writing each row values ('Project','D4J ID','Faulty file path','faulty line','FIC','BFIC')
-                instance = [project, D4J_ID, faulty_file_path, faulty_line, FIC_sha, BFIC_sha] ## data in order of columns
+                instance = [project, D4J_ID, faulty_file_path, fix_faulty_line, FIC_sha, BFIC_sha] ## data in order of columns
                 csv_writer.writerow(instance)
 
                 #os.system("cd ..")

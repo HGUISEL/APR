@@ -1,381 +1,706 @@
-/*
- * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//dbcp/src/java/org/apache/commons/dbcp/DelegatingResultSet.java,v 1.8 2003/08/11 23:54:59 dirkv Exp $
- * $Revision: 1.8 $
- * $Date: 2003/08/11 23:54:59 $
- *
- * ====================================================================
- *
- * The Apache Software License, Version 1.1
- *
- * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
- * reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. The end-user documentation included with the redistribution, if
- *    any, must include the following acknowlegement:
- *       "This product includes software developed by the
- *        Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowlegement may appear in the software itself,
- *    if and wherever such third-party acknowlegements normally appear.
- *
- * 4. The names "The Jakarta Project", "Commons", and "Apache Software
- *    Foundation" must not be used to endorse or promote products derived
- *    from this software without prior written permission. For written
- *    permission, please contact apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache"
- *    nor may "Apache" appear in their names without prior written
- *    permission of the Apache Group.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation.  For more
- * information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- *
- */
-package org.apache.commons.dbcp;
+package org.jsoup.helper;
 
-import java.sql.ResultSet;
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
-import java.io.InputStream;
-import java.sql.SQLWarning;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.io.Reader;
-import java.sql.Statement;
-import java.util.Map;
-import java.sql.Ref;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Array;
-import java.util.Calendar;
+import org.jsoup.Connection;
+import org.jsoup.HttpStatusException;
+import org.jsoup.UnsupportedMimeTypeException;
+import org.jsoup.nodes.Document;
+import org.jsoup.parser.Parser;
+import org.jsoup.parser.TokenQueue;
+
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.util.*;
+import java.util.zip.GZIPInputStream;
 
 /**
- * A base delegating implementation of {@link ResultSet}.
- * <p>
- * All of the methods from the {@link ResultSet} interface
- * simply call the corresponding method on the "delegate"
- * provided in my constructor.
- * <p>
- * Extends AbandonedTrace to implement result set tracking and
- * logging of code which created the ResultSet. Tracking the
- * ResultSet ensures that the Statment which created it can
- * close any open ResultSet's on Statement close.
- *
- * @author Glenn L. Nielsen
- * @author James House (<a href="mailto:james@interobjective.com">james@interobjective.com</a>)
+ * Implementation of {@link Connection}.
+ * @see org.jsoup.Jsoup#connect(String) 
  */
-public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
-
-    /** My delegate. **/
-    private ResultSet _res;
-
-    /** The Statement that created me, if any. **/
-    private Statement _stmt;
-
-    /**
-     * Create a wrapper for the ResultSet which traces this
-     * ResultSet to the Statement which created it and the
-     * code which created it.
-     *
-     * @param Statement stmt which create this ResultSet
-     * @param ResultSet to wrap
-     */
-    public DelegatingResultSet(Statement stmt, ResultSet res) {
-        super((AbandonedTrace)stmt);
-        this._stmt = stmt;
-        this._res = res;
+public class HttpConnection implements Connection {
+    public static Connection connect(String url) {
+        Connection con = new HttpConnection();
+        con.url(url);
+        return con;
     }
-    
-    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
-        if(null == rset) {
+
+    public static Connection connect(URL url) {
+        Connection con = new HttpConnection();
+        con.url(url);
+        return con;
+    }
+
+	private static String encodeUrl(String url) {
+		if(url == null)
+			return null;
+    	return url.replaceAll(" ", "%20");
+	}
+
+    private Connection.Request req;
+    private Connection.Response res;
+
+	private HttpConnection() {
+        req = new Request();
+        res = new Response();
+    }
+
+    public Connection url(URL url) {
+        req.url(url);
+        return this;
+    }
+
+    public Connection url(String url) {
+        Validate.notEmpty(url, "Must supply a valid URL");
+        try {
+            req.url(new URL(encodeUrl(url)));
+        } catch (MalformedURLException e) {
+            throw new IllegalArgumentException("Malformed URL: " + url, e);
+        }
+        return this;
+    }
+
+    public Connection userAgent(String userAgent) {
+        Validate.notNull(userAgent, "User agent must not be null");
+        req.header("User-Agent", userAgent);
+        return this;
+    }
+
+    public Connection timeout(int millis) {
+        req.timeout(millis);
+        return this;
+    }
+
+    public Connection maxBodySize(int bytes) {
+        req.maxBodySize(bytes);
+        return this;
+    }
+
+    public Connection followRedirects(boolean followRedirects) {
+        req.followRedirects(followRedirects);
+        return this;
+    }
+
+    public Connection referrer(String referrer) {
+        Validate.notNull(referrer, "Referrer must not be null");
+        req.header("Referer", referrer);
+        return this;
+    }
+
+    public Connection method(Method method) {
+        req.method(method);
+        return this;
+    }
+
+    public Connection ignoreHttpErrors(boolean ignoreHttpErrors) {
+		req.ignoreHttpErrors(ignoreHttpErrors);
+		return this;
+	}
+
+    public Connection ignoreContentType(boolean ignoreContentType) {
+        req.ignoreContentType(ignoreContentType);
+        return this;
+    }
+
+    public Connection data(String key, String value) {
+        req.data(KeyVal.create(key, value));
+        return this;
+    }
+
+    public Connection data(Map<String, String> data) {
+        Validate.notNull(data, "Data map must not be null");
+        for (Map.Entry<String, String> entry : data.entrySet()) {
+            req.data(KeyVal.create(entry.getKey(), entry.getValue()));
+        }
+        return this;
+    }
+
+    public Connection data(String... keyvals) {
+        Validate.notNull(keyvals, "Data key value pairs must not be null");
+        Validate.isTrue(keyvals.length %2 == 0, "Must supply an even number of key value pairs");
+        for (int i = 0; i < keyvals.length; i += 2) {
+            String key = keyvals[i];
+            String value = keyvals[i+1];
+            Validate.notEmpty(key, "Data key must not be empty");
+            Validate.notNull(value, "Data value must not be null");
+            req.data(KeyVal.create(key, value));
+        }
+        return this;
+    }
+
+    public Connection data(Collection<Connection.KeyVal> data) {
+        Validate.notNull(data, "Data collection must not be null");
+        for (Connection.KeyVal entry: data) {
+            req.data(entry);
+        }
+        return this;
+    }
+
+    public Connection header(String name, String value) {
+        req.header(name, value);
+        return this;
+    }
+
+    public Connection cookie(String name, String value) {
+        req.cookie(name, value);
+        return this;
+    }
+
+    public Connection cookies(Map<String, String> cookies) {
+        Validate.notNull(cookies, "Cookie map must not be null");
+        for (Map.Entry<String, String> entry : cookies.entrySet()) {
+            req.cookie(entry.getKey(), entry.getValue());
+        }
+        return this;
+    }
+
+    public Connection parser(Parser parser) {
+        req.parser(parser);
+        return this;
+    }
+
+    public Document get() throws IOException {
+        req.method(Method.GET);
+        execute();
+        return res.parse();
+    }
+
+    public Document post() throws IOException {
+        req.method(Method.POST);
+        execute();
+        return res.parse();
+    }
+
+    public Connection.Response execute() throws IOException {
+        res = Response.execute(req);
+        return res;
+    }
+
+    public Connection.Request request() {
+        return req;
+    }
+
+    public Connection request(Connection.Request request) {
+        req = request;
+        return this;
+    }
+
+    public Connection.Response response() {
+        return res;
+    }
+
+    public Connection response(Connection.Response response) {
+        res = response;
+        return this;
+    }
+
+    @SuppressWarnings({"unchecked"})
+    private static abstract class Base<T extends Connection.Base> implements Connection.Base<T> {
+        URL url;
+        Method method;
+        Map<String, String> headers;
+        Map<String, String> cookies;
+
+        private Base() {
+            headers = new LinkedHashMap<String, String>();
+            cookies = new LinkedHashMap<String, String>();
+        }
+
+        public URL url() {
+            return url;
+        }
+
+        public T url(URL url) {
+            Validate.notNull(url, "URL must not be null");
+            this.url = url;
+            return (T) this;
+        }
+
+        public Method method() {
+            return method;
+        }
+
+        public T method(Method method) {
+            Validate.notNull(method, "Method must not be null");
+            this.method = method;
+            return (T) this;
+        }
+
+        public String header(String name) {
+            Validate.notNull(name, "Header name must not be null");
+            return getHeaderCaseInsensitive(name);
+        }
+
+        public T header(String name, String value) {
+            Validate.notEmpty(name, "Header name must not be empty");
+            Validate.notNull(value, "Header value must not be null");
+            removeHeader(name); // ensures we don't get an "accept-encoding" and a "Accept-Encoding"
+            headers.put(name, value);
+            return (T) this;
+        }
+
+        public boolean hasHeader(String name) {
+            Validate.notEmpty(name, "Header name must not be empty");
+            return getHeaderCaseInsensitive(name) != null;
+        }
+
+        public T removeHeader(String name) {
+            Validate.notEmpty(name, "Header name must not be empty");
+            Map.Entry<String, String> entry = scanHeaders(name); // remove is case insensitive too
+            if (entry != null)
+                headers.remove(entry.getKey()); // ensures correct case
+            return (T) this;
+        }
+
+        public Map<String, String> headers() {
+            return headers;
+        }
+
+        private String getHeaderCaseInsensitive(String name) {
+            Validate.notNull(name, "Header name must not be null");
+            // quick evals for common case of title case, lower case, then scan for mixed
+            String value = headers.get(name);
+            if (value == null)
+                value = headers.get(name.toLowerCase());
+            if (value == null) {
+                Map.Entry<String, String> entry = scanHeaders(name);
+                if (entry != null)
+                    value = entry.getValue();
+            }
+            return value;
+        }
+
+        private Map.Entry<String, String> scanHeaders(String name) {
+            String lc = name.toLowerCase();
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                if (entry.getKey().toLowerCase().equals(lc))
+                    return entry;
+            }
             return null;
-        } else {
-            return new DelegatingResultSet(stmt,rset);
+        }
+
+        public String cookie(String name) {
+            Validate.notNull(name, "Cookie name must not be null");
+            return cookies.get(name);
+        }
+
+        public T cookie(String name, String value) {
+            Validate.notEmpty(name, "Cookie name must not be empty");
+            Validate.notNull(value, "Cookie value must not be null");
+            cookies.put(name, value);
+            return (T) this;
+        }
+
+        public boolean hasCookie(String name) {
+            Validate.notEmpty("Cookie name must not be empty");
+            return cookies.containsKey(name);
+        }
+
+        public T removeCookie(String name) {
+            Validate.notEmpty("Cookie name must not be empty");
+            cookies.remove(name);
+            return (T) this;
+        }
+
+        public Map<String, String> cookies() {
+            return cookies;
         }
     }
 
-    public ResultSet getDelegate() {
-        return _res;
+    public static class Request extends Base<Connection.Request> implements Connection.Request {
+        private int timeoutMilliseconds;
+        private int maxBodySizeBytes;
+        private boolean followRedirects;
+        private Collection<Connection.KeyVal> data;
+        private boolean ignoreHttpErrors = false;
+        private boolean ignoreContentType = false;
+        private Parser parser;
+
+      	private Request() {
+            timeoutMilliseconds = 3000;
+            maxBodySizeBytes = 1024 * 1024; // 1MB
+            followRedirects = true;
+            data = new ArrayList<Connection.KeyVal>();
+            method = Connection.Method.GET;
+            headers.put("Accept-Encoding", "gzip");
+            parser = Parser.htmlParser();
+        }
+
+        public int timeout() {
+            return timeoutMilliseconds;
+        }
+
+        public Request timeout(int millis) {
+            Validate.isTrue(millis >= 0, "Timeout milliseconds must be 0 (infinite) or greater");
+            timeoutMilliseconds = millis;
+            return this;
+        }
+
+        public int maxBodySize() {
+            return maxBodySizeBytes;
+        }
+
+        public Connection.Request maxBodySize(int bytes) {
+            Validate.isTrue(bytes >= 0, "maxSize must be 0 (unlimited) or larger");
+            maxBodySizeBytes = bytes;
+            return this;
+        }
+
+        public boolean followRedirects() {
+            return followRedirects;
+        }
+
+        public Connection.Request followRedirects(boolean followRedirects) {
+            this.followRedirects = followRedirects;
+            return this;
+        }
+
+        public boolean ignoreHttpErrors() {
+            return ignoreHttpErrors;
+        }
+
+        public Connection.Request ignoreHttpErrors(boolean ignoreHttpErrors) {
+            this.ignoreHttpErrors = ignoreHttpErrors;
+            return this;
+        }
+
+        public boolean ignoreContentType() {
+            return ignoreContentType;
+        }
+
+        public Connection.Request ignoreContentType(boolean ignoreContentType) {
+            this.ignoreContentType = ignoreContentType;
+            return this;
+        }
+
+        public Request data(Connection.KeyVal keyval) {
+            Validate.notNull(keyval, "Key val must not be null");
+            data.add(keyval);
+            return this;
+        }
+
+        public Collection<Connection.KeyVal> data() {
+            return data;
+        }
+        
+        public Request parser(Parser parser) {
+            this.parser = parser;
+            return this;
+        }
+        
+        public Parser parser() {
+            return parser;
+        }
     }
 
-    public boolean equals(Object obj) {
-        ResultSet delegate = getInnermostDelegate();
-        if (delegate == null) {
-            return false;
-        }
-        if (obj instanceof DelegatingResultSet) {
-            DelegatingResultSet s = (DelegatingResultSet) obj;
-            return delegate.equals(s.getInnermostDelegate());
-        }
-        else {
-            return delegate.equals(obj);
-        }
-    }
+    public static class Response extends Base<Connection.Response> implements Connection.Response {
+        private static final int MAX_REDIRECTS = 20;
+        private int statusCode;
+        private String statusMessage;
+        private ByteBuffer byteData;
+        private String charset;
+        private String contentType;
+        private boolean executed = false;
+        private int numRedirects = 0;
+        private Connection.Request req;
 
-    public int hashCode() {
-        Object obj = getInnermostDelegate();
-        if (obj == null) {
-            return 0;
+        Response() {
+            super();
         }
-        return obj.hashCode();
-    }
 
-    /**
-     * If my underlying {@link ResultSet} is not a
-     * <tt>DelegatingResultSet</tt>, returns it,
-     * otherwise recursively invokes this method on
-     * my delegate.
-     * <p>
-     * Hence this method will return the first
-     * delegate that is not a <tt>DelegatingResultSet</tt>,
-     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
-     * delegate can be found by transversing this chain.
-     * <p>
-     * This method is useful when you may have nested
-     * <tt>DelegatingResultSet</tt>s, and you want to make
-     * sure to obtain a "genuine" {@link ResultSet}.
-     */
-    public ResultSet getInnermostDelegate() {
-        ResultSet r = _res;
-        while(r != null && r instanceof DelegatingResultSet) {
-            r = ((DelegatingResultSet)r).getDelegate();
-            if(this == r) {
-                return null;
+        private Response(Response previousResponse) throws IOException {
+            super();
+            if (previousResponse != null) {
+                numRedirects = previousResponse.numRedirects + 1;
+                if (numRedirects >= MAX_REDIRECTS)
+                    throw new IOException(String.format("Too many redirects occurred trying to load URL %s", previousResponse.url()));
             }
         }
-        return r;
-    }
-    
-    public Statement getStatement() throws SQLException {
-        return _stmt;
-    }
-
-    /**
-     * Wrapper for close of ResultSet which removes this
-     * result set from being traced then calls close on
-     * the original ResultSet.
-     */
-    public void close() throws SQLException {
-        if(_stmt != null) {
-            ((AbandonedTrace)_stmt).removeTrace(this);
-            _stmt = null;
+        
+        static Response execute(Connection.Request req) throws IOException {
+            return execute(req, null);
         }
-        _res.close();
+
+        static Response execute(Connection.Request req, Response previousResponse) throws IOException {
+            Validate.notNull(req, "Request must not be null");
+            String protocol = req.url().getProtocol();
+            if (!protocol.equals("http") && !protocol.equals("https"))
+                throw new MalformedURLException("Only http & https protocols supported");
+
+            // set up the request for execution
+            if (req.method() == Connection.Method.GET && req.data().size() > 0)
+                serialiseRequestUrl(req); // appends query string
+            HttpURLConnection conn = createConnection(req);
+            Response res;
+            try {
+                conn.connect();
+                if (req.method() == Connection.Method.POST)
+                    writePost(req.data(), conn.getOutputStream());
+
+                int status = conn.getResponseCode();
+                boolean needsRedirect = false;
+                if (status != HttpURLConnection.HTTP_OK) {
+                    if (status == HttpURLConnection.HTTP_MOVED_TEMP || status == HttpURLConnection.HTTP_MOVED_PERM || status == HttpURLConnection.HTTP_SEE_OTHER)
+                        needsRedirect = true;
+                    else if (!req.ignoreHttpErrors())
+                        throw new HttpStatusException("HTTP error fetching URL", status, req.url().toString());
+                }
+                res = new Response(previousResponse);
+                res.setupFromConnection(conn, previousResponse);
+                if (needsRedirect && req.followRedirects()) {
+                    req.method(Method.GET); // always redirect with a get. any data param from original req are dropped.
+                    req.data().clear();
+
+                    String location = res.header("Location");
+                    if (location != null && location.startsWith("http:/") && location.charAt(6) != '/') // fix broken Location: http:/temp/AAG_New/en/index.php
+                        location = location.substring(6);
+                    req.url(new URL(req.url(), encodeUrl(location)));
+
+                    for (Map.Entry<String, String> cookie : res.cookies.entrySet()) { // add response cookies to request (for e.g. login posts)
+                        req.cookie(cookie.getKey(), cookie.getValue());
+                    }
+                    return execute(req, res);
+                }
+                res.req = req;
+
+                // check that we can handle the returned content type; if not, abort before fetching it
+                String contentType = res.contentType();
+                if (contentType != null && !req.ignoreContentType() && (!(contentType.startsWith("text/") || contentType.startsWith("application/xml") || contentType.startsWith("application/xhtml+xml"))))
+                    throw new UnsupportedMimeTypeException("Unhandled content type. Must be text/*, application/xml, or application/xhtml+xml",
+                            contentType, req.url().toString());
+
+                InputStream bodyStream = null;
+                InputStream dataStream = null;
+                try {
+                    dataStream = conn.getErrorStream() != null ? conn.getErrorStream() : conn.getInputStream();
+                    bodyStream = res.hasHeader("Content-Encoding") && res.header("Content-Encoding").equalsIgnoreCase("gzip") ?
+                            new BufferedInputStream(new GZIPInputStream(dataStream)) :
+                            new BufferedInputStream(dataStream);
+
+                    res.byteData = DataUtil.readToByteBuffer(bodyStream, req.maxBodySize());
+                    res.charset = DataUtil.getCharsetFromContentType(res.contentType); // may be null, readInputStream deals with it
+                } finally {
+                    if (bodyStream != null) bodyStream.close();
+                    if (dataStream != null) dataStream.close();
+                }
+            } finally {
+                // per Java's documentation, this is not necessary, and precludes keepalives. However in practise,
+                // connection errors will not be released quickly enough and can cause a too many open files error.
+                conn.disconnect();
+            }
+
+            res.executed = true;
+            return res;
+        }
+
+        public int statusCode() {
+            return statusCode;
+        }
+
+        public String statusMessage() {
+            return statusMessage;
+        }
+
+        public String charset() {
+            return charset;
+        }
+
+        public String contentType() {
+            return contentType;
+        }
+
+        public Document parse() throws IOException {
+            Validate.isTrue(executed, "Request must be executed (with .execute(), .get(), or .post() before parsing response");
+            Document doc = DataUtil.parseByteData(byteData, charset, url.toExternalForm(), req.parser());
+            byteData.rewind();
+            charset = doc.outputSettings().charset().name(); // update charset from meta-equiv, possibly
+            return doc;
+        }
+
+        public String body() {
+            Validate.isTrue(executed, "Request must be executed (with .execute(), .get(), or .post() before getting response body");
+            // charset gets set from header on execute, and from meta-equiv on parse. parse may not have happened yet
+            String body;
+            if (charset == null)
+                body = Charset.forName(DataUtil.defaultCharset).decode(byteData).toString();
+            else
+                body = Charset.forName(charset).decode(byteData).toString();
+            byteData.rewind();
+            return body;
+        }
+
+        public byte[] bodyAsBytes() {
+            Validate.isTrue(executed, "Request must be executed (with .execute(), .get(), or .post() before getting response body");
+            return byteData.array();
+        }
+
+        // set up connection defaults, and details from request
+        private static HttpURLConnection createConnection(Connection.Request req) throws IOException {
+            HttpURLConnection conn = (HttpURLConnection) req.url().openConnection();
+            conn.setRequestMethod(req.method().name());
+            conn.setInstanceFollowRedirects(false); // don't rely on native redirection support
+            conn.setConnectTimeout(req.timeout());
+            conn.setReadTimeout(req.timeout());
+            if (req.method() == Method.POST)
+                conn.setDoOutput(true);
+            if (req.cookies().size() > 0)
+                conn.addRequestProperty("Cookie", getRequestCookieString(req));
+            for (Map.Entry<String, String> header : req.headers().entrySet()) {
+                conn.addRequestProperty(header.getKey(), header.getValue());
+            }
+            return conn;
+        }
+
+        // set up url, method, header, cookies
+        private void setupFromConnection(HttpURLConnection conn, Connection.Response previousResponse) throws IOException {
+            method = Connection.Method.valueOf(conn.getRequestMethod());
+            url = conn.getURL();
+            statusCode = conn.getResponseCode();
+            statusMessage = conn.getResponseMessage();
+            contentType = conn.getContentType();
+
+            Map<String, List<String>> resHeaders = conn.getHeaderFields();
+            processResponseHeaders(resHeaders);
+
+            // if from a redirect, map previous response cookies into this response
+            if (previousResponse != null) {
+                for (Map.Entry<String, String> prevCookie : previousResponse.cookies().entrySet()) {
+                    if (!hasCookie(prevCookie.getKey()))
+                        cookie(prevCookie.getKey(), prevCookie.getValue());
+                }
+            }
+        }
+
+        void processResponseHeaders(Map<String, List<String>> resHeaders) {
+            for (Map.Entry<String, List<String>> entry : resHeaders.entrySet()) {
+                String name = entry.getKey();
+                if (name == null)
+                    continue; // http/1.1 line
+
+                List<String> values = entry.getValue();
+                if (name.equalsIgnoreCase("Set-Cookie")) {
+                    for (String value : values) {
+                        if (value == null)
+                            continue;
+                        TokenQueue cd = new TokenQueue(value);
+                        String cookieName = cd.chompTo("=").trim();
+                        String cookieVal = cd.consumeTo(";").trim();
+                        if (cookieVal == null)
+                            cookieVal = "";
+                        // ignores path, date, domain, secure et al. req'd?
+                        // name not blank, value not null
+                        if (cookieName != null && cookieName.length() > 0)
+                            cookie(cookieName, cookieVal);
+                    }
+                } else { // only take the first instance of each header
+                    if (!values.isEmpty())
+                        header(name, values.get(0));
+                }
+            }
+        }
+
+        private static void writePost(Collection<Connection.KeyVal> data, OutputStream outputStream) throws IOException {
+            OutputStreamWriter w = new OutputStreamWriter(outputStream, DataUtil.defaultCharset);
+            boolean first = true;
+            for (Connection.KeyVal keyVal : data) {
+                if (!first) 
+                    w.append('&');
+                else
+                    first = false;
+                
+                w.write(URLEncoder.encode(keyVal.key(), DataUtil.defaultCharset));
+                w.write('=');
+                w.write(URLEncoder.encode(keyVal.value(), DataUtil.defaultCharset));
+            }
+            w.close();
+        }
+        
+        private static String getRequestCookieString(Connection.Request req) {
+            StringBuilder sb = new StringBuilder();
+            boolean first = true;
+            for (Map.Entry<String, String> cookie : req.cookies().entrySet()) {
+                if (!first)
+                    sb.append("; ");
+                else
+                    first = false;
+                sb.append(cookie.getKey()).append('=').append(cookie.getValue());
+                // todo: spec says only ascii, no escaping / encoding defined. validate on set? or escape somehow here?
+            }
+            return sb.toString();
+        }
+
+        // for get url reqs, serialise the data map into the url
+        private static void serialiseRequestUrl(Connection.Request req) throws IOException {
+            URL in = req.url();
+            StringBuilder url = new StringBuilder();
+            boolean first = true;
+            // reconstitute the query, ready for appends
+            url
+                .append(in.getProtocol())
+                .append("://")
+                .append(in.getAuthority()) // includes host, port
+                .append(in.getPath())
+                .append("?");
+            if (in.getQuery() != null) {
+                url.append(in.getQuery());
+                first = false;
+            }
+            for (Connection.KeyVal keyVal : req.data()) {
+                if (!first)
+                    url.append('&');
+                else
+                    first = false;
+                url
+                    .append(URLEncoder.encode(keyVal.key(), DataUtil.defaultCharset))
+                    .append('=')
+                    .append(URLEncoder.encode(keyVal.value(), DataUtil.defaultCharset));
+            }
+            req.url(new URL(url.toString()));
+            req.data().clear(); // moved into url as get params
+        }
     }
 
-    public boolean next() throws SQLException { return _res.next();  }
-    public boolean wasNull() throws SQLException { return _res.wasNull();  }
-    public String getString(int columnIndex) throws SQLException { return _res.getString(columnIndex);  }
-    public boolean getBoolean(int columnIndex) throws SQLException { return _res.getBoolean(columnIndex);  }
-    public byte getByte(int columnIndex) throws SQLException { return _res.getByte(columnIndex); }
-    public short getShort(int columnIndex) throws SQLException { return _res.getShort(columnIndex); }
-    public int getInt(int columnIndex) throws SQLException { return _res.getInt(columnIndex); }
-    public long getLong(int columnIndex) throws SQLException { return _res.getLong(columnIndex); }
-    public float getFloat(int columnIndex) throws SQLException { return _res.getFloat(columnIndex); }
-    public double getDouble(int columnIndex) throws SQLException { return _res.getDouble(columnIndex); }
-    /** @deprecated */
-    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException { return _res.getBigDecimal(columnIndex); }
-    public byte[] getBytes(int columnIndex) throws SQLException { return _res.getBytes(columnIndex); }
-    public Date getDate(int columnIndex) throws SQLException { return _res.getDate(columnIndex); }
-    public Time getTime(int columnIndex) throws SQLException { return _res.getTime(columnIndex); }
-    public Timestamp getTimestamp(int columnIndex) throws SQLException { return _res.getTimestamp(columnIndex); }
-    public InputStream getAsciiStream(int columnIndex) throws SQLException { return _res.getAsciiStream(columnIndex); }
-    /** @deprecated */
-    public InputStream getUnicodeStream(int columnIndex) throws SQLException { return _res.getUnicodeStream(columnIndex); }
-    public InputStream getBinaryStream(int columnIndex) throws SQLException { return _res.getBinaryStream(columnIndex); }
-    public String getString(String columnName) throws SQLException { return _res.getString(columnName); }
-    public boolean getBoolean(String columnName) throws SQLException { return _res.getBoolean(columnName); }
-    public byte getByte(String columnName) throws SQLException { return _res.getByte(columnName); }
-    public short getShort(String columnName) throws SQLException { return _res.getShort(columnName); }
-    public int getInt(String columnName) throws SQLException { return _res.getInt(columnName); }
-    public long getLong(String columnName) throws SQLException { return _res.getLong(columnName); }
-    public float getFloat(String columnName) throws SQLException { return _res.getFloat(columnName); }
-    public double getDouble(String columnName) throws SQLException { return _res.getDouble(columnName); }
-    /** @deprecated */
-    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException { return _res.getBigDecimal(columnName); }
-    public byte[] getBytes(String columnName) throws SQLException { return _res.getBytes(columnName); }
-    public Date getDate(String columnName) throws SQLException { return _res.getDate(columnName); }
-    public Time getTime(String columnName) throws SQLException { return _res.getTime(columnName); }
-    public Timestamp getTimestamp(String columnName) throws SQLException { return _res.getTimestamp(columnName); }
-    public InputStream getAsciiStream(String columnName) throws SQLException { return _res.getAsciiStream(columnName); }
-    /** @deprecated */
-    public InputStream getUnicodeStream(String columnName) throws SQLException { return _res.getUnicodeStream(columnName); }
-    public InputStream getBinaryStream(String columnName) throws SQLException { return _res.getBinaryStream(columnName); }
-    public SQLWarning getWarnings() throws SQLException { return _res.getWarnings();  }
-    public void clearWarnings() throws SQLException { _res.clearWarnings();  }
-    public String getCursorName() throws SQLException { return _res.getCursorName();  }
-    public ResultSetMetaData getMetaData() throws SQLException { return _res.getMetaData();  }
-    public Object getObject(int columnIndex) throws SQLException { return _res.getObject(columnIndex);  }
-    public Object getObject(String columnName) throws SQLException { return _res.getObject(columnName);  }
-    public int findColumn(String columnName) throws SQLException { return _res.findColumn(columnName);  }
-    public Reader getCharacterStream(int columnIndex) throws SQLException { return _res.getCharacterStream(columnIndex);  }
-    public Reader getCharacterStream(String columnName) throws SQLException { return _res.getCharacterStream(columnName);  }
-    public BigDecimal getBigDecimal(int columnIndex) throws SQLException { return _res.getBigDecimal(columnIndex);  }
-    public BigDecimal getBigDecimal(String columnName) throws SQLException { return _res.getBigDecimal(columnName);  }
-    public boolean isBeforeFirst() throws SQLException { return _res.isBeforeFirst();  }
-    public boolean isAfterLast() throws SQLException { return _res.isAfterLast();  }
-    public boolean isFirst() throws SQLException { return _res.isFirst();  }
-    public boolean isLast() throws SQLException { return _res.isLast();  }
-    public void beforeFirst() throws SQLException { _res.beforeFirst();  }
-    public void afterLast() throws SQLException { _res.afterLast();  }
-    public boolean first() throws SQLException { return _res.first();  }
-    public boolean last() throws SQLException { return _res.last();  }
-    public int getRow() throws SQLException { return _res.getRow();  }
-    public boolean absolute(int row) throws SQLException { return _res.absolute(row);  }
-    public boolean relative(int rows) throws SQLException { return _res.relative(rows);  }
-    public boolean previous() throws SQLException { return _res.previous();  }
-    public void setFetchDirection(int direction) throws SQLException { _res.setFetchDirection(direction);  }
-    public int getFetchDirection() throws SQLException { return _res.getFetchDirection();  }
-    public void setFetchSize(int rows) throws SQLException { _res.setFetchSize(rows); }
-    public int getFetchSize() throws SQLException { return _res.getFetchSize();  }
-    public int getType() throws SQLException { return _res.getType();  }
-    public int getConcurrency() throws SQLException { return _res.getConcurrency();  }
-    public boolean rowUpdated() throws SQLException { return _res.rowUpdated();  }
-    public boolean rowInserted() throws SQLException { return _res.rowInserted();  }
-    public boolean rowDeleted() throws SQLException { return _res.rowDeleted();  }
-    public void updateNull(int columnIndex) throws SQLException {  _res.updateNull(columnIndex);  }
-    public void updateBoolean(int columnIndex, boolean x) throws SQLException {  _res.updateBoolean(columnIndex, x);  }
-    public void updateByte(int columnIndex, byte x) throws SQLException {  _res.updateByte(columnIndex, x);  }
-    public void updateShort(int columnIndex, short x) throws SQLException {  _res.updateShort(columnIndex, x);  }
-    public void updateInt(int columnIndex, int x) throws SQLException {  _res.updateInt(columnIndex, x);  }
-    public void updateLong(int columnIndex, long x) throws SQLException {  _res.updateLong(columnIndex, x); }
-    public void updateFloat(int columnIndex, float x) throws SQLException {  _res.updateFloat(columnIndex, x);  }
-    public void updateDouble(int columnIndex, double x) throws SQLException {  _res.updateDouble(columnIndex, x);  }
-    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnIndex, x);  }
-    public void updateString(int columnIndex, String x) throws SQLException {  _res.updateString(columnIndex, x);  }
-    public void updateBytes(int columnIndex, byte[] x) throws SQLException {  _res.updateBytes(columnIndex, x); }
-    public void updateDate(int columnIndex, Date x) throws SQLException {  _res.updateDate(columnIndex, x);  }
-    public void updateTime(int columnIndex, Time x) throws SQLException {  _res.updateTime(columnIndex, x); }
-    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException {  _res.updateTimestamp(columnIndex, x);  }
-    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnIndex, x, length);  }
-    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnIndex, x, length); }
-    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {  _res.updateCharacterStream(columnIndex, x, length); }
-    public void updateObject(int columnIndex, Object x, int scale) throws SQLException {  _res.updateObject(columnIndex, x);  }
-    public void updateObject(int columnIndex, Object x) throws SQLException {  _res.updateObject(columnIndex, x);  }
-    public void updateNull(String columnName) throws SQLException {  _res.updateNull(columnName);  }
-    public void updateBoolean(String columnName, boolean x) throws SQLException {  _res.updateBoolean(columnName, x);  }
-    public void updateByte(String columnName, byte x) throws SQLException {  _res.updateByte(columnName, x);  }
-    public void updateShort(String columnName, short x) throws SQLException {  _res.updateShort(columnName, x);  }
-    public void updateInt(String columnName, int x) throws SQLException {  _res.updateInt(columnName, x);  }
-    public void updateLong(String columnName, long x) throws SQLException {  _res.updateLong(columnName, x);  }
-    public void updateFloat(String columnName, float x) throws SQLException {  _res.updateFloat(columnName, x);  }
-    public void updateDouble(String columnName, double x) throws SQLException { _res.updateDouble(columnName, x);  }
-    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnName, x);  }
-    public void updateString(String columnName, String x) throws SQLException {  _res.updateString(columnName, x);  }
-    public void updateBytes(String columnName, byte[] x) throws SQLException {  _res.updateBytes(columnName, x);  }
-    public void updateDate(String columnName, Date x) throws SQLException {  _res.updateDate(columnName, x);  }
-    public void updateTime(String columnName, Time x) throws SQLException {  _res.updateTime(columnName, x);  }
-    public void updateTimestamp(String columnName, Timestamp x) throws SQLException {  _res.updateTimestamp(columnName, x);  }
-    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnName, x, length);  }
-    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnName, x, length);  }
-    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException {  _res.updateCharacterStream(columnName, reader, length);  }
-    public void updateObject(String columnName, Object x, int scale) throws SQLException {  _res.updateObject(columnName, x);  }
-    public void updateObject(String columnName, Object x) throws SQLException {  _res.updateObject(columnName, x);  }
-    public void insertRow() throws SQLException {  _res.insertRow();  }
-    public void updateRow() throws SQLException {  _res.updateRow();  }
-    public void deleteRow() throws SQLException {  _res.deleteRow();  }
-    public void refreshRow() throws SQLException {  _res.refreshRow();  }
-    public void cancelRowUpdates() throws SQLException {  _res.cancelRowUpdates();  }
-    public void moveToInsertRow() throws SQLException {  _res.moveToInsertRow();  }
-    public void moveToCurrentRow() throws SQLException {  _res.moveToCurrentRow();  }
-    public Object getObject(int i, Map map) throws SQLException { return _res.getObject(i, map);  }
-    public Ref getRef(int i) throws SQLException { return _res.getRef(i);  }
-    public Blob getBlob(int i) throws SQLException { return _res.getBlob(i);  }
-    public Clob getClob(int i) throws SQLException { return _res.getClob(i);  }
-    public Array getArray(int i) throws SQLException { return _res.getArray(i);  }
-    public Object getObject(String colName, Map map) throws SQLException { return _res.getObject(colName, map);  }
-    public Ref getRef(String colName) throws SQLException { return _res.getRef(colName);  }
-    public Blob getBlob(String colName) throws SQLException { return _res.getBlob(colName);  }
-    public Clob getClob(String colName) throws SQLException { return _res.getClob(colName);  }
-    public Array getArray(String colName) throws SQLException { return _res.getArray(colName);  }
-    public Date getDate(int columnIndex, Calendar cal) throws SQLException { return _res.getDate(columnIndex, cal);  }
-    public Date getDate(String columnName, Calendar cal) throws SQLException { return _res.getDate(columnName, cal);  }
-    public Time getTime(int columnIndex, Calendar cal) throws SQLException { return _res.getTime(columnIndex, cal);  }
-    public Time getTime(String columnName, Calendar cal) throws SQLException { return _res.getTime(columnName, cal);  }
-    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException { return _res.getTimestamp(columnIndex, cal);  }
-    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException { return _res.getTimestamp(columnName, cal);  }
+    public static class KeyVal implements Connection.KeyVal {
+        private String key;
+        private String value;
 
-    // ------------------- JDBC 3.0 -----------------------------------------
-    // Will be commented by the build process on a JDBC 2.0 system
+        public static KeyVal create(String key, String value) {
+            Validate.notEmpty(key, "Data key must not be empty");
+            Validate.notNull(value, "Data value must not be null");
+            return new KeyVal(key, value);
+        }
 
-/* JDBC_3_ANT_KEY_BEGIN */
+        private KeyVal(String key, String value) {
+            this.key = key;
+            this.value = value;
+        }
 
-    public java.net.URL getURL(int columnIndex) throws SQLException {
-        return _res.getURL(columnIndex);
+        public KeyVal key(String key) {
+            Validate.notEmpty(key, "Data key must not be empty");
+            this.key = key;
+            return this;
+        }
+
+        public String key() {
+            return key;
+        }
+
+        public KeyVal value(String value) {
+            Validate.notNull(value, "Data value must not be null");
+            this.value = value;
+            return this;
+        }
+
+        public String value() {
+            return value;
+        }
+
+        @Override
+        public String toString() {
+            return key + "=" + value;
+        }      
     }
-
-    public java.net.URL getURL(String columnName) throws SQLException {
-        return _res.getURL(columnName);
-    }
-
-    public void updateRef(int columnIndex, java.sql.Ref x)
-        throws SQLException {
-        _res.updateRef(columnIndex, x);
-    }
-
-    public void updateRef(String columnName, java.sql.Ref x)
-        throws SQLException {
-        _res.updateRef(columnName, x);
-    }
-
-    public void updateBlob(int columnIndex, java.sql.Blob x)
-        throws SQLException {
-        _res.updateBlob(columnIndex, x);
-    }
-
-    public void updateBlob(String columnName, java.sql.Blob x)
-        throws SQLException {
-        _res.updateBlob(columnName, x);
-    }
-
-    public void updateClob(int columnIndex, java.sql.Clob x)
-        throws SQLException {
-        _res.updateClob(columnIndex, x);
-    }
-
-    public void updateClob(String columnName, java.sql.Clob x)
-        throws SQLException {
-        _res.updateClob(columnName, x);
-    }
-
-    public void updateArray(int columnIndex, java.sql.Array x)
-        throws SQLException {
-        _res.updateArray(columnIndex, x);
-    }
-
-    public void updateArray(String columnName, java.sql.Array x)
-        throws SQLException {
-        _res.updateArray(columnName, x);
-    }
-
-/* JDBC_3_ANT_KEY_END */
 }

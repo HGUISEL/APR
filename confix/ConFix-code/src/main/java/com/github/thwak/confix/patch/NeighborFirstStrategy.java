@@ -411,6 +411,23 @@ public class NeighborFirstStrategy extends ConcretizationStrategy {
 			} catch (Exception e1) {
 				e1.printStackTrace();
 			}
+
+			//TE 
+			System.out.println("=================Printing varMapping=================");
+			for(String key : varMapping.keySet()){
+				System.out.println(key + " : "+varMapping.get(key));
+			}
+			System.out.println("=================Printing typeMapping=================");
+			for(String key : typeMapping.keySet()){
+				System.out.println(key + " : "+typeMapping.get(key));
+			}
+			System.out.println("=================Printing methodMapping=================");
+			for(String key : methodMapping.keySet()){
+				System.out.println(key + " : "+methodMapping.get(key));
+			}
+
+
+
 			return astNode;
 		}
 	}

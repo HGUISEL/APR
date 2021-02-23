@@ -694,16 +694,14 @@ class FunctionInjector {
 
     Node block = fnNode.getLastChild();
 
-    boolean hasSideEffects = false;  // empty function case
+    boolean hasSideEffects = false;
     if (block.hasChildren()) {
       Preconditions.checkState(block.hasOneChild());
       Node stmt = block.getFirstChild();
       if (stmt.isReturn()) {
-        hasSideEffects = NodeUtil.mayHaveSideEffects(
-            stmt.getFirstChild(), compiler);
+        hasSideEffects = NodeUtil.mayHaveSideEffects(stmt.getFirstChild(), compiler);
       }
     }
-
     // CALL NODE: [ NAME, ARG1, ARG2, ... ]
     Node cArg = callNode.getFirstChild().getNext();
 
@@ -732,7 +730,6 @@ class FunctionInjector {
           if (hasSideEffects && NodeUtil.canBeSideEffected(cArg)) {
             return CanInlineResult.NO;
           }
-
           // Check for arguments that are evaluated more than once.
           // Note: Unlike block inlining, there it is not possible that a
           // parameter reference will be in a loop.

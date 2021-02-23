@@ -1,7 +1,9 @@
 package org.jsoup.nodes;
 
+import org.jsoup.helper.StringUtil;
 import org.jsoup.helper.Validate;
 import org.jsoup.parser.Tag;
+import org.jsoup.select.Elements;
 
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetEncoder;
@@ -14,6 +16,9 @@ import java.util.List;
  @author Jonathan Hedley, jonathan@hedley.net */
 public class Document extends Element {
     private OutputSettings outputSettings = new OutputSettings();
+    private QuirksMode quirksMode = QuirksMode.noQuirks;
+    private String location;
+    private boolean updateMetaCharset = false;
 
     /**
      Create a new, empty Document.
@@ -23,6 +28,7 @@ public class Document extends Element {
      */
     public Document(String baseUri) {
         super(Tag.valueOf("#root"), baseUri);
+        this.location = baseUri;
     }
 
     /**
@@ -42,6 +48,15 @@ public class Document extends Element {
     }
 
     /**
+     * Get the URL this Document was parsed from. If the starting URL is a redirect,
+     * this will return the final URL from which the document was served from.
+     * @return location
+     */
+    public String location() {
+     return location;
+    }
+    
+    /**
      Accessor to the document's {@code head} element.
      @return {@code head}
      */
@@ -59,11 +74,12 @@ public class Document extends Element {
 
     /**
      Get the string contents of the document's {@code title} element.
-     @return Trimed title, or empty string if none set.
+     @return Trimmed title, or empty string if none set.
      */
     public String title() {
+        // title is a preserve whitespace tag (for document output), but normalised here
         Element titleEl = getElementsByTag("title").first();
-        return titleEl != null ? titleEl.text().trim() : "";
+        return titleEl != null ? StringUtil.normaliseWhitespace(titleEl.text()).trim() : "";
     }
 
     /**
@@ -106,15 +122,20 @@ public class Document extends Element {
 
         // pull text nodes out of root, html, and head els, and push into body. non-text nodes are already taken care
         // of. do in inverse order to maintain text order.
-        normalise(head());
-        normalise(htmlEl);
-        normalise(this);        
+        normaliseTextNodes(head());
+        normaliseTextNodes(htmlEl);
+        normaliseTextNodes(this);
 
+        normaliseStructure("head", htmlEl);
+        normaliseStructure("body", htmlEl);
+        
+        ensureMetaCharsetElement();
+        
         return this;
     }
 
     // does not recurse.
-    private void normalise(Element element) {
+    private void normaliseTextNodes(Element element) {
         List<Node> toMove = new ArrayList<Node>();
         for (Node node: element.childNodes) {
             if (node instanceof TextNode) {
@@ -129,6 +150,28 @@ public class Document extends Element {
             element.removeChild(node);
             body().prependChild(new TextNode(" ", ""));
             body().prependChild(node);
+        }
+    }
+
+    // merge multiple <head> or <body> contents into one, delete the remainder, and ensure they are owned by <html>
+    private void normaliseStructure(String tag, Element htmlEl) {
+        Elements elements = this.getElementsByTag(tag);
+        Element master = elements.first(); // will always be available as created above if not existent
+        if (elements.size() > 1) { // dupes, move contents to master
+            List<Node> toMove = new ArrayList<Node>();
+            for (int i = 1; i < elements.size(); i++) {
+                Node dupe = elements.get(i);
+                for (Node node : dupe.childNodes)
+                    toMove.add(node);
+                dupe.remove();
+            }
+
+            for (Node dupe : toMove)
+                master.appendChild(dupe);
+        }
+        // ensure parented by <html>
+        if (!master.parent().equals(htmlEl)) {
+            htmlEl.appendChild(master); // includes remove()            
         }
     }
 
@@ -166,19 +209,175 @@ public class Document extends Element {
     public String nodeName() {
         return "#document";
     }
+    
+    /**
+     * Sets the charset used in this document. This method is equivalent
+     * to {@link OutputSettings#charset(java.nio.charset.Charset)
+     * OutputSettings.charset(Charset)} but in addition it updates the
+     * charset / encoding element within the document.
+     * 
+     * <p>This enables
+     * {@link #updateMetaCharsetElement(boolean) meta charset update}.</p>
+     * 
+     * <p>If there's no element with charset / encoding information yet it will
+     * be created. Obsolete charset / encoding definitions are removed!</p>
+     * 
+     * <p><b>Elements used:</b></p>
+     * 
+     * <ul>
+     * <li><b>Html:</b> <i>&lt;meta charset="CHARSET"&gt;</i></li>
+     * <li><b>Xml:</b> <i>&lt;?xml version="1.0" encoding="CHARSET"&gt;</i></li>
+     * </ul>
+     * 
+     * @param charset Charset
+     * 
+     * @see #updateMetaCharsetElement(boolean) 
+     * @see OutputSettings#charset(java.nio.charset.Charset) 
+     */
+    public void charset(Charset charset) {
+        updateMetaCharsetElement(true);
+        outputSettings.charset(charset);
+        ensureMetaCharsetElement();
+    }
+    
+    /**
+     * Returns the charset used in this document. This method is equivalent
+     * to {@link OutputSettings#charset()}.
+     * 
+     * @return Current Charset
+     * 
+     * @see OutputSettings#charset() 
+     */
+    public Charset charset() {
+        return outputSettings.charset();
+    }
+    
+    /**
+     * Sets whether the element with charset information in this document is
+     * updated on changes through {@link #charset(java.nio.charset.Charset)
+     * Document.charset(Charset)} or not.
+     * 
+     * <p>If set to <tt>false</tt> <i>(default)</i> there are no elements
+     * modified.</p>
+     * 
+     * @param update If <tt>true</tt> the element updated on charset
+     * changes, <tt>false</tt> if not
+     * 
+     * @see #charset(java.nio.charset.Charset) 
+     */
+    public void updateMetaCharsetElement(boolean update) {
+        this.updateMetaCharset = update;
+    }
+    
+    /**
+     * Returns whether the element with charset information in this document is
+     * updated on changes through {@link #charset(java.nio.charset.Charset)
+     * Document.charset(Charset)} or not.
+     * 
+     * @return Returns <tt>true</tt> if the element is updated on charset
+     * changes, <tt>false</tt> if not
+     */
+    public boolean updateMetaCharsetElement() {
+        return updateMetaCharset;
+    }
+
+    @Override
+    public Document clone() {
+        Document clone = (Document) super.clone();
+        clone.outputSettings = this.outputSettings.clone();
+        return clone;
+    }
+    
+    /**
+     * Ensures a meta charset (html) or xml declaration (xml) with the current
+     * encoding used. This only applies with
+     * {@link #updateMetaCharsetElement(boolean) updateMetaCharset} set to
+     * <tt>true</tt>, otherwise this method does nothing.
+     * 
+     * <ul>
+     * <li>An exsiting element gets updated with the current charset</li>
+     * <li>If there's no element yet it will be inserted</li>
+     * <li>Obsolete elements are removed</li>
+     * </ul>
+     * 
+     * <p><b>Elements used:</b></p>
+     * 
+     * <ul>
+     * <li><b>Html:</b> <i>&lt;meta charset="CHARSET"&gt;</i></li>
+     * <li><b>Xml:</b> <i>&lt;?xml version="1.0" encoding="CHARSET"&gt;</i></li>
+     * </ul>
+     */
+    private void ensureMetaCharsetElement() {
+        if (updateMetaCharset) {
+            OutputSettings.Syntax syntax = outputSettings().syntax();
+
+            if (syntax == OutputSettings.Syntax.html) {
+                Element metaCharset = select("meta[charset]").first();
+
+                if (metaCharset != null) {
+                    metaCharset.attr("charset", charset().displayName());
+                } else {
+                    Element head = head();
+
+                    if (head != null) {
+                        head.appendElement("meta").attr("charset", charset().displayName());
+                    }
+                }
+
+                // Remove obsolete elements
+                select("meta[name=charset]").remove();
+            } else if (syntax == OutputSettings.Syntax.xml) {
+                Node node = childNodes().get(0);
+
+                if (node instanceof XmlDeclaration) {
+                    XmlDeclaration decl = (XmlDeclaration) node;
+
+                    if (decl.name().equals("xml")) {
+                        decl.attr("encoding", charset().displayName());
+
+                        final String version = decl.attr("version");
+
+                        if (version != null) {
+                            decl.attr("version", "1.0");
+                        }
+                    } else {
+                        decl = new XmlDeclaration("xml", baseUri, false);
+                        decl.attr("version", "1.0");
+                        decl.attr("encoding", charset().displayName());
+
+                        prependChild(decl);
+                    }
+                } else {
+                    XmlDeclaration decl = new XmlDeclaration("xml", baseUri, false);
+                    decl.attr("version", "1.0");
+                    decl.attr("encoding", charset().displayName());
+
+                    prependChild(decl);
+                }
+            }
+        }
+    }
+    
 
     /**
      * A Document's output settings control the form of the text() and html() methods.
      */
-    public class OutputSettings {
+    public static class OutputSettings implements Cloneable {
+        /**
+         * The output serialization syntax.
+         */
+        public enum Syntax {html, xml}
+
         private Entities.EscapeMode escapeMode = Entities.EscapeMode.base;
         private Charset charset = Charset.forName("UTF-8");
         private CharsetEncoder charsetEncoder = charset.newEncoder();
         private boolean prettyPrint = true;
+        private boolean outline = false;
         private int indentAmount = 1;
+        private Syntax syntax = Syntax.html;
 
         public OutputSettings() {}
-
+        
         /**
          * Get the document's current HTML escape mode: <code>base</code>, which provides a limited set of named HTML
          * entities and escapes other characters as numbered entities for maximum compatibility; or <code>extended</code>,
@@ -192,7 +391,8 @@ public class Document extends Element {
         }
 
         /**
-         * Set the document's escape mode
+         * Set the document's escape mode, which determines how characters are escaped when the output character set
+         * does not support a given character:- using either a named or a numbered escape.
          * @param escapeMode the new escape mode to use
          * @return the document's output settings, for chaining
          */
@@ -219,7 +419,6 @@ public class Document extends Element {
          * @return the document's output settings, for chaining
          */
         public OutputSettings charset(Charset charset) {
-            // todo: this should probably update the doc's meta charset
             this.charset = charset;
             charsetEncoder = charset.newEncoder();
             return this;
@@ -240,6 +439,25 @@ public class Document extends Element {
         }
 
         /**
+         * Get the document's current output syntax.
+         * @return current syntax
+         */
+        public Syntax syntax() {
+            return syntax;
+        }
+
+        /**
+         * Set the document's output syntax. Either {@code html}, with empty tags and boolean attributes (etc), or
+         * {@code xml}, with self-closing tags.
+         * @param syntax serialization syntax
+         * @return the document's output settings, for chaining
+         */
+        public OutputSettings syntax(Syntax syntax) {
+            this.syntax = syntax;
+            return this;
+        }
+
+        /**
          * Get if pretty printing is enabled. Default is true. If disabled, the HTML output methods will not re-format
          * the output, and the output will generally look like the input.
          * @return if pretty printing is enabled.
@@ -257,6 +475,25 @@ public class Document extends Element {
             prettyPrint = pretty;
             return this;
         }
+        
+        /**
+         * Get if outline mode is enabled. Default is false. If enabled, the HTML output methods will consider
+         * all tags as block.
+         * @return if outline mode is enabled.
+         */
+        public boolean outline() {
+            return outline;
+        }
+        
+        /**
+         * Enable or disable HTML outline mode.
+         * @param outlineMode new outline setting
+         * @return this, for chaining
+         */
+        public OutputSettings outline(boolean outlineMode) {
+            outline = outlineMode;
+            return this;
+        }
 
         /**
          * Get the current tag indent amount, used when pretty printing.
@@ -268,13 +505,27 @@ public class Document extends Element {
 
         /**
          * Set the indent amount for pretty printing
-         * @param indentAmount number of spaces to use for indenting each level. Must be >= 0.
+         * @param indentAmount number of spaces to use for indenting each level. Must be {@literal >=} 0.
          * @return this, for chaining
          */
         public OutputSettings indentAmount(int indentAmount) {
             Validate.isTrue(indentAmount >= 0);
             this.indentAmount = indentAmount;
             return this;
+        }
+
+        @Override
+        public OutputSettings clone() {
+            OutputSettings clone;
+            try {
+                clone = (OutputSettings) super.clone();
+            } catch (CloneNotSupportedException e) {
+                throw new RuntimeException(e);
+            }
+            clone.charset(charset.name()); // new charset and charset encoder
+            clone.escapeMode = Entities.EscapeMode.valueOf(escapeMode.name());
+            // indentAmount, prettyPrint are primitives so object.clone() will handle
+            return clone;
         }
     }
 
@@ -285,5 +536,28 @@ public class Document extends Element {
     public OutputSettings outputSettings() {
         return outputSettings;
     }
-}
 
+    /**
+     * Set the document's output settings.
+     * @param outputSettings new output settings.
+     * @return this document, for chaining.
+     */
+    public Document outputSettings(OutputSettings outputSettings) {
+        Validate.notNull(outputSettings);
+        this.outputSettings = outputSettings;
+        return this;
+    }
+
+    public enum QuirksMode {
+        noQuirks, quirks, limitedQuirks
+    }
+
+    public QuirksMode quirksMode() {
+        return quirksMode;
+    }
+
+    public Document quirksMode(QuirksMode quirksMode) {
+        this.quirksMode = quirksMode;
+        return this;
+    }
+}

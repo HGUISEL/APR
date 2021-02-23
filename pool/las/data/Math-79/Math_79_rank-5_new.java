@@ -7,682 +7,537 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.geronimo.blueprint.context;
 
-import java.beans.BeanInfo;
-import java.beans.IntrospectionException;
-import java.beans.Introspector;
-import java.beans.PropertyDescriptor;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.lang.reflect.Type;
-import java.util.ArrayList;
+package org.apache.flink.runtime.rest;
+
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.runtime.concurrent.FutureUtils;
+import org.apache.flink.runtime.net.RedirectingSslHandler;
+import org.apache.flink.runtime.net.SSLEngineFactory;
+import org.apache.flink.runtime.rest.handler.PipelineErrorHandler;
+import org.apache.flink.runtime.rest.handler.RestHandlerSpecification;
+import org.apache.flink.runtime.rest.handler.router.Router;
+import org.apache.flink.runtime.rest.handler.router.RouterHandler;
+import org.apache.flink.runtime.rest.versioning.RestAPIVersion;
+import org.apache.flink.runtime.util.ExecutorThreadFactory;
+import org.apache.flink.util.AutoCloseableAsync;
+import org.apache.flink.util.Preconditions;
+
+import org.apache.flink.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
+import org.apache.flink.shaded.netty4.io.netty.bootstrap.ServerBootstrapConfig;
+import org.apache.flink.shaded.netty4.io.netty.channel.Channel;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInboundHandler;
+import org.apache.flink.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.flink.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.flink.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
+import org.apache.flink.shaded.netty4.io.netty.handler.codec.http.HttpServerCodec;
+import org.apache.flink.shaded.netty4.io.netty.handler.stream.ChunkedWriteHandler;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+
+import java.io.IOException;
+import java.io.Serializable;
+import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-
-import org.apache.geronimo.blueprint.BeanProcessor;
-import org.apache.geronimo.blueprint.namespace.ComponentDefinitionRegistryImpl;
-import org.apache.geronimo.blueprint.utils.ConversionUtils;
-import org.apache.geronimo.blueprint.utils.ReflectionUtils;
-import org.apache.xbean.recipe.AbstractRecipe;
-import org.apache.xbean.recipe.ConstructionException;
-import org.apache.xbean.recipe.ExecutionContext;
-import org.apache.xbean.recipe.Option;
-import org.apache.xbean.recipe.Recipe;
-import org.apache.xbean.recipe.RecipeHelper;
-import org.apache.xbean.recipe.ReferenceRecipe;
-import org.osgi.service.blueprint.convert.ConversionService;
-import org.osgi.service.blueprint.reflect.BeanArgument;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
- *
- * @author <a href="mailto:dev@geronimo.apache.org">Apache Geronimo Project</a>
- * @version $Rev$, $Date$
+ * An abstract class for netty-based REST server endpoints.
  */
-public class BlueprintObjectRecipe extends AbstractRecipe {
+public abstract class RestServerEndpoint implements AutoCloseableAsync {
 
-    private Class typeClass;
-    private final LinkedHashMap<String,Object> properties = new LinkedHashMap<String,Object>();
-    private final EnumSet<Option> options = EnumSet.noneOf(Option.class);
+	protected final Logger log = LoggerFactory.getLogger(getClass());
 
-    private final BlueprintContextImpl blueprintContext;
-    private boolean keepRecipe = false;
-    private String initMethod;
-    private String destroyMethod;
-    private List<String> explicitDependencies;
-    
-    private Recipe factory; // could be Recipe or actual object
-    private String factoryMethod;
-    private List<Object> arguments;
-    private List<BeanArgument> beanArguments;
-    private boolean reorderArguments;
-    
-    public BlueprintObjectRecipe(BlueprintContextImpl blueprintContext, Class typeClass) {
-        this.typeClass = typeClass;
-        this.blueprintContext = blueprintContext;
-        allow(Option.LAZY_ASSIGNMENT);
-    }
-    
-    public void allow(Option option){
-        options.add(option);
-    }
+	private final Object lock = new Object();
 
-    public void disallow(Option option){
-        options.remove(option);
-    }
+	private final String restAddress;
+	private final String restBindAddress;
+	private final int restBindPort;
+	@Nullable
+	private final SSLEngineFactory sslEngineFactory;
+	private final int maxContentLength;
 
-    public Set<Option> getOptions() {
-        return Collections.unmodifiableSet(options);
-    }
+	protected final Path uploadDir;
+	protected final Map<String, String> responseHeaders;
 
-    public Object getProperty(String name) {
-        return properties.get(name);
-    }
+	private final CompletableFuture<Void> terminationFuture;
 
-    public Map<String, Object> getProperties() {
-        return new LinkedHashMap<String, Object>(properties);
-    }
+	private List<Tuple2<RestHandlerSpecification, ChannelInboundHandler>> handlers;
+	private ServerBootstrap bootstrap;
+	private Channel serverChannel;
+	private String restBaseUrl;
 
-    public void setProperty(String name, Object value) {
-        properties.put(name, value);
-    }
+	private State state = State.CREATED;
 
-    public void setAllProperties(Map<?,?> map) {
-        if (map == null) throw new NullPointerException("map is null");
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            String name = (String) entry.getKey();
-            Object value = entry.getValue();
-            setProperty(name, value);
-        }
-    }
+	public RestServerEndpoint(RestServerEndpointConfiguration configuration) throws IOException {
+		Preconditions.checkNotNull(configuration);
 
-    public void setFactoryMethod(String method) {
-        this.factoryMethod = method;
-    }
-    
-    public void setFactoryComponent(Recipe factory) {
-        this.factory = factory;
-    }
-    
-    public void setBeanArguments(List<BeanArgument> arguments) {
-        this.beanArguments = arguments;
-    }
-    
-    public void setArguments(List<Object> arguments) {
-        this.arguments = arguments;
-    }
-    
-    public void setReorderArguments(boolean reorder) {
-        this.reorderArguments = reorder;
-    }
-    
-    public void setKeepRecipe(boolean keepRecipe) {
-        this.keepRecipe = keepRecipe;
-    }
-    
-    public boolean getKeepRecipe() {
-        return keepRecipe;
-    }
-    
-    public void setInitMethod(String initMethod) {
-        this.initMethod = initMethod;
-    }
-    
-    public String getInitMethod() {
-        return initMethod;
-    }
-    
-    public void setDestroyMethod(String destroyMethod) {
-        this.destroyMethod = destroyMethod;
-    }
-    
-    public String getDestroyMethod() {
-        return destroyMethod;
-    }
+		this.restAddress = configuration.getRestAddress();
+		this.restBindAddress = configuration.getRestBindAddress();
+		this.restBindPort = configuration.getRestBindPort();
+		this.sslEngineFactory = configuration.getSslEngineFactory();
 
-    public List<String> getExplicitDependencies() {
-        return explicitDependencies;
-    }
+		this.uploadDir = configuration.getUploadDir();
+		createUploadDir(uploadDir, log);
 
-    public void setExplicitDependencies(List<String> explicitDependencies) {
-        this.explicitDependencies = explicitDependencies;
-    }
+		this.maxContentLength = configuration.getMaxContentLength();
+		this.responseHeaders = configuration.getResponseHeaders();
 
-    @Override
-    public List<Recipe> getNestedRecipes() {
-        List<Recipe> recipes = new ArrayList<Recipe>();
-        for (Object o : properties.values()) {
-            if (o instanceof Recipe) {
-                Recipe recipe = (Recipe) o;
-                recipes.add(recipe);
-            }
-        }
-        if (arguments != null) {
-            for (Object argument : arguments) {
-                if (argument instanceof Recipe) {
-                    recipes.add((Recipe)argument);
-                }
-            }
-        }
-        if (explicitDependencies != null) {
-            for (String name : explicitDependencies) {
-                recipes.add(new ReferenceRecipe(name));
-            }
-        }
-        return recipes; 
-    }
+		terminationFuture = new CompletableFuture<>();
+	}
 
-    private void instantiateExplicitDependencies() {
-        if (explicitDependencies != null) {
-            for (String name : explicitDependencies) {
-                Recipe recipe = new ReferenceRecipe(name);
-                recipe.create(Object.class, false);
-            }
-        }
-    }
-    
-    private Class loadClass(String typeName) throws ConstructionException {
-        if (typeName == null) {
-            return null;
-        }
-        try {
-            return RecipeBuilder.loadClass(blueprintContext, typeName);
-        } catch (ClassNotFoundException e) {
-            throw new ConstructionException("Unable to load type class " + typeName);
-        }
-    }
-        
-    private Object getInstance(boolean refAllowed) throws ConstructionException {
-        Object instance = null;
-        
-        // Instanciate arguments
-        List<Object> args = new ArrayList<Object>();
-        List<Class> types = new ArrayList<Class>();
-        if (arguments != null) {
-            for (int i = 0; i < arguments.size(); i++) {
-                Object arg = arguments.get(i);
-                if (arg instanceof Recipe) {
-                    args.add(((Recipe) arg).create(Object.class, refAllowed));
-                } else {
-                    args.add(arg);
-                }
-                String valueType = beanArguments.get(i).getValueType();
-                if (valueType != null) {
-                    try {
-                        types.add(loadClass(valueType));
-                    } catch (Throwable t) {
-                        throw new ConstructionException("Error loading class " + valueType + " when instanciating bean " + getName());
-                    }
-                } else {
-                    types.add(null);
-                }
-            }
-        }
+	/**
+	 * This method is called at the beginning of {@link #start()} to setup all handlers that the REST server endpoint
+	 * implementation requires.
+	 *
+	 * @param restAddressFuture future rest address of the RestServerEndpoint
+	 * @return Collection of AbstractRestHandler which are added to the server endpoint
+	 */
+	protected abstract List<Tuple2<RestHandlerSpecification, ChannelInboundHandler>> initializeHandlers(CompletableFuture<String> restAddressFuture);
 
-        if (factory != null) {
-            // look for instance method on factory object
-            Object factoryObj = factory.create(Object.class, false);
-            // Map of matching methods
-            Map<Method, List<Object>> matches = findMatchingMethods(factoryObj.getClass(), factoryMethod, true, args, types, arguments);
-            if (matches.size() == 1) {
-                try {
-                    Map.Entry<Method, List<Object>> match = matches.entrySet().iterator().next();
-                    instance = match.getKey().invoke(factoryObj, match.getValue().toArray());
-                } catch (InvocationTargetException e) {
-                    Throwable root = e.getTargetException();
-                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), root);
-                } catch (Throwable e) {
-                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), e);
-                }
-            } else if (matches.size() == 0) {
-                throw new ConstructionException("Unable to find a matching factory method " + factoryMethod + " on class " + factoryObj.getClass() + " for arguments " + args + " when instanciating bean " + getName());
-            } else {
-                throw new ConstructionException("Multiple matching factory methods " + factoryMethod + " found on class " + factoryObj.getClass() + " for arguments " + args + " when instanciating bean " + getName());
-            }
-        } else if (factoryMethod != null) {
-            // Map of matching methods
-            Map<Method, List<Object>> matches = findMatchingMethods(getType(), factoryMethod, false, args, types, arguments);
-            if (matches.size() == 1) {
-                try {
-                    Map.Entry<Method, List<Object>> match = matches.entrySet().iterator().next();
-                    instance = match.getKey().invoke(null, match.getValue().toArray());
-                } catch (InvocationTargetException e) {
-                    Throwable root = e.getTargetException();
-                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), root);
-                } catch (Throwable e) {
-                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), e);
-                }
-            } else if (matches.size() == 0) {
-                throw new ConstructionException("Unable to find a matching factory method " + factoryMethod + " on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
-            } else {
-                throw new ConstructionException("Multiple matching factory methods " + factoryMethod + " found on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
-            }
-        } else {
-            // Map of matching constructors
-            Map<Constructor, List<Object>> matches = findMatchingConstructors(args, types, args);
-            if (matches.size() == 1) {
-                try {
-                    Map.Entry<Constructor, List<Object>> match = matches.entrySet().iterator().next();
-                    instance = match.getKey().newInstance(match.getValue().toArray());
-                } catch (InvocationTargetException e) {
-                    Throwable root = e.getTargetException();
-                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), root);
-                } catch (Throwable e) {
-                    throw new ConstructionException("Error when instanciating bean " + getName() + " of class " + getType(), e);
-                }
-            } else if (matches.size() == 0) {
-                throw new ConstructionException("Unable to find a matching constructor on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
-            } else {
-                throw new ConstructionException("Multiple matching constructors found on class " + getType() + " for arguments " + args + " when instanciating bean " + getName());
-            }
-        }
-        
-        return instance;
-    }
+	/**
+	 * Starts this REST server endpoint.
+	 *
+	 * @throws Exception if we cannot start the RestServerEndpoint
+	 */
+	public final void start() throws Exception {
+		synchronized (lock) {
+			Preconditions.checkState(state == State.CREATED, "The RestServerEndpoint cannot be restarted.");
 
-    private Object convert(Object obj, Type type) throws Exception {
-        return ConversionUtils.convert(obj, type, blueprintContext.getConversionService());
-    }
+			log.info("Starting rest endpoint.");
 
-    private Map<Method, List<Object>> findMatchingMethods(Class type, String name, boolean instance, List<Object> args, List<Class> types, List<Object> arguments) {
-        Map<Method, List<Object>> matches = new HashMap<Method, List<Object>>();
-        // Get constructors
-        List<Method> methods = new ArrayList<Method>(Arrays.asList(type.getMethods()));
-        // Discard any signature with wrong cardinality
-        for (Iterator<Method> it = methods.iterator(); it.hasNext();) {
-            Method mth = it.next();
-            if (!mth.getName().equals(name)) {
-                it.remove();
-            } else if (mth.getParameterTypes().length != args.size()) {
-                it.remove();
-            } else if (!instance ^ Modifier.isStatic(mth.getModifiers())) {
-                it.remove();
-            }
-        }
-        // Find a direct match
-        for (Method mth : methods) {
-            boolean found = true;
-            List<Object> match = new ArrayList<Object>();
-            for (int i = 0; i < args.size(); i++) {
-                if (types.get(i) != null && types.get(i) != mth.getParameterTypes()[i]) {
-                    found = false;
-                    break;
-                }
-                try {
-                    Object val = convert(args.get(i), mth.getGenericParameterTypes()[i]);
-                    match.add(val);
-                } catch (Throwable t) {
-                    found = false;
-                    break;
-                }
-            }
-            if (found) {
-                matches.put(mth, match);
-            }
-        }
-        // Start reordering
-        if (matches.size() != 1 && reorderArguments && arguments.size() > 1) {
-            Map<Method, List<Object>> nmatches = new HashMap<Method, List<Object>>();
-            for (Method mth : methods) {
-                ArgumentMatcher matcher = new ArgumentMatcher(mth.getGenericParameterTypes());
-                List<Object> match = matcher.match(args, types);
-                if (match != null) {
-                    nmatches.put(mth, match);
-                }
-            }
-            if (nmatches.size() > 0) {
-                matches = nmatches;
-            }
-        }
-        return matches;
-    }
+			final Router router = new Router();
+			final CompletableFuture<String> restAddressFuture = new CompletableFuture<>();
 
-    private Map<Constructor, List<Object>> findMatchingConstructors(List<Object> args, List<Class> types, List<Object> arguments) {
-        Map<Constructor, List<Object>> matches = new HashMap<Constructor, List<Object>>();
-        // Get constructors
-        List<Constructor> constructors = new ArrayList<Constructor>(Arrays.asList(getType().getConstructors()));
-        // Discard any signature with wrong cardinality
-        for (Iterator<Constructor> it = constructors.iterator(); it.hasNext();) {
-            if (it.next().getParameterTypes().length != args.size()) {
-                it.remove();
-            }
-        }
-        // Find a direct match
-        for (Constructor cns : constructors) {
-            boolean found = true;
-            List<Object> match = new ArrayList<Object>();
-            for (int i = 0; i < args.size(); i++) {
-                if (types.get(i) != null && types.get(i) != cns.getParameterTypes()[i]) {
-                    found = false;
-                    break;
-                }
-                try {
-                    Object val = convert(args.get(i), cns.getGenericParameterTypes()[i]);
-                    match.add(val);
-                } catch (Throwable t) {
-                    found = false;
-                    break;
-                }
-            }
-            if (found) {
-                matches.put(cns, match);
-            }
-        }
-        // Start reordering
-        if (matches.size() != 1 && reorderArguments && arguments.size() > 1) {
-            Map<Constructor, List<Object>> nmatches = new HashMap<Constructor, List<Object>>();
-            for (Constructor cns : constructors) {
-                ArgumentMatcher matcher = new ArgumentMatcher(cns.getGenericParameterTypes());
-                List<Object> match = matcher.match(args, types);
-                if (match != null) {
-                    nmatches.put(cns, match);
-                }
-            }
-            if (nmatches.size() > 0) {
-                matches = nmatches;
-            }
-        }
-        return matches;
-    }
+			handlers = initializeHandlers(restAddressFuture);
 
-    /**
-     * Returns init method (if any). Throws exception if the init-method was set explicitly on the bean
-     * and the method is not found on the instance.
-     */
-    protected Method getInitMethod(Object instance) throws ConstructionException {
-        Method method = null;        
-        if (initMethod == null) {
-            ComponentDefinitionRegistryImpl registry = blueprintContext.getComponentDefinitionRegistry();
-            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), registry.getDefaultInitMethod());
-        } else if (initMethod.length() > 0) {
-            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), initMethod);
-            if (method == null) {
-                throw new ConstructionException("Component '" + getName() + "' does not have init-method: " + initMethod);
-            }
-        }
-        return method;
-    }
+			/* sort the handlers such that they are ordered the following:
+			 * /jobs
+			 * /jobs/overview
+			 * /jobs/:jobid
+			 * /jobs/:jobid/config
+			 * /:*
+			 */
+			Collections.sort(
+				handlers,
+				RestHandlerUrlComparator.INSTANCE);
 
-    /**
-     * Returns destroy method (if any). Throws exception if the destroy-method was set explicitly on the bean
-     * and the method is not found on the instance.
-     */
-    protected Method getDestroyMethod(Object instance) throws ConstructionException {
-        Method method = null;        
-        if (destroyMethod == null) {
-            ComponentDefinitionRegistryImpl registry = blueprintContext.getComponentDefinitionRegistry();
-            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), registry.getDefaultDestroyMethod());
-        } else if (destroyMethod.length() > 0) {
-            method = ReflectionUtils.getLifecycleMethod(instance.getClass(), destroyMethod);
-            if (method == null) {
-                throw new ConstructionException("Component '" + getName() + "' does not have destroy-method: " + destroyMethod);
-            }
-        }
-        return method;
-    }
-    
-    @Override
-    public List<Recipe> getConstructorRecipes() {
-        return getNestedRecipes();
-    }
-    
-    @Override
-    protected Object internalCreate(Type expectedType, boolean lazyRefAllowed) throws ConstructionException {
-        
-        instantiateExplicitDependencies();
+			handlers.forEach(handler -> {
+				registerHandler(router, handler, log);
+			});
 
-        Object obj = getInstance(lazyRefAllowed);
-        
-        // check for init lifecycle method (if any)
-        Method initMethod = getInitMethod(obj);
-        
-        // check for destroy lifecycle method (if any)
-        getDestroyMethod(obj);
-        
-        // inject properties
-        setProperties(obj);
+			ChannelInitializer<SocketChannel> initializer = new ChannelInitializer<SocketChannel>() {
 
-        for (BeanProcessor processor : blueprintContext.getBeanProcessors()) {
-            obj = processor.beforeInit(obj, getName());
-        }
-        
-        // call init method
-        if (initMethod != null) {
-            try {
-                initMethod.invoke(obj);
-            } catch (InvocationTargetException e) {
-                Throwable root = e.getTargetException();
-                throw new ConstructionException("init-method generated exception", root);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-        
-        if (getName() != null && !keepRecipe) {
-            ExecutionContext.getContext().addObject(getName(), obj);
-        }
-        
-        return obj;
-    }
-    
-    public void destroyInstance(Object obj) {
-        for (BeanProcessor processor : blueprintContext.getBeanProcessors()) {
-            processor.beforeDestroy(obj, getName());
-        }
-        try {
-            Method method = getDestroyMethod(obj);
-            if (method != null) {
-                method.invoke(obj);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        for (BeanProcessor processor : blueprintContext.getBeanProcessors()) {
-            processor.afterDestroy(obj, getName());
-        }
-    }
+				@Override
+				protected void initChannel(SocketChannel ch) {
+					RouterHandler handler = new RouterHandler(router, responseHeaders);
 
-    public Type[] getTypes() {
-        Class type = getType();
-        if (type != null) {
-            return new Type[] { getType() };
-        } else{
-            return new Type[] { Object.class };
-        }
-    }
+					// SSL should be the first handler in the pipeline
+					if (sslEngineFactory != null) {
+						ch.pipeline().addLast("ssl",
+							new RedirectingSslHandler(restAddress, restAddressFuture, sslEngineFactory));
+					}
 
-    public void setProperties(Object instance) throws ConstructionException {
-        // clone the properties so they can be used again
-        Map<String,Object> propertyValues = new LinkedHashMap<String,Object>(properties);
-        setProperties(propertyValues, instance, instance.getClass());
-    }
+					ch.pipeline()
+						.addLast(new HttpServerCodec())
+						.addLast(new FileUploadHandler(uploadDir))
+						.addLast(new FlinkHttpObjectAggregator(maxContentLength, responseHeaders))
+						.addLast(new ChunkedWriteHandler())
+						.addLast(handler.getName(), handler)
+						.addLast(new PipelineErrorHandler(log, responseHeaders));
+				}
+			};
 
-    public Class getType() {
-        return typeClass;
-    }
+			NioEventLoopGroup bossGroup = new NioEventLoopGroup(1, new ExecutorThreadFactory("flink-rest-server-netty-boss"));
+			NioEventLoopGroup workerGroup = new NioEventLoopGroup(0, new ExecutorThreadFactory("flink-rest-server-netty-worker"));
 
-    private void setProperties(Map<String, Object> propertyValues, Object instance, Class clazz) {
-        // set remaining properties
-        for (Map.Entry<String, Object> entry : propertyValues.entrySet()) {
-            String propertyName = entry.getKey();
-            Object propertyValue = entry.getValue();
+			bootstrap = new ServerBootstrap();
+			bootstrap
+				.group(bossGroup, workerGroup)
+				.channel(NioServerSocketChannel.class)
+				.childHandler(initializer);
 
-            setProperty(instance, clazz, propertyName, propertyValue);
-        }
+			log.debug("Binding rest endpoint to {}:{}.", restBindAddress, restBindPort);
+			final ChannelFuture channel;
+			if (restBindAddress == null) {
+				channel = bootstrap.bind(restBindPort);
+			} else {
+				channel = bootstrap.bind(restBindAddress, restBindPort);
+			}
+			serverChannel = channel.syncUninterruptibly().channel();
 
-    }
+			final InetSocketAddress bindAddress = (InetSocketAddress) serverChannel.localAddress();
+			final String advertisedAddress;
+			if (bindAddress.getAddress().isAnyLocalAddress()) {
+				advertisedAddress = this.restAddress;
+			} else {
+				advertisedAddress = bindAddress.getAddress().getHostAddress();
+			}
+			final int port = bindAddress.getPort();
 
-    private void setProperty(Object instance, Class clazz, String propertyName, Object propertyValue) {
-        String[] names = propertyName.split("\\.");
-        for (int i = 0; i < names.length - 1; i++) {
-            Method getter = getPropertyDescriptor(clazz, names[i]).getReadMethod();
-            if (getter != null) {
-                try {
-                    instance = getter.invoke(instance);
-                    clazz = instance.getClass();
-                } catch (Exception e) {
-                    Throwable t = e;
-                    if (e instanceof InvocationTargetException) {
-                        InvocationTargetException invocationTargetException = (InvocationTargetException) e;
-                        if (invocationTargetException.getCause() != null) {
-                            t = invocationTargetException.getCause();
-                        }
-                    }
-                    throw new ConstructionException("Error getting property: " + names[i] + " on bean " + getName() + " when setting property " + propertyName + " on class " + clazz.getName(), t);
-                }
-            } else {
-                throw new ConstructionException("No getter for " + names[i] + " property");
-            }
-        }
-        Method setter = getPropertyDescriptor(clazz, names[names.length - 1]).getWriteMethod();
-        if (setter != null) {
-            // convert the value to type of setter/field
-            Type type = setter.getGenericParameterTypes()[0];
-            // Instanciate value
-            if (propertyValue instanceof Recipe) {
-                propertyValue = ((Recipe) propertyValue).create(type, false);
-            }
-            try {
-                propertyValue = convert(propertyValue, type);
-            } catch (Exception e) {
-                String valueType = propertyValue == null ? "null" : propertyValue.getClass().getName();
-                String memberType = type instanceof Class ? ((Class) type).getName() : type.toString();
-                throw new ConstructionException("Unable to convert property value" +
-                        " from " + valueType +
-                        " to " + memberType +
-                        " for injection " + setter, e);
-            }
-            try {
-                // set value
-                setter.invoke(instance, propertyValue);
-            } catch (Exception e) {
-                Throwable t = e;
-                if (e instanceof InvocationTargetException) {
-                    InvocationTargetException invocationTargetException = (InvocationTargetException) e;
-                    if (invocationTargetException.getCause() != null) {
-                        t = invocationTargetException.getCause();
-                    }
-                }
-                throw new ConstructionException("Error setting property: " + setter, t);
-            }
-        } else {
-            throw new ConstructionException("No setter for " + names[names.length - 1] + " property");
-        }
-    }
+			log.info("Rest endpoint listening at {}:{}", advertisedAddress, port);
 
-    PropertyDescriptor getPropertyDescriptor(Class clazz, String name) {
-        // TODO: it seems to fail in some cases, for example if there are two setters and no getters
-        //    it should throw an exception
-        try {
-            BeanInfo beanInfo = Introspector.getBeanInfo(clazz);
-            for (PropertyDescriptor pd : beanInfo.getPropertyDescriptors()) {
-                if (pd.getName().equals(name)) {
-                    return pd;
-                }
-            }
-            throw new ConstructionException("Unable to find property descriptor " + name + " on class " + clazz.getName());
-        } catch (IntrospectionException e) {
-            throw new ConstructionException("Unable to find property descriptor " + name + " on class " + clazz.getName(), e);
-        }
-    }
+			final String protocol;
 
-    private static Object UNMATCHED = new Object();
+			if (sslEngineFactory != null) {
+				protocol = "https://";
+			} else {
+				protocol = "http://";
+			}
 
-    private class ArgumentMatcher {
+			restBaseUrl = protocol + advertisedAddress + ':' + port;
 
-        private ConversionService converter;
-        private List<TypeEntry> entries;
+			restAddressFuture.complete(restBaseUrl);
 
-        public ArgumentMatcher(Type[] types) {
-            entries = new ArrayList<TypeEntry>();
-            for (Type type : types) {
-                entries.add(new TypeEntry(type));
-            }
-        }
+			state = State.RUNNING;
 
-        public List<Object> match(List<Object> arguments, List<Class> forcedTypes) {
-            if (find(arguments, forcedTypes)) {
-                return getArguments();
-            }
-            return null;
-        }
+			startInternal();
+		}
+	}
 
-        private List<Object> getArguments() {
-            List<Object> list = new ArrayList<Object>();
-            for (TypeEntry entry : entries) {
-                if (entry.argument == UNMATCHED) {
-                    throw new RuntimeException("There are unmatched types");
-                } else {
-                    list.add(entry.argument);
-                }
-            }
-            return list;
-        }
+	/**
+	 * Hook to start sub class specific services.
+	 *
+	 * @throws Exception if an error occurred
+	 */
+	protected abstract void startInternal() throws Exception;
 
-        private boolean find(List<Object> arguments, List<Class> forcedTypes) {
-            if (entries.size() == arguments.size()) {
-                boolean matched = true;
-                for (int i = 0; i < arguments.size() && matched; i++) {
-                    matched = find(arguments.get(i), forcedTypes.get(i));
-                }
-                return matched;
-            }
-            return false;
-        }
+	/**
+	 * Returns the address on which this endpoint is accepting requests.
+	 *
+	 * @return address on which this endpoint is accepting requests or null if none
+	 */
+	@Nullable
+	public InetSocketAddress getServerAddress() {
+		synchronized (lock) {
+			Preconditions.checkState(state != State.CREATED, "The RestServerEndpoint has not been started yet.");
+			Channel server = this.serverChannel;
 
-        private boolean find(Object arg, Class forcedType) {
-            for (TypeEntry entry : entries) {
-                Object val = arg;
-                if (entry.argument != UNMATCHED) {
-                    continue;
-                }
-                if (forcedType != null) {
-                    if (forcedType != entry.type) {
-                        continue;
-                    }
-                } else if (arg != null) {
-                    try {
-                        val = convert(arg, entry.type);
-                    } catch (Throwable t) {
-                        continue;
-                    }
-                }
-                entry.argument = val;
-                return true;
-            }
-            return false;
-        }
+			if (server != null) {
+				try {
+					return ((InetSocketAddress) server.localAddress());
+				} catch (Exception e) {
+					log.error("Cannot access local server address", e);
+				}
+			}
 
-    }
+			return null;
+		}
+	}
 
-    private static class TypeEntry {
+	/**
+	 * Returns the base URL of the REST server endpoint.
+	 *
+	 * @return REST base URL of this endpoint
+	 */
+	public String getRestBaseUrl() {
+		synchronized (lock) {
+			Preconditions.checkState(state != State.CREATED, "The RestServerEndpoint has not been started yet.");
+			return restBaseUrl;
+		}
+	}
 
-        private final Type type;
-        private Object argument;
+	@Override
+	public CompletableFuture<Void> closeAsync() {
+		synchronized (lock) {
+			log.info("Shutting down rest endpoint.");
 
-        public TypeEntry(Type type) {
-            this.type = type;
-            this.argument = UNMATCHED;
-        }
+			if (state == State.RUNNING) {
+				final CompletableFuture<Void> shutDownFuture = FutureUtils.composeAfterwards(
+					closeHandlersAsync(),
+					this::shutDownInternal);
 
-    }
+				shutDownFuture.whenComplete(
+					(Void ignored, Throwable throwable) -> {
+						log.info("Shut down complete.");
+						if (throwable != null) {
+							terminationFuture.completeExceptionally(throwable);
+						} else {
+							terminationFuture.complete(null);
+						}
+					});
+				state = State.SHUTDOWN;
+			} else if (state == State.CREATED) {
+				terminationFuture.complete(null);
+				state = State.SHUTDOWN;
+			}
 
+			return terminationFuture;
+		}
+	}
+
+	private FutureUtils.ConjunctFuture<Void> closeHandlersAsync() {
+		return FutureUtils.waitForAll(handlers.stream()
+			.map(tuple -> tuple.f1)
+			.filter(handler -> handler instanceof AutoCloseableAsync)
+			.map(handler -> ((AutoCloseableAsync) handler).closeAsync())
+			.collect(Collectors.toList()));
+	}
+
+	/**
+	 * Stops this REST server endpoint.
+	 *
+	 * @return Future which is completed once the shut down has been finished.
+	 */
+	protected CompletableFuture<Void> shutDownInternal() {
+
+		synchronized (lock) {
+
+			CompletableFuture<?> channelFuture = new CompletableFuture<>();
+			if (serverChannel != null) {
+				serverChannel.close().addListener(finished -> {
+					if (finished.isSuccess()) {
+						channelFuture.complete(null);
+					} else {
+						channelFuture.completeExceptionally(finished.cause());
+					}
+				});
+				serverChannel = null;
+			}
+
+			final CompletableFuture<Void> channelTerminationFuture = new CompletableFuture<>();
+
+			channelFuture.thenRun(() -> {
+				CompletableFuture<?> groupFuture = new CompletableFuture<>();
+				CompletableFuture<?> childGroupFuture = new CompletableFuture<>();
+				final Time gracePeriod = Time.seconds(10L);
+
+				if (bootstrap != null) {
+					final ServerBootstrapConfig config = bootstrap.config();
+					final EventLoopGroup group = config.group();
+					if (group != null) {
+						group.shutdownGracefully(0L, gracePeriod.toMilliseconds(), TimeUnit.MILLISECONDS)
+							.addListener(finished -> {
+								if (finished.isSuccess()) {
+									groupFuture.complete(null);
+								} else {
+									groupFuture.completeExceptionally(finished.cause());
+								}
+							});
+					} else {
+						groupFuture.complete(null);
+					}
+
+					final EventLoopGroup childGroup = config.childGroup();
+					if (childGroup != null) {
+						childGroup.shutdownGracefully(0L, gracePeriod.toMilliseconds(), TimeUnit.MILLISECONDS)
+							.addListener(finished -> {
+								if (finished.isSuccess()) {
+									childGroupFuture.complete(null);
+								} else {
+									childGroupFuture.completeExceptionally(finished.cause());
+								}
+							});
+					} else {
+						childGroupFuture.complete(null);
+					}
+
+					bootstrap = null;
+				} else {
+					// complete the group futures since there is nothing to stop
+					groupFuture.complete(null);
+					childGroupFuture.complete(null);
+				}
+
+				CompletableFuture<Void> combinedFuture = FutureUtils.completeAll(Arrays.asList(groupFuture, childGroupFuture));
+
+				combinedFuture.whenComplete(
+					(Void ignored, Throwable throwable) -> {
+						if (throwable != null) {
+							channelTerminationFuture.completeExceptionally(throwable);
+						} else {
+							channelTerminationFuture.complete(null);
+						}
+					});
+			});
+
+			return channelTerminationFuture;
+		}
+	}
+
+	private static void registerHandler(Router router, Tuple2<RestHandlerSpecification, ChannelInboundHandler> specificationHandler, Logger log) {
+		final String handlerURL = specificationHandler.f0.getTargetRestEndpointURL();
+		// setup versioned urls
+		for (final RestAPIVersion supportedVersion : specificationHandler.f0.getSupportedAPIVersions()) {
+			final String versionedHandlerURL = '/' + supportedVersion.getURLVersionPrefix() + handlerURL;
+			log.debug("Register handler {} under {}@{}.", specificationHandler.f1, specificationHandler.f0.getHttpMethod(), versionedHandlerURL);
+			registerHandler(router, versionedHandlerURL, specificationHandler.f0.getHttpMethod(), specificationHandler.f1);
+			if (supportedVersion.isDefaultVersion()) {
+				// setup unversioned url for convenience and backwards compatibility
+				log.debug("Register handler {} under {}@{}.", specificationHandler.f1, specificationHandler.f0.getHttpMethod(), handlerURL);
+				registerHandler(router, handlerURL, specificationHandler.f0.getHttpMethod(), specificationHandler.f1);
+			}
+		}
+	}
+
+	private static void registerHandler(Router router, String handlerURL, HttpMethodWrapper httpMethod, ChannelInboundHandler handler) {
+		switch (httpMethod) {
+			case GET:
+				router.addGet(handlerURL, handler);
+				break;
+			case POST:
+				router.addPost(handlerURL, handler);
+				break;
+			case DELETE:
+				router.addDelete(handlerURL, handler);
+				break;
+			case PATCH:
+				router.addPatch(handlerURL, handler);
+				break;
+			default:
+				throw new RuntimeException("Unsupported http method: " + httpMethod + '.');
+		}
+	}
+
+	/**
+	 * Creates the upload dir if needed.
+	 */
+	@VisibleForTesting
+	static void createUploadDir(final Path uploadDir, final Logger log) throws IOException {
+		if (!Files.exists(uploadDir)) {
+			log.warn("Upload directory {} does not exist, or has been deleted externally. " +
+				"Previously uploaded files are no longer available.", uploadDir);
+			checkAndCreateUploadDir(uploadDir, log);
+		}
+	}
+
+	/**
+	 * Checks whether the given directory exists and is writable. If it doesn't exist, this method
+	 * will attempt to create it.
+	 *
+	 * @param uploadDir directory to check
+	 * @param log logger used for logging output
+	 * @throws IOException if the directory does not exist and cannot be created, or if the
+	 *                     directory isn't writable
+	 */
+	private static synchronized void checkAndCreateUploadDir(final Path uploadDir, final Logger log) throws IOException {
+		if (Files.exists(uploadDir) && Files.isWritable(uploadDir)) {
+			log.info("Using directory {} for file uploads.", uploadDir);
+		} else if (Files.isWritable(Files.createDirectories(uploadDir))) {
+			log.info("Created directory {} for file uploads.", uploadDir);
+		} else {
+			log.warn("Upload directory {} cannot be created or is not writable.", uploadDir);
+			throw new IOException(
+				String.format("Upload directory %s cannot be created or is not writable.",
+					uploadDir));
+		}
+	}
+
+	/**
+	 * Comparator for Rest URLs.
+	 *
+	 * <p>The comparator orders the Rest URLs such that URLs with path parameters are ordered behind
+	 * those without parameters. E.g.:
+	 * /jobs
+	 * /jobs/overview
+	 * /jobs/:jobid
+	 * /jobs/:jobid/config
+	 * /:*
+	 *
+	 * <p>IMPORTANT: This comparator is highly specific to how Netty path parameters are encoded. Namely
+	 * with a preceding ':' character.
+	 */
+	public static final class RestHandlerUrlComparator implements Comparator<Tuple2<RestHandlerSpecification, ChannelInboundHandler>>, Serializable {
+
+		private static final long serialVersionUID = 2388466767835547926L;
+
+		private static final Comparator<String> CASE_INSENSITIVE_ORDER = new CaseInsensitiveOrderComparator();
+
+		private static final Comparator<RestAPIVersion> API_VERSION_ORDER = new RestAPIVersion.RestAPIVersionComparator();
+
+		static final RestHandlerUrlComparator INSTANCE = new RestHandlerUrlComparator();
+
+		@Override
+		public int compare(
+				Tuple2<RestHandlerSpecification, ChannelInboundHandler> o1,
+				Tuple2<RestHandlerSpecification, ChannelInboundHandler> o2) {
+			final int urlComparisonResult = CASE_INSENSITIVE_ORDER.compare(o1.f0.getTargetRestEndpointURL(), o2.f0.getTargetRestEndpointURL());
+			if (urlComparisonResult != 0) {
+				return urlComparisonResult;
+			} else {
+				return API_VERSION_ORDER.compare(
+					Collections.min(o1.f0.getSupportedAPIVersions()),
+					Collections.min(o2.f0.getSupportedAPIVersions()));
+			}
+		}
+
+		/**
+		 * Comparator for Rest URLs.
+		 *
+		 * <p>The comparator orders the Rest URLs such that URLs with path parameters are ordered behind
+		 * those without parameters. E.g.:
+		 * /jobs
+		 * /jobs/overview
+		 * /jobs/:jobid
+		 * /jobs/:jobid/config
+		 * /:*
+		 *
+		 * <p>IMPORTANT: This comparator is highly specific to how Netty path parameters are encoded. Namely
+		 * with a preceding ':' character.
+		 */
+		public static final class CaseInsensitiveOrderComparator implements Comparator<String>, Serializable {
+			private static final long serialVersionUID = 8550835445193437027L;
+
+			@Override
+			public int compare(String s1, String s2) {
+				int n1 = s1.length();
+				int n2 = s2.length();
+				int min = Math.min(n1, n2);
+				for (int i = 0; i < min; i++) {
+					char c1 = s1.charAt(i);
+					char c2 = s2.charAt(i);
+					if (c1 != c2) {
+						c1 = Character.toUpperCase(c1);
+						c2 = Character.toUpperCase(c2);
+						if (c1 != c2) {
+							c1 = Character.toLowerCase(c1);
+							c2 = Character.toLowerCase(c2);
+							if (c1 != c2) {
+								if (c1 == ':') {
+									// c2 is less than c1 because it is also different
+									return 1;
+								} else if (c2 == ':') {
+									// c1 is less than c2
+									return -1;
+								} else {
+									return c1 - c2;
+								}
+							}
+						}
+					}
+				}
+				return n1 - n2;
+			}
+		}
+	}
+
+	private enum State {
+		CREATED,
+		RUNNING,
+		SHUTDOWN
+	}
 }

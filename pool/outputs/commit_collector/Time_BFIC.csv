@@ -1,11 +1,4 @@
 Project,D4J ID,Faulty file path,faulty line,FIC_sha,BFIC_sha
 Time,4,JodaTime/src/java/org/joda/time/Partial.java,464,b86efe73e72ece8e5ceeed48d05228aa1725c9ad,17eb41943b7289bb9607e0f840076b61a3e3c707
-Time,7,src/main/java/org/joda/time/format/DateTimeFormatter.java,710,706513d59425e7a9dc6bdb972f25b03b02e48558,dba7c37ea3d83b32779d3bb13cb184aedf761a8a
-Time,8,JodaTime/src/java/org/joda/time/DateTimeZone.java,279,7fe68f297f7c372b515fde7f0bc8d721ec257ceb,70aab34192a9e900655973c5fc24ed953e1e064d
-Time,9,JodaTime/src/java/org/joda/time/DateTimeZone.java,263,4062cef5ffd76dff4fca40236eb15c79820e86c6,fad8c2ae24f1398d61b57e7effa2fd136f1a0416
-Time,10,JodaTime/src/java/org/joda/time/base/BaseSingleFieldPeriod.java,104,42bde04b7208bf4cc2c43c9134c5f47c39eb0679,60563aa4c5a04469431c5f6e0c4850e630e99cdb
-Time,11,JodaTime/src/main/java/org/joda/time/tz/ZoneInfoCompiler.java,68,01ed04f3a83f17e9947c83d04cb258430429789d,af371a8f99adacdcfafc608222d024ec6d83ab9f
-Time,13,JodaTime/src/java/org/joda/time/format/PeriodFormatterBuilder.java,1098,9aa6681d31b410756bf0b8c252a86e31f4aee30f,1aea267f61b95d56f32ebeb79b627b2a93f0d4b4
-Time,16,src/main/java/org/joda/time/format/DateTimeFormatter.java,709,1ec3c2f0962d41db0d83e01ac5df26d7b954aa34,3ea62678a6497af61932df9b8e1b5c06d90df116
+Time,16,JodaTime/src/main/java/org/joda/time/format/DateTimeFormatter.java,709,843d7b8f07f4899ad153ffabc25e09a6c0e897c7,e12257524e216a6673ba1e337f8d97e955af7800
 Time,19,JodaTime/src/main/java/org/joda/time/DateTimeZone.java,900,552be4b677ec30a34d04d234395ba1a8c7beaacf,c7a581e55fc988bd90fa4bb1b0acece5181b7c5f
-Time,20,src/main/java/org/joda/time/format/DateTimeFormatterBuilder.java,2544,53eadfbd0ec9d6b4a02dae38730b77b14000c1f3,05df0f4615c0e863478d5c747e94429073c55af2

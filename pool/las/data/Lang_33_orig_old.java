@@ -890,7 +890,8 @@ public class ClassUtils {
     }
 
     /**
-     * <p>Converts an array of <code>Object</code> in to an array of <code>Class</code> objects.</p>
+     * <p>Converts an array of <code>Object</code> in to an array of <code>Class</code> objects.
+     * If any of these objects is null, a null element will be inserted into the array.</p>
      *
      * <p>This method returns <code>null</code> for a <code>null</code> input array.</p>
      *

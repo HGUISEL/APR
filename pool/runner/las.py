@@ -25,6 +25,7 @@ def main(argv):
         # writing header
         header = ['DFJ ID', 'Rank', 'orig change info', 'suggested change info']
         csv_writer.writerow(header)
+        old_D4J_ID = ""
 
         for i in range(len(LAS_input)):
             if i==0:
@@ -34,34 +35,24 @@ def main(argv):
             y_project = LAS_input_csv[i][2]
             y_bugId = LAS_input_csv[i][3]
             rank = LAS_input_csv[i][4]
-            sim_score = LAS_input_csv[i][5]
+            #sim_score = LAS_input_csv[i][5]
             yhat_project = LAS_input_csv[i][6]
             yhat_bic_sha = LAS_input_csv[i][7]
             yhat_bic_path = LAS_input_csv[i][8]
             yhat_bfc_sha = LAS_input_csv[i][9]
             yhat_bfc_path = LAS_input_csv[i][10]
-            yhat_bfc_hunk = LAS_input_csv[i][11]
+            #yhat_bfc_hunk = LAS_input_csv[i][11]
+
+            D4J_ID = y_project + y_bugId
 
             buggy_sha = ""
             clean_sha = ""
             buggy_path = ""
 
-            ## commit-db도 읽기
-            ## path is where the D4J framework exists
-            commit_db = pd.read_csv("~/paths/defects4j/framework/projects/"+y_project+"/commit-db", 
-                                    names=["ID","buggy","clean","num","path"])
-            commit_db_csv = commit_db.values
-
             orig_input = pd.read_csv(root+"/pool/commit_collector/inputs/"+y_project+".csv",
-                                     names=["DefectsfJ_ID","Faulty_file_path","faulty_line","buffer"])
+                                     names=["DefectsfJ ID","Faulty file path","fix faulty line","blame faulty line","dummy"])
             orig_input_csv = orig_input.values
 
-
-            for j in range(len(commit_db_csv)):
-                if int(commit_db_csv[j][0]) == int(LAS_input_csv[i][3]): # if the ID is same
-                    buggy_sha = commit_db_csv[j][1] # get the buggy sha from commit-db
-                    clean_sha = commit_db_csv[j][2] # get the clean sha from commit-db
-                    break
                     
             for j in range(len(orig_input_csv)):
                 if j == 0:
@@ -72,14 +63,21 @@ def main(argv):
 
             each_dir = code_dir+"/"+y_project+"-"+y_bugId
             os.system("mkdir "+each_dir)
-            orig_BIC_path = code_dir+"/"+y_project+"_"+y_bugId+"_orig_old.java"
-            orig_BFC_path = code_dir+"/"+y_project+"_"+y_bugId+"_orig_new.java"
 
-            os.system("cd "+root+"/pool/commit_collector/data/"+y_project+"/"+y_project+"-"+y_bugId+" ; "
-                    + "git checkout -f "+buggy_sha+" ; "
-                    + "cp "+buggy_path+" "+orig_BIC_path+" ; "
-                    + "git checkout -f "+clean_sha+" ; "
-                    + "cp "+buggy_path+" "+orig_BFC_path+" ; " )
+            if D4J_ID != old_D4J_ID:
+                orig_BIC_path = code_dir+"/"+y_project+"_"+y_bugId+"_orig_old.java"
+                orig_BFC_path = code_dir+"/"+y_project+"_"+y_bugId+"_orig_new.java"
+
+                os.system("cd "+root+"/pool/las/tmp/ ; "
+                        + "defects4j checkout -p"+y_project+" -v "+y_bugId+"b -w "+y_project+"-"+y_bugId+" ; "
+                        + "cd "+y_project+"-"+y_bugId+" ; "
+                        + "cp "+buggy_path+" "+orig_BIC_path+" ; "
+                        + "git checkout HEAD~ ; "
+                        + "cp "+buggy_path+" "+orig_BFC_path+" ; "
+                        + "cd .. ; rm -rf "+y_project+"-"+y_bugId+" ; " )
+                
+                old_D4J_ID = D4J_ID
+
 
             ## check out the reccomended commit in the repository and copy the file into code_dir
             rec_BIC_path = each_dir+"/"+y_project+"_"+y_bugId+"_rank-"+rank+"_old.java"
@@ -101,7 +99,7 @@ def main(argv):
             LAS_rec_result = str(LAS_rec_stream.read())
 
             
-            D4J_ID = y_project + y_bugId
+            
 
             # writing each row values (DFJ ID', 'Rank', 'orig change info', 'suggested change info')
             instance = [D4J_ID, rank, LAS_orig_result, LAS_rec_result] ## data in order of columns

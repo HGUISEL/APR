@@ -1,665 +1,1206 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.hadoop.hbase.io.hfile;
 
-package org.apache.commons.dbcp2;
+import java.io.DataInput;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
-import java.net.URL;
-import java.sql.CallableStatement;
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
-import java.util.Map;
-import java.sql.Ref;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Array;
-import java.util.Calendar;
-import java.io.InputStream;
-import java.io.Reader;
-import java.sql.SQLException;
-/* JDBC_4_ANT_KEY_BEGIN */
-import java.sql.NClob;
-import java.sql.RowId;
-import java.sql.SQLXML;
-/* JDBC_4_ANT_KEY_END */
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.classification.InterfaceAudience;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.KeyValue.KVComparator;
+import org.apache.hadoop.hbase.fs.HFileSystem;
+import org.apache.hadoop.hbase.io.FSDataInputStreamWrapper;
+import org.apache.hadoop.hbase.io.encoding.DataBlockEncoder;
+import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
+import org.apache.hadoop.hbase.io.encoding.HFileBlockDecodingContext;
+import org.apache.hadoop.hbase.io.hfile.HFile.FileInfo;
+import org.apache.hadoop.hbase.util.ByteBufferUtils;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.IdLock;
+import org.apache.hadoop.io.WritableUtils;
+import org.cloudera.htrace.Trace;
+import org.cloudera.htrace.TraceScope;
 
 /**
- * A base delegating implementation of {@link CallableStatement}.
- * <p>
- * All of the methods from the {@link CallableStatement} interface
- * simply call the corresponding method on the "delegate"
- * provided in my constructor.
- * <p>
- * Extends AbandonedTrace to implement Statement tracking and
- * logging of code which created the Statement. Tracking the
- * Statement ensures that the Connection which created it can
- * close any open Statement's on Connection close.
- *
- * @author Glenn L. Nielsen
- * @author James House
- * @author Dirk Verbeeck
- * @version $Revision$ $Date$
+ * {@link HFile} reader for version 2.
  */
-public class DelegatingCallableStatement extends DelegatingPreparedStatement
-        implements CallableStatement {
+@InterfaceAudience.Private
+public class HFileReaderV2 extends AbstractHFileReader {
+
+  private static final Log LOG = LogFactory.getLog(HFileReaderV2.class);
+
+  /** Minor versions in HFile V2 starting with this number have hbase checksums */
+  public static final int MINOR_VERSION_WITH_CHECKSUM = 1;
+  /** In HFile V2 minor version that does not support checksums */
+  public static final int MINOR_VERSION_NO_CHECKSUM = 0;
+
+  /** HFile minor version that introduced pbuf filetrailer */
+  public static final int PBUF_TRAILER_MINOR_VERSION = 2;
+
+  /**
+   * The size of a (key length, value length) tuple that prefixes each entry in
+   * a data block.
+   */
+  public final static int KEY_VALUE_LEN_SIZE = 2 * Bytes.SIZEOF_INT;
+
+  protected boolean includesMemstoreTS = false;
+  protected boolean decodeMemstoreTS = false;
+  protected boolean shouldIncludeMemstoreTS() {
+    return includesMemstoreTS;
+  }
+
+  /** Filesystem-level block reader. */
+  protected HFileBlock.FSReader fsBlockReader;
+
+  /**
+   * A "sparse lock" implementation allowing to lock on a particular block
+   * identified by offset. The purpose of this is to avoid two clients loading
+   * the same block, and have all but one client wait to get the block from the
+   * cache.
+   */
+  private IdLock offsetLock = new IdLock();
+
+  /**
+   * Blocks read from the load-on-open section, excluding data root index, meta
+   * index, and file info.
+   */
+  private List<HFileBlock> loadOnOpenBlocks = new ArrayList<HFileBlock>();
+
+  /** Minimum minor version supported by this HFile format */
+  static final int MIN_MINOR_VERSION = 0;
+
+  /** Maximum minor version supported by this HFile format */
+  // We went to version 2 when we moved to pb'ing fileinfo and the trailer on
+  // the file. This version can read Writables version 1.
+  static final int MAX_MINOR_VERSION = 3;
+
+  /** Minor versions starting with this number have faked index key */
+  static final int MINOR_VERSION_WITH_FAKED_KEY = 3;
+  protected HFileContext hfileContext;
+
+  /**
+   * Opens a HFile. You must load the index before you can use it by calling
+   * {@link #loadFileInfo()}.
+   *
+   * @param path Path to HFile.
+   * @param trailer File trailer.
+   * @param fsdis input stream.
+   * @param size Length of the stream.
+   * @param cacheConf Cache configuration.
+   * @param preferredEncodingInCache the encoding to use in cache in case we
+   *          have a choice. If the file is already encoded on disk, we will
+   *          still use its on-disk encoding in cache.
+   * @param hfs
+   */
+  public HFileReaderV2(Path path, FixedFileTrailer trailer,
+      final FSDataInputStreamWrapper fsdis, final long size, final CacheConfig cacheConf,
+      DataBlockEncoding preferredEncodingInCache, final HFileSystem hfs)
+      throws IOException {
+    super(path, trailer, size, cacheConf, hfs);
+    trailer.expectMajorVersion(getMajorVersion());
+    validateMinorVersion(path, trailer.getMinorVersion());
+    this.hfileContext = createHFileContext(trailer);
+    // Should we set the preferredEncodinginCache here for the context
+    HFileBlock.FSReaderV2 fsBlockReaderV2 = new HFileBlock.FSReaderV2(fsdis, fileSize, hfs, path,
+        hfileContext);
+    this.fsBlockReader = fsBlockReaderV2; // upcast
+
+    // Comparator class name is stored in the trailer in version 2.
+    comparator = trailer.createComparator();
+    dataBlockIndexReader = new HFileBlockIndex.BlockIndexReader(comparator,
+        trailer.getNumDataIndexLevels(), this);
+    metaBlockIndexReader = new HFileBlockIndex.BlockIndexReader(
+        KeyValue.RAW_COMPARATOR, 1);
+
+    // Parse load-on-open data.
+
+    HFileBlock.BlockIterator blockIter = fsBlockReaderV2.blockRange(
+        trailer.getLoadOnOpenDataOffset(),
+        fileSize - trailer.getTrailerSize());
+
+    // Data index. We also read statistics about the block index written after
+    // the root level.
+    dataBlockIndexReader.readMultiLevelIndexRoot(
+        blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX),
+        trailer.getDataIndexCount());
+
+    // Meta index.
+    metaBlockIndexReader.readRootIndex(
+        blockIter.nextBlockWithBlockType(BlockType.ROOT_INDEX),
+        trailer.getMetaIndexCount());
+
+    // File info
+    fileInfo = new FileInfo();
+    fileInfo.read(blockIter.nextBlockWithBlockType(BlockType.FILE_INFO).getByteStream());
+    lastKey = fileInfo.get(FileInfo.LASTKEY);
+    avgKeyLen = Bytes.toInt(fileInfo.get(FileInfo.AVG_KEY_LEN));
+    avgValueLen = Bytes.toInt(fileInfo.get(FileInfo.AVG_VALUE_LEN));
+    byte [] keyValueFormatVersion =
+        fileInfo.get(HFileWriterV2.KEY_VALUE_VERSION);
+    includesMemstoreTS = keyValueFormatVersion != null &&
+        Bytes.toInt(keyValueFormatVersion) ==
+            HFileWriterV2.KEY_VALUE_VER_WITH_MEMSTORE;
+    fsBlockReaderV2.setIncludesMemstoreTS(includesMemstoreTS);
+    if (includesMemstoreTS) {
+      decodeMemstoreTS = Bytes.toLong(fileInfo.get(HFileWriterV2.MAX_MEMSTORE_TS_KEY)) > 0;
+    }
+
+    // Read data block encoding algorithm name from file info.
+    dataBlockEncoder = HFileDataBlockEncoderImpl.createFromFileInfo(fileInfo,
+        preferredEncodingInCache);
+    fsBlockReaderV2.setDataBlockEncoder(dataBlockEncoder);
+
+    // Store all other load-on-open blocks for further consumption.
+    HFileBlock b;
+    while ((b = blockIter.nextBlock()) != null) {
+      loadOnOpenBlocks.add(b);
+    }
+  }
+
+  protected HFileContext createHFileContext(FixedFileTrailer trailer) {
+    HFileContext hFileContext  = new HFileContextBuilder()
+                                 .withIncludesMvcc(this.includesMemstoreTS)
+                                 .withCompression(this.compressAlgo)
+                                 .withHBaseCheckSum(trailer.getMinorVersion() >= MINOR_VERSION_WITH_CHECKSUM)
+                                 .build();
+    return hFileContext;
+  }
+
+  /**
+   * Create a Scanner on this file. No seeks or reads are done on creation. Call
+   * {@link HFileScanner#seekTo(byte[])} to position an start the read. There is
+   * nothing to clean up in a Scanner. Letting go of your references to the
+   * scanner is sufficient.
+   *
+   * @param cacheBlocks True if we should cache blocks read in by this scanner.
+   * @param pread Use positional read rather than seek+read if true (pread is
+   *          better for random reads, seek+read is better scanning).
+   * @param isCompaction is scanner being used for a compaction?
+   * @return Scanner on this file.
+   */
+   @Override
+   public HFileScanner getScanner(boolean cacheBlocks, final boolean pread,
+      final boolean isCompaction) {
+    // check if we want to use data block encoding in memory
+    if (dataBlockEncoder.useEncodedScanner(isCompaction)) {
+      return new EncodedScannerV2(this, cacheBlocks, pread, isCompaction,
+          hfileContext);
+    }
+
+    return new ScannerV2(this, cacheBlocks, pread, isCompaction);
+  }
+
+  /**
+   * @param metaBlockName
+   * @param cacheBlock Add block to cache, if found
+   * @return block wrapped in a ByteBuffer, with header skipped
+   * @throws IOException
+   */
+  @Override
+  public ByteBuffer getMetaBlock(String metaBlockName, boolean cacheBlock)
+      throws IOException {
+    if (trailer.getMetaIndexCount() == 0) {
+      return null; // there are no meta blocks
+    }
+    if (metaBlockIndexReader == null) {
+      throw new IOException("Meta index not loaded");
+    }
+
+    byte[] mbname = Bytes.toBytes(metaBlockName);
+    int block = metaBlockIndexReader.rootBlockContainingKey(mbname, 0,
+        mbname.length);
+    if (block == -1)
+      return null;
+    long blockSize = metaBlockIndexReader.getRootBlockDataSize(block);
+    long startTimeNs = System.nanoTime();
+
+    // Per meta key from any given file, synchronize reads for said block. This
+    // is OK to do for meta blocks because the meta block index is always
+    // single-level.
+    synchronized (metaBlockIndexReader.getRootBlockKey(block)) {
+      // Check cache for block. If found return.
+      long metaBlockOffset = metaBlockIndexReader.getRootBlockOffset(block);
+      BlockCacheKey cacheKey = new BlockCacheKey(name, metaBlockOffset,
+          DataBlockEncoding.NONE, BlockType.META);
+
+      cacheBlock &= cacheConf.shouldCacheDataOnRead();
+      if (cacheConf.isBlockCacheEnabled()) {
+        HFileBlock cachedBlock =
+          (HFileBlock) cacheConf.getBlockCache().getBlock(cacheKey, cacheBlock, false);
+        if (cachedBlock != null) {
+          // Return a distinct 'shallow copy' of the block,
+          // so pos does not get messed by the scanner
+          return cachedBlock.getBufferWithoutHeader();
+        }
+        // Cache Miss, please load.
+      }
+
+      HFileBlock metaBlock = fsBlockReader.readBlockData(metaBlockOffset,
+          blockSize, -1, true);
+
+      final long delta = System.nanoTime() - startTimeNs;
+      HFile.offerReadLatency(delta, true);
+
+      // Cache the block
+      if (cacheBlock) {
+        cacheConf.getBlockCache().cacheBlock(cacheKey, metaBlock,
+            cacheConf.isInMemory());
+      }
+
+      return metaBlock.getBufferWithoutHeader();
+    }
+  }
+
+  /**
+   * Read in a file block.
+   * @param dataBlockOffset offset to read.
+   * @param onDiskBlockSize size of the block
+   * @param cacheBlock
+   * @param pread Use positional read instead of seek+read (positional is
+   *          better doing random reads whereas seek+read is better scanning).
+   * @param isCompaction is this block being read as part of a compaction
+   * @param expectedBlockType the block type we are expecting to read with this
+   *          read operation, or null to read whatever block type is available
+   *          and avoid checking (that might reduce caching efficiency of
+   *          encoded data blocks)
+   * @return Block wrapped in a ByteBuffer.
+   * @throws IOException
+   */
+  @Override
+  public HFileBlock readBlock(long dataBlockOffset, long onDiskBlockSize,
+      final boolean cacheBlock, boolean pread, final boolean isCompaction,
+      BlockType expectedBlockType)
+      throws IOException {
+    if (dataBlockIndexReader == null) {
+      throw new IOException("Block index not loaded");
+    }
+    if (dataBlockOffset < 0
+        || dataBlockOffset >= trailer.getLoadOnOpenDataOffset()) {
+      throw new IOException("Requested block is out of range: "
+          + dataBlockOffset + ", lastDataBlockOffset: "
+          + trailer.getLastDataBlockOffset());
+    }
+    // For any given block from any given file, synchronize reads for said
+    // block.
+    // Without a cache, this synchronizing is needless overhead, but really
+    // the other choice is to duplicate work (which the cache would prevent you
+    // from doing).
+
+    BlockCacheKey cacheKey =
+        new BlockCacheKey(name, dataBlockOffset,
+            dataBlockEncoder.getEffectiveEncodingInCache(isCompaction),
+            expectedBlockType);
+
+    boolean useLock = false;
+    IdLock.Entry lockEntry = null;
+    TraceScope traceScope = Trace.startSpan("HFileReaderV2.readBlock");
+    try {
+      while (true) {
+        if (useLock) {
+          lockEntry = offsetLock.getLockEntry(dataBlockOffset);
+        }
+
+        // Check cache for block. If found return.
+        if (cacheConf.isBlockCacheEnabled()) {
+          // Try and get the block from the block cache. If the useLock variable is true then this
+          // is the second time through the loop and it should not be counted as a block cache miss.
+          HFileBlock cachedBlock = (HFileBlock) cacheConf.getBlockCache().getBlock(cacheKey,
+              cacheBlock, useLock);
+          if (cachedBlock != null) {
+            if (cachedBlock.getBlockType() == BlockType.DATA) {
+              HFile.dataBlockReadCnt.incrementAndGet();
+            }
+
+            validateBlockType(cachedBlock, expectedBlockType);
+
+            // Validate encoding type for encoded blocks. We include encoding
+            // type in the cache key, and we expect it to match on a cache hit.
+            if (cachedBlock.getBlockType() == BlockType.ENCODED_DATA
+                && cachedBlock.getDataBlockEncoding() != dataBlockEncoder.getEncodingInCache()) {
+              throw new IOException("Cached block under key " + cacheKey + " "
+                  + "has wrong encoding: " + cachedBlock.getDataBlockEncoding() + " (expected: "
+                  + dataBlockEncoder.getEncodingInCache() + ")");
+            }
+            return cachedBlock;
+          }
+          // Carry on, please load.
+        }
+        if (!useLock) {
+          // check cache again with lock
+          useLock = true;
+          continue;
+        }
+        if (Trace.isTracing()) {
+          traceScope.getSpan().addTimelineAnnotation("blockCacheMiss");
+        }
+        // Load block from filesystem.
+        long startTimeNs = System.nanoTime();
+        HFileBlock hfileBlock = fsBlockReader.readBlockData(dataBlockOffset, onDiskBlockSize, -1,
+            pread);
+        hfileBlock = diskToCacheFormat(hfileBlock, isCompaction);
+        validateBlockType(hfileBlock, expectedBlockType);
+
+        final long delta = System.nanoTime() - startTimeNs;
+        HFile.offerReadLatency(delta, pread);
+
+        // Cache the block if necessary
+        if (cacheBlock && cacheConf.shouldCacheBlockOnRead(hfileBlock.getBlockType().getCategory())) {
+          cacheConf.getBlockCache().cacheBlock(cacheKey, hfileBlock, cacheConf.isInMemory());
+        }
+
+        if (hfileBlock.getBlockType() == BlockType.DATA) {
+          HFile.dataBlockReadCnt.incrementAndGet();
+        }
+
+        return hfileBlock;
+      }
+    } finally {
+      traceScope.close();
+      if (lockEntry != null) {
+        offsetLock.releaseLockEntry(lockEntry);
+      }
+    }
+  }
+
+  protected HFileBlock diskToCacheFormat( HFileBlock hfileBlock, final boolean isCompaction) {
+    return dataBlockEncoder.diskToCacheFormat(hfileBlock, isCompaction);
+  }
+
+  @Override
+  public boolean hasMVCCInfo() {
+    return includesMemstoreTS && decodeMemstoreTS;
+  }
+
+  /**
+   * Compares the actual type of a block retrieved from cache or disk with its
+   * expected type and throws an exception in case of a mismatch. Expected
+   * block type of {@link BlockType#DATA} is considered to match the actual
+   * block type [@link {@link BlockType#ENCODED_DATA} as well.
+   * @param block a block retrieved from cache or disk
+   * @param expectedBlockType the expected block type, or null to skip the
+   *          check
+   */
+  private void validateBlockType(HFileBlock block,
+      BlockType expectedBlockType) throws IOException {
+    if (expectedBlockType == null) {
+      return;
+    }
+    BlockType actualBlockType = block.getBlockType();
+    if (actualBlockType == BlockType.ENCODED_DATA &&
+        expectedBlockType == BlockType.DATA) {
+      // We consider DATA to match ENCODED_DATA for the purpose of this
+      // verification.
+      return;
+    }
+    if (actualBlockType != expectedBlockType) {
+      throw new IOException("Expected block type " + expectedBlockType + ", " +
+          "but got " + actualBlockType + ": " + block);
+    }
+  }
+
+  /**
+   * @return Last key in the file. May be null if file has no entries. Note that
+   *         this is not the last row key, but rather the byte form of the last
+   *         KeyValue.
+   */
+  @Override
+  public byte[] getLastKey() {
+    return dataBlockIndexReader.isEmpty() ? null : lastKey;
+  }
+
+  /**
+   * @return Midkey for this file. We work with block boundaries only so
+   *         returned midkey is an approximation only.
+   * @throws IOException
+   */
+  @Override
+  public byte[] midkey() throws IOException {
+    return dataBlockIndexReader.midkey();
+  }
+
+  @Override
+  public void close() throws IOException {
+    close(cacheConf.shouldEvictOnClose());
+  }
+
+  public void close(boolean evictOnClose) throws IOException {
+    if (evictOnClose && cacheConf.isBlockCacheEnabled()) {
+      int numEvicted = cacheConf.getBlockCache().evictBlocksByHfileName(name);
+      if (LOG.isTraceEnabled()) {
+        LOG.trace("On close, file=" + name + " evicted=" + numEvicted
+          + " block(s)");
+      }
+    }
+    fsBlockReader.closeStreams();
+  }
+
+  /** For testing */
+  @Override
+  HFileBlock.FSReader getUncachedBlockReader() {
+    return fsBlockReader;
+  }
+
+
+  protected abstract static class AbstractScannerV2
+      extends AbstractHFileReader.Scanner {
+    protected HFileBlock block;
 
     /**
-     * Create a wrapper for the Statement which traces this
-     * Statement to the Connection which created it and the
-     * code which created it.
+     * The next indexed key is to keep track of the indexed key of the next data block.
+     * If the nextIndexedKey is HConstants.NO_NEXT_INDEXED_KEY, it means that the
+     * current data block is the last data block.
      *
-     * @param c the {@link DelegatingConnection} that created this statement
-     * @param s the {@link CallableStatement} to delegate all calls to
+     * If the nextIndexedKey is null, it means the nextIndexedKey has not been loaded yet.
      */
-    public DelegatingCallableStatement(DelegatingConnection c,
-                                       CallableStatement s) {
-        super(c, s);
+    protected byte[] nextIndexedKey;
+
+    public AbstractScannerV2(HFileReaderV2 r, boolean cacheBlocks,
+        final boolean pread, final boolean isCompaction) {
+      super(r, cacheBlocks, pread, isCompaction);
     }
 
-    public boolean equals(Object obj) {
-    	if (this == obj) return true;
-        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
-        if (delegate == null) {
-            return false;
-        }
-        if (obj instanceof DelegatingCallableStatement) {
-            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
-            return delegate.equals(s.getInnermostDelegate());
-        }
-        else {
-            return delegate.equals(obj);
-        }
+    /**
+     * An internal API function. Seek to the given key, optionally rewinding to
+     * the first key of the block before doing the seek.
+     *
+     * @param key key byte array
+     * @param offset key offset in the key byte array
+     * @param length key length
+     * @param rewind whether to rewind to the first key of the block before
+     *        doing the seek. If this is false, we are assuming we never go
+     *        back, otherwise the result is undefined.
+     * @return -1 if the key is earlier than the first key of the file,
+     *         0 if we are at the given key, 1 if we are past the given key
+     *         -2 if the key is earlier than the first key of the file while
+     *         using a faked index key
+     * @throws IOException
+     */
+    protected int seekTo(byte[] key, int offset, int length, boolean rewind)
+        throws IOException {
+      HFileBlockIndex.BlockIndexReader indexReader =
+          reader.getDataBlockIndexReader();
+      BlockWithScanInfo blockWithScanInfo =
+        indexReader.loadDataBlockWithScanInfo(key, offset, length, block,
+            cacheBlocks, pread, isCompaction);
+      if (blockWithScanInfo == null || blockWithScanInfo.getHFileBlock() == null) {
+        // This happens if the key e.g. falls before the beginning of the file.
+        return -1;
+      }
+      return loadBlockAndSeekToKey(blockWithScanInfo.getHFileBlock(),
+          blockWithScanInfo.getNextIndexedKey(), rewind, key, offset, length, false);
     }
 
-    /** Sets my delegate. */
-    public void setDelegate(CallableStatement s) {
-        super.setDelegate(s);
-        _stmt = s;
+    protected abstract ByteBuffer getFirstKeyInBlock(HFileBlock curBlock);
+
+    protected abstract int loadBlockAndSeekToKey(HFileBlock seekToBlock, byte[] nextIndexedKey,
+        boolean rewind, byte[] key, int offset, int length, boolean seekBefore)
+        throws IOException;
+
+    @Override
+    public int seekTo(byte[] key, int offset, int length) throws IOException {
+      // Always rewind to the first key of the block, because the given key
+      // might be before or after the current key.
+      return seekTo(key, offset, length, true);
     }
 
-    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
-
-    public boolean wasNull() throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public String getString(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    /** @deprecated */
-    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
-
-    public byte[] getBytes(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(int i, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
-
-    public URL getURL(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void setURL(String parameterName, URL val) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
-
-    public void setNull(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void setBoolean(String parameterName, boolean x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setByte(String parameterName, byte x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setShort(String parameterName, short x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setInt(String parameterName, int x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setLong(String parameterName, long x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setFloat(String parameterName, float x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDouble(String parameterName, double x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setString(String parameterName, String x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBytes(String parameterName, byte [] x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDate(String parameterName, Date x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
-    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
-
-    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
-
-    public String getString(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public byte[] getBytes(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public URL getURL(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-/* JDBC_4_ANT_KEY_BEGIN */
-
-    public RowId getRowId(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterIndex);
+    @Override
+    public int reseekTo(byte[] key, int offset, int length) throws IOException {
+      int compared;
+      if (isSeeked()) {
+        compared = compareKey(reader.getComparator(), key, offset, length);
+        if (compared < 1) {
+          // If the required key is less than or equal to current key, then
+          // don't do anything.
+          return compared;
+        } else {
+          if (this.nextIndexedKey != null &&
+              (this.nextIndexedKey == HConstants.NO_NEXT_INDEXED_KEY ||
+               reader.getComparator().compareFlatKey(key, offset, length,
+                   nextIndexedKey, 0, nextIndexedKey.length) < 0)) {
+            // The reader shall continue to scan the current data block instead of querying the
+            // block index as long as it knows the target key is strictly smaller than
+            // the next indexed key or the current data block is the last data block.
+            return loadBlockAndSeekToKey(this.block, this.nextIndexedKey,
+                false, key, offset, length, false);
+          }
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+      }
+      // Don't rewind on a reseek operation, because reseek implies that we are
+      // always going forward in the file.
+      return seekTo(key, offset, length, false);
     }
 
-    public RowId getRowId(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterName);
+    @Override
+    public boolean seekBefore(byte[] key, int offset, int length)
+        throws IOException {
+      HFileBlock seekToBlock =
+          reader.getDataBlockIndexReader().seekToDataBlock(key, offset, length,
+              block, cacheBlocks, pread, isCompaction);
+      if (seekToBlock == null) {
+        return false;
+      }
+      ByteBuffer firstKey = getFirstKeyInBlock(seekToBlock);
+
+      if (reader.getComparator().compareFlatKey(firstKey.array(),
+          firstKey.arrayOffset(), firstKey.limit(), key, offset, length) >= 0)
+      {
+        long previousBlockOffset = seekToBlock.getPrevBlockOffset();
+        // The key we are interested in
+        if (previousBlockOffset == -1) {
+          // we have a 'problem', the key we want is the first of the file.
+          return false;
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+
+        // It is important that we compute and pass onDiskSize to the block
+        // reader so that it does not have to read the header separately to
+        // figure out the size.
+        seekToBlock = reader.readBlock(previousBlockOffset,
+            seekToBlock.getOffset() - previousBlockOffset, cacheBlocks,
+            pread, isCompaction, BlockType.DATA);
+        // TODO shortcut: seek forward in this block to the last key of the
+        // block.
+      }
+      byte[] firstKeyInCurrentBlock = Bytes.getBytes(firstKey);
+      loadBlockAndSeekToKey(seekToBlock, firstKeyInCurrentBlock, true, key, offset, length, true);
+      return true;
     }
 
-    public void setRowId(String parameterName, RowId value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setRowId(parameterName, value);
+
+    /**
+     * Scans blocks in the "scanned" section of the {@link HFile} until the next
+     * data block is found.
+     *
+     * @return the next block, or null if there are no more data blocks
+     * @throws IOException
+     */
+    protected HFileBlock readNextDataBlock() throws IOException {
+      long lastDataBlockOffset = reader.getTrailer().getLastDataBlockOffset();
+      if (block == null)
+        return null;
+
+      HFileBlock curBlock = block;
+
+      do {
+        if (curBlock.getOffset() >= lastDataBlockOffset)
+          return null;
+
+        if (curBlock.getOffset() < 0) {
+          throw new IOException("Invalid block file offset: " + block);
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+
+        // We are reading the next block without block type validation, because
+        // it might turn out to be a non-data block.
+        curBlock = reader.readBlock(curBlock.getOffset()
+            + curBlock.getOnDiskSizeWithHeader(),
+            curBlock.getNextBlockOnDiskSizeWithHeader(), cacheBlocks, pread,
+            isCompaction, null);
+      } while (!(curBlock.getBlockType().equals(BlockType.DATA) ||
+          curBlock.getBlockType().equals(BlockType.ENCODED_DATA)));
+
+      return curBlock;
+    }
+    /**
+     * Compare the given key against the current key
+     * @param comparator
+     * @param key
+     * @param offset
+     * @param length
+     * @return -1 is the passed key is smaller than the current key, 0 if equal and 1 if greater
+     */
+    public abstract int compareKey(KVComparator comparator, byte[] key, int offset,
+        int length);
+  }
+
+  /**
+   * Implementation of {@link HFileScanner} interface.
+   */
+  protected static class ScannerV2 extends AbstractScannerV2 {
+    private HFileReaderV2 reader;
+
+    public ScannerV2(HFileReaderV2 r, boolean cacheBlocks,
+        final boolean pread, final boolean isCompaction) {
+      super(r, cacheBlocks, pread, isCompaction);
+      this.reader = r;
     }
 
-    public void setNString(String parameterName, String value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNString(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public KeyValue getKeyValue() {
+      if (!isSeeked())
+        return null;
+
+      KeyValue ret = new KeyValue(blockBuffer.array(), blockBuffer.arrayOffset()
+          + blockBuffer.position(), getCellBufSize(), currKeyLen);
+      if (this.reader.shouldIncludeMemstoreTS()) {
+        ret.setMvccVersion(currMemstoreTS);
+      }
+      return ret;
     }
 
-    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    protected int getCellBufSize() {
+      return KEY_VALUE_LEN_SIZE + currKeyLen + currValueLen;
     }
 
-    public void setNClob(String parameterName, NClob value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public ByteBuffer getKey() {
+      assertSeeked();
+      return ByteBuffer.wrap(
+          blockBuffer.array(),
+          blockBuffer.arrayOffset() + blockBuffer.position()
+              + KEY_VALUE_LEN_SIZE, currKeyLen).slice();
     }
 
-    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public int compareKey(KVComparator comparator, byte[] key, int offset, int length) {
+      return comparator.compareFlatKey(key, offset, length, blockBuffer.array(),
+          blockBuffer.arrayOffset() + blockBuffer.position() + KEY_VALUE_LEN_SIZE, currKeyLen);
     }
 
-    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public ByteBuffer getValue() {
+      assertSeeked();
+      return ByteBuffer.wrap(
+          blockBuffer.array(),
+          blockBuffer.arrayOffset() + blockBuffer.position()
+              + KEY_VALUE_LEN_SIZE + currKeyLen, currValueLen).slice();
     }
 
-    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    protected void setNonSeekedState() {
+      block = null;
+      blockBuffer = null;
+      currKeyLen = 0;
+      currValueLen = 0;
+      currMemstoreTS = 0;
+      currMemstoreTSLen = 0;
     }
 
-    public NClob getNClob(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterIndex);
+    /**
+     * Go to the next key/value in the block section. Loads the next block if
+     * necessary. If successful, {@link #getKey()} and {@link #getValue()} can
+     * be called.
+     *
+     * @return true if successfully navigated to the next key/value
+     */
+    @Override
+    public boolean next() throws IOException {
+      assertSeeked();
+
+      try {
+        blockBuffer.position(getNextCellStartPosition());
+      } catch (IllegalArgumentException e) {
+        LOG.error("Current pos = " + blockBuffer.position()
+            + "; currKeyLen = " + currKeyLen + "; currValLen = "
+            + currValueLen + "; block limit = " + blockBuffer.limit()
+            + "; HFile name = " + reader.getName()
+            + "; currBlock currBlockOffset = " + block.getOffset());
+        throw e;
+      }
+
+      if (blockBuffer.remaining() <= 0) {
+        long lastDataBlockOffset =
+            reader.getTrailer().getLastDataBlockOffset();
+
+        if (block.getOffset() >= lastDataBlockOffset) {
+          setNonSeekedState();
+          return false;
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+
+        // read the next block
+        HFileBlock nextBlock = readNextDataBlock();
+        if (nextBlock == null) {
+          setNonSeekedState();
+          return false;
         }
+
+        updateCurrBlock(nextBlock);
+        return true;
+      }
+
+      // We are still in the same block.
+      readKeyValueLen();
+      return true;
     }
 
-    public NClob getNClob(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    protected int getNextCellStartPosition() {
+      return blockBuffer.position() + KEY_VALUE_LEN_SIZE + currKeyLen + currValueLen
+          + currMemstoreTSLen;
     }
 
-    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    /**
+     * Positions this scanner at the start of the file.
+     *
+     * @return false if empty file; i.e. a call to next would return false and
+     *         the current key and value are undefined.
+     * @throws IOException
+     */
+    @Override
+    public boolean seekTo() throws IOException {
+      if (reader == null) {
+        return false;
+      }
+
+      if (reader.getTrailer().getEntryCount() == 0) {
+        // No data blocks.
+        return false;
+      }
+
+      long firstDataBlockOffset =
+          reader.getTrailer().getFirstDataBlockOffset();
+      if (block != null && block.getOffset() == firstDataBlockOffset) {
+        blockBuffer.rewind();
+        readKeyValueLen();
+        return true;
+      }
+
+      block = reader.readBlock(firstDataBlockOffset, -1, cacheBlocks, pread,
+          isCompaction, BlockType.DATA);
+      if (block.getOffset() < 0) {
+        throw new IOException("Invalid block offset: " + block.getOffset());
+      }
+      updateCurrBlock(block);
+      return true;
     }
 
-    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    @Override
+    protected int loadBlockAndSeekToKey(HFileBlock seekToBlock, byte[] nextIndexedKey,
+        boolean rewind, byte[] key, int offset, int length, boolean seekBefore)
+        throws IOException {
+      if (block == null || block.getOffset() != seekToBlock.getOffset()) {
+        updateCurrBlock(seekToBlock);
+      } else if (rewind) {
+        blockBuffer.rewind();
+      }
+
+      // Update the nextIndexedKey
+      this.nextIndexedKey = nextIndexedKey;
+      return blockSeek(key, offset, length, seekBefore);
     }
 
-    public SQLXML getSQLXML(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    /**
+     * Updates the current block to be the given {@link HFileBlock}. Seeks to
+     * the the first key/value pair.
+     *
+     * @param newBlock the block to make current
+     */
+    protected void updateCurrBlock(HFileBlock newBlock) {
+      block = newBlock;
+
+      // sanity check
+      if (block.getBlockType() != BlockType.DATA) {
+        throw new IllegalStateException("ScannerV2 works only on data " +
+            "blocks, got " + block.getBlockType() + "; " +
+            "fileName=" + reader.name + ", " +
+            "dataBlockEncoder=" + reader.dataBlockEncoder + ", " +
+            "isCompaction=" + isCompaction);
+      }
+
+      blockBuffer = block.getBufferWithoutHeader();
+      readKeyValueLen();
+      blockFetches++;
+
+      // Reset the next indexed key
+      this.nextIndexedKey = null;
     }
 
-    public String getNString(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    protected void readKeyValueLen() {
+      blockBuffer.mark();
+      currKeyLen = blockBuffer.getInt();
+      currValueLen = blockBuffer.getInt();
+      ByteBufferUtils.skip(blockBuffer, currKeyLen + currValueLen);
+      readMvccVersion();
+      if (currKeyLen < 0 || currValueLen < 0
+          || currKeyLen > blockBuffer.limit()
+          || currValueLen > blockBuffer.limit()) {
+        throw new IllegalStateException("Invalid currKeyLen " + currKeyLen
+            + " or currValueLen " + currValueLen + ". Block offset: "
+            + block.getOffset() + ", block length: " + blockBuffer.limit()
+            + ", position: " + blockBuffer.position() + " (without header).");
+      }
+      blockBuffer.reset();
     }
 
-    public String getNString(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterName);
+    protected void readMvccVersion() {
+      if (this.reader.shouldIncludeMemstoreTS()) {
+        if (this.reader.decodeMemstoreTS) {
+          try {
+            currMemstoreTS = Bytes.readVLong(blockBuffer.array(), blockBuffer.arrayOffset()
+                + blockBuffer.position());
+            currMemstoreTSLen = WritableUtils.getVIntSize(currMemstoreTS);
+          } catch (Exception e) {
+            throw new RuntimeException("Error reading memstore timestamp", e);
+          }
+        } else {
+          currMemstoreTS = 0;
+          currMemstoreTSLen = 1;
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+      }
     }
 
-    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
+    /**
+     * Within a loaded block, seek looking for the last key that is smaller
+     * than (or equal to?) the key we are interested in.
+     *
+     * A note on the seekBefore: if you have seekBefore = true, AND the first
+     * key in the block = key, then you'll get thrown exceptions. The caller has
+     * to check for that case and load the previous block as appropriate.
+     *
+     * @param key the key to find
+     * @param seekBefore find the key before the given key in case of exact
+     *          match.
+     * @return 0 in case of an exact key match, 1 in case of an inexact match,
+     *         -2 in case of an inexact match and furthermore, the input key less
+     *         than the first key of current block(e.g. using a faked index key)
+     */
+    protected int blockSeek(byte[] key, int offset, int length,
+        boolean seekBefore) {
+      int klen, vlen;
+      long memstoreTS = 0;
+      int memstoreTSLen = 0;
+      int lastKeyValueSize = -1;
+      do {
+        blockBuffer.mark();
+        klen = blockBuffer.getInt();
+        vlen = blockBuffer.getInt();
+        blockBuffer.reset();
+        if (this.reader.shouldIncludeMemstoreTS()) {
+          if (this.reader.decodeMemstoreTS) {
+            try {
+              int memstoreTSOffset = blockBuffer.arrayOffset()
+                  + blockBuffer.position() + KEY_VALUE_LEN_SIZE + klen + vlen;
+              memstoreTS = Bytes.readVLong(blockBuffer.array(),
+                  memstoreTSOffset);
+              memstoreTSLen = WritableUtils.getVIntSize(memstoreTS);
+            } catch (Exception e) {
+              throw new RuntimeException("Error reading memstore timestamp", e);
+            }
+          } else {
+            memstoreTS = 0;
+            memstoreTSLen = 1;
+          }
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+
+        int keyOffset = blockBuffer.arrayOffset() + blockBuffer.position()
+            + KEY_VALUE_LEN_SIZE;
+        int comp = reader.getComparator().compareFlatKey(key, offset, length,
+            blockBuffer.array(), keyOffset, klen);
+
+        if (comp == 0) {
+          if (seekBefore) {
+            if (lastKeyValueSize < 0) {
+              throw new IllegalStateException("blockSeek with seekBefore "
+                  + "at the first key of the block: key="
+                  + Bytes.toStringBinary(key) + ", blockOffset="
+                  + block.getOffset() + ", onDiskSize="
+                  + block.getOnDiskSizeWithHeader());
+            }
+            blockBuffer.position(blockBuffer.position() - lastKeyValueSize);
+            readKeyValueLen();
+            return 1; // non exact match.
+          }
+          currKeyLen = klen;
+          currValueLen = vlen;
+          if (this.reader.shouldIncludeMemstoreTS()) {
+            currMemstoreTS = memstoreTS;
+            currMemstoreTSLen = memstoreTSLen;
+          }
+          return 0; // indicate exact match
+        } else if (comp < 0) {
+          if (lastKeyValueSize > 0)
+            blockBuffer.position(blockBuffer.position() - lastKeyValueSize);
+          readKeyValueLen();
+          if (lastKeyValueSize == -1 && blockBuffer.position() == 0
+              && this.reader.trailer.getMinorVersion() >= MINOR_VERSION_WITH_FAKED_KEY) {
+            return HConstants.INDEX_KEY_MAGIC;
+          }
+          return 1;
         }
+
+        // The size of this key/value tuple, including key/value length fields.
+        lastKeyValueSize = klen + vlen + memstoreTSLen + KEY_VALUE_LEN_SIZE;
+        blockBuffer.position(blockBuffer.position() + lastKeyValueSize);
+      } while (blockBuffer.remaining() > 0);
+
+      // Seek to the last key we successfully read. This will happen if this is
+      // the last key/value pair in the file, in which case the following call
+      // to next() has to return false.
+      blockBuffer.position(blockBuffer.position() - lastKeyValueSize);
+      readKeyValueLen();
+      return 1; // didn't exactly find it.
     }
 
-    public Reader getNCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    @Override
+    protected ByteBuffer getFirstKeyInBlock(HFileBlock curBlock) {
+      ByteBuffer buffer = curBlock.getBufferWithoutHeader();
+      // It is safe to manipulate this buffer because we own the buffer object.
+      buffer.rewind();
+      int klen = buffer.getInt();
+      buffer.getInt();
+      ByteBuffer keyBuff = buffer.slice();
+      keyBuff.limit(klen);
+      keyBuff.rewind();
+      return keyBuff;
     }
 
-    public Reader getCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    @Override
+    public String getKeyString() {
+      return Bytes.toStringBinary(blockBuffer.array(),
+          blockBuffer.arrayOffset() + blockBuffer.position()
+              + KEY_VALUE_LEN_SIZE, currKeyLen);
     }
 
-    public Reader getCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    @Override
+    public String getValueString() {
+      return Bytes.toString(blockBuffer.array(), blockBuffer.arrayOffset()
+          + blockBuffer.position() + KEY_VALUE_LEN_SIZE + currKeyLen,
+          currValueLen);
+    }
+  }
+
+  /**
+   * ScannerV2 that operates on encoded data blocks.
+   */
+  protected static class EncodedScannerV2 extends AbstractScannerV2 {
+    private DataBlockEncoder.EncodedSeeker seeker = null;
+    protected DataBlockEncoder dataBlockEncoder = null;
+    protected final HFileContext meta;
+    protected HFileBlockDecodingContext decodingCtx;
+    public EncodedScannerV2(HFileReaderV2 reader, boolean cacheBlocks,
+        boolean pread, boolean isCompaction, HFileContext meta) {
+      super(reader, cacheBlocks, pread, isCompaction);
+      this.meta = meta;
     }
 
-    public void setBlob(String parameterName, Blob blob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, blob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    protected void setDataBlockEncoder(DataBlockEncoder dataBlockEncoder) {
+      this.dataBlockEncoder = dataBlockEncoder;
+      decodingCtx = this.dataBlockEncoder.newDataBlockDecodingContext(
+          this.meta);
+      seeker = dataBlockEncoder.createSeeker(reader.getComparator(), decodingCtx);
     }
 
-    public void setClob(String parameterName, Clob clob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, clob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public boolean isSeeked(){
+      return this.block != null;
     }
 
-    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    /**
+     * Updates the current block to be the given {@link HFileBlock}. Seeks to
+     * the the first key/value pair.
+     *
+     * @param newBlock the block to make current
+     */
+    protected void updateCurrentBlock(HFileBlock newBlock) {
+      block = newBlock;
+
+      // sanity checks
+      if (block.getBlockType() != BlockType.ENCODED_DATA) {
+        throw new IllegalStateException(
+            "EncodedScanner works only on encoded data blocks");
+      }
+
+      updateDataBlockEncoder(block);
+      seeker.setCurrentBuffer(getEncodedBuffer(newBlock));
+      blockFetches++;
+
+      // Reset the next indexed key
+      this.nextIndexedKey = null;
     }
 
-    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    private void updateDataBlockEncoder(HFileBlock curBlock) {
+      short dataBlockEncoderId = curBlock.getDataBlockEncodingId();
+      if (dataBlockEncoder == null ||
+          !DataBlockEncoding.isCorrectEncoder(dataBlockEncoder, dataBlockEncoderId)) {
+        DataBlockEncoder encoder = DataBlockEncoding.getDataBlockEncoderById(dataBlockEncoderId);
+        setDataBlockEncoder(encoder);
+      }
     }
 
-    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    private ByteBuffer getEncodedBuffer(HFileBlock newBlock) {
+      ByteBuffer origBlock = newBlock.getBufferReadOnly();
+      ByteBuffer encodedBlock = ByteBuffer.wrap(origBlock.array(),
+          origBlock.arrayOffset() + newBlock.headerSize() +
+          DataBlockEncoding.ID_SIZE,
+          newBlock.getUncompressedSizeWithoutHeader() -
+          DataBlockEncoding.ID_SIZE).slice();
+      return encodedBlock;
     }
 
-    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public boolean seekTo() throws IOException {
+      if (reader == null) {
+        return false;
+      }
+
+      if (reader.getTrailer().getEntryCount() == 0) {
+        // No data blocks.
+        return false;
+      }
+
+      long firstDataBlockOffset =
+          reader.getTrailer().getFirstDataBlockOffset();
+      if (block != null && block.getOffset() == firstDataBlockOffset) {
+        seeker.rewind();
+        return true;
+      }
+
+      block = reader.readBlock(firstDataBlockOffset, -1, cacheBlocks, pread,
+          isCompaction, BlockType.DATA);
+      if (block.getOffset() < 0) {
+        throw new IOException("Invalid block offset: " + block.getOffset());
+      }
+      updateCurrentBlock(block);
+      return true;
     }
 
-    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
+    @Override
+    public boolean next() throws IOException {
+      boolean isValid = seeker.next();
+      if (!isValid) {
+        block = readNextDataBlock();
+        isValid = block != null;
+        if (isValid) {
+          updateCurrentBlock(block);
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+      }
+      return isValid;
     }
 
-    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public ByteBuffer getKey() {
+      assertValidSeek();
+      return seeker.getKeyDeepCopy();
     }
 
-    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public int compareKey(KVComparator comparator, byte[] key, int offset, int length) {
+      return seeker.compareKey(comparator, key, offset, length);
     }
 
-    public void setClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setNClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    @Override
+    public ByteBuffer getValue() {
+      assertValidSeek();
+      return seeker.getValueShallowCopy();
     }
-/* JDBC_4_ANT_KEY_END */
+
+    @Override
+    public KeyValue getKeyValue() {
+      if (block == null) {
+        return null;
+      }
+      return seeker.getKeyValue();
+    }
+
+    @Override
+    public String getKeyString() {
+      ByteBuffer keyBuffer = getKey();
+      return Bytes.toStringBinary(keyBuffer.array(),
+          keyBuffer.arrayOffset(), keyBuffer.limit());
+    }
+
+    @Override
+    public String getValueString() {
+      ByteBuffer valueBuffer = getValue();
+      return Bytes.toStringBinary(valueBuffer.array(),
+          valueBuffer.arrayOffset(), valueBuffer.limit());
+    }
+
+    private void assertValidSeek() {
+      if (block == null) {
+        throw new NotSeekedException();
+      }
+    }
+
+    @Override
+    protected ByteBuffer getFirstKeyInBlock(HFileBlock curBlock) {
+      updateDataBlockEncoder(curBlock);
+      return dataBlockEncoder.getFirstKeyInBlock(getEncodedBuffer(curBlock));
+    }
+
+    @Override
+    protected int loadBlockAndSeekToKey(HFileBlock seekToBlock, byte[] nextIndexedKey,
+        boolean rewind, byte[] key, int offset, int length, boolean seekBefore)
+        throws IOException  {
+      if (block == null || block.getOffset() != seekToBlock.getOffset()) {
+        updateCurrentBlock(seekToBlock);
+      } else if (rewind) {
+        seeker.rewind();
+      }
+      this.nextIndexedKey = nextIndexedKey;
+      return seeker.seekToKeyInBlock(key, offset, length, seekBefore);
+    }
+  }
+
+  /**
+   * Returns a buffer with the Bloom filter metadata. The caller takes
+   * ownership of the buffer.
+   */
+  @Override
+  public DataInput getGeneralBloomFilterMetadata() throws IOException {
+    return this.getBloomFilterMetadata(BlockType.GENERAL_BLOOM_META);
+  }
+
+  @Override
+  public DataInput getDeleteBloomFilterMetadata() throws IOException {
+    return this.getBloomFilterMetadata(BlockType.DELETE_FAMILY_BLOOM_META);
+  }
+
+  private DataInput getBloomFilterMetadata(BlockType blockType)
+  throws IOException {
+    if (blockType != BlockType.GENERAL_BLOOM_META &&
+        blockType != BlockType.DELETE_FAMILY_BLOOM_META) {
+      throw new RuntimeException("Block Type: " + blockType.toString() +
+          " is not supported") ;
+    }
+
+    for (HFileBlock b : loadOnOpenBlocks)
+      if (b.getBlockType() == blockType)
+        return b.getByteStream();
+    return null;
+  }
+
+  @Override
+  public boolean isFileInfoLoaded() {
+    return true; // We load file info in constructor in version 2.
+  }
+
+  /**
+   * Validates that the minor version is within acceptable limits.
+   * Otherwise throws an Runtime exception
+   */
+  private void validateMinorVersion(Path path, int minorVersion) {
+    if (minorVersion < MIN_MINOR_VERSION ||
+        minorVersion > MAX_MINOR_VERSION) {
+      String msg = "Minor version for path " + path + 
+                   " is expected to be between " +
+                   MIN_MINOR_VERSION + " and " + MAX_MINOR_VERSION +
+                   " but is found to be " + minorVersion;
+      LOG.error(msg);
+      throw new RuntimeException(msg);
+    }
+  }
+
+  @Override
+  public int getMajorVersion() {
+    return 2;
+  }
 }

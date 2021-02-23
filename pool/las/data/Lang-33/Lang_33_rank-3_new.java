@@ -1,1186 +1,2022 @@
-package com.fasterxml.jackson.core.base;
+package com.fasterxml.jackson.databind;
 
 import java.io.*;
-import java.math.BigDecimal;
-import java.math.BigInteger;
-import java.util.Arrays;
+import java.net.URL;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.core.JsonParser.Feature;
-import com.fasterxml.jackson.core.io.IOContext;
-import com.fasterxml.jackson.core.io.NumberInput;
-import com.fasterxml.jackson.core.json.DupDetector;
-import com.fasterxml.jackson.core.json.JsonReadContext;
-import com.fasterxml.jackson.core.json.PackageVersion;
-import com.fasterxml.jackson.core.util.ByteArrayBuilder;
-import com.fasterxml.jackson.core.util.TextBuffer;
+import com.fasterxml.jackson.core.filter.FilteringParserDelegate;
+import com.fasterxml.jackson.core.filter.JsonPointerBasedFilter;
+import com.fasterxml.jackson.core.filter.TokenFilter;
+import com.fasterxml.jackson.core.type.ResolvedType;
+import com.fasterxml.jackson.core.type.TypeReference;
+
+import com.fasterxml.jackson.databind.cfg.ContextAttributes;
+import com.fasterxml.jackson.databind.deser.DataFormatReaders;
+import com.fasterxml.jackson.databind.deser.DefaultDeserializationContext;
+import com.fasterxml.jackson.databind.deser.DeserializationProblemHandler;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.TreeTraversingParser;
+import com.fasterxml.jackson.databind.type.SimpleType;
+import com.fasterxml.jackson.databind.type.TypeFactory;
+import com.fasterxml.jackson.databind.util.ClassUtil;
 
 /**
- * Intermediate base class used by all Jackson {@link JsonParser}
- * implementations. Contains most common things that are independent
- * of actual underlying input source.
+ * Builder object that can be used for per-serialization configuration of
+ * deserialization parameters, such as root type to use or object
+ * to update (instead of constructing new instance).
+ *<p>
+ * Uses "mutant factory" pattern so that instances are immutable
+ * (and thus fully thread-safe with no external synchronization);
+ * new instances are constructed for different configurations.
+ * Instances are initially constructed by {@link ObjectMapper} and can be
+ * reused, shared, cached; both because of thread-safety and because
+ * instances are relatively light-weight.
+ *<p>
+ * NOTE: this class is NOT meant as sub-classable (with Jackson 2.8 and
+ * above) by users. It is left as non-final mostly to allow frameworks
+ * that require bytecode generation for proxying and similar use cases,
+ * but there is no expecation that functionality should be extended
+ * by sub-classing.
  */
-public abstract class ParserBase extends ParserMinimalBase
+public class ObjectReader
+    extends ObjectCodec
+    implements Versioned, java.io.Serializable // since 2.1
 {
-    /*
-    /**********************************************************
-    /* Generic I/O state
-    /**********************************************************
-     */
+    private static final long serialVersionUID = 2L; // since 2.9
 
-    /**
-     * I/O context for this reader. It handles buffer allocation
-     * for the reader.
-     */
-    final protected IOContext _ioContext;
-
-    /**
-     * Flag that indicates whether parser is closed or not. Gets
-     * set when parser is either closed by explicit call
-     * ({@link #close}) or when end-of-input is reached.
-     */
-    protected boolean _closed;
+    private final static JavaType JSON_NODE_TYPE = SimpleType.constructUnsafe(JsonNode.class);
 
     /*
     /**********************************************************
-    /* Current input data
-    /**********************************************************
-     */
-
-    // Note: type of actual buffer depends on sub-class, can't include
-
-    /**
-     * Pointer to next available character in buffer
-     */
-    protected int _inputPtr;
-
-    /**
-     * Index of character after last available one in the buffer.
-     */
-    protected int _inputEnd;
-
-    /*
-    /**********************************************************
-    /* Current input location information
+    /* Immutable configuration from ObjectMapper
     /**********************************************************
      */
 
     /**
-     * Number of characters/bytes that were contained in previous blocks
-     * (blocks that were already processed prior to the current buffer).
+     * General serialization configuration settings; while immutable,
+     * can use copy-constructor to create modified instances as necessary.
      */
-    protected long _currInputProcessed;
+    protected final DeserializationConfig _config;
 
     /**
-     * Current row location of current point in input buffer, starting
-     * from 1, if available.
+     * Blueprint instance of deserialization context; used for creating
+     * actual instance when needed.
      */
-    protected int _currInputRow = 1;
+    protected final DefaultDeserializationContext _context;
 
     /**
-     * Current index of the first character of the current row in input
-     * buffer. Needed to calculate column position, if necessary; benefit
-     * of not having column itself is that this only has to be updated
-     * once per line.
+     * Factory used for constructing {@link JsonGenerator}s
      */
-    protected int _currInputRowStart;
-
-    /*
-    /**********************************************************
-    /* Information about starting location of event
-    /* Reader is pointing to; updated on-demand
-    /**********************************************************
-     */
-
-    // // // Location info at point when current token was started
+    protected final JsonFactory _parserFactory;
 
     /**
-     * Total number of bytes/characters read before start of current token.
-     * For big (gigabyte-sized) sizes are possible, needs to be long,
-     * unlike pointers and sizes related to in-memory buffers.
+     * Flag that indicates whether root values are expected to be unwrapped or not
      */
-    protected long _tokenInputTotal;
+    protected final boolean _unwrapRoot;
 
     /**
-     * Input row on which current token starts, 1-based
+     * Filter to be consider for JsonParser.  
+     * Default value to be null as filter not considered.
      */
-    protected int _tokenInputRow = 1;
-
-    /**
-     * Column on input row that current token starts; 0-based (although
-     * in the end it'll be converted to 1-based)
-     */
-    protected int _tokenInputCol;
-
-    /*
-    /**********************************************************
-    /* Parsing state
-    /**********************************************************
-     */
-
-    /**
-     * Information about parser context, context in which
-     * the next token is to be parsed (root, array, object).
-     */
-    protected JsonReadContext _parsingContext;
-    
-    /**
-     * Secondary token related to the next token after current one;
-     * used if its type is known. This may be value token that
-     * follows FIELD_NAME, for example.
-     */
-    protected JsonToken _nextToken;
-
-    /*
-    /**********************************************************
-    /* Buffer(s) for local name(s) and text content
-    /**********************************************************
-     */
-
-    /**
-     * Buffer that contains contents of String values, including
-     * field names if necessary (name split across boundary,
-     * contains escape sequence, or access needed to char array)
-     */
-    protected final TextBuffer _textBuffer;
-
-    /**
-     * Temporary buffer that is needed if field name is accessed
-     * using {@link #getTextCharacters} method (instead of String
-     * returning alternatives)
-     */
-    protected char[] _nameCopyBuffer;
-
-    /**
-     * Flag set to indicate whether the field name is available
-     * from the name copy buffer or not (in addition to its String
-     * representation  being available via read context)
-     */
-    protected boolean _nameCopied;
-
-    /**
-     * ByteArrayBuilder is needed if 'getBinaryValue' is called. If so,
-     * we better reuse it for remainder of content.
-     */
-    protected ByteArrayBuilder _byteArrayBuilder;
-
-    /**
-     * We will hold on to decoded binary data, for duration of
-     * current event, so that multiple calls to
-     * {@link #getBinaryValue} will not need to decode data more
-     * than once.
-     */
-    protected byte[] _binaryValue;
-
-    // Numeric value holders: multiple fields used for
-    // for efficiency
-
-    /**
-     * Bitfield that indicates which numeric representations
-     * have been calculated for the current type
-     */
-    protected int _numTypesValid = NR_UNKNOWN;
-
-    // First primitives
-
-    protected int _numberInt;
-
-    protected long _numberLong;
-
-    protected double _numberDouble;
-
-    // And then object types
-
-    protected BigInteger _numberBigInt;
-
-    protected BigDecimal _numberBigDecimal;
-
-    // And then other information about value itself
-
-    /**
-     * Flag that indicates whether numeric value has a negative
-     * value. That is, whether its textual representation starts
-     * with minus character.
-     */
-    protected boolean _numberNegative;
-
-    /**
-     * Length of integer part of the number, in characters
-     */
-    protected int _intLength;
-
-    /**
-     * Length of the fractional part (not including decimal
-     * point or exponent), in characters.
-     * Not used for  pure integer values.
-     */
-    protected int _fractLength;
-
-    /**
-     * Length of the exponent part of the number, if any, not
-     * including 'e' marker or sign, just digits. 
-     * Not used for  pure integer values.
-     */
-    protected int _expLength;
-
-    /*
-    /**********************************************************
-    /* Life-cycle
-    /**********************************************************
-     */
-
-    protected ParserBase(IOContext ctxt, int features) {
-        super(features);
-        _ioContext = ctxt;
-        _textBuffer = ctxt.constructTextBuffer();
-        DupDetector dups = Feature.STRICT_DUPLICATE_DETECTION.enabledIn(features)
-                ? DupDetector.rootDetector(this) : null;
-        _parsingContext = JsonReadContext.createRootContext(dups);
-    }
-
-    @Override public Version version() { return PackageVersion.VERSION; }
-
-    @Override
-    public Object getCurrentValue() {
-        return _parsingContext.getCurrentValue();
-    }
-
-    @Override
-    public void setCurrentValue(Object v) {
-        _parsingContext.setCurrentValue(v);
-    }
+    private final TokenFilter _filter;
     
     /*
     /**********************************************************
-    /* Overrides for Feature handling
+    /* Configuration that can be changed during building
     /**********************************************************
      */
 
+    /**
+     * Declared type of value to instantiate during deserialization.
+     * Defines which deserializer to use; as well as base type of instance
+     * to construct if an updatable value is not configured to be used
+     * (subject to changes by embedded type information, for polymorphic
+     * types). If {@link #_valueToUpdate} is non-null, only used for
+     * locating deserializer.
+     */
+    protected final JavaType _valueType;
+
+    /**
+     * We may pre-fetch deserializer as soon as {@link #_valueType}
+     * is known, and if so, reuse it afterwards.
+     * This allows avoiding further deserializer lookups and increases
+     * performance a bit on cases where readers are reused.
+     * 
+     * @since 2.1
+     */
+    protected final JsonDeserializer<Object> _rootDeserializer;
+    
+    /**
+     * Instance to update with data binding; if any. If null,
+     * a new instance is created, if non-null, properties of
+     * this value object will be updated instead.
+     * Note that value can be of almost any type, except not
+     * {@link com.fasterxml.jackson.databind.type.ArrayType}; array
+     * types cannot be modified because array size is immutable.
+     */
+    protected final Object _valueToUpdate;
+
+    /**
+     * When using data format that uses a schema, schema is passed
+     * to parser.
+     */
+    protected final FormatSchema _schema;
+
+    /**
+     * Values that can be injected during deserialization, if any.
+     */
+    protected final InjectableValues _injectableValues;
+
+    /**
+     * Optional detector used for auto-detecting data format that byte-based
+     * input uses.
+     *<p>
+     * NOTE: If defined non-null, <code>readValue()</code> methods that take
+     * {@link Reader} or {@link String} input <b>will fail with exception</b>,
+     * because format-detection only works on byte-sources. Also, if format
+     * cannot be detect reliably (as per detector settings),
+     * a {@link JsonParseException} will be thrown).
+     * 
+     * @since 2.1
+     */
+    protected final DataFormatReaders _dataFormatReaders;
+
+    /*
+    /**********************************************************
+    /* Caching
+    /**********************************************************
+     */
+
+    /**
+     * Root-level cached deserializers.
+     * Passed by {@link ObjectMapper}, shared with it.
+     */
+    final protected ConcurrentHashMap<JavaType, JsonDeserializer<Object>> _rootDeserializers;
+
+    /*
+    /**********************************************************
+    /* Life-cycle, construction
+    /**********************************************************
+     */
+
+    /**
+     * Constructor used by {@link ObjectMapper} for initial instantiation
+     */
+    protected ObjectReader(ObjectMapper mapper, DeserializationConfig config) {
+        this(mapper, config, null, null, null, null);
+    }
+
+    /**
+     * Constructor called when a root deserializer should be fetched based
+     * on other configuration.
+     */
+    protected ObjectReader(ObjectMapper mapper, DeserializationConfig config,
+            JavaType valueType, Object valueToUpdate,
+            FormatSchema schema, InjectableValues injectableValues)
+    {
+        _config = config;
+        _context = mapper._deserializationContext;
+        _rootDeserializers = mapper._rootDeserializers;
+        _parserFactory = mapper._jsonFactory;
+        _valueType = valueType;
+        _valueToUpdate = valueToUpdate;
+        _schema = schema;
+        _injectableValues = injectableValues;
+        _unwrapRoot = config.useRootWrapping();
+
+        _rootDeserializer = _prefetchRootDeserializer(valueType);
+        _dataFormatReaders = null;        
+        _filter = null;
+    }
+    
+    /**
+     * Copy constructor used for building variations.
+     */
+    protected ObjectReader(ObjectReader base, DeserializationConfig config,
+            JavaType valueType, JsonDeserializer<Object> rootDeser, Object valueToUpdate,
+            FormatSchema schema, InjectableValues injectableValues,
+            DataFormatReaders dataFormatReaders)
+    {
+        _config = config;
+        _context = base._context;
+
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = base._parserFactory;
+
+        _valueType = valueType;
+        _rootDeserializer = rootDeser;
+        _valueToUpdate = valueToUpdate;
+        _schema = schema;
+        _injectableValues = injectableValues;
+        _unwrapRoot = config.useRootWrapping();
+        _dataFormatReaders = dataFormatReaders;
+        _filter = base._filter;
+    }
+
+    /**
+     * Copy constructor used when modifying simple feature flags
+     */
+    protected ObjectReader(ObjectReader base, DeserializationConfig config)
+    {
+        _config = config;
+        _context = base._context;
+
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = base._parserFactory;
+
+        _valueType = base._valueType;
+        _rootDeserializer = base._rootDeserializer;
+        _valueToUpdate = base._valueToUpdate;
+        _schema = base._schema;
+        _injectableValues = base._injectableValues;
+        _unwrapRoot = config.useRootWrapping();
+        _dataFormatReaders = base._dataFormatReaders;
+        _filter = base._filter;
+    }
+    
+    protected ObjectReader(ObjectReader base, JsonFactory f)
+    {
+        // may need to override ordering, based on data format capabilities
+        _config = base._config
+            .with(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, f.requiresPropertyOrdering());
+        _context = base._context;
+
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = f;
+
+        _valueType = base._valueType;
+        _rootDeserializer = base._rootDeserializer;
+        _valueToUpdate = base._valueToUpdate;
+        _schema = base._schema;
+        _injectableValues = base._injectableValues;
+        _unwrapRoot = base._unwrapRoot;
+        _dataFormatReaders = base._dataFormatReaders;
+        _filter = base._filter;
+    }
+    
+    protected ObjectReader(ObjectReader base, TokenFilter filter) {
+        _config = base._config;
+        _context = base._context;
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = base._parserFactory;
+        _valueType = base._valueType;
+        _rootDeserializer = base._rootDeserializer;
+        _valueToUpdate = base._valueToUpdate;
+        _schema = base._schema;
+        _injectableValues = base._injectableValues;
+        _unwrapRoot = base._unwrapRoot;
+        _dataFormatReaders = base._dataFormatReaders;
+        _filter = filter;
+    }
+    
+    /**
+     * Method that will return version information stored in and read from jar
+     * that contains this class.
+     */
     @Override
-    public JsonParser enable(Feature f) {
-        _features |= f.getMask();
-        if (f == Feature.STRICT_DUPLICATE_DETECTION) { // enabling dup detection?
-            if (_parsingContext.getDupDetector() == null) { // but only if disabled currently
-                _parsingContext = _parsingContext.withDupDetector(DupDetector.rootDetector(this));
+    public Version version() {
+        return com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION;
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods used internally for invoking constructors
+    /* Need to be overridden if sub-classing (not recommended)
+    /* is used.
+    /**********************************************************
+     */
+
+    /**
+     * Overridable factory method called by various "withXxx()" methods
+     * 
+     * @since 2.5
+     */
+    protected ObjectReader _new(ObjectReader base, JsonFactory f) {
+        return new ObjectReader(base, f);
+    }
+
+    /**
+     * Overridable factory method called by various "withXxx()" methods
+     * 
+     * @since 2.5
+     */
+    protected ObjectReader _new(ObjectReader base, DeserializationConfig config) {
+        return new ObjectReader(base, config);
+    }
+
+    /**
+     * Overridable factory method called by various "withXxx()" methods
+     * 
+     * @since 2.5
+     */
+    protected ObjectReader _new(ObjectReader base, DeserializationConfig config,
+            JavaType valueType, JsonDeserializer<Object> rootDeser, Object valueToUpdate,
+            FormatSchema schema, InjectableValues injectableValues,
+            DataFormatReaders dataFormatReaders) {
+        return new ObjectReader(base, config, valueType, rootDeser,  valueToUpdate,
+                 schema,  injectableValues, dataFormatReaders);
+    }
+
+    /**
+     * Factory method used to create {@link MappingIterator} instances;
+     * either default, or custom subtype.
+     * 
+     * @since 2.5
+     */
+    protected <T> MappingIterator<T> _newIterator(JsonParser p, DeserializationContext ctxt,
+            JsonDeserializer<?> deser, boolean parserManaged)
+    {
+        return new MappingIterator<T>(_valueType, p, ctxt,
+                deser, parserManaged, _valueToUpdate);
+    }
+
+    /*
+    /**********************************************************
+    /* Methods for initializing parser instance to use
+    /**********************************************************
+     */
+
+    protected JsonToken _initForReading(DeserializationContext ctxt, JsonParser p)
+        throws IOException
+    {
+        if (_schema != null) {
+            p.setSchema(_schema);
+        }
+        _config.initialize(p); // since 2.5
+
+        /* First: must point to a token; if not pointing to one, advance.
+         * This occurs before first read from JsonParser, as well as
+         * after clearing of current token.
+         */
+        JsonToken t = p.getCurrentToken();
+        if (t == null) { // and then we must get something...
+            t = p.nextToken();
+            if (t == null) {
+                // Throw mapping exception, since it's failure to map, not an actual parsing problem
+                ctxt.reportInputMismatch(_valueType,
+                        "No content to map due to end-of-input");
             }
         }
-        return this;
-    }
-
-    @Override
-    public JsonParser disable(Feature f) {
-        _features &= ~f.getMask();
-        if (f == Feature.STRICT_DUPLICATE_DETECTION) {
-            _parsingContext = _parsingContext.withDupDetector(null);
-        }
-        return this;
-    }
-
-    @Override
-    @Deprecated
-    public JsonParser setFeatureMask(int newMask) {
-        int changes = (_features ^ newMask);
-        if (changes != 0) {
-            _features = newMask;
-            _checkStdFeatureChanges(newMask, changes);
-        }
-        return this;
-    }
-
-    @Override // since 2.7
-    public JsonParser overrideStdFeatures(int values, int mask) {
-        int oldState = _features;
-        int newState = (oldState & ~mask) | (values & mask);
-        int changed = oldState ^ newState;
-        if (changed != 0) {
-            _features = newState;
-            _checkStdFeatureChanges(newState, changed);
-        }
-        return this;
+        return t;
     }
 
     /**
-     * Helper method called to verify changes to standard features.
-     *
-     * @param newFeatureFlags Bitflag of standard features after they were changed
-     * @param changedFeatures Bitflag of standard features for which setting
-     *    did change
+     * Alternative to {@link #_initForReading} used in cases where reading
+     * of multiple values means that we may or may not want to advance the stream,
+     * but need to do other initialization.
+     *<p>
+     * Base implementation only sets configured {@link FormatSchema}, if any, on parser.
+     * 
+     * @since 2.8
+     */
+    protected void _initForMultiRead(DeserializationContext ctxt, JsonParser p)
+        throws IOException
+    {
+        if (_schema != null) {
+            p.setSchema(_schema);
+        }
+        _config.initialize(p);
+    }
+
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods for DeserializationFeatures
+    /**********************************************************
+     */
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature enabled.
+     */
+    public ObjectReader with(DeserializationFeature feature) {
+        return _with(_config.with(feature));
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
+     */
+    public ObjectReader with(DeserializationFeature first,
+            DeserializationFeature... other)
+    {
+        return _with(_config.with(first, other));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
+     */
+    public ObjectReader withFeatures(DeserializationFeature... features) {
+        return _with(_config.withFeatures(features));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature disabled.
+     */
+    public ObjectReader without(DeserializationFeature feature) {
+        return _with(_config.without(feature)); 
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     */
+    public ObjectReader without(DeserializationFeature first,
+            DeserializationFeature... other) {
+        return _with(_config.without(first, other));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     */
+    public ObjectReader withoutFeatures(DeserializationFeature... features) {
+        return _with(_config.withoutFeatures(features));
+    }    
+
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods for JsonParser.Features
+    /**********************************************************
+     */
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature enabled.
+     */
+    public ObjectReader with(JsonParser.Feature feature) {
+        return _with(_config.with(feature));
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
+     */
+    public ObjectReader withFeatures(JsonParser.Feature... features) {
+        return _with(_config.withFeatures(features));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature disabled.
+     */
+    public ObjectReader without(JsonParser.Feature feature) {
+        return _with(_config.without(feature)); 
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     */
+    public ObjectReader withoutFeatures(JsonParser.Feature... features) {
+        return _with(_config.withoutFeatures(features));
+    }
+
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods for FormatFeature (2.7)
+    /**********************************************************
+     */
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature enabled.
      *
      * @since 2.7
      */
-    protected void _checkStdFeatureChanges(int newFeatureFlags, int changedFeatures)
-    {
-        int f = Feature.STRICT_DUPLICATE_DETECTION.getMask();
-        
-        if ((changedFeatures & f) != 0) {
-            if ((newFeatureFlags & f) != 0) {
-                if (_parsingContext.getDupDetector() == null) {
-                    _parsingContext = _parsingContext.withDupDetector(DupDetector.rootDetector(this));
-                } else { // disabling
-                    _parsingContext = _parsingContext.withDupDetector(null);
-                }
-            }
-        }
-    }
-
-    /*
-    /**********************************************************
-    /* JsonParser impl
-    /**********************************************************
-     */
-    
-    /**
-     * Method that can be called to get the name associated with
-     * the current event.
-     */
-    @Override public String getCurrentName() throws IOException {
-        // [JACKSON-395]: start markers require information from parent
-        if (_currToken == JsonToken.START_OBJECT || _currToken == JsonToken.START_ARRAY) {
-            JsonReadContext parent = _parsingContext.getParent();
-            if (parent != null) {
-                return parent.getCurrentName();
-            }
-        }
-        return _parsingContext.getCurrentName();
-    }
-
-    @Override public void overrideCurrentName(String name) {
-        // Simple, but need to look for START_OBJECT/ARRAY's "off-by-one" thing:
-        JsonReadContext ctxt = _parsingContext;
-        if (_currToken == JsonToken.START_OBJECT || _currToken == JsonToken.START_ARRAY) {
-            ctxt = ctxt.getParent();
-        }
-        /* 24-Sep-2013, tatu: Unfortunate, but since we did not expose exceptions,
-         *   need to wrap this here
-         */
-        try {
-            ctxt.setCurrentName(name);
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
-    @Override public void close() throws IOException {
-        if (!_closed) {
-            // 19-Jan-2018, tatu: as per [core#440] need to ensure no more data assumed available
-            _inputPtr = Math.max(_inputPtr, _inputEnd);
-            _closed = true;
-            try {
-                _closeInput();
-            } finally {
-                // as per [JACKSON-324], do in finally block
-                // Also, internal buffer(s) can now be released as well
-                _releaseBuffers();
-            }
-        }
-    }
-
-    @Override public boolean isClosed() { return _closed; }
-    @Override public JsonReadContext getParsingContext() { return _parsingContext; }
-
-    /**
-     * Method that return the <b>starting</b> location of the current
-     * token; that is, position of the first character from input
-     * that starts the current token.
-     */
-    @Override
-    public JsonLocation getTokenLocation() {
-        return new JsonLocation(_getSourceReference(),
-                -1L, getTokenCharacterOffset(), // bytes, chars
-                getTokenLineNr(),
-                getTokenColumnNr());
+    public ObjectReader with(FormatFeature feature) {
+        return _with(_config.with(feature));
     }
 
     /**
-     * Method that returns location of the last processed character;
-     * usually for error reporting purposes
-     */
-    @Override
-    public JsonLocation getCurrentLocation() {
-        int col = _inputPtr - _currInputRowStart + 1; // 1-based
-        return new JsonLocation(_getSourceReference(),
-                -1L, _currInputProcessed + _inputPtr, // bytes, chars
-                _currInputRow, col);
-    }
-
-    /*
-    /**********************************************************
-    /* Public API, access to token information, text and similar
-    /**********************************************************
-     */
-
-    @Override
-    public boolean hasTextCharacters() {
-        if (_currToken == JsonToken.VALUE_STRING) { return true; } // usually true        
-        if (_currToken == JsonToken.FIELD_NAME) { return _nameCopied; }
-        return false;
-    }
-
-    @SuppressWarnings("resource")
-    @Override // since 2.7
-    public byte[] getBinaryValue(Base64Variant variant) throws IOException
-    {
-        if (_binaryValue == null) {
-            if (_currToken != JsonToken.VALUE_STRING) {
-                _reportError("Current token ("+_currToken+") not VALUE_STRING, can not access as binary");
-            }
-            ByteArrayBuilder builder = _getByteArrayBuilder();
-            _decodeBase64(getText(), builder, variant);
-            _binaryValue = builder.toByteArray();
-        }
-        return _binaryValue;
-    }
-
-    /*
-    /**********************************************************
-    /* Public low-level accessors
-    /**********************************************************
-     */
-
-    public long getTokenCharacterOffset() { return _tokenInputTotal; }
-    public int getTokenLineNr() { return _tokenInputRow; }
-    public int getTokenColumnNr() {
-        // note: value of -1 means "not available"; otherwise convert from 0-based to 1-based
-        int col = _tokenInputCol;
-        return (col < 0) ? col : (col + 1);
-    }
-
-    /*
-    /**********************************************************
-    /* Abstract methods for sub-classes to implement
-    /**********************************************************
-     */
-
-    protected abstract void _closeInput() throws IOException;
-    
-    /*
-    /**********************************************************
-    /* Low-level reading, other
-    /**********************************************************
-     */
-
-    /**
-     * Method called to release internal buffers owned by the base
-     * reader. This may be called along with {@link #_closeInput} (for
-     * example, when explicitly closing this reader instance), or
-     * separately (if need be).
-     */
-    protected void _releaseBuffers() throws IOException {
-        _textBuffer.releaseBuffers();
-        char[] buf = _nameCopyBuffer;
-        if (buf != null) {
-            _nameCopyBuffer = null;
-            _ioContext.releaseNameCopyBuffer(buf);
-        }
-    }
-    
-    /**
-     * Method called when an EOF is encountered between tokens.
-     * If so, it may be a legitimate EOF, but only iff there
-     * is no open non-root context.
-     */
-    @Override
-    protected void _handleEOF() throws JsonParseException {
-        if (!_parsingContext.inRoot()) {
-            String marker = _parsingContext.inArray() ? "Array" : "Object";
-            _reportInvalidEOF(String.format(
-                    ": expected close marker for %s (start marker at %s)",
-                    marker,
-                    _parsingContext.getStartLocation(_getSourceReference())),
-                    null);
-        }
-    }
-
-    /**
-     * @since 2.4
-     */
-    protected final int _eofAsNextChar() throws JsonParseException {
-        _handleEOF();
-        return -1;
-    }
-
-    /*
-    /**********************************************************
-    /* Internal/package methods: shared/reusable builders
-    /**********************************************************
-     */
-    
-    public ByteArrayBuilder _getByteArrayBuilder()
-    {
-        if (_byteArrayBuilder == null) {
-            _byteArrayBuilder = new ByteArrayBuilder();
-        } else {
-            _byteArrayBuilder.reset();
-        }
-        return _byteArrayBuilder;
-    }
-
-    /*
-    /**********************************************************
-    /* Methods from former JsonNumericParserBase
-    /**********************************************************
-     */
-
-    // // // Life-cycle of number-parsing
-    
-    protected final JsonToken reset(boolean negative, int intLen, int fractLen, int expLen)
-    {
-        if (fractLen < 1 && expLen < 1) { // integer
-            return resetInt(negative, intLen);
-        }
-        return resetFloat(negative, intLen, fractLen, expLen);
-    }
-        
-    protected final JsonToken resetInt(boolean negative, int intLen)
-    {
-        _numberNegative = negative;
-        _intLength = intLen;
-        _fractLength = 0;
-        _expLength = 0;
-        _numTypesValid = NR_UNKNOWN; // to force parsing
-        return JsonToken.VALUE_NUMBER_INT;
-    }
-    
-    protected final JsonToken resetFloat(boolean negative, int intLen, int fractLen, int expLen)
-    {
-        _numberNegative = negative;
-        _intLength = intLen;
-        _fractLength = fractLen;
-        _expLength = expLen;
-        _numTypesValid = NR_UNKNOWN; // to force parsing
-        return JsonToken.VALUE_NUMBER_FLOAT;
-    }
-    
-    protected final JsonToken resetAsNaN(String valueStr, double value)
-    {
-        _textBuffer.resetWithString(valueStr);
-        _numberDouble = value;
-        _numTypesValid = NR_DOUBLE;
-        return JsonToken.VALUE_NUMBER_FLOAT;
-    }
-
-    @Override
-    public boolean isNaN() {
-        if (_currToken == JsonToken.VALUE_NUMBER_FLOAT) {
-            if ((_numTypesValid & NR_DOUBLE) != 0) {
-                // 10-Mar-2017, tatu: Alas, `Double.isFinite(d)` only added in JDK 8
-                double d = _numberDouble;
-                return Double.isNaN(d) || Double.isInfinite(d);              
-            }
-        }
-        return false;
-    }
-
-    /*
-    /**********************************************************
-    /* Numeric accessors of public API
-    /**********************************************************
-     */
-    
-    @Override
-    public Number getNumberValue() throws IOException
-    {
-        if (_numTypesValid == NR_UNKNOWN) {
-            _parseNumericValue(NR_UNKNOWN); // will also check event type
-        }
-        // Separate types for int types
-        if (_currToken == JsonToken.VALUE_NUMBER_INT) {
-            if ((_numTypesValid & NR_INT) != 0) {
-                return _numberInt;
-            }
-            if ((_numTypesValid & NR_LONG) != 0) {
-                return _numberLong;
-            }
-            if ((_numTypesValid & NR_BIGINT) != 0) {
-                return _numberBigInt;
-            }
-            // Shouldn't get this far but if we do
-            return _numberBigDecimal;
-        }
-    
-        /* And then floating point types. But here optimal type
-         * needs to be big decimal, to avoid losing any data?
-         */
-        if ((_numTypesValid & NR_BIGDECIMAL) != 0) {
-            return _numberBigDecimal;
-        }
-        if ((_numTypesValid & NR_DOUBLE) == 0) { // sanity check
-            _throwInternal();
-        }
-        return _numberDouble;
-    }
-    
-    @Override
-    public NumberType getNumberType() throws IOException
-    {
-        if (_numTypesValid == NR_UNKNOWN) {
-            _parseNumericValue(NR_UNKNOWN); // will also check event type
-        }
-        if (_currToken == JsonToken.VALUE_NUMBER_INT) {
-            if ((_numTypesValid & NR_INT) != 0) {
-                return NumberType.INT;
-            }
-            if ((_numTypesValid & NR_LONG) != 0) {
-                return NumberType.LONG;
-            }
-            return NumberType.BIG_INTEGER;
-        }
-    
-        /* And then floating point types. Here optimal type
-         * needs to be big decimal, to avoid losing any data?
-         * However... using BD is slow, so let's allow returning
-         * double as type if no explicit call has been made to access
-         * data as BD?
-         */
-        if ((_numTypesValid & NR_BIGDECIMAL) != 0) {
-            return NumberType.BIG_DECIMAL;
-        }
-        return NumberType.DOUBLE;
-    }
-    
-    @Override
-    public int getIntValue() throws IOException
-    {
-        if ((_numTypesValid & NR_INT) == 0) {
-            if (_numTypesValid == NR_UNKNOWN) { // not parsed at all
-                return _parseIntValue();
-            }
-            if ((_numTypesValid & NR_INT) == 0) { // wasn't an int natively?
-                convertNumberToInt(); // let's make it so, if possible
-            }
-        }
-        return _numberInt;
-    }
-    
-    @Override
-    public long getLongValue() throws IOException
-    {
-        if ((_numTypesValid & NR_LONG) == 0) {
-            if (_numTypesValid == NR_UNKNOWN) {
-                _parseNumericValue(NR_LONG);
-            }
-            if ((_numTypesValid & NR_LONG) == 0) {
-                convertNumberToLong();
-            }
-        }
-        return _numberLong;
-    }
-    
-    @Override
-    public BigInteger getBigIntegerValue() throws IOException
-    {
-        if ((_numTypesValid & NR_BIGINT) == 0) {
-            if (_numTypesValid == NR_UNKNOWN) {
-                _parseNumericValue(NR_BIGINT);
-            }
-            if ((_numTypesValid & NR_BIGINT) == 0) {
-                convertNumberToBigInteger();
-            }
-        }
-        return _numberBigInt;
-    }
-    
-    @Override
-    public float getFloatValue() throws IOException
-    {
-        double value = getDoubleValue();
-        /* 22-Jan-2009, tatu: Bounds/range checks would be tricky
-         *   here, so let's not bother even trying...
-         */
-        /*
-        if (value < -Float.MAX_VALUE || value > MAX_FLOAT_D) {
-            _reportError("Numeric value ("+getText()+") out of range of Java float");
-        }
-        */
-        return (float) value;
-    }
-    
-    @Override
-    public double getDoubleValue() throws IOException
-    {
-        if ((_numTypesValid & NR_DOUBLE) == 0) {
-            if (_numTypesValid == NR_UNKNOWN) {
-                _parseNumericValue(NR_DOUBLE);
-            }
-            if ((_numTypesValid & NR_DOUBLE) == 0) {
-                convertNumberToDouble();
-            }
-        }
-        return _numberDouble;
-    }
-    
-    @Override
-    public BigDecimal getDecimalValue() throws IOException
-    {
-        if ((_numTypesValid & NR_BIGDECIMAL) == 0) {
-            if (_numTypesValid == NR_UNKNOWN) {
-                _parseNumericValue(NR_BIGDECIMAL);
-            }
-            if ((_numTypesValid & NR_BIGDECIMAL) == 0) {
-                convertNumberToBigDecimal();
-            }
-        }
-        return _numberBigDecimal;
-    }
-
-    /*
-    /**********************************************************
-    /* Conversion from textual to numeric representation
-    /**********************************************************
-     */
-    
-    /**
-     * Method that will parse actual numeric value out of a syntactically
-     * valid number value. Type it will parse into depends on whether
-     * it is a floating point number, as well as its magnitude: smallest
-     * legal type (of ones available) is used for efficiency.
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
      *
-     * @param expType Numeric type that we will immediately need, if any;
-     *   mostly necessary to optimize handling of floating point numbers
+     * @since 2.7
      */
-    protected void _parseNumericValue(int expType) throws IOException
+    public ObjectReader withFeatures(FormatFeature... features) {
+        return _with(_config.withFeatures(features));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature disabled.
+     *
+     * @since 2.7
+     */
+    public ObjectReader without(FormatFeature feature) {
+        return _with(_config.without(feature)); 
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     *
+     * @since 2.7
+     */
+    public ObjectReader withoutFeatures(FormatFeature... features) {
+        return _with(_config.withoutFeatures(features));
+    }
+    
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods, other
+    /**********************************************************
+     */
+
+    /**
+     * Convenience method to bind from {@link JsonPointer}.  
+     * {@link JsonPointerBasedFilter} is registered and will be used for parsing later. 
+     * @since 2.6
+     */
+    public ObjectReader at(final String value) {
+        return new ObjectReader(this, new JsonPointerBasedFilter(value));
+    }
+
+    /**
+     * Convenience method to bind from {@link JsonPointer}
+      * {@link JsonPointerBasedFilter} is registered and will be used for parsing later.
+     * @since 2.6
+     */
+    public ObjectReader at(final JsonPointer pointer) {
+        return new ObjectReader(this, new JsonPointerBasedFilter(pointer));
+    }
+
+    /**
+     * Mutant factory method that will construct a new instance that has
+     * specified underlying {@link DeserializationConfig}.
+     *<p>
+     * NOTE: use of this method is not recommended, as there are many other
+     * re-configuration methods available.
+     */
+    public ObjectReader with(DeserializationConfig config) {
+        return _with(config);
+    }    
+
+    /**
+     * Method for constructing a new instance with configuration that uses
+     * passed {@link InjectableValues} to provide injectable values.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader with(InjectableValues injectableValues)
     {
-        // Int or float?
-        if (_currToken == JsonToken.VALUE_NUMBER_INT) {
-            int len = _intLength;
-            // First: optimization for simple int
-            if (len <= 9) { 
-                int i = _textBuffer.contentsAsInt(_numberNegative);
-                _numberInt = i;
-                _numTypesValid = NR_INT;
-                return;
-            }
-            if (len <= 18) { // definitely fits AND is easy to parse using 2 int parse calls
-                long l = _textBuffer.contentsAsLong(_numberNegative);
-                // Might still fit in int, need to check
-                if (len == 10) {
-                    if (_numberNegative) {
-                        if (l >= MIN_INT_L) {
-                            _numberInt = (int) l;
-                            _numTypesValid = NR_INT;
-                            return;
-                        }
-                    } else {
-                        if (l <= MAX_INT_L) {
-                            _numberInt = (int) l;
-                            _numTypesValid = NR_INT;
-                            return;
-                        }
-                    }
-                }
-                _numberLong = l;
-                _numTypesValid = NR_LONG;
-                return;
-            }
-            _parseSlowInt(expType);
-            return;
+        if (_injectableValues == injectableValues) {
+            return this;
         }
-        if (_currToken == JsonToken.VALUE_NUMBER_FLOAT) {
-            _parseSlowFloat(expType);
-            return;
+        return _new(this, _config,
+                _valueType, _rootDeserializer, _valueToUpdate,
+                _schema, injectableValues, _dataFormatReaders);
+    }
+
+    /**
+     * Method for constructing a new reader instance with configuration that uses
+     * passed {@link JsonNodeFactory} for constructing {@link JsonNode}
+     * instances.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader with(JsonNodeFactory f) {
+        return _with(_config.with(f));
+    }
+
+    /**
+     * Method for constructing a new reader instance with configuration that uses
+     * passed {@link JsonFactory} for constructing underlying Readers.
+     *<p>
+     * NOTE: only factories that <b>DO NOT REQUIRE SPECIAL MAPPERS</b>
+     * (that is, ones that return <code>false</code> for
+     * {@link JsonFactory#requiresCustomCodec()}) can be used: trying
+     * to use one that requires custom codec will throw exception
+     * 
+     * @since 2.1
+     */
+    public ObjectReader with(JsonFactory f) {
+        if (f == _parserFactory) {
+            return this;
         }
-        _reportError("Current token (%s) not numeric, can not use numeric value accessors", _currToken);
+        ObjectReader r = _new(this, f);
+        // Also, try re-linking, if possible...
+        if (f.getCodec() == null) {
+            f.setCodec(r);
+        }
+        return r;
+    }
+    
+    /**
+     * Method for constructing a new instance with configuration that
+     * specifies what root name to expect for "root name unwrapping".
+     * See {@link DeserializationConfig#withRootName(String)} for
+     * details.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader withRootName(String rootName) {
+        return _with(_config.withRootName(rootName));
     }
 
     /**
      * @since 2.6
      */
-    protected int _parseIntValue() throws IOException
-    {
-        // Inlined variant of: _parseNumericValue(NR_INT)
-        if (_currToken == JsonToken.VALUE_NUMBER_INT) {
-            if (_intLength <= 9) {
-                int i = _textBuffer.contentsAsInt(_numberNegative);
-                _numberInt = i;
-                _numTypesValid = NR_INT;
-                return i;
-            }
-        }
-        // if not optimizable, use more generic
-        _parseNumericValue(NR_INT);
-        if ((_numTypesValid & NR_INT) == 0) {
-            convertNumberToInt();
-        }
-        return _numberInt;
-    }
-
-    private void _parseSlowFloat(int expType) throws IOException
-    {
-        /* Nope: floating point. Here we need to be careful to get
-         * optimal parsing strategy: choice is between accurate but
-         * slow (BigDecimal) and lossy but fast (Double). For now
-         * let's only use BD when explicitly requested -- it can
-         * still be constructed correctly at any point since we do
-         * retain textual representation
-         */
-        try {
-            if (expType == NR_BIGDECIMAL) {
-                _numberBigDecimal = _textBuffer.contentsAsDecimal();
-                _numTypesValid = NR_BIGDECIMAL;
-            } else {
-                // Otherwise double has to do
-                _numberDouble = _textBuffer.contentsAsDouble();
-                _numTypesValid = NR_DOUBLE;
-            }
-        } catch (NumberFormatException nex) {
-            // Can this ever occur? Due to overflow, maybe?
-            _wrapError("Malformed numeric value ("+_longNumberDesc(_textBuffer.contentsAsString())+")", nex);
-        }
-    }
-
-    private void _parseSlowInt(int expType) throws IOException
-    {
-        String numStr = _textBuffer.contentsAsString();
-        try {
-            int len = _intLength;
-            char[] buf = _textBuffer.getTextBuffer();
-            int offset = _textBuffer.getTextOffset();
-            if (_numberNegative) {
-                ++offset;
-            }
-            // Some long cases still...
-            if (NumberInput.inLongRange(buf, offset, len, _numberNegative)) {
-                // Probably faster to construct a String, call parse, than to use BigInteger
-                _numberLong = Long.parseLong(numStr);
-                _numTypesValid = NR_LONG;
-            } else {
-                // 16-Oct-2018, tatu: Need to catch "too big" early due to [jackson-core#488]
-                if ((expType == NR_INT) || (expType == NR_LONG)) {
-                    _reportTooLongInt(expType, numStr);
-                }
-                if ((expType == NR_DOUBLE) || (expType == NR_FLOAT)) {
-                    _numberDouble = NumberInput.parseDouble(numStr);
-                    _numTypesValid = NR_DOUBLE;
-                } else {
-                    // nope, need the heavy guns... (rare case)
-                    _numberBigInt = new BigInteger(numStr);
-                    _numTypesValid = NR_BIGINT;
-                }
-            }
-        } catch (NumberFormatException nex) {
-            // Can this ever occur? Due to overflow, maybe?
-            _wrapError("Malformed numeric value ("+_longNumberDesc(numStr)+")", nex);
-        }
-    }
-
-    // @since 2.9.8
-    protected void _reportTooLongInt(int expType, String rawNum) throws IOException
-    {
-        final String numDesc = _longIntegerDesc(rawNum);
-        _reportError("Numeric value (%s) out of range of %s", numDesc,
-                (expType == NR_LONG) ? "long" : "int");
-    }
-
-    /*
-    /**********************************************************
-    /* Numeric conversions
-    /**********************************************************
-     */    
-    
-    protected void convertNumberToInt() throws IOException
-    {
-        // First, converting from long ought to be easy
-        if ((_numTypesValid & NR_LONG) != 0) {
-            // Let's verify it's lossless conversion by simple roundtrip
-            int result = (int) _numberLong;
-            if (((long) result) != _numberLong) {
-                _reportError("Numeric value ("+getText()+") out of range of int");
-            }
-            _numberInt = result;
-        } else if ((_numTypesValid & NR_BIGINT) != 0) {
-            if (BI_MIN_INT.compareTo(_numberBigInt) > 0 
-                    || BI_MAX_INT.compareTo(_numberBigInt) < 0) {
-                reportOverflowInt();
-            }
-            _numberInt = _numberBigInt.intValue();
-        } else if ((_numTypesValid & NR_DOUBLE) != 0) {
-            // Need to check boundaries
-            if (_numberDouble < MIN_INT_D || _numberDouble > MAX_INT_D) {
-                reportOverflowInt();
-            }
-            _numberInt = (int) _numberDouble;
-        } else if ((_numTypesValid & NR_BIGDECIMAL) != 0) {
-            if (BD_MIN_INT.compareTo(_numberBigDecimal) > 0 
-                || BD_MAX_INT.compareTo(_numberBigDecimal) < 0) {
-                reportOverflowInt();
-            }
-            _numberInt = _numberBigDecimal.intValue();
-        } else {
-            _throwInternal();
-        }
-        _numTypesValid |= NR_INT;
+    public ObjectReader withRootName(PropertyName rootName) {
+        return _with(_config.withRootName(rootName));
     }
     
-    protected void convertNumberToLong() throws IOException
-    {
-        if ((_numTypesValid & NR_INT) != 0) {
-            _numberLong = (long) _numberInt;
-        } else if ((_numTypesValid & NR_BIGINT) != 0) {
-            if (BI_MIN_LONG.compareTo(_numberBigInt) > 0 
-                    || BI_MAX_LONG.compareTo(_numberBigInt) < 0) {
-                reportOverflowLong();
-            }
-            _numberLong = _numberBigInt.longValue();
-        } else if ((_numTypesValid & NR_DOUBLE) != 0) {
-            // Need to check boundaries
-            if (_numberDouble < MIN_LONG_D || _numberDouble > MAX_LONG_D) {
-                reportOverflowLong();
-            }
-            _numberLong = (long) _numberDouble;
-        } else if ((_numTypesValid & NR_BIGDECIMAL) != 0) {
-            if (BD_MIN_LONG.compareTo(_numberBigDecimal) > 0 
-                || BD_MAX_LONG.compareTo(_numberBigDecimal) < 0) {
-                reportOverflowLong();
-            }
-            _numberLong = _numberBigDecimal.longValue();
-        } else {
-            _throwInternal();
-        }
-        _numTypesValid |= NR_LONG;
-    }
-    
-    protected void convertNumberToBigInteger() throws IOException
-    {
-        if ((_numTypesValid & NR_BIGDECIMAL) != 0) {
-            // here it'll just get truncated, no exceptions thrown
-            _numberBigInt = _numberBigDecimal.toBigInteger();
-        } else if ((_numTypesValid & NR_LONG) != 0) {
-            _numberBigInt = BigInteger.valueOf(_numberLong);
-        } else if ((_numTypesValid & NR_INT) != 0) {
-            _numberBigInt = BigInteger.valueOf(_numberInt);
-        } else if ((_numTypesValid & NR_DOUBLE) != 0) {
-            _numberBigInt = BigDecimal.valueOf(_numberDouble).toBigInteger();
-        } else {
-            _throwInternal();
-        }
-        _numTypesValid |= NR_BIGINT;
-    }
-    
-    protected void convertNumberToDouble() throws IOException
-    {
-        /* 05-Aug-2008, tatus: Important note: this MUST start with
-         *   more accurate representations, since we don't know which
-         *   value is the original one (others get generated when
-         *   requested)
-         */
-    
-        if ((_numTypesValid & NR_BIGDECIMAL) != 0) {
-            _numberDouble = _numberBigDecimal.doubleValue();
-        } else if ((_numTypesValid & NR_BIGINT) != 0) {
-            _numberDouble = _numberBigInt.doubleValue();
-        } else if ((_numTypesValid & NR_LONG) != 0) {
-            _numberDouble = (double) _numberLong;
-        } else if ((_numTypesValid & NR_INT) != 0) {
-            _numberDouble = (double) _numberInt;
-        } else {
-            _throwInternal();
-        }
-        _numTypesValid |= NR_DOUBLE;
-    }
-    
-    protected void convertNumberToBigDecimal() throws IOException
-    {
-        /* 05-Aug-2008, tatus: Important note: this MUST start with
-         *   more accurate representations, since we don't know which
-         *   value is the original one (others get generated when
-         *   requested)
-         */
-    
-        if ((_numTypesValid & NR_DOUBLE) != 0) {
-            /* Let's actually parse from String representation, to avoid
-             * rounding errors that non-decimal floating operations could incur
-             */
-            _numberBigDecimal = NumberInput.parseBigDecimal(getText());
-        } else if ((_numTypesValid & NR_BIGINT) != 0) {
-            _numberBigDecimal = new BigDecimal(_numberBigInt);
-        } else if ((_numTypesValid & NR_LONG) != 0) {
-            _numberBigDecimal = BigDecimal.valueOf(_numberLong);
-        } else if ((_numTypesValid & NR_INT) != 0) {
-            _numberBigDecimal = BigDecimal.valueOf(_numberInt);
-        } else {
-            _throwInternal();
-        }
-        _numTypesValid |= NR_BIGDECIMAL;
-    }
-
-    /*
-    /**********************************************************
-    /* Internal/package methods: Error reporting
-    /**********************************************************
+    /**
+     * Convenience method that is same as calling:
+     *<code>
+     *   withRootName("")
+     *</code>
+     * which will forcibly prevent use of root name wrapping when writing
+     * values with this {@link ObjectReader}.
+     * 
+     * @since 2.6
      */
-
-    protected void _reportMismatchedEndMarker(int actCh, char expCh) throws JsonParseException {
-        JsonReadContext ctxt = getParsingContext();
-        _reportError(String.format(
-                "Unexpected close marker '%s': expected '%c' (for %s starting at %s)",
-                (char) actCh, expCh, ctxt.typeDesc(), ctxt.getStartLocation(_getSourceReference())));
+    public ObjectReader withoutRootName() {
+        return _with(_config.withRootName(PropertyName.NO_NAME));
     }
-
-    @SuppressWarnings("deprecation")
-    protected char _handleUnrecognizedCharacterEscape(char ch) throws JsonProcessingException {
-        // as per [JACKSON-300]
-        if (isEnabled(Feature.ALLOW_BACKSLASH_ESCAPING_ANY_CHARACTER)) {
-            return ch;
+    
+    /**
+     * Method for constructing a new instance with configuration that
+     * passes specified {@link FormatSchema} to {@link JsonParser} that
+     * is constructed for parsing content.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader with(FormatSchema schema)
+    {
+        if (_schema == schema) {
+            return this;
         }
-        // and [JACKSON-548]
-        if (ch == '\'' && isEnabled(Feature.ALLOW_SINGLE_QUOTES)) {
-            return ch;
-        }
-        _reportError("Unrecognized character escape "+_getCharDesc(ch));
-        return ch;
+        _verifySchemaType(schema);
+        return _new(this, _config, _valueType, _rootDeserializer, _valueToUpdate,
+                schema, _injectableValues, _dataFormatReaders);
     }
 
     /**
-     * Method called to report a problem with unquoted control character.
-     * Note: it is possible to suppress some instances of
-     * exception by enabling {@link Feature#ALLOW_UNQUOTED_CONTROL_CHARS}.
+     * Method for constructing a new reader instance that is configured
+     * to data bind into specified type.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     * 
+     * @since 2.5
      */
-    @SuppressWarnings("deprecation")
-    protected void _throwUnquotedSpace(int i, String ctxtDesc) throws JsonParseException {
-        // JACKSON-208; possible to allow unquoted control chars:
-        if (!isEnabled(Feature.ALLOW_UNQUOTED_CONTROL_CHARS) || i > INT_SPACE) {
-            char c = (char) i;
-            String msg = "Illegal unquoted character ("+_getCharDesc(c)+"): has to be escaped using backslash to be included in "+ctxtDesc;
-            _reportError(msg);
+    public ObjectReader forType(JavaType valueType)
+    {
+        if (valueType != null && valueType.equals(_valueType)) {
+            return this;
         }
+        JsonDeserializer<Object> rootDeser = _prefetchRootDeserializer(valueType);
+        // type is stored here, no need to make a copy of config
+        DataFormatReaders det = _dataFormatReaders;
+        if (det != null) {
+            det = det.withType(valueType);
+        }
+        return _new(this, _config, valueType, rootDeser,
+                _valueToUpdate, _schema, _injectableValues, det);
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * to data bind into specified type.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     *
+     * @since 2.5
+     */
+    public ObjectReader forType(Class<?> valueType) {
+        return forType(_config.constructType(valueType));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * to data bind into specified type.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     *
+     * @since 2.5
+     */
+    public ObjectReader forType(TypeReference<?> valueTypeRef) {
+        return forType(_config.getTypeFactory().constructType(valueTypeRef.getType()));
+    }    
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(JavaType)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(JavaType valueType) {
+        return forType(valueType);
+    }
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(Class)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(Class<?> valueType) {
+        return forType(_config.constructType(valueType));
+    }    
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(Class)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(java.lang.reflect.Type valueType) {
+        return forType(_config.getTypeFactory().constructType(valueType));
+    }
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(TypeReference)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(TypeReference<?> valueTypeRef) {
+        return forType(_config.getTypeFactory().constructType(valueTypeRef.getType()));
+    }    
+
+    /**
+     * Method for constructing a new instance with configuration that
+     * updates passed Object (as root value), instead of constructing 
+     * a new value.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader withValueToUpdate(Object value)
+    {
+        if (value == _valueToUpdate) return this;
+        if (value == null) {
+            // 18-Oct-2016, tatu: Actually, should be allowed, to remove value
+            //   to update, if any
+            return _new(this, _config, _valueType, _rootDeserializer, null,
+                    _schema, _injectableValues, _dataFormatReaders);
+        }
+        JavaType t;
+        
+        /* no real benefit from pre-fetching, as updating readers are much
+         * less likely to be reused, and value type may also be forced
+         * with a later chained call...
+         */
+        if (_valueType == null) {
+            t = _config.constructType(value.getClass());
+        } else {
+            t = _valueType;
+        }
+        return _new(this, _config, t, _rootDeserializer, value,
+                _schema, _injectableValues, _dataFormatReaders);
+    }
+
+    /**
+     * Method for constructing a new instance with configuration that
+     * uses specified View for filtering.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader withView(Class<?> activeView) {
+        return _with(_config.withView(activeView));
+    }
+
+    public ObjectReader with(Locale l) {
+        return _with(_config.with(l));
+    }
+
+    public ObjectReader with(TimeZone tz) {
+        return _with(_config.with(tz));
+    }
+
+    public ObjectReader withHandler(DeserializationProblemHandler h) {
+        return _with(_config.withHandler(h));
+    }
+
+    public ObjectReader with(Base64Variant defaultBase64) {
+        return _with(_config.with(defaultBase64));
+    }
+
+    /**
+     * Fluent factory method for constructing a reader that will try to
+     * auto-detect underlying data format, using specified list of
+     * {@link JsonFactory} instances, and default {@link DataFormatReaders} settings
+     * (for customized {@link DataFormatReaders}, you can construct instance yourself).
+     * to construct appropriate {@link JsonParser} for actual parsing.
+     *<p>
+     * Note: since format detection only works with byte sources, it is possible to
+     * get a failure from some 'readValue()' methods. Also, if input cannot be reliably
+     * (enough) detected as one of specified types, an exception will be thrown.
+     *<p>
+     * Note: not all {@link JsonFactory} types can be passed: specifically, ones that
+     * require "custom codec" (like XML factory) will not work. Instead, use
+     * method that takes {@link ObjectReader} instances instead of factories.
+     * 
+     * @param readers Data formats accepted, in decreasing order of priority (that is,
+     *   matches checked in listed order, first match wins)
+     * 
+     * @return Newly configured writer instance
+     * 
+     * @since 2.1
+     */
+    public ObjectReader withFormatDetection(ObjectReader... readers) {
+        return withFormatDetection(new DataFormatReaders(readers));
+    }
+
+    /**
+     * Fluent factory method for constructing a reader that will try to
+     * auto-detect underlying data format, using specified
+     * {@link DataFormatReaders}.
+     *<p>
+     * NOTE: since format detection only works with byte sources, it is possible to
+     * get a failure from some 'readValue()' methods. Also, if input cannot be reliably
+     * (enough) detected as one of specified types, an exception will be thrown.
+     * 
+     * @param readers DataFormatReaders to use for detecting underlying format.
+     * 
+     * @return Newly configured writer instance
+     * 
+     * @since 2.1
+     */
+    public ObjectReader withFormatDetection(DataFormatReaders readers) {
+        return _new(this, _config, _valueType, _rootDeserializer, _valueToUpdate,
+                _schema, _injectableValues, readers);
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader with(ContextAttributes attrs) {
+        return _with(_config.with(attrs));
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader withAttributes(Map<?,?> attrs) {
+        return _with(_config.withAttributes(attrs));
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader withAttribute(Object key, Object value) {
+        return _with( _config.withAttribute(key, value));
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader withoutAttribute(Object key) {
+        return _with(_config.withoutAttribute(key));
     }
 
     /*
     /**********************************************************
-    /* Base64 handling support
+    /* Overridable factory methods may override
+    /**********************************************************
+     */
+    
+    protected ObjectReader _with(DeserializationConfig newConfig) {
+        if (newConfig == _config) {
+            return this;
+        }
+        ObjectReader r = _new(this, newConfig);
+        if (_dataFormatReaders != null) {
+            r  = r.withFormatDetection(_dataFormatReaders.with(newConfig));
+        }
+        return r;
+    }
+    
+    /*
+    /**********************************************************
+    /* Simple accessors
+    /**********************************************************
+     */
+    
+    public boolean isEnabled(DeserializationFeature f) {
+        return _config.isEnabled(f);
+    }
+
+    public boolean isEnabled(MapperFeature f) {
+        return _config.isEnabled(f);
+    }
+
+    public boolean isEnabled(JsonParser.Feature f) {
+        return _parserFactory.isEnabled(f);
+    }
+
+    /**
+     * @since 2.2
+     */
+    public DeserializationConfig getConfig() {
+        return _config;
+    }
+    
+    /**
+     * @since 2.1
+     */
+    @Override
+    public JsonFactory getFactory() {
+        return _parserFactory;
+    }
+
+    public TypeFactory getTypeFactory() {
+        return _config.getTypeFactory();
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ContextAttributes getAttributes() {
+        return _config.getAttributes();
+    }
+
+    /**
+     * @since 2.6
+     */
+    public InjectableValues getInjectableValues() {
+        return _injectableValues;
+    }
+
+    /*
+    /**********************************************************
+    /* Deserialization methods; basic ones to support ObjectCodec first
+    /* (ones that take JsonParser)
     /**********************************************************
      */
 
     /**
-     * Method that sub-classes must implement to support escaped sequences
-     * in base64-encoded sections.
-     * Sub-classes that do not need base64 support can leave this as is
+     * Method that binds content read using given parser, using
+     * configuration of this reader, including expected result type.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
      */
-    protected char _decodeEscaped() throws IOException {
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(JsonParser p) throws IOException
+    {
+        return (T) _bind(p, _valueToUpdate);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that expected value type
+     * is specified with the call (instead of currently configured root type).
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T> T readValue(JsonParser p, Class<T> valueType) throws IOException
+    {
+        return (T) forType(valueType).readValue(p);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that expected value type
+     * is specified with the call (instead of currently configured root type).
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T> T readValue(JsonParser p, TypeReference<T> valueTypeRef) throws IOException
+    {
+        return (T) forType(valueTypeRef).readValue(p);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that expected value type
+     * is specified with the call (instead of currently configured root type).
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(JsonParser p, ResolvedType valueType) throws IOException {
+        return (T) forType((JavaType)valueType).readValue(p);
+    }
+
+    /**
+     * Type-safe overloaded method, basically alias for {@link #readValue(JsonParser, ResolvedType)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(JsonParser p, JavaType valueType) throws IOException {
+        return (T) forType(valueType).readValue(p);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueType).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    public <T> Iterator<T> readValues(JsonParser p, Class<T> valueType) throws IOException {
+        return forType(valueType).readValues(p);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueTypeRef).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    public <T> Iterator<T> readValues(JsonParser p, TypeReference<T> valueTypeRef) throws IOException {
+        return forType(valueTypeRef).readValues(p);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueType).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    public <T> Iterator<T> readValues(JsonParser p, ResolvedType valueType) throws IOException {
+        return readValues(p, (JavaType) valueType);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueType).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    public <T> Iterator<T> readValues(JsonParser p, JavaType valueType) throws IOException {
+        return forType(valueType).readValues(p);
+    }
+
+    /*
+    /**********************************************************
+    /* TreeCodec impl
+    /**********************************************************
+     */
+
+    @Override
+    public JsonNode createArrayNode() {
+        return _config.getNodeFactory().arrayNode();
+    }
+
+    @Override
+    public JsonNode createObjectNode() {
+        return _config.getNodeFactory().objectNode();
+    }
+
+    @Override
+    public JsonParser treeAsTokens(TreeNode n) {
+        // 05-Dec-2017, tatu: Important! Must clear "valueToUpdate" since we do not
+        //    want update to be applied here, as a side effect
+        ObjectReader codec = withValueToUpdate(null);
+        return new TreeTraversingParser((JsonNode) n, codec);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that content is bound as
+     * JSON tree instead of configured root value type.
+     * Returns {@link JsonNode} that represents the root of the resulting tree, if there
+     * was content to read, or {@code null} if no more content is accessible
+     * via passed {@link JsonParser}.
+     *<p>
+     * NOTE! Behavior with end-of-input (no more content) differs between this
+     * {@code readTree} method, and all other methods that take input source: latter
+     * will return "missing node", NOT {@code null}
+     *<p>
+     * Note: if an object was specified with {@link #withValueToUpdate}, it
+     * will be ignored.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T extends TreeNode> T readTree(JsonParser p) throws IOException {
+        return (T) _bindAsTreeOrNull(p);
+    }
+
+    @Override
+    public void writeTree(JsonGenerator g, TreeNode rootNode) {
         throw new UnsupportedOperationException();
     }
+
+    /*
+    /**********************************************************
+    /* Deserialization methods; others similar to what ObjectMapper has
+    /**********************************************************
+     */
     
-    protected final int _decodeBase64Escape(Base64Variant b64variant, int ch, int index) throws IOException
+    /**
+     * Method that binds content read from given input source,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(InputStream src) throws IOException
     {
-        // 17-May-2011, tatu: As per [JACKSON-xxx], need to handle escaped chars
-        if (ch != '\\') {
-            throw reportInvalidBase64Char(b64variant, ch, index);
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(_dataFormatReaders.findFormat(src), false);
         }
-        int unescaped = _decodeEscaped();
-        // if white space, skip if first triplet; otherwise errors
-        if (unescaped <= INT_SPACE) {
-            if (index == 0) { // whitespace only allowed to be skipped between triplets
-                return -1;
-            }
-        }
-        // otherwise try to find actual triplet value
-        int bits = b64variant.decodeBase64Char(unescaped);
-        if (bits < 0) {
-            if (bits != Base64Variant.BASE64_VALUE_PADDING) {
-                throw reportInvalidBase64Char(b64variant, unescaped, index);
-            }
-        }
-        return bits;
-    }
-    
-    protected final int _decodeBase64Escape(Base64Variant b64variant, char ch, int index) throws IOException
-    {
-        if (ch != '\\') {
-            throw reportInvalidBase64Char(b64variant, ch, index);
-        }
-        char unescaped = _decodeEscaped();
-        // if white space, skip if first triplet; otherwise errors
-        if (unescaped <= INT_SPACE) {
-            if (index == 0) { // whitespace only allowed to be skipped between triplets
-                return -1;
-            }
-        }
-        // otherwise try to find actual triplet value
-        int bits = b64variant.decodeBase64Char(unescaped);
-        if (bits < 0) {
-            // second check since padding can only be 3rd or 4th byte (index #2 or #3)
-            if ((bits != Base64Variant.BASE64_VALUE_PADDING) || (index < 2)) {
-                throw reportInvalidBase64Char(b64variant, unescaped, index);
-            }
-        }
-        return bits;
-    }
-    
-    protected IllegalArgumentException reportInvalidBase64Char(Base64Variant b64variant, int ch, int bindex) throws IllegalArgumentException {
-        return reportInvalidBase64Char(b64variant, ch, bindex, null);
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
     }
 
     /**
-     * @param bindex Relative index within base64 character unit; between 0
-     *   and 3 (as unit has exactly 4 characters)
+     * Method that binds content read from given input source,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
      */
-    protected IllegalArgumentException reportInvalidBase64Char(Base64Variant b64variant, int ch, int bindex, String msg) throws IllegalArgumentException {
-        String base;
-        if (ch <= INT_SPACE) {
-            base = String.format("Illegal white space character (code 0x%s) as character #%d of 4-char base64 unit: can only used between units",
-                    Integer.toHexString(ch), (bindex+1));
-        } else if (b64variant.usesPaddingChar(ch)) {
-            base = "Unexpected padding character ('"+b64variant.getPaddingChar()+"') as character #"+(bindex+1)+" of 4-char base64 unit: padding only legal as 3rd or 4th character";
-        } else if (!Character.isDefined(ch) || Character.isISOControl(ch)) {
-            // Not sure if we can really get here... ? (most illegal xml chars are caught at lower level)
-            base = "Illegal character (code 0x"+Integer.toHexString(ch)+") in base64 content";
-        } else {
-            base = "Illegal character '"+((char)ch)+"' (code 0x"+Integer.toHexString(ch)+") in base64 content";
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(Reader src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
         }
-        if (msg != null) {
-            base = base + ": " + msg;
-        }
-        return new IllegalArgumentException(base);
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
     }
 
-    // since 2.9.8
-    protected void _handleBase64MissingPadding(Base64Variant b64variant) throws IOException
+    /**
+     * Method that binds content read from given JSON string,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(String src) throws IOException
     {
-        _reportError(b64variant.missingPaddingMessage());
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given byte array,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(byte[] src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(src, 0, src.length);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given byte array,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(byte[] src, int offset, int length)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(src, offset, length);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src, offset, length),
+                false));
+    }
+    
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(File src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(_dataFormatReaders.findFormat(_inputStream(src)), true);
+        }
+
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given input source,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(URL src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(_dataFormatReaders.findFormat(_inputStream(src)), true);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Convenience method for converting results from given JSON tree into given
+     * value type. Basically short-cut for:
+     *<pre>
+     *   objectReader.readValue(src.traverse())
+     *</pre>
+     */
+    @SuppressWarnings({ "unchecked", "resource" })
+    public <T> T readValue(JsonNode src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return (T) _bindAndClose(_considerFilter(treeAsTokens(src), false));
+    }
+
+    /**
+     * @since 2.8
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(DataInput src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
     }
 
     /*
     /**********************************************************
-    /* Internal/package methods: other
+    /* Deserialization methods; JsonNode ("tree")
+    /**********************************************************
+     */
+    
+    /**
+     * Method that reads content from given input source,
+     * using configuration of this reader, and binds it as JSON Tree.
+     * Returns {@link JsonNode} that represents the root of the resulting tree, if there
+     * was content to read, or "missing node" (instance of {@JsonNode} for which
+     * {@link JsonNode#isMissingNode()} returns true, and behaves otherwise similar to
+     * "null node") if no more content is accessible through passed-in input source.
+     *<p>
+     * NOTE! Behavior with end-of-input (no more content) differs between this
+     * {@code readTree} method, and {@link #readTree(JsonParser)} -- latter returns
+     * {@code null} for "no content" case.
+     *<p>
+     * Note that if an object was specified with a call to
+     * {@link #withValueToUpdate(Object)}
+     * it will just be ignored; result is always a newly constructed
+     * {@link JsonNode} instance.
+     */
+    public JsonNode readTree(InputStream in) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndCloseAsTree(in);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(in), false));
+    }
+    
+    /**
+     * Same as {@link #readTree(InputStream)} except content accessed through
+     * passed-in {@link Reader}
+     */
+    public JsonNode readTree(Reader r) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(r);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(r), false));
+    }
+
+    /**
+     * Same as {@link #readTree(InputStream)} except content read from
+     * passed-in {@link String}
+     */
+    public JsonNode readTree(String json) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(json), false));
+    }
+
+    /**
+     * Same as {@link #readTree(InputStream)} except content read from
+     * passed-in byte array.
+     */
+    public JsonNode readTree(byte[] json) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(json), false));
+    }
+    
+    /**
+     * Same as {@link #readTree(InputStream)} except content read from
+     * passed-in byte array.
+     */
+    public JsonNode readTree(byte[] json, int offset, int len) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(json, offset, len), false));
+    }
+
+    /**
+     * Same as {@link #readTree(InputStream)} except content read using
+     * passed-in {@link DataInput}.
+     */
+    public JsonNode readTree(DataInput src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /*
+    /**********************************************************
+    /* Deserialization methods; reading sequence of values
+    /**********************************************************
+     */
+    
+    /**
+     * Method for reading sequence of Objects from parser stream.
+     *<p>
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} must point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> but rather
+     * to the token following it.
+     */
+    public <T> MappingIterator<T> readValues(JsonParser p)
+        throws IOException
+    {
+        DeserializationContext ctxt = createDeserializationContext(p);
+        // false -> do not close as caller gave parser instance
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), false);
+    }
+    
+    /**
+     * Method for reading sequence of Objects from parser stream.
+     *<p>
+     * Sequence can be either wrapped or unwrapped root-level sequence:
+     * wrapped means that the elements are enclosed in JSON Array;
+     * and unwrapped that elements are directly accessed at main level.
+     * Assumption is that iff the first token of the document is
+     * <code>START_ARRAY</code>, we have a wrapped sequence; otherwise
+     * unwrapped. For wrapped sequences, leading <code>START_ARRAY</code>
+     * is skipped, so that for both cases, underlying {@link JsonParser}
+     * will point to what is expected to be the first token of the first
+     * element.
+     *<p>
+     * Note that the wrapped vs unwrapped logic means that it is NOT
+     * possible to use this method for reading an unwrapped sequence
+     * of elements written as JSON Arrays: to read such sequences, one
+     * has to use {@link #readValues(JsonParser)}, making sure parser
+     * points to the first token of the first element (i.e. the second
+     * <code>START_ARRAY</code> which is part of the first element).
+     */
+    public <T> MappingIterator<T> readValues(InputStream src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(_dataFormatReaders.findFormat(src), false);
+        }
+        
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+    
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    @SuppressWarnings("resource")
+    public <T> MappingIterator<T> readValues(Reader src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        JsonParser p = _considerFilter(_parserFactory.createParser(src), true);
+        DeserializationContext ctxt = createDeserializationContext(p);
+        _initForMultiRead(ctxt, p);
+        p.nextToken();
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), true);
+    }
+    
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     * 
+     * @param json String that contains JSON content to parse
+     */
+    @SuppressWarnings("resource")
+    public <T> MappingIterator<T> readValues(String json)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        JsonParser p = _considerFilter(_parserFactory.createParser(json), true);
+        DeserializationContext ctxt = createDeserializationContext(p);
+        _initForMultiRead(ctxt, p);
+        p.nextToken();
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), true);
+    }
+
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    public <T> MappingIterator<T> readValues(byte[] src, int offset, int length)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(_dataFormatReaders.findFormat(src, offset, length), false);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src, offset, length),
+                true));
+    }
+
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    public final <T> MappingIterator<T> readValues(byte[] src)
+            throws IOException {
+        return readValues(src, 0, src.length);
+    }
+    
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    public <T> MappingIterator<T> readValues(File src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(
+                    _dataFormatReaders.findFormat(_inputStream(src)), false);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     * 
+     * @param src URL to read to access JSON content to parse.
+     */
+    public <T> MappingIterator<T> readValues(URL src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(
+                    _dataFormatReaders.findFormat(_inputStream(src)), true);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+
+    /**
+     * @since 2.8
+     */
+    public <T> MappingIterator<T> readValues(DataInput src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+
+    /*
+    /**********************************************************
+    /* Implementation of rest of ObjectCodec methods
+    /**********************************************************
+     */
+
+    @Override
+    public <T> T treeToValue(TreeNode n, Class<T> valueType) throws JsonProcessingException
+    {
+        try {
+            return readValue(treeAsTokens(n), valueType);
+        } catch (JsonProcessingException e) {
+            throw e;
+        } catch (IOException e) { // should not occur, no real i/o...
+            throw JsonMappingException.fromUnexpectedIOE(e);
+        }
+    }    
+
+    @Override
+    public void writeValue(JsonGenerator gen, Object value) throws IOException {
+        throw new UnsupportedOperationException("Not implemented for ObjectReader");
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods, data-binding
     /**********************************************************
      */
 
     /**
-     * Helper method used to encapsulate logic of including (or not) of
-     * "source reference" when constructing {@link JsonLocation} instances.
-     *
+     * Actual implementation of value reading+binding operation.
+     */
+    protected Object _bind(JsonParser p, Object valueToUpdate) throws IOException
+    {
+        /* First: may need to read the next token, to initialize state (either
+         * before first read from parser, or after previous token has been cleared)
+         */
+        Object result;
+        final DeserializationContext ctxt = createDeserializationContext(p);
+        JsonToken t = _initForReading(ctxt, p);
+        if (t == JsonToken.VALUE_NULL) {
+            if (valueToUpdate == null) {
+                result = _findRootDeserializer(ctxt).getNullValue(ctxt);
+            } else {
+                result = valueToUpdate;
+            }
+        } else if (t == JsonToken.END_ARRAY || t == JsonToken.END_OBJECT) {
+            result = valueToUpdate;
+        } else { // pointing to event other than null
+            JsonDeserializer<Object> deser = _findRootDeserializer(ctxt);
+            if (_unwrapRoot) {
+                result = _unwrapAndDeserialize(p, ctxt, _valueType, deser);
+            } else {
+                if (valueToUpdate == null) {
+                    result = deser.deserialize(p, ctxt);
+                } else {
+                    // 20-Mar-2017, tatu: Important! May be different from `valueToUpdate`
+                    //   for immutable Objects like Java arrays; logical result
+                    result = deser.deserialize(p, ctxt, valueToUpdate);
+                }
+            }
+        }
+        // Need to consume the token too
+        p.clearCurrentToken();
+        if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+            _verifyNoTrailingTokens(p, ctxt, _valueType);
+        }
+        return result;
+    }
+
+    protected Object _bindAndClose(JsonParser p0) throws IOException
+    {
+        try (JsonParser p = p0) {
+            Object result;
+
+            DeserializationContext ctxt = createDeserializationContext(p);
+            JsonToken t = _initForReading(ctxt, p);
+            if (t == JsonToken.VALUE_NULL) {
+                if (_valueToUpdate == null) {
+                    result = _findRootDeserializer(ctxt).getNullValue(ctxt);
+                } else {
+                    result = _valueToUpdate;
+                }
+            } else if (t == JsonToken.END_ARRAY || t == JsonToken.END_OBJECT) {
+                result = _valueToUpdate;
+            } else {
+                JsonDeserializer<Object> deser = _findRootDeserializer(ctxt);
+                if (_unwrapRoot) {
+                    result = _unwrapAndDeserialize(p, ctxt, _valueType, deser);
+                } else {
+                    if (_valueToUpdate == null) {
+                        result = deser.deserialize(p, ctxt);
+                    } else {
+                        deser.deserialize(p, ctxt, _valueToUpdate);
+                        result = _valueToUpdate;                    
+                    }
+                }
+            }
+            if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+                _verifyNoTrailingTokens(p, ctxt, _valueType);
+            }
+            return result;
+        }
+    }
+
+    protected final JsonNode _bindAndCloseAsTree(JsonParser p0) throws IOException {
+        try (JsonParser p = p0) {
+            return _bindAsTree(p);
+        }
+    }
+
+    protected final JsonNode _bindAsTree(JsonParser p) throws IOException
+    {
+        // Need to inline `_initForReading()` due to tree reading handling end-of-input specially
+        _config.initialize(p);
+        if (_schema != null) {
+            p.setSchema(_schema);
+        }
+
+        JsonToken t = p.getCurrentToken();
+        if (t == null) {
+            t = p.nextToken();
+            if (t == null) {
+                return _config.getNodeFactory().missingNode();
+            }
+        }
+        final JsonNode resultNode;
+        if (t == JsonToken.VALUE_NULL) {
+            resultNode = _config.getNodeFactory().nullNode();
+        } else {
+            final DeserializationContext ctxt = createDeserializationContext(p);
+            final JsonDeserializer<Object> deser = _findTreeDeserializer(ctxt);
+            if (_unwrapRoot) {
+                resultNode = (JsonNode) _unwrapAndDeserialize(p, ctxt, JSON_NODE_TYPE, deser);
+            } else {
+                resultNode = (JsonNode) deser.deserialize(p, ctxt);
+                if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+                    _verifyNoTrailingTokens(p, ctxt, JSON_NODE_TYPE);
+                }
+            }
+        }
+        return resultNode;
+    }
+
+    /**
+     * Same as {@link #_bindAsTree} except end-of-input is reported by returning
+     * {@code null}, not "missing node"
+     */
+    protected final JsonNode _bindAsTreeOrNull(JsonParser p) throws IOException
+    {
+        _config.initialize(p);
+        if (_schema != null) {
+            p.setSchema(_schema);
+        }
+        JsonToken t = p.getCurrentToken();
+        if (t == null) {
+            t = p.nextToken();
+            if (t == null) {
+                return null;
+            }
+        }
+        final JsonNode resultNode;
+        if (t == JsonToken.VALUE_NULL) {
+            resultNode = _config.getNodeFactory().nullNode();
+        } else {
+            final DeserializationContext ctxt = createDeserializationContext(p);
+            final JsonDeserializer<Object> deser = _findTreeDeserializer(ctxt);
+            if (_unwrapRoot) {
+                resultNode = (JsonNode) _unwrapAndDeserialize(p, ctxt, JSON_NODE_TYPE, deser);
+            } else {
+                resultNode = (JsonNode) deser.deserialize(p, ctxt);
+                if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+                    _verifyNoTrailingTokens(p, ctxt, JSON_NODE_TYPE);
+                }
+            }
+        }
+        return resultNode;
+    }
+    
+    /**
+     * @since 2.1
+     */
+    protected <T> MappingIterator<T> _bindAndReadValues(JsonParser p) throws IOException
+    {
+        DeserializationContext ctxt = createDeserializationContext(p);
+        _initForMultiRead(ctxt, p);
+        p.nextToken();
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), true);
+    }
+
+    protected Object _unwrapAndDeserialize(JsonParser p, DeserializationContext ctxt,
+            JavaType rootType, JsonDeserializer<Object> deser) throws IOException
+    {
+        PropertyName expRootName = _config.findRootName(rootType);
+        // 12-Jun-2015, tatu: Should try to support namespaces etc but...
+        String expSimpleName = expRootName.getSimpleName();
+
+        if (p.getCurrentToken() != JsonToken.START_OBJECT) {
+            ctxt.reportWrongTokenException(rootType, JsonToken.START_OBJECT,
+                    "Current token not START_OBJECT (needed to unwrap root name '%s'), but %s",
+                    expSimpleName, p.getCurrentToken());
+        }
+        if (p.nextToken() != JsonToken.FIELD_NAME) {
+            ctxt.reportWrongTokenException(rootType, JsonToken.FIELD_NAME,
+                    "Current token not FIELD_NAME (to contain expected root name '%s'), but %s", 
+                    expSimpleName, p.getCurrentToken());
+        }
+        String actualName = p.getCurrentName();
+        if (!expSimpleName.equals(actualName)) {
+            ctxt.reportInputMismatch(rootType,
+                    "Root name '%s' does not match expected ('%s') for type %s",
+                    actualName, expSimpleName, rootType);
+        }
+        // ok, then move to value itself....
+        p.nextToken();
+        Object result;
+        if (_valueToUpdate == null) {
+            result = deser.deserialize(p, ctxt);
+        } else {
+            deser.deserialize(p, ctxt, _valueToUpdate);
+            result = _valueToUpdate;                    
+        }
+        // and last, verify that we now get matching END_OBJECT
+        if (p.nextToken() != JsonToken.END_OBJECT) {
+            ctxt.reportWrongTokenException(rootType, JsonToken.END_OBJECT,
+                    "Current token not END_OBJECT (to match wrapper object with root name '%s'), but %s",
+                    expSimpleName, p.getCurrentToken());
+        }
+        if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+            _verifyNoTrailingTokens(p, ctxt, _valueType);
+        }
+        return result;
+    }
+
+    /**
+     * Consider filter when creating JsonParser.  
+     */
+    protected JsonParser _considerFilter(final JsonParser p, boolean multiValue) {
+        // 26-Mar-2016, tatu: Need to allow multiple-matches at least if we have
+        //    have a multiple-value read (that is, "readValues()").
+        return ((_filter == null) || FilteringParserDelegate.class.isInstance(p))
+                ? p : new FilteringParserDelegate(p, _filter, false, multiValue);
+    }
+
+    /**
      * @since 2.9
      */
-    protected Object _getSourceReference() {
-        if (JsonParser.Feature.INCLUDE_SOURCE_IN_LOCATION.enabledIn(_features)) {
-            return _ioContext.getSourceReference();
+    protected final void _verifyNoTrailingTokens(JsonParser p, DeserializationContext ctxt,
+            JavaType bindType)
+        throws IOException
+    {
+        JsonToken t = p.nextToken();
+        if (t != null) {
+            Class<?> bt = ClassUtil.rawClass(bindType);
+            if (bt == null) {
+                if (_valueToUpdate != null) {
+                    bt = _valueToUpdate.getClass();
+                }
+            }
+            ctxt.reportTrailingTokens(bt, p, t);
         }
-        return null;
     }
 
-    protected static int[] growArrayBy(int[] arr, int more)
-    {
-        if (arr == null) {
-            return new int[more];
-        }
-        return Arrays.copyOf(arr, arr.length + more);
-    }
-    
     /*
     /**********************************************************
-    /* Stuff that was abstract and required before 2.8, but that
-    /* is not mandatory in 2.8 or above.
+    /* Internal methods, format auto-detection
+    /**********************************************************
+     */
+    
+    @SuppressWarnings("resource")
+    protected Object _detectBindAndClose(byte[] src, int offset, int length) throws IOException
+    {
+        DataFormatReaders.Match match = _dataFormatReaders.findFormat(src, offset, length);
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        return match.getReader()._bindAndClose(p);
+    }
+
+    @SuppressWarnings({ "resource" })
+    protected Object _detectBindAndClose(DataFormatReaders.Match match, boolean forceClosing)
+        throws IOException
+    {
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        // One more thing: we Own the input stream now; and while it's 
+        // not super clean way to do it, we must ensure closure so:
+        if (forceClosing) {
+            p.enable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
+        }
+        // important: use matching ObjectReader (may not be 'this')
+        return match.getReader()._bindAndClose(p);
+    }
+
+    @SuppressWarnings({ "resource" })
+    protected <T> MappingIterator<T> _detectBindAndReadValues(DataFormatReaders.Match match, boolean forceClosing)
+        throws IOException
+    {
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        // One more thing: we Own the input stream now; and while it's 
+        // not super clean way to do it, we must ensure closure so:
+        if (forceClosing) {
+            p.enable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
+        }
+        // important: use matching ObjectReader (may not be 'this')
+        return match.getReader()._bindAndReadValues(p);
+    }
+    
+    @SuppressWarnings({ "resource" })
+    protected JsonNode _detectBindAndCloseAsTree(InputStream in) throws IOException
+    {
+        DataFormatReaders.Match match = _dataFormatReaders.findFormat(in);
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        p.enable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
+        return match.getReader()._bindAndCloseAsTree(p);
+    }
+    
+    /**
+     * Method called to indicate that format detection failed to detect format
+     * of given input
+     */
+    protected void _reportUnkownFormat(DataFormatReaders detector, DataFormatReaders.Match match)
+        throws JsonProcessingException
+    {
+        // 17-Aug-2015, tatu: Unfortunately, no parser/generator available so:
+        throw new JsonParseException(null, "Cannot detect format from input, does not look like any of detectable formats "
+                +detector.toString());
+    }
+
+    /*
+    /**********************************************************
+    /* Internal methods, other
     /**********************************************************
      */
 
-    @Deprecated // since 2.8
-    protected void loadMoreGuaranteed() throws IOException {
-        if (!loadMore()) { _reportInvalidEOF(); }
+    /**
+     * @since 2.2
+     */
+    protected void _verifySchemaType(FormatSchema schema)
+    {
+        if (schema != null) {
+            if (!_parserFactory.canUseSchema(schema)) {
+                    throw new IllegalArgumentException("Cannot use FormatSchema of type "+schema.getClass().getName()
+                            +" for format "+_parserFactory.getFormatName());
+            }
+        }
     }
 
-    @Deprecated // since 2.8
-    protected boolean loadMore() throws IOException { return false; }
+    /**
+     * Internal helper method called to create an instance of {@link DeserializationContext}
+     * for deserializing a single root value.
+     * Can be overridden if a custom context is needed.
+     */
+    protected DefaultDeserializationContext createDeserializationContext(JsonParser p) {
+        return _context.createInstance(_config, p, _injectableValues);
+    }
 
-    // Can't declare as deprecated, for now, but shouldn't be needed
-    protected void _finishString() throws IOException { }
+    protected InputStream _inputStream(URL src) throws IOException {
+        return src.openStream();
+    }
+
+    protected InputStream _inputStream(File f) throws IOException {
+        return new FileInputStream(f);
+    }
+
+    protected void _reportUndetectableSource(Object src) throws JsonProcessingException
+    {
+        // 17-Aug-2015, tatu: Unfortunately, no parser/generator available so:
+        throw new JsonParseException(null, "Cannot use source of type "
+                +src.getClass().getName()+" with format auto-detection: must be byte- not char-based");
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods, locating deserializers etc
+    /**********************************************************
+     */
+    
+    /**
+     * Method called to locate deserializer for the passed root-level value.
+     */
+    protected JsonDeserializer<Object> _findRootDeserializer(DeserializationContext ctxt)
+        throws JsonMappingException
+    {
+        if (_rootDeserializer != null) {
+            return _rootDeserializer;
+        }
+
+        // Sanity check: must have actual type...
+        JavaType t = _valueType;
+        if (t == null) {
+            ctxt.reportBadDefinition((JavaType) null,
+                    "No value type configured for ObjectReader");
+        }
+        // First: have we already seen it?
+        JsonDeserializer<Object> deser = _rootDeserializers.get(t);
+        if (deser != null) {
+            return deser;
+        }
+        // Nope: need to ask provider to resolve it
+        deser = ctxt.findRootValueDeserializer(t);
+        if (deser == null) { // can this happen?
+            ctxt.reportBadDefinition(t, "Cannot find a deserializer for type "+t);
+        }
+        _rootDeserializers.put(t, deser);
+        return deser;
+    }
+
+    /**
+     * @since 2.6
+     */
+    protected JsonDeserializer<Object> _findTreeDeserializer(DeserializationContext ctxt)
+        throws JsonMappingException
+    {
+        JsonDeserializer<Object> deser = _rootDeserializers.get(JSON_NODE_TYPE);
+        if (deser == null) {
+            // Nope: need to ask provider to resolve it
+            deser = ctxt.findRootValueDeserializer(JSON_NODE_TYPE);
+            if (deser == null) { // can this happen?
+                ctxt.reportBadDefinition(JSON_NODE_TYPE,
+                        "Cannot find a deserializer for type "+JSON_NODE_TYPE);
+            }
+            _rootDeserializers.put(JSON_NODE_TYPE, deser);
+        }
+        return deser;
+    }
+
+    /**
+     * Method called to locate deserializer ahead of time, if permitted
+     * by configuration. Method also is NOT to throw an exception if
+     * access fails.
+     */
+    protected JsonDeserializer<Object> _prefetchRootDeserializer(JavaType valueType)
+    {
+        if ((valueType == null) || !_config.isEnabled(DeserializationFeature.EAGER_DESERIALIZER_FETCH)) {
+            return null;
+        }
+        // already cached?
+        JsonDeserializer<Object> deser = _rootDeserializers.get(valueType);
+        if (deser == null) {
+            try {
+                // If not, need to resolve; for which we need a temporary context as well:
+                DeserializationContext ctxt = createDeserializationContext(null);
+                deser = ctxt.findRootValueDeserializer(valueType);
+                if (deser != null) {
+                    _rootDeserializers.put(valueType, deser);
+                }
+                return deser;
+            } catch (JsonProcessingException e) {
+                // need to swallow?
+            }
+        }
+        return deser;
+    }
 }

@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,488 +14,320 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.jclouds.ec2.compute;
 
-package org.apache.pdfbox.pdmodel.encryption;
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Strings.emptyToNull;
+import static com.google.common.collect.Iterables.concat;
+import static com.google.common.collect.Iterables.transform;
+import static com.google.common.collect.Lists.newArrayList;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.jclouds.compute.config.ComputeServiceProperties.RESOURCENAME_DELIMITER;
+import static org.jclouds.compute.config.ComputeServiceProperties.TIMEOUT_NODE_RUNNING;
+import static org.jclouds.compute.config.ComputeServiceProperties.TIMEOUT_NODE_SUSPENDED;
+import static org.jclouds.compute.config.ComputeServiceProperties.TIMEOUT_NODE_TERMINATED;
+import static org.jclouds.compute.util.ComputeServiceUtils.addMetadataAndParseTagsFromValuesOfEmptyString;
+import static org.jclouds.compute.util.ComputeServiceUtils.metadataAndTagsAsValuesOfEmptyString;
+import static org.jclouds.ec2.reference.EC2Constants.PROPERTY_EC2_GENERATE_INSTANCE_NAMES;
+import static org.jclouds.ec2.util.Tags.resourceToTagsAsMap;
+import static org.jclouds.util.Predicates2.retry;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.math.BigInteger;
-import java.security.AlgorithmParameterGenerator;
-import java.security.AlgorithmParameters;
-import java.security.GeneralSecurityException;
-import java.security.InvalidKeyException;
-import java.security.KeyStoreException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.PrivateKey;
-import java.security.SecureRandom;
-import java.security.cert.CertificateEncodingException;
-import java.security.cert.X509Certificate;
-import java.util.Collection;
-import java.util.Iterator;
+import javax.inject.Named;
+import javax.inject.Provider;
+import javax.inject.Singleton;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReference;
 
-import javax.crypto.BadPaddingException;
-import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.KeyGenerator;
-import javax.crypto.NoSuchPaddingException;
-import javax.crypto.SecretKey;
-
-import org.apache.pdfbox.cos.COSArray;
-import org.apache.pdfbox.cos.COSString;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.bouncycastle.asn1.ASN1InputStream;
-import org.bouncycastle.asn1.ASN1ObjectIdentifier;
-import org.bouncycastle.asn1.ASN1Primitive;
-import org.bouncycastle.asn1.ASN1Set;
-import org.bouncycastle.asn1.DEROctetString;
-import org.bouncycastle.asn1.DEROutputStream;
-import org.bouncycastle.asn1.DERSet;
-import org.bouncycastle.asn1.cms.ContentInfo;
-import org.bouncycastle.asn1.cms.EncryptedContentInfo;
-import org.bouncycastle.asn1.cms.EnvelopedData;
-import org.bouncycastle.asn1.cms.IssuerAndSerialNumber;
-import org.bouncycastle.asn1.cms.KeyTransRecipientInfo;
-import org.bouncycastle.asn1.cms.RecipientIdentifier;
-import org.bouncycastle.asn1.cms.RecipientInfo;
-import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
-import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
-import org.bouncycastle.asn1.x509.TBSCertificateStructure;
-import org.bouncycastle.cert.X509CertificateHolder;
-import org.bouncycastle.cms.CMSEnvelopedData;
-import org.bouncycastle.cms.CMSException;
-import org.bouncycastle.cms.KeyTransRecipientId;
-import org.bouncycastle.cms.RecipientId;
-import org.bouncycastle.cms.RecipientInformation;
-import org.bouncycastle.cms.jcajce.JceKeyTransEnvelopedRecipient;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Function;
+import com.google.common.base.Optional;
+import com.google.common.base.Predicate;
+import com.google.common.base.Supplier;
+import com.google.common.cache.LoadingCache;
+import com.google.common.collect.FluentIterable;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableMultimap;
+import com.google.common.collect.ImmutableMultimap.Builder;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multimap;
+import com.google.common.util.concurrent.ListeningExecutorService;
+import com.google.inject.Inject;
+import org.jclouds.Constants;
+import org.jclouds.aws.util.AWSUtils;
+import org.jclouds.collect.Memoized;
+import org.jclouds.compute.ComputeServiceContext;
+import org.jclouds.compute.RunNodesException;
+import org.jclouds.compute.callables.RunScriptOnNode;
+import org.jclouds.compute.domain.Hardware;
+import org.jclouds.compute.domain.Image;
+import org.jclouds.compute.domain.NodeMetadata;
+import org.jclouds.compute.domain.NodeMetadataBuilder;
+import org.jclouds.compute.domain.Template;
+import org.jclouds.compute.domain.TemplateBuilder;
+import org.jclouds.compute.extensions.ImageExtension;
+import org.jclouds.compute.extensions.SecurityGroupExtension;
+import org.jclouds.compute.functions.GroupNamingConvention;
+import org.jclouds.compute.functions.GroupNamingConvention.Factory;
+import org.jclouds.compute.internal.BaseComputeService;
+import org.jclouds.compute.internal.PersistNodeCredentials;
+import org.jclouds.compute.options.TemplateOptions;
+import org.jclouds.compute.reference.ComputeServiceConstants.Timeouts;
+import org.jclouds.compute.strategy.CreateNodesInGroupThenAddToSet;
+import org.jclouds.compute.strategy.DestroyNodeStrategy;
+import org.jclouds.compute.strategy.GetImageStrategy;
+import org.jclouds.compute.strategy.GetNodeMetadataStrategy;
+import org.jclouds.compute.strategy.InitializeRunScriptOnNodeOrPlaceInBadMap;
+import org.jclouds.compute.strategy.ListNodesStrategy;
+import org.jclouds.compute.strategy.RebootNodeStrategy;
+import org.jclouds.compute.strategy.ResumeNodeStrategy;
+import org.jclouds.compute.strategy.SuspendNodeStrategy;
+import org.jclouds.domain.Credentials;
+import org.jclouds.domain.Location;
+import org.jclouds.ec2.EC2Api;
+import org.jclouds.ec2.compute.domain.RegionAndName;
+import org.jclouds.ec2.compute.domain.RegionNameAndIngressRules;
+import org.jclouds.ec2.compute.options.EC2TemplateOptions;
+import org.jclouds.ec2.domain.InstanceState;
+import org.jclouds.ec2.domain.KeyPair;
+import org.jclouds.ec2.domain.RunningInstance;
+import org.jclouds.ec2.domain.Tag;
+import org.jclouds.ec2.util.TagFilterBuilder;
+import org.jclouds.scriptbuilder.functions.InitAdminAccess;
+import org.jclouds.util.Strings2;
 
 /**
- * This class implements the public key security handler described in the PDF specification.
- *
- * @see PublicKeyProtectionPolicy to see how to protect document with this security handler.
- * @author Benoit Guillon
+ * @author Adrian Cole
  */
-public final class PublicKeySecurityHandler extends SecurityHandler
-{
-    /** The filter name. */
-    public static final String FILTER = "Adobe.PubSec";
+@Singleton
+public class EC2ComputeService extends BaseComputeService {
+   private final EC2Api client;
+   private final ConcurrentMap<RegionAndName, KeyPair> credentialsMap;
+   private final LoadingCache<RegionAndName, String> securityGroupMap;
+   private final Factory namingConvention;
+   private final boolean generateInstanceNames;
 
-    private static final String SUBFILTER = "adbe.pkcs7.s4";
+   @Inject
+   protected EC2ComputeService(ComputeServiceContext context, Map<String, Credentials> credentialStore,
+            @Memoized Supplier<Set<? extends Image>> images, @Memoized Supplier<Set<? extends Hardware>> sizes,
+            @Memoized Supplier<Set<? extends Location>> locations, ListNodesStrategy listNodesStrategy,
+            GetImageStrategy getImageStrategy, GetNodeMetadataStrategy getNodeMetadataStrategy,
+            CreateNodesInGroupThenAddToSet runNodesAndAddToSetStrategy, RebootNodeStrategy rebootNodeStrategy,
+            DestroyNodeStrategy destroyNodeStrategy, ResumeNodeStrategy startNodeStrategy,
+            SuspendNodeStrategy stopNodeStrategy, Provider<TemplateBuilder> templateBuilderProvider,
+            @Named("DEFAULT") Provider<TemplateOptions> templateOptionsProvider,
+            @Named(TIMEOUT_NODE_RUNNING) Predicate<AtomicReference<NodeMetadata>> nodeRunning,
+            @Named(TIMEOUT_NODE_TERMINATED) Predicate<AtomicReference<NodeMetadata>> nodeTerminated,
+            @Named(TIMEOUT_NODE_SUSPENDED) Predicate<AtomicReference<NodeMetadata>> nodeSuspended,
+            InitializeRunScriptOnNodeOrPlaceInBadMap.Factory initScriptRunnerFactory,
+            RunScriptOnNode.Factory runScriptOnNodeFactory, InitAdminAccess initAdminAccess,
+            PersistNodeCredentials persistNodeCredentials, Timeouts timeouts,
+            @Named(Constants.PROPERTY_USER_THREADS) ListeningExecutorService userExecutor, EC2Api client,
+            ConcurrentMap<RegionAndName, KeyPair> credentialsMap,
+            @Named("SECURITY") LoadingCache<RegionAndName, String> securityGroupMap,
+            Optional<ImageExtension> imageExtension, GroupNamingConvention.Factory namingConvention,
+            @Named(PROPERTY_EC2_GENERATE_INSTANCE_NAMES) boolean generateInstanceNames,
+            Optional<SecurityGroupExtension> securityGroupExtension) {
+      super(context, credentialStore, images, sizes, locations, listNodesStrategy, getImageStrategy,
+               getNodeMetadataStrategy, runNodesAndAddToSetStrategy, rebootNodeStrategy, destroyNodeStrategy,
+               startNodeStrategy, stopNodeStrategy, templateBuilderProvider, templateOptionsProvider, nodeRunning,
+               nodeTerminated, nodeSuspended, initScriptRunnerFactory, initAdminAccess, runScriptOnNodeFactory,
+               persistNodeCredentials, timeouts, userExecutor, imageExtension, securityGroupExtension);
+      this.client = client;
+      this.credentialsMap = credentialsMap;
+      this.securityGroupMap = securityGroupMap;
+      this.namingConvention = namingConvention;
+      this.generateInstanceNames = generateInstanceNames;
+   }
 
-    private PublicKeyProtectionPolicy policy = null;
-    
-    /**
-     * Constructor.
-     */
-    public PublicKeySecurityHandler()
-    {
-    }
+   @Override
+   public Set<? extends NodeMetadata> createNodesInGroup(String group, int count, final Template template)
+            throws RunNodesException {
+      Set<? extends NodeMetadata> nodes = super.createNodesInGroup(group, count, template);
+      String region = AWSUtils.getRegionFromLocationOrNull(template.getLocation());
 
-    /**
-     * Constructor used for encryption.
-     *
-     * @param p The protection policy.
-     */
-    public PublicKeySecurityHandler(PublicKeyProtectionPolicy p)
-    {
-        policy = p;
-        this.keyLength = policy.getEncryptionKeyLength();
-    }
+      if (client.getTagApiForRegion(region).isPresent()) {
+         Map<String, String> common = metadataAndTagsAsValuesOfEmptyString(template.getOptions());
+         if (generateInstanceNames || !common.isEmpty() || !template.getOptions().getNodeNames().isEmpty()) {
+            return addTagsAndNamesToInstancesInRegion(common, template.getOptions().getNodeNames(),
+                    nodes, region, group);
+         }
+      }
+      return nodes;
+   }
 
-    /**
-     * Prepares everything to decrypt the document.
-     *
-     * @param encryption encryption dictionary, can be retrieved via
-     * {@link PDDocument#getEncryption()}
-     * @param documentIDArray document id which is returned via
-     * {@link org.apache.pdfbox.cos.COSDocument#getDocumentID()} (not used by
-     * this handler)
-     * @param decryptionMaterial Information used to decrypt the document.
-     *
-     * @throws IOException If there is an error accessing data. If verbose mode
-     * is enabled, the exception message will provide more details why the
-     * match wasn't successful.
-     */
-    @Override
-    public void prepareForDecryption(PDEncryption encryption, COSArray documentIDArray,
-            DecryptionMaterial decryptionMaterial)
-            throws IOException
-    {
-        if (!(decryptionMaterial instanceof PublicKeyDecryptionMaterial))
-        {
-            throw new IOException(
-                    "Provided decryption material is not compatible with the document");
-        }
+   private static final Function<NodeMetadata, String> instanceId = new Function<NodeMetadata, String>() {
+      @Override
+      public String apply(NodeMetadata in) {
+         return in.getProviderId();
+      }
+   };
+   
+   private Set<NodeMetadata> addTagsAndNamesToInstancesInRegion(Map<String, String> common, Set<String> nodeNames,
+                                                                Set<? extends NodeMetadata> input, String region,
+                                                                String group) {
+      Map<String, ? extends NodeMetadata> instancesById = Maps.uniqueIndex(input, instanceId);
+      ImmutableSet.Builder<NodeMetadata> builder = ImmutableSet.<NodeMetadata> builder();
 
-        setDecryptMetadata(encryption.isEncryptMetaData());
-        if (encryption.getLength() != 0)
-        {
-            this.keyLength = encryption.getLength();
-        }
-
-        PublicKeyDecryptionMaterial material = (PublicKeyDecryptionMaterial) decryptionMaterial;
-
-        try
-        {
-            boolean foundRecipient = false;
-
-            X509Certificate certificate = material.getCertificate();
-            X509CertificateHolder materialCert = null;
-            if (certificate != null)
-            {
-                materialCert = new X509CertificateHolder(certificate.getEncoded());
+      List<String> namesToUse = newArrayList(nodeNames);
+      if (generateInstanceNames && !common.containsKey("Name")) {
+         for (Map.Entry<String, ? extends NodeMetadata> entry : instancesById.entrySet()) {
+            String id = entry.getKey();
+            String name;
+            if (!namesToUse.isEmpty()) {
+               name = namesToUse.remove(0);
+            } else {
+               name = id.replaceAll(".*-", group + "-");
             }
+            Map<String, String> tags = ImmutableMap.<String, String> builder().putAll(common)
+                  .put("Name", name).build();
+            logger.debug(">> applying tags %s to instance %s in region %s", tags, id, region);
+            client.getTagApiForRegion(region).get().applyToResources(tags, ImmutableSet.of(id));
+            builder.add(addTagsForInstance(tags, instancesById.get(id)));
+         }
+      } else {
+         Iterable<String> ids = instancesById.keySet();
+         logger.debug(">> applying tags %s to instances %s in region %s", common, ids, region);
+         client.getTagApiForRegion(region).get().applyToResources(common, ids);
+         for (NodeMetadata in : input)
+            builder.add(addTagsForInstance(common, in));
+      }
+      if (logger.isDebugEnabled()) {
+         Multimap<String, String> filter = new TagFilterBuilder().resourceIds(instancesById.keySet()).build();
+         FluentIterable<Tag> tags = client.getTagApiForRegion(region).get().filter(filter);
+         logger.debug("<< applied tags in region %s: %s", region, resourceToTagsAsMap(tags));
+      }
+      return builder.build();
+   }
 
-            // the decrypted content of the enveloped data that match
-            // the certificate in the decryption material provided
-            byte[] envelopedData = null;
+   private static NodeMetadata addTagsForInstance(Map<String, String> tags, NodeMetadata input) {
+      NodeMetadataBuilder builder = NodeMetadataBuilder.fromNodeMetadata(input).name(tags.get("Name"));
+      return addMetadataAndParseTagsFromValuesOfEmptyString(builder, tags).build();
+   }
 
-            // the bytes of each recipient in the recipients array
-            byte[][] recipientFieldsBytes = new byte[encryption.getRecipientsLength()][];
+   @Inject(optional = true)
+   @Named(RESOURCENAME_DELIMITER)
+   char delimiter = '#';
 
-            int recipientFieldsLength = 0;
-            int i = 0;
-            StringBuilder extraInfo = new StringBuilder();
-            for (; i < encryption.getRecipientsLength(); i++)
-            {
-                COSString recipientFieldString = encryption.getRecipientStringAt(i);
-                byte[] recipientBytes = recipientFieldString.getBytes();
-                CMSEnvelopedData data = new CMSEnvelopedData(recipientBytes);
-                Collection<RecipientInformation> recipCertificatesIt = data.getRecipientInfos()
-                        .getRecipients();
-                int j = 0;
-                for (RecipientInformation ri : recipCertificatesIt)
-                {
-                    // Impl: if a matching certificate was previously found it is an error,
-                    // here we just don't care about it
-                    RecipientId rid = ri.getRID();
-                    if (!foundRecipient && rid.match(materialCert))
-                    {
-                        foundRecipient = true;
-                        PrivateKey privateKey = (PrivateKey) material.getPrivateKey();
-                        envelopedData = ri.getContent(new JceKeyTransEnvelopedRecipient(privateKey));
-                        break;
-                    }
-                    j++;
-                    if (certificate != null)
-                    {
-                        extraInfo.append('\n');
-                        extraInfo.append(j);
-                        extraInfo.append(": ");
-                        if (rid instanceof KeyTransRecipientId)
-                        {
-                            appendCertInfo(extraInfo, (KeyTransRecipientId) rid, certificate, materialCert);
-                        }
-                    }
-                }
-                recipientFieldsBytes[i] = recipientBytes;
-                recipientFieldsLength += recipientBytes.length;
+   /**
+    * @throws IllegalStateException If the security group was in use
+    */
+   @VisibleForTesting
+   void deleteSecurityGroup(String region, String group) {
+      checkNotNull(emptyToNull(region), "region must be defined");
+      checkNotNull(emptyToNull(group), "group must be defined");
+      String groupName = namingConvention.create().sharedNameForGroup(group);
+      
+      if (client.getSecurityGroupApi().get().describeSecurityGroupsInRegion(region, groupName).size() > 0) {
+         logger.debug(">> deleting securityGroup(%s)", groupName);
+         client.getSecurityGroupApi().get().deleteSecurityGroupInRegion(region, groupName);
+         // TODO: test this clear happens
+         securityGroupMap.invalidate(new RegionNameAndIngressRules(region, groupName, null, false));
+         logger.debug("<< deleted securityGroup(%s)", groupName);
+      }
+   }
+
+   @VisibleForTesting
+   void deleteKeyPair(String region, String group) {
+      for (KeyPair keyPair : client.getKeyPairApi().get().describeKeyPairsInRegionWithFilter(region,
+              ImmutableMultimap.<String, String>builder()
+                      .put("key-name", Strings2.urlEncode(
+                              String.format("jclouds#%s#%s*", group, region).replace('#', delimiter)))
+                      .build())) {
+         String keyName = keyPair.getKeyName();
+         Predicate<String> keyNameMatcher = namingConvention.create().containsGroup(group);
+         String oldKeyNameRegex = String.format("jclouds#%s#%s#%s", group, region, "[0-9a-f]+").replace('#', delimiter);
+         // old keypair pattern too verbose as it has an unnecessary region qualifier
+         
+         if (keyNameMatcher.apply(keyName) || keyName.matches(oldKeyNameRegex)) {
+            Set<String> instancesUsingKeyPair = extractIdsFromInstances(concat(client.getInstanceApi().get()
+                  .describeInstancesInRegionWithFilter(region, ImmutableMultimap.<String, String>builder()
+                          .put("instance-state-name", InstanceState.TERMINATED.toString())
+                          .put("instance-state-name", InstanceState.SHUTTING_DOWN.toString())
+                          .put("key-name", keyPair.getKeyName()).build())));
+
+            if (instancesUsingKeyPair.size() > 0) {
+               logger.debug("<< inUse keyPair(%s), by (%s)", keyPair.getKeyName(), instancesUsingKeyPair);
+            } else {
+               logger.debug(">> deleting keyPair(%s)", keyPair.getKeyName());
+               client.getKeyPairApi().get().deleteKeyPairInRegion(region, keyPair.getKeyName());
+               // TODO: test this clear happens
+               credentialsMap.remove(new RegionAndName(region, keyPair.getKeyName()));
+               credentialsMap.remove(new RegionAndName(region, group));
+               logger.debug("<< deleted keyPair(%s)", keyPair.getKeyName());
             }
-            if (!foundRecipient || envelopedData == null)
-            {
-                throw new IOException("The certificate matches none of " + i
-                        + " recipient entries" + extraInfo.toString());
+         }
+      }
+   }
+
+   protected ImmutableSet<String> extractIdsFromInstances(Iterable<? extends RunningInstance> deadOnes) {
+      return ImmutableSet.copyOf(transform(deadOnes, new Function<RunningInstance, String>() {
+
+         @Override
+         public String apply(RunningInstance input) {
+            return input.getId();
+         }
+
+      }));
+   }
+
+   /**
+    * Cleans implicit keypairs and security groups.
+    */
+   @Override
+   protected void cleanUpIncidentalResourcesOfDeadNodes(Set<? extends NodeMetadata> deadNodes) {
+      Builder<String, String> regionGroups = ImmutableMultimap.builder();
+      for (NodeMetadata nodeMetadata : deadNodes) {
+         if (nodeMetadata.getGroup() != null)
+            regionGroups.put(AWSUtils.parseHandle(nodeMetadata.getId())[0], nodeMetadata.getGroup());
+         }
+      for (Entry<String, String> regionGroup : regionGroups.build().entries()) {
+         cleanUpIncidentalResources(regionGroup.getKey(), regionGroup.getValue());
+      }
+   }
+
+   protected void cleanUpIncidentalResources(final String region, final String group) {
+      // For issue #445, tries to delete security groups first: ec2 throws exception if in use, but
+      // deleting a key pair does not.
+      // This is "belt-and-braces" because deleteKeyPair also does extractIdsFromInstances & usingKeyPairAndNotDead
+      // for us to check if any instances are using the key-pair before we delete it. 
+      // There is (probably?) still a race if someone is creating instances at the same time as deleting them: 
+      // we may delete the key-pair just when the node-being-created was about to rely on the incidental 
+      // resources existing.
+
+      // Also in #445, in aws-ec2 the deleteSecurityGroup sometimes fails after terminating the final VM using a 
+      // given security group, if called very soon after the VM's state reports terminated. Empirically, it seems that
+      // waiting a small time (e.g. enabling logging or debugging!) then the tests pass. We therefore retry.
+      // TODO: this could be moved to a config module, also the narrative above made more concise
+      retry(new Predicate<RegionAndName>() {
+         public boolean apply(RegionAndName input) {
+            try {
+               logger.debug(">> deleting incidentalResources(%s)", input);
+               deleteSecurityGroup(input.getRegion(), input.getName());
+               deleteKeyPair(input.getRegion(), input.getName()); // not executed if securityGroup was in use
+               logger.debug("<< deleted incidentalResources(%s)", input);
+               return true;
+            } catch (IllegalStateException e) {
+               logger.debug("<< inUse incidentalResources(%s)", input);
+               return false;
             }
-            if (envelopedData.length != 24)
-            {
-                throw new IOException("The enveloped data does not contain 24 bytes");
-            }
-            // now envelopedData contains:
-            // - the 20 bytes seed
-            // - the 4 bytes of permission for the current user
+         }
+      }, SECONDS.toMillis(3), 50, 1000, MILLISECONDS).apply(new RegionAndName(region, group));
+   }
 
-            byte[] accessBytes = new byte[4];
-            System.arraycopy(envelopedData, 20, accessBytes, 0, 4);
+   /**
+    * returns template options, except of type {@link EC2TemplateOptions}.
+    */
+   @Override
+   public EC2TemplateOptions templateOptions() {
+      return EC2TemplateOptions.class.cast(super.templateOptions());
+   }
 
-            AccessPermission currentAccessPermission = new AccessPermission(accessBytes);
-            currentAccessPermission.setReadOnly();
-            setCurrentAccessPermission(currentAccessPermission);
-
-            // what we will put in the SHA1 = the seed + each byte contained in the recipients array
-            byte[] sha1Input = new byte[recipientFieldsLength + 20];
-
-            // put the seed in the sha1 input
-            System.arraycopy(envelopedData, 0, sha1Input, 0, 20);
-
-            // put each bytes of the recipients array in the sha1 input
-            int sha1InputOffset = 20;
-            for (byte[] recipientFieldsByte : recipientFieldsBytes)
-            {
-                System.arraycopy(recipientFieldsByte, 0, sha1Input, sha1InputOffset,
-                        recipientFieldsByte.length);
-                sha1InputOffset += recipientFieldsByte.length;
-            }
-
-            MessageDigest md = MessageDigests.getSHA1();
-            byte[] mdResult = md.digest(sha1Input);
-
-            // we have the encryption key ...
-            encryptionKey = new byte[this.keyLength / 8];
-            System.arraycopy(mdResult, 0, encryptionKey, 0, this.keyLength / 8);
-        }
-        catch (CMSException e)
-        {
-            throw new IOException(e);
-        }
-        catch (KeyStoreException e)
-        {
-            throw new IOException(e);
-        }
-        catch (CertificateEncodingException e)
-        {
-            throw new IOException(e);
-        }
-    }
-
-    private void appendCertInfo(StringBuilder extraInfo, KeyTransRecipientId ktRid, 
-            X509Certificate certificate, X509CertificateHolder materialCert)
-    {
-        BigInteger ridSerialNumber = ktRid.getSerialNumber();
-        if (ridSerialNumber != null)
-        {
-            String certSerial = "unknown";
-            BigInteger certSerialNumber = certificate.getSerialNumber();
-            if (certSerialNumber != null)
-            {
-                certSerial = certSerialNumber.toString(16);
-            }
-            extraInfo.append("serial-#: rid ");
-            extraInfo.append(ridSerialNumber.toString(16));
-            extraInfo.append(" vs. cert ");
-            extraInfo.append(certSerial);
-            extraInfo.append(" issuer: rid \'");
-            extraInfo.append(ktRid.getIssuer());
-            extraInfo.append("\' vs. cert \'");
-            extraInfo.append(materialCert == null ? "null" : materialCert.getIssuer());
-            extraInfo.append("\' ");
-        }
-    }
-    
-    /**
-     * Prepare the document for encryption.
-     *
-     * @param doc The document that will be encrypted.
-     *
-     * @throws IOException If there is an error while encrypting.
-     */
-    @Override
-    public void prepareDocumentForEncryption(PDDocument doc) throws IOException
-    {
-        if (keyLength == 256)
-        {
-            throw new IOException("256 bit key length is not supported yet for public key security");
-        }
-        try
-        {
-            PDEncryption dictionary = doc.getEncryption();
-            if (dictionary == null) 
-            {
-                dictionary = new PDEncryption();
-            }
-
-            dictionary.setFilter(FILTER);
-            dictionary.setLength(this.keyLength);
-            dictionary.setVersion(2);
-            
-            // remove CF, StmF, and StrF entries that may be left from a previous encryption
-            dictionary.removeV45filters();
-            
-            dictionary.setSubFilter(SUBFILTER);
-
-            // create the 20 bytes seed
-
-            byte[] seed = new byte[20];
-
-            KeyGenerator key;
-            try
-            {
-                key = KeyGenerator.getInstance("AES");
-            }
-            catch (NoSuchAlgorithmException e)
-            {
-                // should never happen
-                throw new RuntimeException(e);
-            }
-
-            key.init(192, new SecureRandom());
-            SecretKey sk = key.generateKey();
-            System.arraycopy(sk.getEncoded(), 0, seed, 0, 20); // create the 20 bytes seed
-            
-            byte[][] recipientsField = computeRecipientsField(seed);
-            dictionary.setRecipients(recipientsField);
-
-            int sha1InputLength = seed.length;
-
-            for(int j=0; j<dictionary.getRecipientsLength(); j++)
-            {
-                COSString string = dictionary.getRecipientStringAt(j);
-                sha1InputLength += string.getBytes().length;
-            }
-
-            byte[] sha1Input = new byte[sha1InputLength];
-
-            System.arraycopy(seed, 0, sha1Input, 0, 20);
-
-            int sha1InputOffset = 20;
-
-            for(int j=0; j<dictionary.getRecipientsLength(); j++)
-            {
-                COSString string = dictionary.getRecipientStringAt(j);
-                System.arraycopy(
-                    string.getBytes(), 0,
-                    sha1Input, sha1InputOffset, string.getBytes().length);
-                sha1InputOffset += string.getBytes().length;
-            }
-
-            MessageDigest sha1 = MessageDigests.getSHA1();
-            byte[] mdResult = sha1.digest(sha1Input);
-
-            this.encryptionKey = new byte[this.keyLength/8];
-            System.arraycopy(mdResult, 0, this.encryptionKey, 0, this.keyLength/8);
-
-            doc.setEncryptionDictionary(dictionary);
-            doc.getDocument().setEncryptionDictionary(dictionary.getCOSDictionary());
-        }
-        catch(GeneralSecurityException e)
-        {
-            throw new IOException(e);
-        }
-    }
-
-    private byte[][] computeRecipientsField(byte[] seed) throws GeneralSecurityException, IOException
-    {
-        byte[][] recipientsField = new byte[policy.getNumberOfRecipients()][];
-        Iterator<PublicKeyRecipient> it = policy.getRecipientsIterator();
-        int i = 0;
-        
-        while(it.hasNext())
-        {
-            PublicKeyRecipient recipient = it.next();
-            X509Certificate certificate = recipient.getX509();
-            int permission = recipient.getPermission().getPermissionBytesForPublicKey();
-            
-            byte[] pkcs7input = new byte[24];
-            byte one = (byte)(permission);
-            byte two = (byte)(permission >>> 8);
-            byte three = (byte)(permission >>> 16);
-            byte four = (byte)(permission >>> 24);
-            
-            System.arraycopy(seed, 0, pkcs7input, 0, 20); // put this seed in the pkcs7 input
-            
-            pkcs7input[20] = four;
-            pkcs7input[21] = three;
-            pkcs7input[22] = two;
-            pkcs7input[23] = one;
-            
-            ASN1Primitive obj = createDERForRecipient(pkcs7input, certificate);
-            
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            
-            DEROutputStream k = new DEROutputStream(baos);
-            
-            k.writeObject(obj);
-            
-            recipientsField[i] = baos.toByteArray();
-            
-            i++;
-        }
-        return recipientsField;
-    }
-
-    private ASN1Primitive createDERForRecipient(byte[] in, X509Certificate cert)
-            throws IOException, GeneralSecurityException
-    {
-        String algorithm = "1.2.840.113549.3.2";
-        AlgorithmParameterGenerator apg;
-        KeyGenerator keygen;
-        Cipher cipher;
-        try
-        {
-            apg = AlgorithmParameterGenerator.getInstance(algorithm,
-                    SecurityProvider.getProvider());
-            keygen = KeyGenerator.getInstance(algorithm, SecurityProvider.getProvider());
-            cipher = Cipher.getInstance(algorithm, SecurityProvider.getProvider());
-        }
-        catch (NoSuchAlgorithmException e)
-        {
-            // happens when using the command line app .jar file
-            throw new IOException("Could not find a suitable javax.crypto provider for algorithm " + 
-                    algorithm + "; possible reason: using an unsigned .jar file", e);
-        }
-        catch (NoSuchPaddingException e)
-        {
-            // should never happen, if this happens throw IOException instead
-            throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
-        }
-
-        AlgorithmParameters parameters = apg.generateParameters();
-
-        ASN1InputStream input = new ASN1InputStream(parameters.getEncoded("ASN.1"));
-        ASN1Primitive object = input.readObject();
-        input.close();
-
-        keygen.init(128);
-        SecretKey secretkey = keygen.generateKey();
-
-        cipher.init(1, secretkey, parameters);
-        byte[] bytes = cipher.doFinal(in);
-
-        KeyTransRecipientInfo recipientInfo = computeRecipientInfo(cert, secretkey.getEncoded());
-        DERSet set = new DERSet(new RecipientInfo(recipientInfo));
-
-        AlgorithmIdentifier algorithmId = new AlgorithmIdentifier(new ASN1ObjectIdentifier(algorithm), object);
-        EncryptedContentInfo encryptedInfo = 
-                new EncryptedContentInfo(PKCSObjectIdentifiers.data, algorithmId, new DEROctetString(bytes));
-        EnvelopedData enveloped = new EnvelopedData(null, set, encryptedInfo, (ASN1Set) null);
-
-        ContentInfo contentInfo = new ContentInfo(PKCSObjectIdentifiers.envelopedData, enveloped);
-        return contentInfo.toASN1Primitive();
-    }
-
-    private KeyTransRecipientInfo computeRecipientInfo(X509Certificate x509certificate, byte[] abyte0)
-        throws IOException, CertificateEncodingException, InvalidKeyException,
-            BadPaddingException, IllegalBlockSizeException
-    {
-        ASN1InputStream input = new ASN1InputStream(x509certificate.getTBSCertificate());
-        TBSCertificateStructure certificate = TBSCertificateStructure.getInstance(input.readObject());
-        input.close();
-
-        AlgorithmIdentifier algorithmId = certificate.getSubjectPublicKeyInfo().getAlgorithm();
-
-        IssuerAndSerialNumber serial = new IssuerAndSerialNumber(
-                certificate.getIssuer(),
-                certificate.getSerialNumber().getValue());
-
-        Cipher cipher;
-        try
-        {
-            cipher = Cipher.getInstance(algorithmId.getAlgorithm().getId(),
-                    SecurityProvider.getProvider());
-        }
-        catch (NoSuchAlgorithmException e)
-        {
-            // should never happen, if this happens throw IOException instead
-            throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
-        }
-        catch (NoSuchPaddingException e)
-        {
-            // should never happen, if this happens throw IOException instead
-            throw new RuntimeException("Could not find a suitable javax.crypto provider", e);
-        }
-
-        cipher.init(1, x509certificate.getPublicKey());
-
-        DEROctetString octets = new DEROctetString(cipher.doFinal(abyte0));
-        RecipientIdentifier recipientId = new RecipientIdentifier(serial);
-        return new KeyTransRecipientInfo(recipientId, algorithmId, octets);
-    }
-    
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public boolean hasProtectionPolicy()
-    {
-        return policy != null;
-    }
 }

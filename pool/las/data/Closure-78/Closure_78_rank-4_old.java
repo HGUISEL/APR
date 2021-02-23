@@ -1,1543 +1,615 @@
-/*
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.openejb.client;
 
-   Derby - Class org.apache.derby.client.am.Connection
+import org.apache.openejb.client.event.RemoteInitialContextCreated;
+import org.omg.CORBA.ORB;
 
-   Copyright (c) 2001, 2005 The Apache Software Foundation or its licensors, where applicable.
+import javax.naming.*;
+import javax.naming.Context;
+import javax.naming.spi.InitialContextFactory;
+import javax.naming.spi.NamingManager;
+import javax.sql.DataSource;
+import java.lang.reflect.Constructor;
+import java.net.ConnectException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.rmi.RemoteException;
+import java.util.ArrayList;
+import java.util.Hashtable;
+import java.util.List;
+import java.util.Properties;
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+/**
+ * @version $Rev$ $Date$
+ */
+@SuppressWarnings("UseOfObsoleteCollectionType")
+public class JNDIContext implements InitialContextFactory, Context {
 
-      http://www.apache.org/licenses/LICENSE-2.0
+    public static final String DEFAULT_PROVIDER_URL = "ejbd://localhost:4201";
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+    private String tail = "/";
+    private ServerMetaData server;
+    private ClientMetaData client;
+    private Hashtable env;
+    private String moduleId;
+    private ClientInstance clientIdentity;
 
-*/
-
-package org.apache.derby.client.am;
-
-import org.apache.derby.jdbc.ClientDataSource;
-import org.apache.derby.client.am.Section;
-
-public abstract class Connection implements java.sql.Connection,
-                                            ConnectionCallbackInterface
-{
-  //---------------------navigational members-----------------------------------
-
-
-  public Agent agent_; 
-
-  public DatabaseMetaData databaseMetaData_;
-  // Since DERBY prepared statements must be re-prepared after a commit,
-  // then we must traverse this list after a commit and notify statements
-  // that they are now in an un-prepared state.
-  final java.util.LinkedList openStatements_ = new java.util.LinkedList();
-
-  // Some statuses of DERBY objects may be invalid on server either after only rollback
-  // or after both commit and rollback. For example,
-  // (1) prepared statements need to be re-prepared
-  //     after both commit and rollback
-  // (2) result set will be unpositioned on server after both commit and rollback.
-  // If they only depend on rollback, they need to get on RollbackOnlyListeners_.
-  // If they depend on both commit and rollback, they need to get on CommitAndRollbackListeners_.
-  final java.util.LinkedList RollbackOnlyListeners_ = new java.util.LinkedList();
-  final java.util.LinkedList CommitAndRollbackListeners_ = new java.util.LinkedList();
-  private SqlWarning warnings_ = null;
-
-  // ------------------------properties set for life of connection--------------
-
-  // See ClientDataSource pre-connect settings
-  public transient String user_;
-  public boolean retrieveMessageText_;
-  protected boolean jdbcReadOnly_;
-  public int resultSetHoldability_;
-  public String databaseName_;
-
-  // Holds the Product-Specific Identifier which specifies
-  // the product release level of a DDM Server.
-  // The max length is 8.
-  public String productID_;
-
-  // Used to get the public key and encrypt password and/or userid
-  protected EncryptionManager encryptionManager_;
-
-	// used to set transaction isolation level
-	private Statement setTransactionIsolationStmt = null;
-  // ------------------------dynamic properties---------------------------------
-
-  protected boolean open_ = true; 
-  protected boolean availableForReuse_ = false;
-
-  public int isolation_ = Configuration.defaultIsolation;
-  public boolean autoCommit_ = true;
-  protected boolean inUnitOfWork_ = false; // This means a transaction is in progress.
-
-  private boolean accumulated440ForMessageProcFailure_ = false;
-  private boolean accumulated444ForMessageProcFailure_ = false;
-  private boolean accumulatedSetReadOnlyWarning_ = false;
-
-
-
-  //---------------------XA-----------------------------------------------------
-
-  protected boolean isXAConnection_ = false; // Indicates an XA connection
-
-  // XA States
-  public static final int XA_OPEN_IDLE = 0;
-  public static final int XA_LOCAL = 1; // local transaction started by DNC
-  public static final int XA_LOCAL_CCC = 2; // local transaction started by CCC
-  public static final int XA_ACTIVE = 3;
-  public static final int XA_ENDED = 4;
-  public static final int XA_HEUR_COMP = 5;
-  public static final int XA_SUSPENDED = 6;
-  public static final int XA_PREPARED = 7;
-  public static final int XA_ROLLBACK = 8;
-  public static final int XA_LOCAL_START_SENT = 9;
-  public static final int XA_UNKNOWN = 10;
-  public static final int XA_GLOBAL_START_SENT = 11;
-  public static final int XA_PENDING_END = 12;
-  public static final int XA_RBATHER = 13;
-  public static final int XA_RECOVER = 14;
-  public static final int XA_EMPTY_TRANSACTION = 15;
-  public static final int XA_RBROLLBACK = 16;
-  public static final int XA_PENDING_START = 17;
-  public static final int XA_EMPTY_SUSPENDED = 18;
-
-
-  protected int xaState_ = XA_OPEN_IDLE;
-
-  // XA Host Type
-  public int xaHostVersion_ = 0;
-
-  public int loginTimeout_;
-  public org.apache.derby.jdbc.ClientDataSource dataSource_;
-  public String serverNameIP_;
-  public int portNumber_;
-
-  public java.util.Hashtable clientCursorNameCache_ = new java.util.Hashtable();
-  public boolean canUseCachedConnectBytes_ = false;
-  public int commBufferSize_ = 32767;
-
-  // indicates if a deferred reset connection is required
-  public boolean resetConnectionAtFirstSql_ = false;
-
-  //---------------------constructors/finalizer---------------------------------
-
-  // For jdbc 2 connections
-  protected Connection (org.apache.derby.client.am.LogWriter logWriter,
-                        String user,
-                        String password,
-                        org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException
-  {
-    initConnection(logWriter, user, dataSource);
-  }
-
-  protected Connection (org.apache.derby.client.am.LogWriter logWriter,
-                        String user,
-                        String password,
-                        boolean isXAConn,
-                        org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException
-  {
-    isXAConnection_ = isXAConn;
-    initConnection(logWriter, user, dataSource);
-  }
-
-  // For jdbc 2 connections
-  protected void initConnection (org.apache.derby.client.am.LogWriter logWriter,
-                                 String user,
-                                 org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException
-  {
-    if (logWriter != null) logWriter.traceConnectEntry (dataSource);
-    org.apache.derby.client.am.Configuration.checkForExceptionsFromLoadConfiguration (logWriter);
-
-    user_ = user;
-
-    // Extract common properties.
-    databaseName_ = dataSource.getDatabaseName() + dataSource.getConnectionAttributes();
-    retrieveMessageText_ = dataSource.getRetrieveMessageText();
-
-    loginTimeout_ = dataSource.getLoginTimeout();
-    dataSource_ = dataSource;
-
-    serverNameIP_ = dataSource.getServerName();
-    portNumber_ = dataSource.getPortNumber();
-
-
-    agent_ = newAgent_ (logWriter,
-			loginTimeout_,
-                        serverNameIP_,
-                        portNumber_);
-  }
-
-  // For jdbc 2 connections
-  protected Connection (org.apache.derby.client.am.LogWriter logWriter,
-                        boolean isXAConn,
-                        org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException
-  {
-    if (logWriter != null) logWriter.traceConnectEntry (dataSource);
-    isXAConnection_ = isXAConn;
-    org.apache.derby.client.am.Configuration.checkForExceptionsFromLoadConfiguration (logWriter);
-
-    user_ = ClientDataSource.propertyDefault_user;
-
-    // Extract common properties.
-    databaseName_ = dataSource.getDatabaseName();
-    retrieveMessageText_ = dataSource.getRetrieveMessageText();
-
-    loginTimeout_= dataSource.getLoginTimeout();
-    dataSource_ = dataSource;
-
-    serverNameIP_ = dataSource.getServerName();
-    portNumber_ = dataSource.getPortNumber();
-
-
-    agent_ = newAgent_ (logWriter,
-                        loginTimeout_,
-                        serverNameIP_,
-                        portNumber_);
-  }
-
-  // This is a callback method, called by subsystem - NetConnection
-  protected void resetConnection (LogWriter logWriter,
-                                  String user,
-                                  ClientDataSource ds,
-                                  boolean recomputeFromDataSource) throws SqlException
-  {
-    // clearWarningsX() will re-initialize the following properties
-    clearWarningsX();
-
-    user_ = (user != null) ? user : user_;
-
-    if (ds != null && recomputeFromDataSource) { // no need to reinitialize connection state if ds hasn't changed
-      user_ = (user != null) ? user : ds.getUser();;
-
-      retrieveMessageText_ = ds.getRetrieveMessageText();
-
-
-      // property encryptionManager_
-      // if needed this will later be initialized by NET calls to initializePublicKeyForEncryption()
-      encryptionManager_ = null;
-
-      // property: open_
-      // this should already be true
-
-      isolation_ = Configuration.defaultIsolation;
-      autoCommit_ = true;
-      inUnitOfWork_ = false;
-
-      loginTimeout_ = ds.getLoginTimeout();
-      dataSource_ = ds;
+    public JNDIContext() {
     }
 
-    // property isXAConnection_
-    // leave set to current value.  this will impact which connect reset flows are used.
-
-    xaState_ = XA_OPEN_IDLE;
-    if (recomputeFromDataSource)
-    this.agent_.resetAgent(this, logWriter, loginTimeout_, serverNameIP_, portNumber_);
-  }
-
-  protected void resetConnection (LogWriter logWriter,
-                                  String databaseName,
-                                  java.util.Properties properties) throws SqlException
-  {
-    // clearWarningsX() will re-initialize the following properties
-    // warnings_, accumulated440ForMessageProcFailure_,
-    // accumulated444ForMessageProcFailure_, and accumulatedSetReadOnlyWarning_
-    clearWarningsX();
-
-    databaseName_ = databaseName;
-    user_ = ClientDataSource.getUser(properties);
-
-    retrieveMessageText_ = ClientDataSource.getRetrieveMessageText(properties);
-
-
-    // property encryptionManager_
-    // if needed this will later be initialized by NET calls to initializePublicKeyForEncryption()
-    encryptionManager_ = null;
-
-    // property: open_
-    // this should already be true
-
-    isolation_ = Configuration.defaultIsolation;
-    autoCommit_ = true;
-    inUnitOfWork_ = false;
-
-    // property isXAConnection_
-    // leave set to current value.  this will impact which connect reset flows are used.
-
-    xaState_ = XA_OPEN_IDLE;
-
-    this.agent_.resetAgent(this, logWriter, loginTimeout_, serverNameIP_, portNumber_);
-
-  }
-
-
-
-  // For jdbc 1 connections
-  protected Connection (LogWriter logWriter,
-                       int driverManagerLoginTimeout,
-                       String serverName,
-                       int portNumber,
-                       String databaseName,
-                       java.util.Properties properties) throws SqlException
-  {
-    if (logWriter != null) logWriter.traceConnectEntry (serverName, portNumber, databaseName, properties);
-    org.apache.derby.client.am.Configuration.checkForExceptionsFromLoadConfiguration (logWriter);
-
-    databaseName_ = databaseName;
-
-    // Extract common properties.
-    user_ = ClientDataSource.getUser (properties);
-    retrieveMessageText_ = ClientDataSource.getRetrieveMessageText (properties);
-
-    loginTimeout_ = driverManagerLoginTimeout;
-    serverNameIP_ = serverName;
-    portNumber_ = portNumber;
-
-    agent_ = newAgent_ (logWriter,
-                        loginTimeout_,
-                        serverNameIP_,
-                        portNumber_);
-  }
-
-  // Users are advised to call the method close() on Statement and Connection objects when they are done with them.
-  // However, some users will forget, and some code may get killed before it can close these objects.
-  // Therefore, if JDBC drivers have state associated with JDBC objects that need to get
-  // explicitly cleared up, they should provide finalize methods to take care of them.
-  // The garbage collector will call these finalize methods when the objects are found to be garbage,
-  // and this will give the driver a chance to close (or otherwise clean up) the objects.
-  // Note, however, that there is no guarantee that the garbage collector will ever run.
-  // If that is the case, the finalizers will not be called.
-  protected void finalize () throws java.lang.Throwable
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "finalize");
-
-    // finalize() differs from close() in that it will not throw an
-    // exception if a transaction is in progress.
-    // finalize() also differs from close() in that it will not drive
-    // an auto-commit before disconnecting.
-    //
-    // If a transaction is in progress, a close() request will throw an SqlException.
-    // However, if a connection with an incomplete transaction is finalized,
-    // or is abruptly terminated by application exit,
-    // the normal rollback semantics imposed by the DERBY server are adopted.
-    // So we just pull the plug and let the server handle this default semantic.
-
-    if (!open_) return;
-    agent_.disconnectEvent ();
-    super.finalize();
-  }
-
-  // ---------------------------jdbc 1------------------------------------------
-
-  synchronized public java.sql.Statement createStatement () throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "createStatement");
-    Statement s = createStatementX (java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "createStatement", s);
-    return s;
-  }
-
-  synchronized public java.sql.PreparedStatement prepareStatement (String sql) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareStatement", sql);
-    PreparedStatement ps = prepareStatementX (sql,
-                                                java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                                                java.sql.ResultSet.CONCUR_READ_ONLY,
-                                                resultSetHoldability_,
-                                                java.sql.Statement.NO_GENERATED_KEYS,
-                                                null);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareStatement", ps);
-    return ps;
-  }
-
-  // For internal use only.  Use by updatable result set code.
-  synchronized public PreparedStatement preparePositionedUpdateStatement (String sql, Section querySection) throws SqlException
-  {
-    checkForClosedConnection ();
-    // create a net material prepared statement.
-    PreparedStatement preparedStatement = newPositionedUpdatePreparedStatement_ (sql, querySection);
-    preparedStatement.flowPrepareDescribeInputOutput ();
-    // The positioned update statement is not added to the list of open statements,
-    // because this would cause a java.util.ConcurrentModificationException when
-    // iterating thru the list of open statements to call completeRollback().
-    // An updatable result set is marked closed on a call to completeRollback(),
-    // and would therefore need to close the positioned update statement associated with the result set which would cause
-    // it to be removed from the open statements list. Resulting in concurrent modification
-    // on the open statements list.
-    // Notice that ordinary Statement.closeX() is never called on the positioned update statement,
-    // rather markClosed() is called to avoid trying to remove the statement from the openStatements_ list.
-    return preparedStatement;
-  }
-
-  synchronized public java.sql.CallableStatement prepareCall (String sql) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareCall", sql);
-    CallableStatement cs = prepareCallX (sql, java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareCall", cs);
-    return cs;
-  }
-
-  synchronized PreparedStatement prepareDynamicCatalogQuery (String sql) throws SqlException
-  {
-    PreparedStatement ps = newPreparedStatement_ (sql, java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_, java.sql.Statement.NO_GENERATED_KEYS, null);
-    ps.isCatalogQuery_ = true;
-    ps.prepare (); 
-    openStatements_.add (ps);
-    return ps;
-  }
-
-  public String nativeSQL (String sql) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "nativeSQL", sql);
-    String nativeSql = nativeSQLX (sql);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "nativeSQL", nativeSql);
-    return nativeSql;
-  }
-
-  synchronized public String nativeSQLX (String sql) throws SqlException
-  {
-    checkForClosedConnection();
-    if (sql == null) throw new SqlException (agent_.logWriter_, "Null SQL string passed.");
-
-    // Derby can handle the escape syntax directly so only needs escape
-    // processing for { ? = CALL  ....}
-    String trimSql = sql.trim();
-    if (trimSql.startsWith ("{"))
-    {
-	if (trimSql.lastIndexOf("}") >= 0)
-        	return trimSql.substring(1, trimSql.lastIndexOf("}"));
+    /*
+     * A neater version of clone
+     */
+    public JNDIContext(final JNDIContext that) {
+        this.tail = that.tail;
+        this.server = that.server;
+        this.client = that.client;
+        this.moduleId = that.moduleId;
+        this.env = (Hashtable) that.env.clone();
+        this.clientIdentity = that.clientIdentity;
     }
 
-    return trimSql;
-  }
+    private JNDIResponse request(final JNDIRequest req) throws Exception {
+        req.setServerHash(server.buildHash());
 
-  // Driver-specific determination if local COMMIT/ROLLBACK is allowed;
-  // primary usage is distinction between local and global trans. envs.;
-  protected abstract boolean disallowLocalCommitRollback_() throws org.apache.derby.client.am.SqlException;
-
-  synchronized public void setAutoCommit (boolean autoCommit) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setAutoCommit", autoCommit);
-    checkForClosedConnection();
-
-    if ( disallowLocalCommitRollback_() ) {
-      if (autoCommit) { // can't toggle to autocommit mode when between xars.start() and xars.end()
-        throw new SqlException (agent_.logWriter_,
-                                "setAutoCommit(true) invalid during global transaction",
-                                SqlState._2D521, // Spec'ed by PROTOCOL
-                                SqlCode.invalidSetAutoCommitUnderXA);
-      }
-    }
-    else {
-      if (autoCommit == autoCommit_) return; // don't flow a commit if nothing changed.
-      if (inUnitOfWork_) flowCommit(); // we are not between xars.start() and xars.end(), can flow commit
-    }
-    autoCommit_ = autoCommit;
-  }
-
-  public boolean getAutoCommit () throws SqlException
-  {
-    checkForClosedConnection();
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "getAutoCommit", autoCommit_);
-    if ( disallowLocalCommitRollback_() )
-    { // autoCommit is always false between xars.start() and xars.end()
-      return false;
-    }
-    return autoCommit_;
-  }
-
-  synchronized public void commit () throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "commit");
-
-    // the following XA State check must be in commit instead of commitX since
-    // external application call commit, the SqlException should be thrown
-    // only if an external application calls commit during a Global Transaction,
-    // internal code will call commitX which will ignore the commit request
-    // while in a Global transaction
-    checkForInvalidXAStateOnCommitOrRollback ();
-    checkForClosedConnection();
-    flowCommit();
-  }
-
-  private void checkForInvalidXAStateOnCommitOrRollback () throws SqlException
-  {
-    if ( disallowLocalCommitRollback_() ) {
-      throw new SqlException (agent_.logWriter_,
-        "COMMIT or ROLLBACK invalid for application execution environment",
-        SqlState._2D521, // Spec'ed by PROTOCOL
-        SqlCode.invalidCommitOrRollbackUnderXA);
-    }
-  }
-
-  public void flowCommit () throws SqlException
-  {
-    // Per JDBC specification (see javadoc for Connection.commit()):
-    //   "This method should be used only when auto-commit mode has been disabled."
-    // However, some applications do this anyway, it is harmless, so
-    // if they ask to commit, we could go ahead and flow a commit.
-    // But note that rollback() is less harmless, rollback() shouldn't be used in auto-commit mode.
-    // This behavior is subject to further review.
-
-    //   if (!this.inUnitOfWork)
-    //     return;
-    // We won't try to be "too smart", if the user requests a commit, we'll flow a commit,
-    // regardless of whether or not we're in a unit of work or in auto-commit mode.
-    //
-    if (isXAConnection_) {
-      agent_.beginWriteChainOutsideUOW ();
-      writeCommit ();
-      agent_.flowOutsideUOW ();
-      readCommit (); // This will invoke the commitEvent() callback from the material layer.
-      agent_.endReadChain();
-    }
-    else {
-      agent_.beginWriteChain (null) ;
-      writeCommit ();
-      agent_.flow (null);
-      readCommit (); // This will invoke the commitEvent() callback from the material layer.
-      agent_.endReadChain();
+        final JNDIResponse response = new JNDIResponse();
+        Client.request(req, response, server);
+        if (null != response.getServer()) {
+            server.merge(response.getServer());
+        }
+        return response;
     }
 
-  }
-
-  // precondition: autoCommit_ is true
-  public void flowAutoCommit () throws SqlException
-  {
-    if (willAutoCommitGenerateFlow()) flowCommit();
-  }
-
-  public boolean willAutoCommitGenerateFlow() throws org.apache.derby.client.am.SqlException
-  {
-    if (!autoCommit_) return false;
-    if (disallowLocalCommitRollback_()) return false;
-    return true;
-  }
-
-  // precondition: autoCommit_ is true
-  void writeAutoCommit() throws SqlException
-  {
-    if (willAutoCommitGenerateFlow()) writeCommit();
-  }
-
-  public void writeCommit () throws SqlException
-  {
-    if (isXAConnection_) {
-      if ((xaState_ == XA_LOCAL) ||
-          (xaState_ == XA_LOCAL_START_SENT))
-        writeLocalXACommit_();
-    }
-    else
-      writeLocalCommit_();
-  }
-
-  // precondition: autoCommit_ is true
-  void readAutoCommit() throws SqlException
-  {
-    if (willAutoCommitGenerateFlow()) readCommit();
-  }
-
-  public void readCommit () throws SqlException
-  {
-    if (isXAConnection_) {
-        if ((xaState_ == XA_LOCAL) ||
-            (xaState_ == XA_LOCAL_START_SENT)) {
-          readLocalXACommit_();
-          setXAState( XA_OPEN_IDLE );
-      }
-    }
-    else
-      readLocalCommit_();
-  }
-
-  synchronized public void rollback () throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "rollback");
-    checkForInvalidXAStateOnCommitOrRollback ();
-    checkForClosedConnection();
-    flowRollback();
-  }
-
-  // Even if we're not in a transaction, all open result sets will be closed.
-  // So we could probably just return if we're not in a transaction
-  // using the following code:
-  //     if (!this.inUnitOfWork)
-  //       return;
-  // But we'll just play it safe, and blindly flow the rollback.
-  // We won't try to be "too smart", if the user requests a rollback, we'll flow a rollback,
-  // regardless of whether or not we're in a unit of work or in auto-commit mode.
-  //
-  // Per JDBC specification (see javadoc for Connection.rollback()):
-  //   "This method should be used only when auto-commit mode has been disabled."
-  // However, rather than trying to be too smart, we'll just flow the rollback anyway
-  // before throwing an exception.
-  // As a side-effect of invoking rollback() in auto-commit mode,
-  // we'll close all open result sets on this connection in the rollbackEvent().
-  //
-  protected void flowRollback () throws SqlException
-  {
-    if(isXAConnection_) {
-    agent_.beginWriteChainOutsideUOW ();
-    writeRollback ();
-    agent_.flowOutsideUOW ();
-    readRollback (); // This method will invoke the rollbackEvent() callback from the material layer.
-    agent_.endReadChain();
-  }
-    else {
-      agent_.beginWriteChain(null);
-      writeRollback ();
-      agent_.flow(null);
-      readRollback (); // This method will invoke the rollbackEvent() callback from the material layer.
-      agent_.endReadChain();
-    }
-  }
-
-  public void writeRollback () throws SqlException
-  {
-    if (isXAConnection_) {
-        writeLocalXARollback_();
-    }
-    else
-      writeLocalRollback_();
-  }
-
-  public void readRollback() throws SqlException
-  {
-    if (isXAConnection_) {
-      readLocalXARollback_();
-        setXAState( XA_OPEN_IDLE );
-    }
-    else
-      readLocalRollback_();
-  }
-
-  synchronized public void close () throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "close");
-    closeX();
-  }
-
-  void checkForTransactionInProgress () throws SqlException
-  {
-    // The following precondition matches CLI semantics, see SQLDisconnect()
-    if (!autoCommit_ && inUnitOfWork_ && !allowCloseInUOW_()) {
-      throw new SqlException (agent_.logWriter_,
-        "java.sql.Connection.close() requested while a transaction is in progress on the connection." +
-        "The transaction remains active, and the connection cannot be closed.");
-    }
-  }
-
-  // This is a no-op if the connection is already closed.
-  synchronized public void closeX () throws SqlException
-  {
-    if (!open_) return;
-    closeResourcesX();
-  }
-
-  // Close physical socket or attachment even if connection is marked close.
-  // Used by ClientPooledConnection.close().
-  synchronized public void closeResources () throws SqlException
-  {
-    if (open_ || (!open_ && availableForReuse_)) {
-      availableForReuse_ = false;
-      closeResourcesX();
-    }
-  }
-
-  private void closeResourcesX () throws SqlException
-  {
-    checkForTransactionInProgress ();
-    resetConnectionAtFirstSql_ = false; // unset indicator of deferred reset
-    SqlException accumulatedExceptions = null;
-	if (setTransactionIsolationStmt != null)
-		try {
-			setTransactionIsolationStmt.close();
-		} catch (SqlException se)
-		{
-			accumulatedExceptions = se; 
-		}
-    try { flowClose(); } catch (SqlException e) 
-	{ accumulatedExceptions =
-		  Utils.accumulateSQLException(e,accumulatedExceptions); 
-	}
-
-    markClosed();
-    try { agent_.close(); }
-    catch (SqlException e) {
-      throw Utils.accumulateSQLException (e, accumulatedExceptions);
-    }
-  }
-
-  protected abstract boolean isGlobalPending_ ();
-
-  // Just like closeX except the socket is not pulled.
-  // Physical resources are not closed.
-  synchronized public void closeForReuse() throws SqlException
-  {
-    if (!open_) return;
-    checkForTransactionInProgress ();
-    resetConnectionAtFirstSql_ = false; // unset indicator of deferred reset
-    SqlException accumulatedExceptions = null;
-    try { flowClose(); } catch (SqlException e) { accumulatedExceptions = e; }
-    if (open_) markClosedForReuse();
-    if (accumulatedExceptions != null) throw accumulatedExceptions;
-  }
-
-  private void flowClose () throws SqlException
-  {
-    agent_.beginWriteChainOutsideUOW ();
-    if (doCloseStatementsOnClose_()) writeCloseStatements();
-    if (autoCommit_) writeAutoCommit ();
-    agent_.flowOutsideUOW ();
-    if (doCloseStatementsOnClose_()) readCloseStatements();
-    if (autoCommit_) readAutoCommit ();
-    agent_.endReadChain();
-  }
-
-  protected abstract void markClosed_();
-  public void markClosed() // called by LogicalConnection.close()
-  {
-    open_ = false;
-    inUnitOfWork_ = false;
-    markStatementsClosed();
-    CommitAndRollbackListeners_.clear();
-    RollbackOnlyListeners_.clear();
-    markClosed_();
-  }
-
-
-  private void markClosedForReuse()
-  {
-    availableForReuse_ = true;
-    markClosed();
-  } 
-
-  private void markStatementsClosed ()
-  {
-    for (java.util.ListIterator i = openStatements_.listIterator(); i.hasNext(); ) {
-      Statement stmt  = (Statement) i.next();
-      stmt.markClosed();
-      i.remove();
-    }
-  }
-
-  private void writeCloseStatements () throws SqlException
-  {
-    for (java.util.ListIterator i = openStatements_.listIterator(); i.hasNext(); ) {
-      ((Statement) i.next()).writeClose (false);  // false means don't permit auto-commits
-    }
-  }
-
-  private void readCloseStatements () throws SqlException
-  {
-    for (java.util.ListIterator i = openStatements_.listIterator(); i.hasNext(); ) {
-      ((Statement) i.next()).readClose (false);  // false means don't permit auto-commits
-    }
-  }
-
-
-  public boolean isClosed ()
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "isClosed", !open_);
-    return !open_;
-  }
-
-  public boolean isClosedX ()
-  {
-    return !open_;
-  }
-
-	private static String DERBY_TRANSACTION_REPEATABLE_READ = "RS";
-	private static String DERBY_TRANSACTION_SERIALIZABLE = "RR";
-	private static String DERBY_TRANSACTION_READ_COMMITTED = "CS";
-	private static String DERBY_TRANSACTION_READ_UNCOMMITTED = "UR";
-
-  synchronized public void setTransactionIsolation (int level) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setTransactionIsolation", level);
-    // Per jdbc spec (see java.sql.Connection.close() javadoc).
-    checkForClosedConnection ();
-
-    // Javadoc for this method:
-    //   If this method is called during a transaction, the result is implementation-defined.
-    //
-    //
-    // REPEATABLE_READ = JDBC: TRANSACTION_SERIALIZABLE, DERBY: RR, PROTOCOL: repeatable read
-    // READ_STABILITY = JDBC: TRANSACTION_REPEATABLE_READ, DERBY: RS, PROTOCOL: All
-    // CURSOR_STABILITY = JDBC: TRANSACTION_READ_COMMITTED, DERBY: CS, PROTOCOL: Cursor stability
-    // UNCOMMITTED_READ = JDBC: TRANSACTION_READ_UNCOMMITTED, DERBY: UR , PROTOCOL: Change
-    // NO_COMMIT = JDBC: TRANSACTION_NONE, DERBY: NC, PROTOCOL: No commit
-    //
-	String levelString = null;
-    switch (level) {
-    case java.sql.Connection.TRANSACTION_REPEATABLE_READ:
-		levelString = DERBY_TRANSACTION_REPEATABLE_READ;
-		break;
-    case java.sql.Connection.TRANSACTION_READ_COMMITTED:
-		levelString = DERBY_TRANSACTION_READ_COMMITTED;
-		break;
-    case java.sql.Connection.TRANSACTION_SERIALIZABLE:
-		levelString = DERBY_TRANSACTION_SERIALIZABLE;
-		break;
-    case java.sql.Connection.TRANSACTION_READ_UNCOMMITTED:
-		levelString = DERBY_TRANSACTION_READ_UNCOMMITTED;
-		break;
-    // Per javadoc:
-    //   Note that Connection.TRANSACTION_NONE cannot be used because it specifies that transactions are not supported.
-    case java.sql.Connection.TRANSACTION_NONE:
-    default:
-      throw new SqlException (agent_.logWriter_,
-        "Transaction isolation level " + level + " is an invalid argument for java.sql.Connection.setTransactionIsolation()." +
-        " See Javadoc specification for a list of valid arguments.","XJ045");
-    }
-	if (setTransactionIsolationStmt == null)
-		setTransactionIsolationStmt =
-			createStatementX(java.sql.ResultSet.TYPE_FORWARD_ONLY, 
-							 java.sql.ResultSet.CONCUR_READ_ONLY, 
-							 resultSetHoldability_);
-	setTransactionIsolationStmt.executeUpdate("SET CURRENT ISOLATION = " + levelString);
-	
-	isolation_ = level;
-	
-  }
-
-  public int getTransactionIsolation () throws SqlException
-  {
-    checkForClosedConnection();
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "getTransactionIsolation", isolation_);
-    return isolation_;
-  }
-
-  public java.sql.SQLWarning getWarnings ()
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "getWarnings", warnings_);
-    return warnings_;
-  }
-
-  synchronized public void clearWarnings () throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "clearWarnings");
-    clearWarningsX();
-  }
-
-  // An untraced version of clearWarnings()
-  public void clearWarningsX () throws SqlException
-  {
-    warnings_ = null;
-    accumulated440ForMessageProcFailure_ = false;
-    accumulated444ForMessageProcFailure_ = false;
-    accumulatedSetReadOnlyWarning_ = false;
-  }
-
-  //======================================================================
-  // Advanced features:
-
-  public java.sql.DatabaseMetaData getMetaData () throws SqlException
-  {
-    checkForClosedConnection();
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "getMetaData", databaseMetaData_);
-    return databaseMetaData_;
-  }
-
-  synchronized public void setReadOnly (boolean readOnly) throws SqlException
-  {
-    // This is a hint to the driver only, so this request is silently ignored.
-    // PROTOCOL can only flow a set-read-only before the connection is established.
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setReadOnly", readOnly);
-    checkForClosedConnection();
-  }
-
-  public boolean isReadOnly () throws SqlException
-  {
-    checkForClosedConnection();
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "isReadOnly", jdbcReadOnly_);
-    return false;
-  }
-
-  synchronized public void setCatalog (String catalog) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setCatalog", catalog);
-    checkForClosedConnection();
-    // Per jdbc spec: if the driver does not support catalogs, it will silently ignore this request.
-  }
-
-  public String getCatalog () throws SqlException
-  {
-    checkForClosedConnection();
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "getCatalog", (String) null);
-    return null;
-  }
-
-  //--------------------------JDBC 2.0-----------------------------
-
-  synchronized public java.sql.Statement createStatement (int resultSetType,
-                                                          int resultSetConcurrency) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "createStatement", resultSetType, resultSetConcurrency);
-    Statement s = createStatementX (resultSetType, resultSetConcurrency, resultSetHoldability_);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "createStatement", s);
-    return s;
-  }
-
-  synchronized public java.sql.PreparedStatement prepareStatement (String sql,
-                                                                   int resultSetType,
-                                                                   int resultSetConcurrency) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareStatement", sql, resultSetType, resultSetConcurrency);
-    PreparedStatement ps = prepareStatementX (sql,
-                                                resultSetType,
-                                                resultSetConcurrency,
-                                                resultSetHoldability_,
-                                                java.sql.Statement.NO_GENERATED_KEYS,
-                                                null);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareStatement", ps);
-    return ps;
-  }
-
-  synchronized public java.sql.CallableStatement prepareCall (String sql,
-                                                              int resultSetType,
-                                                              int resultSetConcurrency) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareCall", sql, resultSetType, resultSetConcurrency);
-    CallableStatement cs = prepareCallX (sql, resultSetType, resultSetConcurrency, resultSetHoldability_);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareCall", cs);
-    return cs;
-  }
-
-  synchronized public CallableStatement prepareMessageProc (String sql) throws SqlException
-  {
-    checkForClosedConnection ();
-
-    CallableStatement cs = prepareCallX (sql, java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_);
-    return cs;
-  }
-
-  // Per jdbc spec, when a result set type is unsupported, we downgrade and
-  // issue a warning rather than to throw an exception.
-  private int downgradeResultSetType (int resultSetType)
-  {
-    if (resultSetType == java.sql.ResultSet.TYPE_SCROLL_SENSITIVE) {
-      accumulateWarning (new SqlWarning (
-        agent_.logWriter_, "Scroll sensitive result sets are not supported by server; remapping to forward-only cursor"));
-      return java.sql.ResultSet.TYPE_SCROLL_INSENSITIVE;
-    }
-    return resultSetType;
-  }
-
-  // Per jdbc spec, when a result set concurrency is unsupported, we downgrade and
-  // issue a warning rather than to throw an exception.
-  private int downgradeResultSetConcurrency (int resultSetConcurrency, int resultSetType)
-  {
-      if (resultSetConcurrency == java.sql.ResultSet.CONCUR_UPDATABLE &&
-          resultSetType == java.sql.ResultSet.TYPE_SCROLL_INSENSITIVE) {
-        accumulateWarning (new SqlWarning (
-          agent_.logWriter_, "Insensitive updatable result sets are not supported by server; remapping to insensitive read-only cursor"));
-        return java.sql.ResultSet.CONCUR_READ_ONLY;
-      }
-      return resultSetConcurrency;
-  }
-
-  public java.util.Map getTypeMap () throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "getTypeMap");
-    checkForClosedConnection();
-    java.util.Map map = new java.util.HashMap();
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "getTypeMap", map);
-    return map;
-  }
-
-  synchronized public void setTypeMap (java.util.Map map) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setTypeMap", map);
-    checkForClosedConnection();
-    throw new SqlException (agent_.logWriter_, "Connection.setTypeMap is not supported");
-  }
-
-  //--------------------------JDBC 3.0-----------------------------
-
-  synchronized public void setHoldability (int holdability) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setHoldability", holdability);
-    checkForClosedConnection();
-    resultSetHoldability_ = holdability;
-  }
-
-  public int getHoldability() throws SqlException
-  {
-    checkForClosedConnection();
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "getHoldability", resultSetHoldability_);
-    return resultSetHoldability_;
-  }
-
-  public int dncGeneratedSavepointId_;
-  // generated name used internally for unnamed savepoints
-  public static final String dncGeneratedSavepointNamePrefix__ = "DNC_GENENERATED_NAME_";
-
-  synchronized public java.sql.Savepoint setSavepoint() throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setSavepoint");
-    checkForClosedConnection ();
-    if (autoCommit_) // Throw exception if auto-commit is on
-      throw new SqlException (agent_.logWriter_, "Cannot set savepoint when in auto-commit mode.");
-    else if (xaState_ == XA_PENDING_START ||
-             xaState_ == XA_ACTIVE) // Throw exception if in distributed transaction
-      throw new SqlException (agent_.logWriter_, "Cannot set savepoint during distributed transaction.");
-    // create an un-named savepoint.
-    if ((++dncGeneratedSavepointId_) < 0) dncGeneratedSavepointId_ = 1; // restart from 1 when overflow.
-    Object s = setSavepointX (new Savepoint (agent_, dncGeneratedSavepointId_));
-    return (java.sql.Savepoint) s;
-  }
-
-  synchronized public java.sql.Savepoint setSavepoint (String name) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "setSavepoint", name);
-    checkForClosedConnection ();
-    if (name == null) // Throw exception if savepoint name is null
-      throw new SqlException (agent_.logWriter_, "Named savepoint needs a none-null name.");
-    else if (autoCommit_) // Throw exception if auto-commit is on
-      throw new SqlException (agent_.logWriter_, "Cannot set savepoint when in auto-commit mode.");
-    else if (xaState_ == XA_PENDING_START ||
-             xaState_ == XA_ACTIVE) // Throw exception if in distributed transaction
-      throw new SqlException (agent_.logWriter_, "Cannot set savepoint during distributed transaction.");
-    // create a named savepoint.
-    Object s = setSavepointX (new Savepoint (agent_, name));
-    return (java.sql.Savepoint) s;
-  }
-
-  private Savepoint setSavepointX (Savepoint savepoint) throws SqlException
-  {
-    // Construct and flow a savepoint statement to server.
-    Statement stmt = null;
-    try {
-      stmt = (Statement) createStatementX (java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                                           java.sql.ResultSet.CONCUR_READ_ONLY,
-                                           resultSetHoldability_);
-      String savepointName;
-      try {
-        savepointName = savepoint.getSavepointName();
-      }
-      catch (SqlException e) {
-        // generate the name for an un-named savepoint.
-        savepointName = dncGeneratedSavepointNamePrefix__ +
-                        savepoint.getSavepointId();
-      }
-      String sql = "SAVEPOINT \"" + savepointName + "\" ON ROLLBACK RETAIN CURSORS";
-      stmt.executeX (sql);
-    }
-    finally {
-      if (stmt != null)
-        try { stmt.closeX(); } catch (SqlException doNothing) {}
+    protected AuthenticationResponse requestAuthorization(final AuthenticationRequest req) throws RemoteException {
+        return (AuthenticationResponse) Client.request(req, new AuthenticationResponse(), server);
     }
 
-    return savepoint;
-  }
+    @Override
+    public Context getInitialContext(final Hashtable environment) throws NamingException {
+        if (environment == null) {
+            throw new NamingException("Invalid argument, hashtable cannot be null.");
+        } else {
+            env = (Hashtable) environment.clone();
+        }
 
-  synchronized public void rollback (java.sql.Savepoint savepoint) throws SqlException
-  {
-    int saveXaState = xaState_;
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "rollback", savepoint);
-    checkForClosedConnection ();
-    if (savepoint == null) // Throw exception if savepoint is null
-      throw new SqlException (agent_.logWriter_, "Cannot rollback to a null savepoint.");
-    else if (autoCommit_) // Throw exception if auto-commit is on
-      throw new SqlException (agent_.logWriter_, "Cannot rollback to a savepoint when in auto-commit mode.");
-    else if (xaState_ == XA_PENDING_START ||
-             xaState_ == XA_ACTIVE) // Throw exception if in distributed transaction
-      throw new SqlException (agent_.logWriter_, "Cannot rollback to a savepoint during distributed transaction.");
-    // Only allow to rollback to a savepoint from the connection that create the savepoint.
-    try {
-      if (this != ((Savepoint) savepoint).agent_.connection_)
-        throw new SqlException (agent_.logWriter_,
-                                "Rollback to a savepoint not created by this connection.");
-    }
-    catch (java.lang.ClassCastException e) { // savepoint is not an instance of am.Savepoint
-      throw new SqlException (agent_.logWriter_,
-                              "Rollback to a savepoint not created by this connection.");
-    }
+        final String userID = (String) env.get(Context.SECURITY_PRINCIPAL);
+        final String psswrd = (String) env.get(Context.SECURITY_CREDENTIALS);
+        String providerUrl = (String) env.get(Context.PROVIDER_URL);
+        moduleId = (String) env.get("openejb.client.moduleId");
 
-    // Construct and flow a savepoint rollback statement to server.
-    Statement stmt = null;
-    try {
-      stmt = createStatementX (java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                                           java.sql.ResultSet.CONCUR_READ_ONLY,
-                                           resultSetHoldability_);
-      String savepointName;
-      try {
-        savepointName = ((Savepoint) savepoint).getSavepointName();
-      }
-      catch (SqlException e) {
-        // generate the name for an un-named savepoint.
-        savepointName = dncGeneratedSavepointNamePrefix__ +
-                        ((Savepoint) savepoint).getSavepointId();
-      }
-      String sql = "ROLLBACK TO SAVEPOINT \"" + savepointName + "\"";
-      stmt.executeX (sql);
-    }
-    finally {
-      if (stmt != null)
-        try { stmt.closeX(); } catch (SqlException doNothing) {}
-      xaState_ = saveXaState;
-    }
-  }
+        final URI location;
+        try {
+            providerUrl = addMissingParts(providerUrl);
+            location = new URI(providerUrl);
+        } catch (URISyntaxException e) {
+            throw (ConfigurationException) new ConfigurationException("Property value for " + Context.PROVIDER_URL + " invalid: " + providerUrl + " - " + e.getMessage()).initCause(e);
+        }
+        this.server = new ServerMetaData(location);
 
-  synchronized public void releaseSavepoint (java.sql.Savepoint savepoint) throws SqlException
-  {
-    int saveXaState = xaState_;
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "releaseSavepoint", savepoint);
-    checkForClosedConnection ();
-    if (savepoint == null) // Throw exception if savepoint is null
-      throw new SqlException (agent_.logWriter_, "Cannot release a null savepoint.");
-    else if (autoCommit_) // Throw exception if auto-commit is on
-      throw new SqlException (agent_.logWriter_, "Cannot release a savepoint when in auto-commit mode.");
-    else if (xaState_ == XA_PENDING_START ||
-             xaState_ == XA_ACTIVE) // Throw exception if in distributed transaction
-      throw new SqlException (agent_.logWriter_, "Cannot release a savepoint during distributed transaction.");
-    // Only allow to release a savepoint from the connection that create the savepoint.
-    try {
-      if (this != ((Savepoint) savepoint).agent_.connection_)
-        throw new SqlException (agent_.logWriter_,
-                                "Cannot release a savepoint that was not created by this connection.");
-    }
-    catch (java.lang.ClassCastException e) { // savepoint is not an instance of am.Savepoint
-      throw new SqlException (agent_.logWriter_,
-                              "Cannot release a savepoint that was not created by this connection.");
+        final Client.Context context = Client.getContext(this.server);
+        context.getProperties().putAll(environment);
+
+        final String strategy = context.getOptions().get("openejb.client.connection.strategy", "default");
+        context.getClusterMetaData().setConnectionStrategy(strategy);
+
+        Client.fireEvent(new RemoteInitialContextCreated(location));
+
+        //TODO:1: Either aggressively initiate authentication or wait for the
+        //        server to send us an authentication challange.
+        if (userID != null) {
+            authenticate(userID, psswrd);
+        } else {
+            client = new ClientMetaData();
+        }
+
+        return this;
     }
 
-    // Construct and flow a savepoint release statement to server.
-    Statement stmt = null;
-    try {
-      stmt = (Statement) createStatementX (java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                                           java.sql.ResultSet.CONCUR_READ_ONLY,
-                                           resultSetHoldability_);
-      String savepointName;
-      try {
-        savepointName = ((Savepoint) savepoint).getSavepointName();
-      }
-      catch (SqlException e) {
-        // generate the name for an un-named savepoint.
-        savepointName = dncGeneratedSavepointNamePrefix__ +
-                        ((Savepoint) savepoint).getSavepointId();
-      }
-      String sql = "RELEASE SAVEPOINT \"" + savepointName + "\"";
-      stmt.executeX (sql);
-    }
-    finally {
-      if (stmt != null)
-        try { stmt.closeX(); } catch (SqlException doNothing) {}
-      xaState_ = saveXaState;
-    }
-  }
+    /**
+     * Add missing parts - expected only part of the required providerUrl
+     * <p/>
+     * TODO: Move the check to a place where it really belongs - ConnectionManager, ConnectionFactory or such
+     * This method (class in general) doesn't really know what is required as far as connection details go
+     * Assuming that java.net.URI or java.net.URL are going to be used is overly stated
+     */
+    String addMissingParts(String providerUrl) throws URISyntaxException {
+        if (providerUrl == null || providerUrl.length() == 0) {
+            providerUrl = DEFAULT_PROVIDER_URL;
+        } else {
 
-  synchronized public java.sql.Statement createStatement (int resultSetType,
-                                             int resultSetConcurrency,
-                                             int resultSetHoldability) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "createStatement", resultSetType, resultSetConcurrency, resultSetHoldability);
-    Statement s = createStatementX (resultSetType, resultSetConcurrency, resultSetHoldability);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "createStatement", s);
-    return s;
-  }
+            final int colonIndex = providerUrl.indexOf(":");
+            final int slashesIndex = providerUrl.indexOf("//");
 
-  private Statement createStatementX (int resultSetType,
-                                             int resultSetConcurrency,
-                                             int resultSetHoldability) throws SqlException
-  {
-    checkForClosedConnection ();
-    resultSetType = downgradeResultSetType (resultSetType);
-    resultSetConcurrency = downgradeResultSetConcurrency (resultSetConcurrency, resultSetType);
-    Statement s = newStatement_ (resultSetType, resultSetConcurrency, resultSetHoldability);
-    s.cursorAttributesToSendOnPrepare_ = s.cacheCursorAttributesToSendOnPrepare();
-    openStatements_.add (s);
-    return s;
-  }
+            final int port = Integer.parseInt(System.getProperty("ejbd.port", "4201"));
 
-  // not sure if holding on to cursorAttributesToSendOnPrepare and restoring it is the
-  // right thing to do here... because if property on the dataSource changes, we may have
-  // to send different attributes, i.e. SENSITIVE DYNAMIC, instead of SENSITIVE STATIC.
-  protected void resetStatement (Statement s) throws SqlException
-  {
-    String cursorAttributesToSendOnPrepare = s.cursorAttributesToSendOnPrepare_;
-    resetStatement_ (s, s.resultSetType_, s.resultSetConcurrency_, s.resultSetHoldability_);
-    s.cursorAttributesToSendOnPrepare_ = cursorAttributesToSendOnPrepare;
-  }
-
-  synchronized public java.sql.PreparedStatement prepareStatement (String sql,
-                                                      int resultSetType,
-                                                      int resultSetConcurrency,
-                                                      int resultSetHoldability) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareStatement", sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-    PreparedStatement ps = prepareStatementX (sql,
-                                                resultSetType,
-                                                resultSetConcurrency,
-                                                resultSetHoldability,
-                                                java.sql.Statement.NO_GENERATED_KEYS,
-                                                null);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareStatement", ps);
-    return ps;
-  }
-
-  // used by DBMD
-  PreparedStatement prepareStatementX (String sql,
-                                                      int resultSetType,
-                                                      int resultSetConcurrency,
-                                       int resultSetHoldability,
-                                       int autoGeneratedKeys,
-                                       String[] columnNames) throws SqlException
-  {
-    checkForClosedConnection ();
-    checkAutoGeneratedKeysParameters (autoGeneratedKeys, columnNames);
-    resultSetType = downgradeResultSetType (resultSetType);
-    resultSetConcurrency = downgradeResultSetConcurrency (resultSetConcurrency, resultSetType);
-    PreparedStatement ps = newPreparedStatement_ (sql, resultSetType, resultSetConcurrency, resultSetHoldability, autoGeneratedKeys, columnNames);
-    ps.cursorAttributesToSendOnPrepare_ = ps.cacheCursorAttributesToSendOnPrepare();
-    ps.prepare ();
-    openStatements_.add (ps);
-    return ps;
-  }
-
-  // not sure if holding on to cursorAttributesToSendOnPrepare and restoring it is the
-  // right thing to do here... because if property on the dataSource changes, we may have
-  // to send different attributes, i.e. SENSITIVE DYNAMIC, instead of SENSITIVE STATIC.
-  protected void resetPrepareStatement (PreparedStatement ps) throws SqlException
-  {
-    String cursorAttributesToSendOnPrepare = ps.cursorAttributesToSendOnPrepare_;
-    resetPreparedStatement_ (ps, ps.sql_, ps.resultSetType_, ps.resultSetConcurrency_, ps.resultSetHoldability_, ps.autoGeneratedKeys_, ps.generatedKeysColumnNames_);
-    ps.cursorAttributesToSendOnPrepare_ = cursorAttributesToSendOnPrepare;
-    ps.prepare();  
-  }
-
-  synchronized public java.sql.CallableStatement prepareCall (String sql,
-                                                 int resultSetType,
-                                                 int resultSetConcurrency,
-                                                 int resultSetHoldability) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareCall", sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-    CallableStatement cs = prepareCallX (sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareCall", cs);
-    return cs;
-  }
-
-  private CallableStatement prepareCallX (String sql,
-                                                 int resultSetType,
-                                                 int resultSetConcurrency,
-                                                 int resultSetHoldability) throws SqlException
-  {
-    checkForClosedConnection ();
-    resultSetType = downgradeResultSetType (resultSetType);
-    resultSetConcurrency = downgradeResultSetConcurrency (resultSetConcurrency, resultSetType);
-    CallableStatement cs = newCallableStatement_ (sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-    cs.cursorAttributesToSendOnPrepare_ = cs.cacheCursorAttributesToSendOnPrepare();
-    cs.prepare ();
-    openStatements_.add (cs);
-    return cs;
-  }
-
-  protected void resetPrepareCall (CallableStatement cs) throws SqlException
-  {
-    String cursorAttributesToSendOnPrepare = cs.cursorAttributesToSendOnPrepare_;
-    resetCallableStatement_ (cs, cs.sql_, cs.resultSetType_, cs.resultSetConcurrency_, cs.resultSetHoldability_);
-    cs.cursorAttributesToSendOnPrepare_ = cursorAttributesToSendOnPrepare;
-    cs.prepare ();  
-  }
-
-  public java.sql.PreparedStatement prepareStatement (String sql, int autoGeneratedKeys) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareStatement", sql, autoGeneratedKeys);
-    PreparedStatement ps = prepareStatementX (sql,
-                                                java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                                                java.sql.ResultSet.CONCUR_READ_ONLY,
-                                                resultSetHoldability_,
-                                                autoGeneratedKeys,
-                                                null);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareStatement", ps);
-    return ps;
-  }
-
-  public java.sql.PreparedStatement prepareStatement (String sql, int columnIndexes[]) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareStatement", sql, columnIndexes);
-    checkForClosedConnection();
-    throw new SqlException (agent_.logWriter_, "Driver not capable");
-  }
-
-  public java.sql.PreparedStatement prepareStatement (String sql, String columnNames[]) throws SqlException
-  {
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceEntry (this, "prepareStatement", sql, columnNames);
-      PreparedStatement ps = prepareStatementX (sql,
-                                                  java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                                                  java.sql.ResultSet.CONCUR_READ_ONLY,
-                                                  resultSetHoldability_,
-                                                  java.sql.Statement.RETURN_GENERATED_KEYS,
-                                                  columnNames);
-      if (agent_.loggingEnabled()) agent_.logWriter_.traceExit (this, "prepareStatement", ps);
-      return ps;
+            if (colonIndex == -1 && slashesIndex == -1) {   // hostname or ip address only
+                providerUrl = "ejbd://" + providerUrl + ":" + port;
+            } else if (colonIndex == -1) {
+                final URI providerUri = new URI(providerUrl);
+                final String scheme = providerUri.getScheme();
+                if (!(scheme.equals("http") || scheme.equals("https"))) {
+                    providerUrl = providerUrl + ":" + port;
+                }
+            } else if (slashesIndex == -1) {
+                providerUrl = "ejbd://" + providerUrl;
+            }
+        }
+        return providerUrl;
     }
 
+    public void authenticate(final String userID, final String psswrd) throws AuthenticationException {
 
-  // ---------------------------------------------------------------------------
+        // May be null
+        final String realmName = (String) env.get("openejb.authentication.realmName");
 
-  protected abstract boolean allowCloseInUOW_();
-  protected abstract boolean doCloseStatementsOnClose_();
+        final AuthenticationRequest req = new AuthenticationRequest(realmName, userID, psswrd);
+        final AuthenticationResponse res;
 
-  public abstract SectionManager newSectionManager (String collection,
-       Agent agent,
-       String databaseName);
-  //--------------------Abstract material factory methods-----------------
+        try {
+            res = requestAuthorization(req);
+        } catch (RemoteException e) {
+            throw new AuthenticationException(e.getLocalizedMessage());
+        }
 
-  protected abstract Agent newAgent_ (LogWriter logWriter, int loginTimeout, String serverName, int portNumber) throws SqlException;
-
-
-  protected abstract DatabaseMetaData newDatabaseMetaData_ ();
-  protected abstract Statement newStatement_ (int type,
-                                             int concurrency,
-                                             int holdability) throws SqlException;
-  protected abstract void resetStatement_ (Statement statement,
-                                           int type,
-                                           int concurrency,
-                                           int holdability) throws SqlException;
-
-
-  protected abstract PreparedStatement newPositionedUpdatePreparedStatement_ (String sql, Section section) throws SqlException;
-  protected abstract PreparedStatement newPreparedStatement_ (String sql,
-                                                             int type,
-                                                             int concurrency,
-                                                             int holdability,
-                                                             int autoGeneratedKeys,
-                                                             String[] columnNames) throws SqlException;
-
-  protected abstract void resetPreparedStatement_ (PreparedStatement ps,
-                                                   String sql,
-                                                   int resultSetType,
-                                                   int resultSetConcurrency,
-                                                   int resultSetHoldability,
-                                                   int autoGeneratedKeys,
-                                                   String[] columnNames) throws SqlException;
-
-  protected abstract CallableStatement newCallableStatement_ (String sql,
-                                                             int type,
-                                                             int concurrency,
-                                                             int holdability) throws SqlException;
-
-  protected abstract void resetCallableStatement_ (CallableStatement cs,
-                                                   String sql,
-                                                   int resultSetType,
-                                                   int resultSetConcurrency,
-                                                   int resultSetHoldability) throws SqlException;
-
-  // ----------------------- abstract box car and callback methods ---------------------
-  // All callbacks must be client-side only operations.
-
-
-  public void completeConnect () throws SqlException
-  {
-    open_ = true;
-    databaseMetaData_ = newDatabaseMetaData_();
-
-    agent_.sectionManager_ =
-          newSectionManager ("NULLID",
-          agent_,
-          databaseName_);
-    if (agent_.loggingEnabled()) agent_.logWriter_.traceConnectExit (this);
-  }
-
-  public abstract void writeCommitSubstitute_ () throws SqlException;
-  public abstract void readCommitSubstitute_ () throws SqlException;
-
-  public abstract void writeLocalXAStart_ () throws SqlException;
-  public abstract void readLocalXAStart_ () throws SqlException;
-
-  public abstract void writeLocalXACommit_ () throws SqlException;
-  public abstract void readLocalXACommit_ () throws SqlException;
-
-  public abstract void writeLocalCommit_ () throws SqlException;
-  public abstract void readLocalCommit_ () throws SqlException;
-  public void completeLocalCommit ()
-  {
-    for (java.util.Iterator i = CommitAndRollbackListeners_.iterator(); i.hasNext(); ) {
-      UnitOfWorkListener listener = (UnitOfWorkListener)i.next();
-      listener.completeLocalCommit(i);
+        switch (res.getResponseCode()) {
+            case ResponseCodes.AUTH_GRANTED:
+                client = res.getIdentity();
+                break;
+            case ResponseCodes.AUTH_REDIRECT:
+                client = res.getIdentity();
+                server = res.getServer();
+                break;
+            case ResponseCodes.AUTH_DENIED:
+                throw (AuthenticationException) new AuthenticationException("This principle is not authorized.").initCause(res.getDeniedCause());
+        }
     }
-    inUnitOfWork_ = false;
-  }
 
-  public abstract void writeLocalRollback_ () throws SqlException;
-  public abstract void readLocalRollback_ () throws SqlException;
-  // A callback for certain non-fatal exceptions that occur when parsing error replies.
-  // This is a client-side only operation.
-  // This method will only throw an exception on bug check.
-  public void completeLocalRollback ()
-  {
-    for (java.util.Iterator i = CommitAndRollbackListeners_.iterator(); i.hasNext(); ) {
-      UnitOfWorkListener listener = (UnitOfWorkListener)i.next();
-      listener.completeLocalRollback (i);
-    }
-    for (java.util.Iterator i = RollbackOnlyListeners_.iterator(); i.hasNext(); ) {
-      UnitOfWorkListener listener = (UnitOfWorkListener)i.next();
-      listener.completeLocalRollback (i);
-    }
-    inUnitOfWork_ = false;
-  }
+    public EJBHomeProxy createEJBHomeProxy(final EJBMetaDataImpl ejbData) {
+        final EJBHomeHandler handler = EJBHomeHandler.createEJBHomeHandler(ejbData, server, client);
+        final EJBHomeProxy proxy = handler.createEJBHomeProxy();
+        handler.ejb.ejbHomeProxy = proxy;
 
-
-  public abstract void writeLocalXARollback_ () throws SqlException;
-  public abstract void readLocalXARollback_ () throws SqlException;
-
-  public void writeTransactionStart(Statement statement) throws SqlException {}
-  public void readTransactionStart() throws SqlException { completeTransactionStart(); }
-  void completeTransactionStart() { inUnitOfWork_ = true; }
-
-  // Occurs autonomously
-  public void completeAbnormalUnitOfWork () { completeLocalRollback (); }
-
-  // Called by Connection.close(), NetConnection.errorRollbackDisconnect().
-  // The Agent's client-side resources associated with database connection are reclaimed (eg. socket).
-  // And this connection and all associated statements and result sets are marked closed.
-  // This is a client-side only operation.
-  // This method will only throw an exception if the agent cannot be closed.
-  public void completeChainBreakingDisconnect ()
-  {
-    open_ = false;
-    completeLocalRollback();
-    markStatementsClosed();
-  }
-
-  public void completeSqlca (Sqlca sqlca)
-  {
-    if (sqlca == null) {}
-    else if (sqlca.getSqlCode() > 0)
-      accumulateWarning (new SqlWarning (agent_.logWriter_, sqlca));
-    else if (sqlca.getSqlCode() < 0)
-      agent_.accumulateReadException (new SqlException (agent_.logWriter_, sqlca));
-  }
-
-  public abstract void addSpecialRegisters (String s);
-
-  // can this only be called by the PooledConnection
-  // can this be called on a closed connection
-  // can this be called in a unit of work
-  // can this be called from within a stored procedure
-  //
-  synchronized public void reset (LogWriter logWriter, String user, String password, ClientDataSource ds, boolean recomputeFromDataSource) throws SqlException
-  {
-    if (logWriter != null) {
-      logWriter.traceConnectResetEntry (this, logWriter, user, (ds!=null)?ds:dataSource_);
-    }
-    try {
-      reset_ (logWriter, user, password, ds, recomputeFromDataSource);
-    }
-    catch (SqlException sqle) {
-      DisconnectException de = new DisconnectException (
-        agent_, "An error occurred during connect reset and the connection has been terminated.  See chained exceptions for details.");
-      de.setNextException (sqle);
-      throw de;
-    }
-  }
-
-  synchronized public void reset (LogWriter logWriter, ClientDataSource ds, boolean recomputeFromDataSource) throws SqlException
-  {
-    if (logWriter != null) {
-      logWriter.traceConnectResetEntry (this, logWriter, null, (ds!=null)?ds:dataSource_);
-    }
-    try {
-      reset_ (logWriter,  ds, recomputeFromDataSource);
-    }
-    catch (SqlException sqle) {
-      DisconnectException de = new DisconnectException (
-        agent_, "An error occurred during connect reset and the connection has been terminated.  See chained exceptions for details.");
-      de.setNextException (sqle);
-      throw de;
-    }
-  }
-
-  synchronized public void lightReset () throws SqlException
-  {
-    if (!open_ && !availableForReuse_) return;
-    open_ = true;
-    availableForReuse_ = false;
-  }
-
-  abstract protected void reset_ (LogWriter logWriter, String user, String password, ClientDataSource ds, boolean recomputerFromDataSource) throws SqlException;
-  abstract protected void reset_ (LogWriter logWriter, ClientDataSource ds, boolean recomputerFromDataSource) throws SqlException;
-  protected void completeReset (boolean isDeferredReset, boolean recomputeFromDataSource) throws SqlException
-  {
-    open_ = true;
-
-    completeLocalRollback(); // this will close the cursors if the physical connection hadn't been closed for reuse properly
-
-    // Reopen physical statement resources associated with previous uses of this physical connection.
-    // Notice that these physical statements may not belong to this logical connection.
-    // Iterate through the physical statements and re-enable them for reuse.
-
-    for (java.util.Iterator i = openStatements_.iterator(); i.hasNext(); ) {
-      Object o = i.next();
-      ((Statement)o).reset (recomputeFromDataSource);
+        return proxy;
 
     }
 
-    if (!isDeferredReset && agent_.loggingEnabled()) agent_.logWriter_.traceConnectResetExit (this);
-  }
+    private Object createBusinessObject(final Object result) {
+        final EJBMetaDataImpl ejb = (EJBMetaDataImpl) result;
+        final Object primaryKey = ejb.getPrimaryKey();
 
-
-  //-------------------------------helper methods-------------------------------
-
-  protected void checkForClosedConnection () throws SqlException
-  {
-    if (!open_) {
-      agent_.checkForDeferredExceptions();
-      throw new SqlException (agent_.logWriter_, "invalid operation: connection closed");
+        final EJBObjectHandler handler = EJBObjectHandler.createEJBObjectHandler(ejb, server, client, primaryKey);
+        return handler.createEJBObjectProxy();
     }
-    else {
-      agent_.checkForDeferredExceptions();
+
+    @Override
+    public Object lookup(String name) throws NamingException {
+
+        if (name == null)
+            throw new InvalidNameException("The name cannot be null");
+        else if (name.equals(""))
+            return new JNDIContext(this);
+        else if (name.startsWith("java:"))
+            name = name.replaceFirst("^java:", "");
+        else if (!name.startsWith("/"))
+            name = tail + name;
+
+        final String prop = name.replaceFirst("comp/env/", "");
+        String value = System.getProperty(prop);
+        if (value != null) {
+            return parseEntry(prop, value);
+        }
+
+        if (name.equals("comp/ORB")) {
+            return getDefaultOrb();
+        }
+
+        final JNDIRequest req = new JNDIRequest();
+        req.setRequestMethod(RequestMethodCode.JNDI_LOOKUP);
+        req.setRequestString(name);
+        req.setModuleId(moduleId);
+
+        final JNDIResponse res;
+        try {
+            res = request(req);
+        } catch (Exception e) {
+            if (e instanceof RemoteException && e.getCause() instanceof ConnectException) {
+                e = (Exception) e.getCause();
+                throw (ServiceUnavailableException) new ServiceUnavailableException("Cannot lookup '" + name + "'.").initCause(e);
+            }
+            throw (NamingException) new NamingException("Cannot lookup '" + name + "'.").initCause(e);
+        }
+
+        switch (res.getResponseCode()) {
+            case ResponseCodes.JNDI_EJBHOME:
+                return createEJBHomeProxy((EJBMetaDataImpl) res.getResult());
+
+            case ResponseCodes.JNDI_BUSINESS_OBJECT:
+                return createBusinessObject(res.getResult());
+
+            case ResponseCodes.JNDI_OK:
+                return res.getResult();
+
+            case ResponseCodes.JNDI_INJECTIONS:
+                return res.getResult();
+
+            case ResponseCodes.JNDI_CONTEXT:
+                final JNDIContext subCtx = new JNDIContext(this);
+                if (!name.endsWith("/"))
+                    name += '/';
+                subCtx.tail = name;
+                return subCtx;
+
+            case ResponseCodes.JNDI_DATA_SOURCE:
+                return createDataSource((DataSourceMetaData) res.getResult());
+
+            case ResponseCodes.JNDI_WEBSERVICE:
+                return createWebservice((WsMetaData) res.getResult());
+
+            case ResponseCodes.JNDI_RESOURCE:
+                final String type = (String) res.getResult();
+                value = System.getProperty("Resource/" + type);
+                if (value == null) {
+                    return null;
+                }
+                return parseEntry(prop, value);
+
+            case ResponseCodes.JNDI_REFERENCE:
+                final Reference ref = (Reference) res.getResult();
+                try {
+                    return NamingManager.getObjectInstance(ref, getNameParser(name).parse(name), this, env);
+                } catch (Exception e) {
+                    throw (NamingException) new NamingException("Could not dereference " + ref).initCause(e);
+                }
+
+            case ResponseCodes.JNDI_NOT_FOUND:
+                throw new NameNotFoundException(name + " does not exist in the system.  Check that the app was successfully deployed.");
+
+            case ResponseCodes.JNDI_NAMING_EXCEPTION:
+                final Throwable throwable = ((ThrowableArtifact) res.getResult()).getThrowable();
+                if (throwable instanceof NamingException) {
+                    throw (NamingException) throwable;
+                }
+                throw (NamingException) new NamingException().initCause(throwable);
+
+            case ResponseCodes.JNDI_RUNTIME_EXCEPTION:
+                throw (RuntimeException) res.getResult();
+
+            case ResponseCodes.JNDI_ERROR:
+                throw (Error) res.getResult();
+
+            default:
+                throw new ClientRuntimeException("Invalid response from server: " + res.getResponseCode());
+        }
     }
-  }
 
-  void checkAutoGeneratedKeysParameters (int autoGeneratedKeys, String[] columnNames) throws SqlException
-  {
-    if (autoGeneratedKeys != java.sql.Statement.NO_GENERATED_KEYS &&
-        autoGeneratedKeys != java.sql.Statement.RETURN_GENERATED_KEYS)
-      throw new SqlException (agent_.logWriter_, "Invalid argument: " +
-                              "Statement auto-generated keys value " + autoGeneratedKeys +
-                              " is invalid.");
+    private Object parseEntry(final String name, String value) throws NamingException {
+        try {
+            URI uri = new URI(value);
+            final String scheme = uri.getScheme();
+            if (scheme.equals("link")) {
+                value = System.getProperty(uri.getSchemeSpecificPart());
+                if (value == null) {
+                    return null;
+                }
+                return parseEntry(name, value);
+            } else if (scheme.equals("datasource")) {
+                uri = new URI(uri.getSchemeSpecificPart());
+                final String driver = uri.getScheme();
+                final String url = uri.getSchemeSpecificPart();
+                return new ClientDataSource(driver, url, null, null);
+            } else if (scheme.equals("connectionfactory")) {
+                return build(uri);
+            } else if (scheme.equals("javamail")) {
+                return javax.mail.Session.getDefaultInstance(new Properties());
+            } else if (scheme.equals("orb")) {
+                return getDefaultOrb();
+            } else if (scheme.equals("queue")) {
+                return build(uri);
+            } else if (scheme.equals("topic")) {
+                return build(uri);
+            } else {
+                throw new UnsupportedOperationException("Unsupported Naming URI scheme '" + scheme + "'");
+            }
+        } catch (URISyntaxException e) {
+            throw (NamingException) new NamingException("Unparsable jndi entry '" + name + "=" + value + "'.  Exception: " + e.getMessage()).initCause(e);
+        }
+    }
 
-    if (columnNames != null)
-      throw new SqlException (agent_.logWriter_, "Driver not capable");
+    private Object build(final URI inputUri) throws URISyntaxException {
+        final URI uri = new URI(inputUri.getSchemeSpecificPart());
+        final String driver = uri.getScheme();
+        final String url = uri.getSchemeSpecificPart();
+        final ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        if (classLoader == null)
+            getClass().getClassLoader();
+        if (classLoader == null)
+            ClassLoader.getSystemClassLoader();
+        try {
+            final Class<?> clazz = Class.forName(driver, true, classLoader);
+            final Constructor<?> constructor = clazz.getConstructor(String.class);
+            return constructor.newInstance(url);
+        } catch (Exception e) {
+            throw new IllegalStateException("Cannot use " + driver + " with parameter " + url, e);
+        }
+    }
 
-  }
+    private DataSource createDataSource(final DataSourceMetaData dataSourceMetaData) {
+        return new ClientDataSource(dataSourceMetaData);
+    }
 
-  public boolean isXAConnection() { return isXAConnection_; }
-  public int getXAState() { return xaState_; }
-  public void setXAState (int state) { xaState_ =  state; }
+    private Object createWebservice(final WsMetaData webserviceMetaData) throws NamingException {
+        try {
+            return webserviceMetaData.createWebservice();
+        } catch (Exception e) {
+            throw (NamingException) new NamingException("Error creating webservice").initCause(e);
+        }
+    }
 
-  public void accumulateWarning (SqlWarning e)
-  {
-    if (warnings_ == null)
-      warnings_ = e;
-    else
-      warnings_.setNextException (e);
-  }
+    private ORB getDefaultOrb() {
+        return ORB.init();
+    }
 
-  public void accumulate440WarningForMessageProcFailure (SqlWarning e)
-  { if (!accumulated440ForMessageProcFailure_) { accumulateWarning (e); accumulated440ForMessageProcFailure_ = true; }}
+    @Override
+    public Object lookup(final Name name) throws NamingException {
+        return lookup(name.toString());
+    }
 
-  public void accumulate444WarningForMessageProcFailure (SqlWarning e)
-  { if (!accumulated444ForMessageProcFailure_) { accumulateWarning (e); accumulated444ForMessageProcFailure_ = true; }}
+    @SuppressWarnings("unchecked")
+    @Override
+    public NamingEnumeration<NameClassPair> list(String name) throws NamingException {
+        if (name == null)
+            throw new InvalidNameException("The name cannot be null");
+        else if (name.startsWith("java:"))
+            name = name.replaceFirst("^java:", "");
+        else if (!name.startsWith("/"))
+            name = tail + name;
 
-  // get the server version
-  public int getServerVersion()
-  {
-    return databaseMetaData_.productLevel_.versionLevel_;
-  }
+        final JNDIRequest req = new JNDIRequest(RequestMethodCode.JNDI_LIST, name);
+        req.setModuleId(moduleId);
 
-  public void setInUnitOfWork (boolean inUnitOfWork)
-  {
-    inUnitOfWork_ = inUnitOfWork;
-  }
+        final JNDIResponse res;
+        try {
+            res = request(req);
+        } catch (Exception e) {
+            if (e instanceof RemoteException && e.getCause() instanceof ConnectException) {
+                e = (Exception) e.getCause();
+                throw (ServiceUnavailableException) new ServiceUnavailableException("Cannot list '" + name + "'.").initCause(e);
+            }
+            throw (NamingException) new NamingException("Cannot list '" + name + "'.").initCause(e);
+        }
+
+        switch (res.getResponseCode()) {
+
+            case ResponseCodes.JNDI_OK:
+                return null;
+
+            case ResponseCodes.JNDI_ENUMERATION:
+                return (NamingEnumeration) res.getResult();
+
+            case ResponseCodes.JNDI_NOT_FOUND:
+                throw new NameNotFoundException(name);
+
+            case ResponseCodes.JNDI_NAMING_EXCEPTION:
+                final Throwable throwable = ((ThrowableArtifact) res.getResult()).getThrowable();
+                if (throwable instanceof NamingException) {
+                    throw (NamingException) throwable;
+                }
+                throw (NamingException) new NamingException().initCause(throwable);
+
+            case ResponseCodes.JNDI_ERROR:
+                throw (Error) res.getResult();
+
+            default:
+                throw new ClientRuntimeException("Invalid response from server :" + res.getResponseCode());
+        }
+
+    }
+
+    @Override
+    public NamingEnumeration<NameClassPair> list(final Name name) throws NamingException {
+        return list(name.toString());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public NamingEnumeration<Binding> listBindings(final String name) throws NamingException {
+        final Object o = lookup(name);
+        if (o instanceof Context) {
+            final Context context = (Context) o;
+            final NamingEnumeration<NameClassPair> enumeration = context.list("");
+            final List<NameClassPair> bindings = new ArrayList<NameClassPair>();
+
+            while (enumeration.hasMoreElements()) {
+                final NameClassPair pair = enumeration.nextElement();
+                bindings.add(new LazyBinding(pair.getName(), pair.getClassName(), context));
+            }
+
+            return new NameClassPairEnumeration(bindings);
+
+        } else {
+            return null;
+        }
+
+    }
+
+    private static class LazyBinding extends Binding {
+
+        private static final long serialVersionUID = 1L;
+        private RuntimeException failed;
+        private Context context;
+
+        public LazyBinding(final String name, final String className, final Context context) {
+            super(name, className, null);
+            this.context = context;
+        }
+
+        @Override
+        public synchronized Object getObject() {
+            if (super.getObject() == null) {
+                if (failed != null)
+                    throw failed;
+                try {
+                    super.setObject(context.lookup(getName()));
+                } catch (NamingException e) {
+                    throw failed = new ClientRuntimeException("Failed to lazily fetch the binding '" + getName() + "'", e);
+                }
+            }
+            return super.getObject();
+        }
+    }
+
+    @Override
+    public NamingEnumeration<Binding> listBindings(final Name name) throws NamingException {
+        return listBindings(name.toString());
+    }
+
+    @Override
+    public Object lookupLink(final String name) throws NamingException {
+        return lookup(name);
+    }
+
+    @Override
+    public Object lookupLink(final Name name) throws NamingException {
+        return lookupLink(name.toString());
+    }
+
+    @Override
+    public NameParser getNameParser(final String name) throws NamingException {
+        return new SimpleNameParser();
+    }
+
+    @Override
+    public NameParser getNameParser(final Name name) throws NamingException {
+        return new SimpleNameParser();
+    }
+
+    @Override
+    public String composeName(final String name, final String prefix) throws NamingException {
+        throw new OperationNotSupportedException("TODO: Needs to be implemented");
+    }
+
+    @Override
+    public Name composeName(final Name name, final Name prefix) throws NamingException {
+        throw new OperationNotSupportedException("TODO: Needs to be implemented");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public Object addToEnvironment(final String key, final Object value) throws NamingException {
+        return env.put(key, value);
+    }
+
+    @Override
+    public Object removeFromEnvironment(final String key) throws NamingException {
+        return env.remove(key);
+    }
+
+    @Override
+    public Hashtable getEnvironment() throws NamingException {
+        return (Hashtable) env.clone();
+    }
+
+    @Override
+    public String getNameInNamespace() throws NamingException {
+        return "";
+    }
+
+    @Override
+    public void close() throws NamingException {
+    }
+
+    @Override
+    public void bind(final String name, final Object obj) throws NamingException {
+        throw new OperationNotSupportedException();
+    }
+
+    @Override
+    public void bind(final Name name, final Object obj) throws NamingException {
+        bind(name.toString(), obj);
+    }
+
+    @Override
+    public void rebind(final String name, final Object obj) throws NamingException {
+        throw new OperationNotSupportedException();
+    }
+
+    @Override
+    public void rebind(final Name name, final Object obj) throws NamingException {
+        rebind(name.toString(), obj);
+    }
+
+    @Override
+    public void unbind(final String name) throws NamingException {
+        throw new OperationNotSupportedException();
+    }
+
+    @Override
+    public void unbind(final Name name) throws NamingException {
+        unbind(name.toString());
+    }
+
+    @Override
+    public void rename(final String oldname, final String newname) throws NamingException {
+        throw new OperationNotSupportedException();
+    }
+
+    @Override
+    public void rename(final Name oldname, final Name newname) throws NamingException {
+        rename(oldname.toString(), newname.toString());
+    }
+
+    @Override
+    public void destroySubcontext(final String name) throws NamingException {
+        throw new OperationNotSupportedException();
+    }
+
+    @Override
+    public void destroySubcontext(final Name name) throws NamingException {
+        destroySubcontext(name.toString());
+    }
+
+    @Override
+    public Context createSubcontext(final String name) throws NamingException {
+        throw new OperationNotSupportedException();
+    }
+
+    @Override
+    public Context createSubcontext(final Name name) throws NamingException {
+        return createSubcontext(name.toString());
+    }
+
+    private static final class SimpleNameParser implements NameParser {
+
+        private static final Properties PARSER_PROPERTIES = new Properties();
+
+        static {
+            PARSER_PROPERTIES.put("jndi.syntax.direction", "left_to_right");
+            PARSER_PROPERTIES.put("jndi.syntax.separator", "/");
+        }
+
+        private SimpleNameParser() {
+        }
+
+        @Override
+        public Name parse(final String name) throws NamingException {
+            return new CompoundName(name, PARSER_PROPERTIES);
+        }
+    }
 
 }
+

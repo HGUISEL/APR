@@ -1,768 +1,645 @@
-/*
- * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//jxpath/src/java/org/apache/commons/jxpath/ri/model/jdom/JDOMNodePointer.java,v 1.6 2002/11/29 06:44:16 dmitri Exp $
- * $Revision: 1.6 $
- * $Date: 2002/11/29 06:44:16 $
- *
- * ====================================================================
- * The Apache Software License, Version 1.1
- *
- *
- * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
- * reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. The end-user documentation included with the redistribution, if
- *    any, must include the following acknowlegement:
- *       "This product includes software developed by the
- *        Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowlegement may appear in the software itself,
- *    if and wherever such third-party acknowlegements normally appear.
- *
- * 4. The names "The Jakarta Project", "Commons", and "Apache Software
- *    Foundation" must not be used to endorse or promote products derived
- *    from this software without prior written permission. For written
- *    permission, please contact apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache"
- *    nor may "Apache" appear in their names without prior written
- *    permission of the Apache Group.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation and was
- * originally based on software copyright (c) 2001, Plotnix, Inc,
- * <http://www.plotnix.com/>.
- * For more information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- */
-package org.apache.commons.jxpath.ri.model.jdom;
+package org.jsoup.nodes;
 
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
+import org.apache.commons.lang.Validate;
+import org.jsoup.parser.Parser;
+import org.jsoup.parser.Tag;
+import org.jsoup.select.Collector;
+import org.jsoup.select.Elements;
+import org.jsoup.select.Selector;
 
-import org.apache.commons.jxpath.AbstractFactory;
-import org.apache.commons.jxpath.JXPathContext;
-import org.apache.commons.jxpath.JXPathException;
-import org.apache.commons.jxpath.ri.Compiler;
-import org.apache.commons.jxpath.ri.QName;
-import org.apache.commons.jxpath.ri.compiler.*;
-import org.apache.commons.jxpath.ri.model.NodeIterator;
-import org.apache.commons.jxpath.ri.model.NodePointer;
-import org.apache.commons.jxpath.util.TypeUtils;
-import org.jdom.*;
+import java.util.*;
 
 /**
- * A Pointer that points to a DOM node.
- *
- * @author Dmitri Plotnikov
- * @version $Revision: 1.6 $ $Date: 2002/11/29 06:44:16 $
+ * A HTML element consists of a tag name, attributes, and child nodes (including text nodes and
+ * other elements).
+ * 
+ * From an Element, you can extract data, traverse the node graph, and manipulate the HTML.
+ * 
+ * @author Jonathan Hedley, jonathan@hedley.net
  */
-public class JDOMNodePointer extends NodePointer {
-    private Object node;
-    private Map namespaces;
-    private String defaultNamespace;
-    private String id;
-
-    public static final String XML_NAMESPACE_URI =
-            "http://www.w3.org/XML/1998/namespace";
-    public static final String XMLNS_NAMESPACE_URI =
-            "http://www.w3.org/2000/xmlns/";
-
-    public JDOMNodePointer(Object node, Locale locale){
-        super(null, locale);
-        this.node = node;
-    }
-
-    public JDOMNodePointer(Object node, Locale locale, String id){
-        super(null, locale);
-        this.node = node;
-        this.id = id;
-    }
-
-    public JDOMNodePointer(NodePointer parent, Object node){
-        super(parent);
-        this.node = node;
-    }
-
-    public NodeIterator childIterator(NodeTest test, boolean reverse,
-                    NodePointer startWith) {
-        return new JDOMNodeIterator(this, test, reverse, startWith);
-    }
-
-    public NodeIterator attributeIterator(QName name){
-        return new JDOMAttributeIterator(this, name);
-    }
-
-    public NodeIterator namespaceIterator(){
-        return new JDOMNamespaceIterator(this);
-    }
-
-    public NodePointer namespacePointer(String prefix){
-        return new JDOMNamespacePointer(this, prefix);
-    }
-
-    public String getNamespaceURI(){
-        if (node instanceof Element){
-            Element element = (Element)node;
-            String ns = element.getNamespaceURI();
-            if (ns != null && ns.equals("")){
-                ns = null;
-            }
-            return ns;
-        }
-        return null;
-    }
-
-    public String getNamespaceURI(String prefix){
-        if (node instanceof Element){
-            Element element = (Element)node;
-            Namespace ns = element.getNamespace(prefix);
-            if (ns == null){
-                return null;
-            }
-            return ns.getURI();
-        }
-        return null;
-    }
-
-    public int compareChildNodePointers(
-                NodePointer pointer1, NodePointer pointer2)
-    {
-        Object node1 = pointer1.getBaseValue();
-        Object node2 = pointer2.getBaseValue();
-        if (node1 == node2){
-            return 0;
-        }
-
-        if ((node1 instanceof Attribute) && !(node2 instanceof Attribute)){
-            return -1;
-        }
-        else if (!(node1 instanceof Attribute) && (node2 instanceof Attribute)){
-            return 1;
-        }
-        else if ((node1 instanceof Attribute) && (node2 instanceof Attribute)){
-            List list = ((Element)getNode()).getAttributes();
-            int length = list.size();
-            for (int i = 0; i < length; i++){
-                Object n = list.get(i);
-                if (n == node1){
-                    return -1;
-                }
-                else if (n == node2){
-                    return 1;
-                }
-            }
-            return 0;       // Should not happen
-        }
-
-        if (!(node instanceof Element)){
-            throw new RuntimeException("JXPath internal error: " +
-                    "compareChildNodes called for " + node);
-        }
-
-        List children = ((Element)node).getContent();
-        int length = children.size();
-        for (int i = 0; i < length; i++){
-            Object n = children.get(i);
-            if (n == node1){
-                return -1;
-            }
-            else if (n == node2){
-                return 1;
-            }
-        }
-
-        return 0;
-    }
-
-
-    /**
-     * @see org.apache.commons.jxpath.ri.model.NodePointer#getBaseValue()
-     */
-    public Object getBaseValue() {
-        return node;
-    }
-
-    public boolean isCollection(){
-        return false;
-    }
+public class Element extends Node {
+    private final Tag tag;
+    private Set<String> classNames;
     
-    public int getLength(){
-        return 1;
-    }    
-
-    public boolean isLeaf(){
-        if (node instanceof Element){
-            return ((Element)node).getContent().size() == 0;
-        }
-        else if (node instanceof Document){
-            return ((Document)node).getContent().size() == 0;
-        }
-        return true;
-    }
-
     /**
-     * @see org.apache.commons.jxpath.ri.model.NodePointer#getName()
+     * Create a new, standalone Element. (Standalone in that is has no parent.)
+     * 
+     * @param tag tag of this element
+     * @param baseUri the base URI
+     * @param attributes initial attributes
+     * @see #appendChild(Node)
+     * @see #appendElement(String)
      */
-    public QName getName() {
-        String ns = null;
-        String ln = null;
-        if (node instanceof Element){
-            ns = ((Element)node).getNamespacePrefix();
-            if (ns != null && ns.equals("")){
-                ns = null;
-            }
-            ln = ((Element)node).getName();
-        }
-        else if (node instanceof ProcessingInstruction){
-            ln = ((ProcessingInstruction)node).getTarget();
-        }
-        return new QName(ns, ln);
-    }
-
-    public QName getExpandedName(){
-        return new QName(getNamespaceURI(), getName().getName());
-    }
-
-    /**
-     * @see org.apache.commons.jxpath.ri.model.NodePointer#getNode()
-     */
-    public Object getImmediateNode() {
-        return node;
-    }
-
-    public Object getValue(){
-        if (node instanceof Element){
-            return ((Element)node).getTextTrim();
-        }
-        else if (node instanceof Comment){
-            String text = ((Comment)node).getText();
-            if (text != null){
-                text = text.trim();
-            }
-            return text;
-        }
-        else if (node instanceof Text){
-            return ((Text)node).getTextTrim();
-        }
-        else if (node instanceof CDATA){
-            return ((CDATA)node).getTextTrim();
-        }
-        else if (node instanceof ProcessingInstruction){
-            String text = ((ProcessingInstruction)node).getData();
-            if (text != null){
-                text = text.trim();
-            }
-            return text;
-        }
-        return null;
-    }
-
-
-    /**
-     * @see org.apache.commons.jxpath.Pointer#setValue(Object)
-     */
-//        String string = null;
-//        if (value != null){
-//            string = (String)TypeUtils.convert(value, String.class);
-//            if (string.equals("")){
-//                string = null;
-//            }
-//        }
-//
-//        if (node instanceof Text){
-//            if (string != null){
-//                ((Text)node).setText(string);
-//            }
-//            else {
-//                nodeParent(node).removeContent((Text)node);
-//            }
-//        }
-//        else {
-//            Element element = (Element)node;
-//            // First remove all text from the element
-//            List content = new ArrayList(element.getContent());
-//            for (int i = content.size(); --i >= 0;){
-//                Object child = content.get(i);
-//                if (child instanceof Text){
-//                    element.removeContent((Text)node);
-//                }
-//                else if (child instanceof CDATA){
-//                    element.removeContent((CDATA)node);
-//                }
-//            }
-//            if (string != null){
-//                element.addContent(new Text(string));
-//            }
-//        }
-
-    public void setValue(Object value) {
-        if (node instanceof Text){
-            String string = (String)TypeUtils.convert(value, String.class);
-            if (string != null && !string.equals("")){
-                ((Text)node).setText(string);
-            }
-            else {
-                nodeParent(node).removeContent((Text)node);
-            }
-        }
-        else {
-            Element element = (Element)node;
-            element.getContent().clear();
-                        
-            if (value instanceof Element){
-                Element valueElement = (Element)value;
-                addContent(valueElement.getContent());
-            }
-            else if (value instanceof Document){
-                Document valueDocument = (Document)value;                
-                addContent(valueDocument.getContent());
-            }
-            else if (value instanceof Text ||
-                     value instanceof CDATA){
-                String string = ((Text)value).getText();
-                element.addContent(new Text(string));
-            }
-            else if (value instanceof ProcessingInstruction){
-                ProcessingInstruction pi = (ProcessingInstruction)
-                        ((ProcessingInstruction)value).clone();
-                element.addContent(pi);
-            }
-            else if (value instanceof Comment){
-                Comment comment = (Comment)((Comment)value).clone();
-                element.addContent(comment);
-            }
-            else {
-                String string = (String)TypeUtils.convert(value, String.class);
-                if (string != null && !string.equals("")){
-                    element.addContent(new Text(string));
-                }
-            }
-        }
-    }
-    
-    private void addContent(List content){
-        Element element = (Element)node;
-        int count = content.size();
+    public Element(Tag tag, String baseUri, Attributes attributes) {
+        super(baseUri, attributes);
         
-        for (int i = 0; i < count; i++){
-            Object child = content.get(i);
-            if (child instanceof Element){
-                child = ((Element)child).clone();
-                element.addContent((Element)child);
-            }
-            else if (child instanceof Text){
-                child = ((Text)child).clone();
-                element.addContent((Text)child);
-            }
-            else if (node instanceof CDATA){
-                child = ((CDATA)child).clone();
-                element.addContent((CDATA)child);
-            }
-            else if (node instanceof ProcessingInstruction){
-                child = ((ProcessingInstruction)child).clone();
-                element.addContent((ProcessingInstruction)child);
-            }
-            else if (node instanceof Comment){
-                child = ((Comment)child).clone();
-                element.addContent((Comment)child);
-            }
-        }
+        Validate.notNull(tag);    
+        this.tag = tag;
     }
     
-    public boolean testNode(NodeTest test){
-        return testNode(this, node, test);
+    /**
+     * Create a new Element from a tag and a base URI.
+     * 
+     * @param tag element tag
+     * @param baseUri the base URI of this element. It is acceptable for the base URI to be an empty
+     *            string, but not null.
+     * @see Tag#valueOf(String)
+     */
+    public Element(Tag tag, String baseUri) {
+        this(tag, baseUri, new Attributes());
     }
 
-    public static boolean testNode(
-            NodePointer pointer, Object node, NodeTest test)
-    {
-        if (test == null){
-            return true;
-        }
-        else if (test instanceof NodeNameTest){
-            if (!(node instanceof Element)){
-                return false;
-            }
-
-            QName testName = ((NodeNameTest)test).getNodeName();
-            String testLocalName = testName.getName();
-            boolean wildcard = testLocalName.equals("*");
-            if (wildcard && testName.getPrefix() == null){
-                return true;
-            }
-             
-            if (wildcard ||
-                    testLocalName.equals(
-                            JDOMNodePointer.getLocalName((Element)node))){
-                String testPrefix = testName.getPrefix();
-                String nodePrefix = JDOMNodePointer.getPrefix((Element)node);
-                if (equalStrings(testPrefix, nodePrefix)){
-                    return true;
-                }
-
-                String testNS = pointer.getNamespaceURI(testPrefix);
-                if (testNS == null){
-                    return false;
-                }
-                String nodeNS = pointer.getNamespaceURI(nodePrefix);
-                return equalStrings(testNS, nodeNS);
-            }
-        }
-        else if (test instanceof NodeTypeTest){
-            switch (((NodeTypeTest)test).getNodeType()){
-                case Compiler.NODE_TYPE_NODE:
-                    return node instanceof Element;
-                case Compiler.NODE_TYPE_TEXT:
-                    return (node instanceof Text) ||
-                        (node instanceof CDATA);
-                case Compiler.NODE_TYPE_COMMENT:
-                    return node instanceof Comment;
-                case Compiler.NODE_TYPE_PI:
-                    return node instanceof ProcessingInstruction;
-            }
-            return false;
-        }
-        else if (test instanceof ProcessingInstructionTest){
-            if (node instanceof ProcessingInstruction){
-                String testPI = ((ProcessingInstructionTest)test).getTarget();
-                String nodePI = ((ProcessingInstruction)node).getTarget();
-                return testPI.equals(nodePI);
-            }
-        }
-
-        return false;
+    @Override
+    public String nodeName() {
+        return tag.getName();
     }
 
-    private static boolean equalStrings(String s1, String s2){
-        if (s1 == null && s2 != null){
-            return false;
-        }
-        if (s1 != null && s2 == null){
-            return false;
-        }
+    /**
+     * Get the name of the tag for this element. E.g. {@code div}
+     * 
+     * @return the tag name
+     */
+    public String tagName() {
+        return tag.getName();
+    }
 
-        if (s1 != null && !s1.trim().equals(s2.trim())){
-            return false;
+    /**
+     * Get the Tag for this element.
+     * 
+     * @return the tag object
+     */
+    public Tag tag() {
+        return tag;
+    }
+    
+    /**
+     * Test if this element is a block-level element. (E.g. {@code <div> == true} or an inline element
+     * {@code <p> == false}).
+     * 
+     * @return true if block, false if not (and thus inline)
+     */
+    public boolean isBlock() {
+        return tag.isBlock();
+    }
+
+    /**
+     * Get the {@code id} attribute of this element.
+     * 
+     * @return The id attribute, if present, or an empty string if not.
+     */
+    public String id() {
+        String id = attr("id");
+        return id == null ? "" : id;
+    }
+
+    /**
+     * Set an attribute value on this element. If this element already has an attribute with the
+     * key, its value is updated; otherwise, a new attribute is added.
+     * 
+     * @return this element
+     */
+    public Element attr(String attributeKey, String attributeValue) {
+        super.attr(attributeKey, attributeValue);
+        return this;
+    }
+
+    @Override
+    public Element parent() {
+        return (Element) super.parent();
+    }
+
+    /**
+     * Get a child element of this element, by its 0-based index number.
+     * <p/>
+     * Note that an element can have both mixed Nodes and Elements as children. This method inspects
+     * a filtered list of children that are elements, and the index is based on that filtered list.
+     * 
+     * @param index the index number of the element to retrieve
+     * @return the child element, if it exists, or {@code null} if absent.
+     * @see #childNode(int)
+     */
+    public Element child(int index) {
+        return children().get(index);
+    }
+
+    /**
+     * Get this element's child elements.
+     * <p/>
+     * This is effectively a filter on {@link #childNodes()} to get Element nodes.
+     * @return child elements. If this element has no children, returns an
+     * empty list.
+     * @see #childNodes()
+     */
+    public Elements children() {
+        // create on the fly rather than maintaining two lists. if gets slow, memoize, and mark dirty on change
+        List<Element> elements = new ArrayList<Element>();
+        for (Node node : childNodes) {
+            if (node instanceof Element)
+                elements.add((Element) node);
         }
+        return new Elements(elements);
+    }
+
+    /**
+     * Find elements that match the selector query, with this element as the starting context. Matched elements
+     * may include this element, or any of its children.
+     * <p/>
+     * This method is generally more powerful to use than the DOM-type {@code getElementBy*} methods, because
+     * multiple filters can be combined, e.g.:
+     * <ul>
+     * <li>{@code el.select("a[href]")} - finds links ({@code a} tags with {@code href} attributes)
+     * <li>{@code el.select("a[href*=example.com]")} - finds links pointing to example.com (loosely)
+     * </ul>
+     * 
+     * @param query a {@link Selector} query
+     * @return elements that match the query (empty if none match)
+     */
+    public Elements select(String query) {
+        return Selector.select(query, this);
+    }
+    
+    /**
+     * Add a node to the last child of this element.
+     * 
+     * @param child node to add. Must not already have a parent.
+     * @return this element, so that you can add more child nodes or elements.
+     */
+    public Element appendChild(Node child) {
+        Validate.notNull(child);
+        
+        child.setParentNode(this);
+        childNodes.add(child);
+        return this;
+    }
+    
+    /**
+     * Add a node to the start of this element's children.
+     * 
+     * @param child node to add. Must not already have a parent.
+     * @return this element, so that you can add more child nodes or elements.
+     */
+    public Element prependChild(Node child) {
+        Validate.notNull(child);
+        
+        child.setParentNode(this);
+        childNodes.add(0, child);
+        return this;
+    }
+    
+    /**
+     * Create a new element by tag name, and add it as the last child.
+     * 
+     * @param tagName the name of the tag (e.g. {@code div}).
+     * @return the new element, to allow you to add content to it, e.g.:
+     *  {@code parent.appendElement("h1").attr("id", "header").text("Welcome");}
+     */
+    public Element appendElement(String tagName) {
+        Element child = new Element(Tag.valueOf(tagName), baseUri());
+        appendChild(child);
+        return child;
+    }
+    
+    /**
+     * Create a new element by tag name, and add it as the first child.
+     * 
+     * @param tagName the name of the tag (e.g. {@code div}).
+     * @return the new element, to allow you to add content to it, e.g.:
+     *  {@code parent.prependElement("h1").attr("id", "header").text("Welcome");}
+     */
+    public Element prependElement(String tagName) {
+        Element child = new Element(Tag.valueOf(tagName), baseUri());
+        prependChild(child);
+        return child;
+    }
+    
+    /**
+     * Create and append a new TextNode to this element.
+     * 
+     * @param text the unencoded text to add
+     * @return this element
+     */
+    public Element appendText(String text) {
+        TextNode node = new TextNode(text, baseUri());
+        appendChild(node);
+        return this;
+    }
+    
+    /**
+     * Create and prepend a new TextNode to this element.
+     * 
+     * @param text the unencoded text to add
+     * @return this element
+     */
+    public Element prependText(String text) {
+        TextNode node = new TextNode(text, baseUri());
+        prependChild(node);
+        return this;
+    }
+    
+    /**
+     * Add inner HTML to this element. The supplied HTML will be parsed, and each node appended to the end of the children.
+     * @param html HTML to add inside this element, after the existing HTML
+     * @return this element
+     * @see #html(String)
+     */
+    public Element append(String html) {
+        Validate.notNull(html);
+        
+        Element fragment = Parser.parseBodyFragment(html, baseUri).body();
+        // TODO: must parse without implicit elements, so you can e.g. add <td> to a <tr> (without creating a whole new table)
+        for (Node node : fragment.childNodes()) {
+            node.parentNode = null;
+            appendChild(node);
+        }
+        return this;
+    }
+    
+    /**
+     * Add inner HTML to this element. The supplied HTML will be parsed, and each node prepended to the start of the children.
+     * @param html HTML to add inside this element, before the existing HTML
+     * @return this element
+     * @see #html(String)
+     */
+    public Element prepend(String html) {
+        Validate.notNull(html);
+        
+        Element fragment = Parser.parseBodyFragment(html, baseUri).body();
+        // TODO: must parse without implicit elements, so you can e.g. add <td> to a <tr> (without creating a whole new table)
+        List<Node> nodes = fragment.childNodes();
+        for (int i = nodes.size() - 1; i >= 0; i--) {
+            Node node = nodes.get(i);
+            node.parentNode = null;
+            prependChild(node);
+        }
+        return this;
+    }
+    
+    /**
+     * Remove all of the element's child nodes. Any attributes are left as-is.
+     * @return this element
+     */
+    public Element empty() {
+        childNodes.clear();
+        return this;
+    }
+    
+    /**
+     * Get sibling elements.
+     * @return sibling elements
+     */
+    public Elements siblingElements() {
+        return parent().children();
+    }
+
+    /**
+     * Gets the next sibling element of this element. E.g., if a {@code div} contains two {@code p}s, 
+     * the {@code nextElementSibling} of the first {@code p} is the second {@code p}.
+     * <p/>
+     * This is similar to {@link #nextSibling()}, but specifically finds only Elements
+     * @return the next element, or null if there is no next element
+     * @see #previousElementSibling()
+     */
+    public Element nextElementSibling() {
+        List<Element> siblings = parent().children();
+        Integer index = indexInList(this, siblings);
+        Validate.notNull(index);
+        if (siblings.size() > index+1)
+            return siblings.get(index+1);
+        else
+            return null;
+    }
+
+    /**
+     * Gets the previous element sibling of this element.
+     * @return the previous element, or null if there is no previous element
+     * @see #nextElementSibling()
+     */
+    public Element previousElementSibling() {
+        List<Element> siblings = parent().children();
+        Integer index = indexInList(this, siblings);
+        Validate.notNull(index);
+        if (index > 0)
+            return siblings.get(index-1);
+        else
+            return null;
+    }
+
+    /**
+     * Gets the first element sibling of this element.
+     * @return the first sibling that is an element (aka the parent's first element child) 
+     */
+    public Element firstElementSibling() {
+        // todo: should firstSibling() exclude this?
+        List<Element> siblings = parent().children();
+        return siblings.size() > 1 ? siblings.get(0) : null;
+    }
+
+    /**
+     * Gets the last element sibling of this element
+     * @return the last sibling that is an element (aka the parent's last element child) 
+     */
+    public Element lastElementSibling() {
+        List<Element> siblings = parent().children();
+        return siblings.size() > 1 ? siblings.get(siblings.size() - 1) : null;
+    }
+
+    // DOM type methods
+
+    /**
+     * Finds elements, including and recursively under this element, with the specified tag name.
+     * @param tagName The tag name to search for (case insensitively).
+     * @return a matching unmodifiable list of elements. Will be empty if this element and none of its children match.
+     */
+    public Elements getElementsByTag(String tagName) {
+        Validate.notEmpty(tagName);
+        tagName = tagName.toLowerCase().trim();
+
+        return Collector.collect(new Evaluator.Tag(tagName), this);
+    }
+
+    /**
+     * Find an element by ID, including or under this element.
+     * <p>
+     * Note that this finds the first matching ID, starting with this element. If you search down from a different
+     * starting point, it is possible to find a different element by ID. For unique element by ID within a Document,
+     * use {@link Document#getElementById(String)}
+     * @param id The ID to search for.
+     * @return The first matching element by ID, starting with this element, or null if none found.
+     */
+    public Element getElementById(String id) {
+        Validate.notEmpty(id);
+        
+        Elements elements = Collector.collect(new Evaluator.Id(id), this);
+        if (elements.size() > 0)
+            return elements.get(0);
+        else
+            return null;
+    }
+
+    /**
+     * Find elements that have this class, including or under this element. Case insensitive.
+     * <p>
+     * Elements can have multiple classes (e.g. {@code <div class="header round first">}. This method
+     * checks each class, so you can find the above with {@code el.getElementsByClass("header");}.
+     * 
+     * @param className the name of the class to search for.
+     * @return elements with the supplied class name, empty if none
+     * @see #hasClass(String)
+     * @see #classNames()
+     */
+    public Elements getElementsByClass(String className) {
+        Validate.notEmpty(className);
+
+        return Collector.collect(new Evaluator.Class(className), this);
+    }
+
+    /**
+     * Find elements that have a named attribute set. Case insensitive.
+     *
+     * @param key name of the attribute
+     * @return elements that have this attribute, empty if none
+     */
+    public Elements getElementsByAttribute(String key) {
+        Validate.notEmpty(key);
+        key = key.trim().toLowerCase();
+
+        return Collector.collect(new Evaluator.Attribute(key), this);
+    }
+
+    /**
+     * Find elements that have an attribute with the specific value. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param value value of the attribute
+     * @return elements that have this attribute with this value, empty if none
+     */
+    public Elements getElementsByAttributeValue(String key, String value) {
+        return Collector.collect(new Evaluator.AttributeWithValue(key, value), this);
+    }
+
+    /**
+     * Find elements that either do not have this attribute, or have it with a different value. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param value value of the attribute
+     * @return elements that do not have a matching attribute
+     */
+    public Elements getElementsByAttributeValueNot(String key, String value) {
+        return Collector.collect(new Evaluator.AttributeWithValueNot(key, value), this);
+    }
+
+    /**
+     * Find elements that have attributes that start with the value prefix. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param valuePrefix start of attribute value
+     * @return elements that have attributes that start with the value prefix
+     */
+    public Elements getElementsByAttributeValueStarting(String key, String valuePrefix) {
+        return Collector.collect(new Evaluator.AttributeWithValueStarting(key, valuePrefix), this);
+    }
+
+    /**
+     * Find elements that have attributes that end with the value suffix. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param valueSuffix end of the attribute value
+     * @return elements that have attributes that end with the value suffix
+     */
+    public Elements getElementsByAttributeValueEnding(String key, String valueSuffix) {
+        return Collector.collect(new Evaluator.AttributeWithValueEnding(key, valueSuffix), this);
+    }
+
+    /**
+     * Find elements that have attributes whose value contains the match string. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param match substring of value to search for
+     * @return elements that have attributes containing this text
+     */
+    public Elements getElementsByAttributeValueContaining(String key, String match) {
+        return Collector.collect(new Evaluator.AttributeWithValueContaining(key, match), this);
+    }
+    
+    /**
+     * Find all elements under this element (including self, and children of children).
+     * 
+     * @return all elements
+     */
+    public Elements getAllElements() {
+        return Collector.collect(new Evaluator.AllElements(), this);
+    }
+
+    /**
+     * Gets the combined text of this element and all its children.
+     * 
+     * @return unencoded text, or empty string if none.
+     */
+    public String text() {
+        StringBuilder sb = new StringBuilder();
+        text(sb);
+        return sb.toString().trim();
+    }
+
+    private void text(StringBuilder accum) {
+        for (Node child : childNodes) {
+            if (child instanceof TextNode) {
+                TextNode textNode = (TextNode) child;
+                String text = textNode.getWholeText();
+
+                if (!tag.preserveWhitespace()) {
+                    text = TextNode.normaliseWhitespace(text);
+                    if (TextNode.lastCharIsWhitespace(accum))
+                        text = TextNode.stripLeadingWhitespace(text);
+                }
+                accum.append(text);
+
+            } else if (child instanceof Element) {
+                Element element = (Element) child;
+                if (accum.length() > 0 && element.isBlock() && !TextNode.lastCharIsWhitespace(accum))
+                    accum.append(" ");
+                element.text(accum);
+            }
+        }
+    }
+
+    /**
+     * Set the text of this element. Any existing contents (text or elements) will be cleared
+     * @param text unencoded text
+     * @return this element
+     */
+    public Element text(String text) {
+        Validate.notNull(text);
+
+        empty();
+        TextNode textNode = new TextNode(text, baseUri);
+        appendChild(textNode);
+
+        return this;
+    }
+
+    /**
+     * Get the combined data of this element. Data is e.g. the inside of a {@code script} tag.
+     * @return the data, or empty string if none
+     */
+    public String data() {
+        StringBuilder sb = new StringBuilder();
+
+        for (Node childNode : childNodes) {
+            if (childNode instanceof DataNode) {
+                DataNode data = (DataNode) childNode;
+                sb.append(data.getWholeData());
+            } else if (childNode instanceof Element) {
+                Element element = (Element) childNode;
+                String elementData = element.data();
+                sb.append(elementData);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Gets the literal value of this element's "class" attribute, which may include multiple class names, space
+     * separated. (E.g. on <code>&lt;div class="header gray"></code> returns, "<code>header gray</code>")
+     * @return The literal class attribute, or <b>empty string</b> if no class attribute set.
+     */
+    public String className() {
+        return attributes.hasKey("class") ? attributes.get("class") : "";
+    }
+
+    /**
+     * Get all of the element's class names. E.g. on element {@code <div class="header gray"}>},
+     * returns a set of two elements {@code "header", "gray"}.
+     * @return set of classnames, empty if no class attribute
+     */
+    public Set<String> classNames() {
+        if (classNames == null) {
+            String[] names = className().split("\\s+");
+            classNames = new HashSet<String>(Arrays.asList(names));
+        }
+        return classNames;
+    }
+
+    /**
+     * Tests if this element has a class.
+     * @param className name of class to check for
+     * @return true if it does, false if not
+     */
+    public boolean hasClass(String className) {
+        return classNames().contains(className);
+    }
+
+    void outerHtml(StringBuilder accum) {
+ 
+        accum
+                .append("<")
+                .append(tagName())
+                .append(attributes.html());
+
+        if (childNodes.isEmpty() && tag.isEmpty()) {
+            accum.append(" />");
+        } else {
+            accum.append(">");
+            if (tag.canContainBlock())
+                accum.append("\n");
+            html(accum);
+            accum.append("</").append(tagName()).append(">");
+            if (tag.isBlock())
+                accum.append("\n");
+        }
+    }
+
+    /**
+     * Retrieves the element's inner HTML. E.g. on a {@code <div>} with one empty {@code <p>}, would return
+     * {@code <p></p>}. (Whereas {@link #outerHtml()} would return {@code <div><p></p></div>}.)
+     * 
+     * @return String of HTML.
+     * @see #outerHtml()
+     */
+    public String html() {
+        StringBuilder accum = new StringBuilder();
+        html(accum); 
+        return accum.toString().trim();
+    }
+
+    private void html(StringBuilder accum) {
+        for (Node node : childNodes)
+            node.outerHtml(accum);
+    }
+    
+    /**
+     * Set this element's inner HTML. Clears the existing HTML first.
+     * @param html HTML to parse and set into this element
+     * @return this element
+     * @see #append(String)
+     */
+    public Element html(String html) {
+        empty();
+        append(html);
+        return this;
+    }
+
+    public String toString() {
+        return outerHtml();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Element)) return false;
+        if (!super.equals(o)) return false;
+
+        Element element = (Element) o;
+
+        if (tag != null ? !tag.equals(element.tag) : element.tag != null) return false;
 
         return true;
     }
 
-    public static String getPrefix(Object node){
-        if (node instanceof Element){
-            String prefix = ((Element)node).getNamespacePrefix();
-            return (prefix == null || prefix.equals("")) ? null : prefix;
-        }
-        else if (node instanceof Attribute){
-            String prefix = ((Attribute)node).getNamespacePrefix();
-            return (prefix == null || prefix.equals("")) ? null : prefix;
-        }
-        return null;
-    }
-
-    public static String getLocalName(Object node){
-        if (node instanceof Element){
-            return ((Element)node).getName();
-        }
-        else if (node instanceof Attribute){
-            return ((Attribute)node).getName();
-        }
-        return null;
-    }
-
-    /**
-     * Returns true if the xml:lang attribute for the current node
-     * or its parent has the specified prefix <i>lang</i>.
-     * If no node has this prefix, calls <code>super.isLanguage(lang)</code>.
-     */
-    public boolean isLanguage(String lang){
-        String current = getLanguage();
-        if (current == null){
-            return super.isLanguage(lang);
-        }
-        return current.toUpperCase().startsWith(lang.toUpperCase());
-    }
-
-    protected String getLanguage(){
-        Object n = node;
-        while (n != null){
-            if (n instanceof Element){
-                Element e = (Element)n;
-                String attr = e.getAttributeValue("lang",
-                        Namespace.XML_NAMESPACE);
-                if (attr != null && !attr.equals("")){
-                    return attr;
-                }
-            }
-            n = nodeParent(n);
-        }
-        return null;
-    }
-
-    private Element nodeParent(Object node){
-        if (node instanceof Element){
-            return ((Element)node).getParent();
-        }
-        else if (node instanceof Text){
-            return ((Text)node).getParent();
-        }
-        else if (node instanceof CDATA){
-            return ((CDATA)node).getParent();
-        }
-        else if (node instanceof ProcessingInstruction){
-            return ((ProcessingInstruction)node).getParent();
-        }
-        else if (node instanceof Comment){
-            return ((Comment)node).getParent();
-        }
-        return null;
-    }
-
-    public NodePointer createChild(
-            JXPathContext context, QName name, int index)
-    {
-        if (index == WHOLE_COLLECTION){
-            index = 0;
-        }
-        if (!getAbstractFactory(context).
-                    createObject(context, this, node, name.toString(), index)){
-            throw new JXPathException("Factory could not create " +
-                    "a child node for path: " +
-                    asPath() + "/" + name + "[" + (index+1) + "]");
-        }
-        NodeIterator it = childIterator(new NodeNameTest(name), false, null);
-        if (it == null || !it.setPosition(index + 1)){
-            throw new JXPathException("Factory could not create " +
-                    "a child node for path: " +
-                    asPath() + "/" + name + "[" + (index+1) + "]");
-        }
-        return it.getNodePointer();
-    }
-
-    public NodePointer createChild(
-            JXPathContext context, QName name, int index, Object value)
-    {
-        NodePointer ptr = createChild(context, name, index);
-        ptr.setValue(value);
-        return ptr;
-    }
-
-    public NodePointer createAttribute(JXPathContext context, QName name){
-        if (!(node instanceof Element)) {
-            return super.createAttribute(context, name);
-        }
-
-        Element element = (Element) node;
-        String prefix = name.getPrefix();
-        if (prefix != null) {
-            Namespace ns = element.getNamespace(prefix);
-            if (ns == null) {
-                throw new JXPathException(
-                    "Unknown namespace prefix: " + prefix);
-            }
-            Attribute attr = element.getAttribute(name.getName(), ns);
-            if (attr == null) {
-                element.setAttribute(name.getName(), "", ns);
-            }
-        }
-        else {
-            Attribute attr = element.getAttribute(name.getName());
-            if (attr == null) {
-                element.setAttribute(name.getName(), "");
-            }
-        }
-        NodeIterator it = attributeIterator(name);
-        it.setPosition(1);
-        return it.getNodePointer();
-    }
-
-    public void remove(){
-        Element parent = nodeParent(node);
-        if (parent == null){
-            throw new JXPathException("Cannot remove root JDOM node");
-        }
-        parent.getContent().remove(node);
-    }
-
-    public String asPath(){
-        if (id != null){
-            return "id('" + escape(id) + "')";
-        }
-
-        StringBuffer buffer = new StringBuffer();
-        if (parent != null){
-            buffer.append(parent.asPath());
-        }
-        if (node instanceof Element){
-            // If the parent pointer is not a JDOMNodePointer, it is
-            // the parent's responsibility to produce the node test part
-            // of the path
-            if (parent instanceof JDOMNodePointer){
-                if (buffer.length() == 0 ||
-                        buffer.charAt(buffer.length()-1) != '/'){
-                    buffer.append('/');
-                }
-                buffer.append(getName());
-                buffer.append('[');
-                buffer.append(getRelativePositionByName());
-                buffer.append(']');
-            }
-        }
-        else if (node instanceof Text || node instanceof CDATA){
-            buffer.append("/text()");
-            buffer.append('[').
-                    append(getRelativePositionOfTextNode()).
-                    append(']');
-        }
-        else if (node instanceof ProcessingInstruction){
-            String target = ((ProcessingInstruction)node).getTarget();
-            buffer.append("/processing-instruction(\'").
-                    append(target).
-                    append("')");
-            buffer.append('[').
-                    append(getRelativePositionOfPI(target)).
-                    append(']');
-        }
-        return buffer.toString();
-    }
-
-    private String escape(String string){
-        int index = string.indexOf('\'');
-        while (index != -1){
-            string = string.substring(0, index) +
-                    "&apos;" + string.substring(index + 1);
-            index = string.indexOf('\'');
-        }
-        index = string.indexOf('\"');
-        while (index != -1){
-            string = string.substring(0, index) +
-                    "&quot;" + string.substring(index + 1);
-            index = string.indexOf('\"');
-        }
-        return string;
-    }
-
-    private int getRelativePositionByName(){
-        if (node instanceof Element){
-            Element parent = ((Element)node).getParent();
-            if (parent == null){
-                return 1;
-            }
-            List children = parent.getContent();
-            int count = 0;
-            String name = ((Element)node).getQualifiedName();
-            for (int i = 0; i < children.size(); i++){
-                Object child = children.get(i);
-                if ((child instanceof Element) &&
-                    ((Element)child).getQualifiedName().equals(name)){
-                    count++;
-                }
-                if (child == node){
-                    break;
-                }
-            }
-            return count;
-        }
-        return 1;
-    }
-
-    private int getRelativePositionOfTextNode(){
-        Element parent;
-        if (node instanceof Text){
-            parent = ((Text)node).getParent();
-        }
-        else {
-            parent = ((CDATA)node).getParent();
-        }
-        if (parent == null){
-            return 1;
-        }
-        List children = parent.getContent();
-        int count = 0;
-        for (int i = 0; i < children.size(); i++){
-            Object child = children.get(i);
-            if (child instanceof Text || child instanceof CDATA){
-                count++;
-            }
-            if (child == node){
-                break;
-            }
-        }
-        return count;
-    }
-
-    private int getRelativePositionOfPI(String target){
-        Element parent = ((ProcessingInstruction) node).getParent();
-        if (parent == null) {
-            return 1;
-        }
-        List children = parent.getContent();
-        int count = 0;
-        for (int i = 0; i < children.size(); i++) {
-            Object child = children.get(i);
-            if (child instanceof ProcessingInstruction
-                && (target == null
-                    || target.equals(
-                        ((ProcessingInstruction) child).getTarget()))) {
-                count++;
-            }
-            if (child == node) {
-                break;
-            }
-        }
-        return count;
-    }
-
-    public int hashCode(){
-        return System.identityHashCode(node);
-    }
-
-    public boolean equals(Object object){
-        if (object == this){
-            return true;
-        }
-
-        if (!(object instanceof JDOMNodePointer)){
-            return false;
-        }
-
-        JDOMNodePointer other = (JDOMNodePointer)object;
-        return node == other.node;
-    }
-
-    private AbstractFactory getAbstractFactory(JXPathContext context) {
-        AbstractFactory factory = context.getFactory();
-        if (factory == null) {
-            throw new JXPathException(
-                "Factory is not set on the JXPathContext - cannot create path: "
-                    + asPath());
-        }
-        return factory;
+    @Override
+    public int hashCode() {
+        int result = super.hashCode();
+        result = 31 * result + (tag != null ? tag.hashCode() : 0);
+        return result;
     }
 }

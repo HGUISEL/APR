@@ -256,6 +256,7 @@ abstract class CodeConsumer {
     } else {
       add(String.valueOf(x));
     }
+
   }
 
   static boolean isWordChar(char ch) {

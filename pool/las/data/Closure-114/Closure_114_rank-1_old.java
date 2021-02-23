@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,1101 +14,2976 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.kafka.streams;
+package org.apache.activemq.artemis.core.server.impl;
 
-import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.CommonClientConfigs;
-import org.apache.kafka.clients.admin.AdminClientConfig;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.config.AbstractConfig;
-import org.apache.kafka.common.config.ConfigDef;
-import org.apache.kafka.common.config.ConfigDef.Importance;
-import org.apache.kafka.common.config.ConfigDef.Type;
-import org.apache.kafka.common.config.ConfigException;
-import org.apache.kafka.common.config.TopicConfig;
-import org.apache.kafka.common.metrics.Sensor;
-import org.apache.kafka.common.serialization.Serde;
-import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.streams.errors.DeserializationExceptionHandler;
-import org.apache.kafka.streams.errors.LogAndFailExceptionHandler;
-import org.apache.kafka.streams.errors.ProductionExceptionHandler;
-import org.apache.kafka.streams.errors.DefaultProductionExceptionHandler;
-import org.apache.kafka.streams.errors.StreamsException;
-import org.apache.kafka.streams.processor.DefaultPartitionGrouper;
-import org.apache.kafka.streams.processor.FailOnInvalidTimestamp;
-import org.apache.kafka.streams.processor.TimestampExtractor;
-import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.Collections;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Locale;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
-import java.util.Properties;
+import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
-import static org.apache.kafka.common.config.ConfigDef.Range.atLeast;
-import static org.apache.kafka.common.config.ConfigDef.Range.between;
-import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
-import static org.apache.kafka.common.requests.IsolationLevel.READ_COMMITTED;
+import org.apache.activemq.artemis.api.core.Message;
+import org.apache.activemq.artemis.api.core.Pair;
+import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.api.core.management.CoreNotificationType;
+import org.apache.activemq.artemis.api.core.management.ManagementHelper;
+import org.apache.activemq.artemis.core.filter.Filter;
+import org.apache.activemq.artemis.core.io.IOCallback;
+import org.apache.activemq.artemis.core.message.impl.MessageImpl;
+import org.apache.activemq.artemis.core.paging.cursor.PageSubscription;
+import org.apache.activemq.artemis.core.paging.cursor.PagedReference;
+import org.apache.activemq.artemis.core.persistence.StorageManager;
+import org.apache.activemq.artemis.core.postoffice.Binding;
+import org.apache.activemq.artemis.core.postoffice.Bindings;
+import org.apache.activemq.artemis.core.postoffice.DuplicateIDCache;
+import org.apache.activemq.artemis.core.postoffice.PostOffice;
+import org.apache.activemq.artemis.core.postoffice.impl.LocalQueueBinding;
+import org.apache.activemq.artemis.core.postoffice.impl.PostOfficeImpl;
+import org.apache.activemq.artemis.core.remoting.server.RemotingService;
+import org.apache.activemq.artemis.core.server.ActiveMQMessageBundle;
+import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
+import org.apache.activemq.artemis.core.server.Consumer;
+import org.apache.activemq.artemis.core.server.HandleStatus;
+import org.apache.activemq.artemis.core.server.MessageReference;
+import org.apache.activemq.artemis.core.server.Queue;
+import org.apache.activemq.artemis.core.server.RoutingContext;
+import org.apache.activemq.artemis.core.server.ScheduledDeliveryHandler;
+import org.apache.activemq.artemis.core.server.ServerMessage;
+import org.apache.activemq.artemis.core.server.cluster.RemoteQueueBinding;
+import org.apache.activemq.artemis.core.server.cluster.impl.Redistributor;
+import org.apache.activemq.artemis.core.server.management.ManagementService;
+import org.apache.activemq.artemis.core.server.management.Notification;
+import org.apache.activemq.artemis.core.settings.HierarchicalRepository;
+import org.apache.activemq.artemis.core.settings.HierarchicalRepositoryChangeListener;
+import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
+import org.apache.activemq.artemis.core.settings.impl.SlowConsumerPolicy;
+import org.apache.activemq.artemis.core.transaction.Transaction;
+import org.apache.activemq.artemis.core.transaction.TransactionPropertyIndexes;
+import org.apache.activemq.artemis.core.transaction.impl.BindingsTransactionImpl;
+import org.apache.activemq.artemis.core.transaction.impl.TransactionImpl;
+import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
+import org.apache.activemq.artemis.utils.ConcurrentHashSet;
+import org.apache.activemq.artemis.utils.FutureLatch;
+import org.apache.activemq.artemis.utils.LinkedListIterator;
+import org.apache.activemq.artemis.utils.PriorityLinkedList;
+import org.apache.activemq.artemis.utils.PriorityLinkedListImpl;
+import org.apache.activemq.artemis.utils.ReferenceCounter;
+import org.apache.activemq.artemis.utils.ReusableLatch;
+import org.apache.activemq.artemis.utils.TypedProperties;
 
 /**
- * Configuration for a {@link KafkaStreams} instance.
- * Can also be used to configure the Kafka Streams internal {@link KafkaConsumer}, {@link KafkaProducer} and {@link AdminClient}.
- * To avoid consumer/producer/admin property conflicts, you should prefix those properties using
- * {@link #consumerPrefix(String)}, {@link #producerPrefix(String)} and {@link #adminClientPrefix(String)}, respectively.
+ * Implementation of a Queue
  * <p>
- * Example:
- * <pre>{@code
- * // potentially wrong: sets "metadata.max.age.ms" to 1 minute for producer AND consumer
- * Properties streamsProperties = new Properties();
- * streamsProperties.put(ConsumerConfig.METADATA_MAX_AGE_CONFIG, 60000);
- * // or
- * streamsProperties.put(ProducerConfig.METADATA_MAX_AGE_CONFIG, 60000);
- *
- * // suggested:
- * Properties streamsProperties = new Properties();
- * // sets "metadata.max.age.ms" to 1 minute for consumer only
- * streamsProperties.put(StreamsConfig.consumerPrefix(ConsumerConfig.METADATA_MAX_AGE_CONFIG), 60000);
- * // sets "metadata.max.age.ms" to 1 minute for producer only
- * streamsProperties.put(StreamsConfig.producerPrefix(ProducerConfig.METADATA_MAX_AGE_CONFIG), 60000);
- *
- * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
- * }</pre>
- *
- * This instance can also be used to pass in custom configurations to different modules (e.g. passing a special config in your customized serde class).
- * The consumer/producer/admin prefix can also be used to distinguish these custom config values passed to different clients with the same config name.
- * * Example:
- * <pre>{@code
- * Properties streamsProperties = new Properties();
- * // sets "my.custom.config" to "foo" for consumer only
- * streamsProperties.put(StreamsConfig.consumerPrefix("my.custom.config"), "foo");
- * // sets "my.custom.config" to "bar" for producer only
- * streamsProperties.put(StreamsConfig.producerPrefix("my.custom.config"), "bar");
- * // sets "my.custom.config2" to "boom" for all clients universally
- * streamsProperties.put("my.custom.config2", "boom");
- *
- * // as a result, inside producer's serde class configure(..) function,
- * // users can now read both key-value pairs "my.custom.config" -> "foo"
- * // and "my.custom.config2" -> "boom" from the config map
- * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
- * }</pre>
- *
- * When increasing both {@link ProducerConfig#RETRIES_CONFIG} and {@link ProducerConfig#MAX_BLOCK_MS_CONFIG} to be more resilient to non-available brokers you should also
- * consider increasing {@link ConsumerConfig#MAX_POLL_INTERVAL_MS_CONFIG} using the following guidance:
- * <pre>
- *     max.poll.interval.ms > min ( max.block.ms, (retries +1) * request.timeout.ms )
- * </pre>
- *
- *
- * Kafka Streams requires at least the following properties to be set:
- * <ul>
- *  <li>{@link #APPLICATION_ID_CONFIG "application.id"}</li>
- *  <li>{@link #BOOTSTRAP_SERVERS_CONFIG "bootstrap.servers"}</li>
- * </ul>
- *
- * By default, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
- * <ul>
- *   <li>{@link ConsumerConfig#ENABLE_AUTO_COMMIT_CONFIG "enable.auto.commit"} (false) - Streams client will always disable/turn off auto committing</li>
- * </ul>
- *
- * If {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} is set to {@link #EXACTLY_ONCE "exactly_once"}, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
- * <ul>
- *   <li>{@link ConsumerConfig#ISOLATION_LEVEL_CONFIG "isolation.level"} (read_committed) - Consumers will always read committed data only</li>
- *   <li>{@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG "enable.idempotence"} (true) - Producer will always have idempotency enabled</li>
- *   <li>{@link ProducerConfig#MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION "max.in.flight.requests.per.connection"} (5) - Producer will always have one in-flight request per connection</li>
- * </ul>
- *
- *
- * @see KafkaStreams#KafkaStreams(org.apache.kafka.streams.Topology, Properties)
- * @see ConsumerConfig
- * @see ProducerConfig
+ * Completely non blocking between adding to queue and delivering to consumers.
  */
-public class StreamsConfig extends AbstractConfig {
-
-    private final static Logger log = LoggerFactory.getLogger(StreamsConfig.class);
-
-    private static final ConfigDef CONFIG;
-
-    private final boolean eosEnabled;
-    private final static long DEFAULT_COMMIT_INTERVAL_MS = 30000L;
-    private final static long EOS_DEFAULT_COMMIT_INTERVAL_MS = 100L;
-
-    /**
-     * Prefix used to provide default topic configs to be applied when creating internal topics.
-     * These should be valid properties from {@link org.apache.kafka.common.config.TopicConfig TopicConfig}.
-     * It is recommended to use {@link #topicPrefix(String)}.
-     */
-    // TODO: currently we cannot get the full topic configurations and hence cannot allow topic configs without the prefix,
-    //       this can be lifted once kafka.log.LogConfig is completely deprecated by org.apache.kafka.common.config.TopicConfig
-    public static final String TOPIC_PREFIX = "topic.";
-
-    /**
-     * Prefix used to isolate {@link KafkaConsumer consumer} configs from other client configs.
-     * It is recommended to use {@link #consumerPrefix(String)} to add this prefix to {@link ConsumerConfig consumer
-     * properties}.
-     */
-    public static final String CONSUMER_PREFIX = "consumer.";
-
-    /**
-     * Prefix used to override {@link KafkaConsumer consumer} configs for the main consumer client from
-     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
-     * 1. main.consumer.[config-name]
-     * 2. consumer.[config-name]
-     * 3. [config-name]
-     */
-    public static final String MAIN_CONSUMER_PREFIX = "main.consumer.";
-
-    /**
-     * Prefix used to override {@link KafkaConsumer consumer} configs for the restore consumer client from
-     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
-     * 1. restore.consumer.[config-name]
-     * 2. consumer.[config-name]
-     * 3. [config-name]
-     */
-    public static final String RESTORE_CONSUMER_PREFIX = "restore.consumer.";
-
-    /**
-     * Prefix used to override {@link KafkaConsumer consumer} configs for the global consumer client from
-     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
-     * 1. global.consumer.[config-name]
-     * 2. consumer.[config-name]
-     * 3. [config-name]
-     */
-    public static final String GLOBAL_CONSUMER_PREFIX = "global.consumer.";
-
-    /**
-     * Prefix used to isolate {@link KafkaProducer producer} configs from other client configs.
-     * It is recommended to use {@link #producerPrefix(String)} to add this prefix to {@link ProducerConfig producer
-     * properties}.
-     */
-    public static final String PRODUCER_PREFIX = "producer.";
-
-    /**
-     * Prefix used to isolate {@link org.apache.kafka.clients.admin.AdminClient admin} configs from other client configs.
-     * It is recommended to use {@link #adminClientPrefix(String)} to add this prefix to {@link ProducerConfig producer
-     * properties}.
-     */
-    public static final String ADMIN_CLIENT_PREFIX = "admin.";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.0.x}.
-     */
-    public static final String UPGRADE_FROM_0100 = "0.10.0";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.1.x}.
-     */
-    public static final String UPGRADE_FROM_0101 = "0.10.1";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.2.x}.
-     */
-    public static final String UPGRADE_FROM_0102 = "0.10.2";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.11.0.x}.
-     */
-    public static final String UPGRADE_FROM_0110 = "0.11.0";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.0.x}.
-     */
-    public static final String UPGRADE_FROM_10 = "1.0";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.1.x}.
-     */
-    public static final String UPGRADE_FROM_11 = "1.1";
-
-    /**
-     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for at-least-once processing guarantees.
-     */
-    public static final String AT_LEAST_ONCE = "at_least_once";
-
-    /**
-     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for exactly-once processing guarantees.
-     */
-    public static final String EXACTLY_ONCE = "exactly_once";
-
-    /** {@code application.id} */
-    public static final String APPLICATION_ID_CONFIG = "application.id";
-    private static final String APPLICATION_ID_DOC = "An identifier for the stream processing application. Must be unique within the Kafka cluster. It is used as 1) the default client-id prefix, 2) the group-id for membership management, 3) the changelog topic prefix.";
-
-    /**{@code user.endpoint} */
-    public static final String APPLICATION_SERVER_CONFIG = "application.server";
-    private static final String APPLICATION_SERVER_DOC = "A host:port pair pointing to an embedded user defined endpoint that can be used for discovering the locations of state stores within a single KafkaStreams application";
-
-    /** {@code bootstrap.servers} */
-    public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
-
-    /** {@code buffered.records.per.partition} */
-    public static final String BUFFERED_RECORDS_PER_PARTITION_CONFIG = "buffered.records.per.partition";
-    private static final String BUFFERED_RECORDS_PER_PARTITION_DOC = "The maximum number of records to buffer per partition.";
-
-    /** {@code cache.max.bytes.buffering} */
-    public static final String CACHE_MAX_BYTES_BUFFERING_CONFIG = "cache.max.bytes.buffering";
-    private static final String CACHE_MAX_BYTES_BUFFERING_DOC = "Maximum number of memory bytes to be used for buffering across all threads";
-
-    /** {@code client.id} */
-    public static final String CLIENT_ID_CONFIG = CommonClientConfigs.CLIENT_ID_CONFIG;
-    private static final String CLIENT_ID_DOC = "An ID prefix string used for the client IDs of internal consumer, producer and restore-consumer," +
-        " with pattern '<client.id>-StreamThread-<threadSequenceNumber>-<consumer|producer|restore-consumer>'.";
-
-    /** {@code commit.interval.ms} */
-    public static final String COMMIT_INTERVAL_MS_CONFIG = "commit.interval.ms";
-    private static final String COMMIT_INTERVAL_MS_DOC = "The frequency with which to save the position of the processor." +
-        " (Note, if 'processing.guarantee' is set to '" + EXACTLY_ONCE + "', the default value is " + EOS_DEFAULT_COMMIT_INTERVAL_MS + "," +
-        " otherwise the default value is " + DEFAULT_COMMIT_INTERVAL_MS + ".";
+public class QueueImpl implements Queue {
 
-    /** {@code connections.max.idle.ms} */
-    public static final String CONNECTIONS_MAX_IDLE_MS_CONFIG = CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG;
-
-    /**
-     * {@code default.deserialization.exception.handler}
-     */
-    public static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.deserialization.exception.handler";
-    private static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.DeserializationExceptionHandler</code> interface.";
-
-    /**
-     * {@code default.production.exception.handler}
-     */
-    public static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.production.exception.handler";
-    private static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.ProductionExceptionHandler</code> interface.";
+   private static final boolean isTrace = ActiveMQServerLogger.LOGGER.isTraceEnabled();
 
-    /**
-     * {@code default.windowed.key.serde.inner}
-     */
-    public static final String DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS = "default.windowed.key.serde.inner";
+   public static final int REDISTRIBUTOR_BATCH_SIZE = 100;
 
-    /**
-     * {@code default.windowed.value.serde.inner}
-     */
-    public static final String DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS = "default.windowed.value.serde.inner";
-
-    /** {@code default key.serde} */
-    public static final String DEFAULT_KEY_SERDE_CLASS_CONFIG = "default.key.serde";
-    private static final String DEFAULT_KEY_SERDE_CLASS_DOC = " Default serializer / deserializer class for key that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
-            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
-            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
-
-    /** {@code default value.serde} */
-    public static final String DEFAULT_VALUE_SERDE_CLASS_CONFIG = "default.value.serde";
-    private static final String DEFAULT_VALUE_SERDE_CLASS_DOC = "Default serializer / deserializer class for value that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
-            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
-            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
-
-    /** {@code default.timestamp.extractor} */
-    public static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG = "default.timestamp.extractor";
-    private static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC = "Default timestamp extractor class that implements the <code>org.apache.kafka.streams.processor.TimestampExtractor</code> interface.";
-
-    /** {@code metadata.max.age.ms} */
-    public static final String METADATA_MAX_AGE_CONFIG = CommonClientConfigs.METADATA_MAX_AGE_CONFIG;
-
-    /** {@code metrics.num.samples} */
-    public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;
-
-    /** {@code metrics.record.level} */
-    public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;
-
-    /** {@code metric.reporters} */
-    public static final String METRIC_REPORTER_CLASSES_CONFIG = CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG;
-
-    /** {@code metrics.sample.window.ms} */
-    public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
-
-    /** {@code num.standby.replicas} */
-    public static final String NUM_STANDBY_REPLICAS_CONFIG = "num.standby.replicas";
-    private static final String NUM_STANDBY_REPLICAS_DOC = "The number of standby replicas for each task.";
-
-    /** {@code num.stream.threads} */
-    public static final String NUM_STREAM_THREADS_CONFIG = "num.stream.threads";
-    private static final String NUM_STREAM_THREADS_DOC = "The number of threads to execute stream processing.";
-
-    /** {@code partition.grouper} */
-    public static final String PARTITION_GROUPER_CLASS_CONFIG = "partition.grouper";
-    private static final String PARTITION_GROUPER_CLASS_DOC = "Partition grouper class that implements the <code>org.apache.kafka.streams.processor.PartitionGrouper</code> interface.";
-
-    /** {@code poll.ms} */
-    public static final String POLL_MS_CONFIG = "poll.ms";
-    private static final String POLL_MS_DOC = "The amount of time in milliseconds to block waiting for input.";
-
-    /** {@code processing.guarantee} */
-    public static final String PROCESSING_GUARANTEE_CONFIG = "processing.guarantee";
-    private static final String PROCESSING_GUARANTEE_DOC = "The processing guarantee that should be used. Possible values are <code>" + AT_LEAST_ONCE + "</code> (default) and <code>" + EXACTLY_ONCE + "</code>. " +
-        "Note that exactly-once processing requires a cluster of at least three brokers by default what is the recommended setting for production; for development you can change this, by adjusting broker setting `transaction.state.log.replication.factor`.";
-
-    /** {@code receive.buffer.bytes} */
-    public static final String RECEIVE_BUFFER_CONFIG = CommonClientConfigs.RECEIVE_BUFFER_CONFIG;
-
-    /** {@code reconnect.backoff.ms} */
-    public static final String RECONNECT_BACKOFF_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MS_CONFIG;
-
-    /** {@code reconnect.backoff.max} */
-    public static final String RECONNECT_BACKOFF_MAX_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_CONFIG;
-
-    /** {@code replication.factor} */
-    public static final String REPLICATION_FACTOR_CONFIG = "replication.factor";
-    private static final String REPLICATION_FACTOR_DOC = "The replication factor for change log topics and repartition topics created by the stream processing application.";
-
-    /** {@code request.timeout.ms} */
-    public static final String REQUEST_TIMEOUT_MS_CONFIG = CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG;
-
-    /** {@code retries} */
-    public static final String RETRIES_CONFIG = CommonClientConfigs.RETRIES_CONFIG;
-
-    /** {@code retry.backoff.ms} */
-    public static final String RETRY_BACKOFF_MS_CONFIG = CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG;
-
-    /** {@code rocksdb.config.setter} */
-    public static final String ROCKSDB_CONFIG_SETTER_CLASS_CONFIG = "rocksdb.config.setter";
-    private static final String ROCKSDB_CONFIG_SETTER_CLASS_DOC = "A Rocks DB config setter class or class name that implements the <code>org.apache.kafka.streams.state.RocksDBConfigSetter</code> interface";
-
-    /** {@code security.protocol} */
-    public static final String SECURITY_PROTOCOL_CONFIG = CommonClientConfigs.SECURITY_PROTOCOL_CONFIG;
-
-    /** {@code send.buffer.bytes} */
-    public static final String SEND_BUFFER_CONFIG = CommonClientConfigs.SEND_BUFFER_CONFIG;
-
-    /** {@code state.cleanup.delay} */
-    public static final String STATE_CLEANUP_DELAY_MS_CONFIG = "state.cleanup.delay.ms";
-    private static final String STATE_CLEANUP_DELAY_MS_DOC = "The amount of time in milliseconds to wait before deleting state when a partition has migrated. Only state directories that have not been modified for at least state.cleanup.delay.ms will be removed";
-
-    /** {@code state.dir} */
-    public static final String STATE_DIR_CONFIG = "state.dir";
-    private static final String STATE_DIR_DOC = "Directory location for state store.";
-
-    /** {@code upgrade.from} */
-    public static final String UPGRADE_FROM_CONFIG = "upgrade.from";
-    public static final String UPGRADE_FROM_DOC = "Allows upgrading from versions 0.10.0/0.10.1/0.10.2/0.11.0/1.0/1.1 to version 1.2 (or newer) in a backward compatible way. " +
-        "When upgrading from 1.2 to a newer version it is not required to specify this config." +
-        "Default is null. Accepted values are \"" + UPGRADE_FROM_0100 + "\", \"" + UPGRADE_FROM_0101 + "\", \"" + UPGRADE_FROM_0102 + "\", \"" + UPGRADE_FROM_0110 + "\", \"" + UPGRADE_FROM_10 + "\", \"" + UPGRADE_FROM_11 + "\" (for upgrading from the corresponding old version).";
-
-    /** {@code windowstore.changelog.additional.retention.ms} */
-    public static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG = "windowstore.changelog.additional.retention.ms";
-    private static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC = "Added to a windows maintainMs to ensure data is not deleted from the log prematurely. Allows for clock drift. Default is 1 day";
-
-    private static final String[] NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS = new String[] {ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG};
-    private static final String[] NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS = new String[] {ConsumerConfig.ISOLATION_LEVEL_CONFIG};
-    private static final String[] NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS = new String[] {ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG,
-                                                                                        ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION};
-
-    static {
-        CONFIG = new ConfigDef()
-
-            // HIGH
-
-            .define(APPLICATION_ID_CONFIG, // required with no default value
-                    Type.STRING,
-                    Importance.HIGH,
-                    APPLICATION_ID_DOC)
-            .define(BOOTSTRAP_SERVERS_CONFIG, // required with no default value
-                    Type.LIST,
-                    Importance.HIGH,
-                    CommonClientConfigs.BOOTSTRAP_SERVERS_DOC)
-            .define(REPLICATION_FACTOR_CONFIG,
-                    Type.INT,
-                    1,
-                    Importance.HIGH,
-                    REPLICATION_FACTOR_DOC)
-            .define(STATE_DIR_CONFIG,
-                    Type.STRING,
-                    "/tmp/kafka-streams",
-                    Importance.HIGH,
-                    STATE_DIR_DOC)
-
-            // MEDIUM
-
-            .define(CACHE_MAX_BYTES_BUFFERING_CONFIG,
-                    Type.LONG,
-                    10 * 1024 * 1024L,
-                    atLeast(0),
-                    Importance.MEDIUM,
-                    CACHE_MAX_BYTES_BUFFERING_DOC)
-            .define(CLIENT_ID_CONFIG,
-                    Type.STRING,
-                    "",
-                    Importance.MEDIUM,
-                    CLIENT_ID_DOC)
-            .define(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
-                    Type.CLASS,
-                    LogAndFailExceptionHandler.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC)
-            .define(DEFAULT_KEY_SERDE_CLASS_CONFIG,
-                    Type.CLASS,
-                    Serdes.ByteArraySerde.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_KEY_SERDE_CLASS_DOC)
-            .define(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG,
-                    Type.CLASS,
-                    DefaultProductionExceptionHandler.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC)
-            .define(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG,
-                    Type.CLASS,
-                    FailOnInvalidTimestamp.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC)
-            .define(DEFAULT_VALUE_SERDE_CLASS_CONFIG,
-                    Type.CLASS,
-                    Serdes.ByteArraySerde.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_VALUE_SERDE_CLASS_DOC)
-            .define(NUM_STANDBY_REPLICAS_CONFIG,
-                    Type.INT,
-                    0,
-                    Importance.MEDIUM,
-                    NUM_STANDBY_REPLICAS_DOC)
-            .define(NUM_STREAM_THREADS_CONFIG,
-                    Type.INT,
-                    1,
-                    Importance.MEDIUM,
-                    NUM_STREAM_THREADS_DOC)
-            .define(PROCESSING_GUARANTEE_CONFIG,
-                    Type.STRING,
-                    AT_LEAST_ONCE,
-                    in(AT_LEAST_ONCE, EXACTLY_ONCE),
-                    Importance.MEDIUM,
-                    PROCESSING_GUARANTEE_DOC)
-            .define(SECURITY_PROTOCOL_CONFIG,
-                    Type.STRING,
-                    CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
-                    Importance.MEDIUM,
-                    CommonClientConfigs.SECURITY_PROTOCOL_DOC)
-
-            // LOW
-
-            .define(APPLICATION_SERVER_CONFIG,
-                    Type.STRING,
-                    "",
-                    Importance.LOW,
-                    APPLICATION_SERVER_DOC)
-            .define(BUFFERED_RECORDS_PER_PARTITION_CONFIG,
-                    Type.INT,
-                    1000,
-                    Importance.LOW,
-                    BUFFERED_RECORDS_PER_PARTITION_DOC)
-            .define(COMMIT_INTERVAL_MS_CONFIG,
-                    Type.LONG,
-                    DEFAULT_COMMIT_INTERVAL_MS,
-                    Importance.LOW,
-                    COMMIT_INTERVAL_MS_DOC)
-            .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
-                    ConfigDef.Type.LONG,
-                    9 * 60 * 1000L,
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
-            .define(METADATA_MAX_AGE_CONFIG,
-                    ConfigDef.Type.LONG,
-                    5 * 60 * 1000L,
-                    atLeast(0),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.METADATA_MAX_AGE_DOC)
-            .define(METRICS_NUM_SAMPLES_CONFIG,
-                    Type.INT,
-                    2,
-                    atLeast(1),
-                    Importance.LOW,
-                    CommonClientConfigs.METRICS_NUM_SAMPLES_DOC)
-            .define(METRIC_REPORTER_CLASSES_CONFIG,
-                    Type.LIST,
-                    "",
-                    Importance.LOW,
-                    CommonClientConfigs.METRIC_REPORTER_CLASSES_DOC)
-            .define(METRICS_RECORDING_LEVEL_CONFIG,
-                    Type.STRING,
-                    Sensor.RecordingLevel.INFO.toString(),
-                    in(Sensor.RecordingLevel.INFO.toString(), Sensor.RecordingLevel.DEBUG.toString()),
-                    Importance.LOW,
-                    CommonClientConfigs.METRICS_RECORDING_LEVEL_DOC)
-            .define(METRICS_SAMPLE_WINDOW_MS_CONFIG,
-                    Type.LONG,
-                    30000L,
-                    atLeast(0),
-                    Importance.LOW,
-                    CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_DOC)
-            .define(PARTITION_GROUPER_CLASS_CONFIG,
-                    Type.CLASS,
-                    DefaultPartitionGrouper.class.getName(),
-                    Importance.LOW,
-                    PARTITION_GROUPER_CLASS_DOC)
-            .define(POLL_MS_CONFIG,
-                    Type.LONG,
-                    100L,
-                    Importance.LOW,
-                    POLL_MS_DOC)
-            .define(RECEIVE_BUFFER_CONFIG,
-                    Type.INT,
-                    32 * 1024,
-                    atLeast(0),
-                    Importance.LOW,
-                    CommonClientConfigs.RECEIVE_BUFFER_DOC)
-            .define(RECONNECT_BACKOFF_MS_CONFIG,
-                    Type.LONG,
-                    50L,
-                    atLeast(0L),
-                    Importance.LOW,
-                    CommonClientConfigs.RECONNECT_BACKOFF_MS_DOC)
-            .define(RECONNECT_BACKOFF_MAX_MS_CONFIG,
-                    Type.LONG,
-                    1000L,
-                    atLeast(0L),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
-            .define(RETRIES_CONFIG,
-                    Type.INT,
-                    0,
-                    between(0, Integer.MAX_VALUE),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.RETRIES_DOC)
-            .define(RETRY_BACKOFF_MS_CONFIG,
-                    Type.LONG,
-                    100L,
-                    atLeast(0L),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.RETRY_BACKOFF_MS_DOC)
-            .define(REQUEST_TIMEOUT_MS_CONFIG,
-                    Type.INT,
-                    40 * 1000,
-                    atLeast(0),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.REQUEST_TIMEOUT_MS_DOC)
-            .define(ROCKSDB_CONFIG_SETTER_CLASS_CONFIG,
-                    Type.CLASS,
-                    null,
-                    Importance.LOW,
-                    ROCKSDB_CONFIG_SETTER_CLASS_DOC)
-            .define(SEND_BUFFER_CONFIG,
-                    Type.INT,
-                    128 * 1024,
-                    atLeast(0),
-                    Importance.LOW,
-                    CommonClientConfigs.SEND_BUFFER_DOC)
-            .define(STATE_CLEANUP_DELAY_MS_CONFIG,
-                    Type.LONG,
-                    10 * 60 * 1000L,
-                    Importance.LOW,
-                    STATE_CLEANUP_DELAY_MS_DOC)
-            .define(UPGRADE_FROM_CONFIG,
-                    ConfigDef.Type.STRING,
-                    null,
-                    in(null, UPGRADE_FROM_0100, UPGRADE_FROM_0101, UPGRADE_FROM_0102, UPGRADE_FROM_0110, UPGRADE_FROM_10, UPGRADE_FROM_11),
-                    Importance.LOW,
-                    UPGRADE_FROM_DOC)
-            .define(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG,
-                    Type.LONG,
-                    24 * 60 * 60 * 1000L,
-                    Importance.LOW,
-                    WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC);
-    }
-
-    // this is the list of configs for underlying clients
-    // that streams prefer different default values
-    private static final Map<String, Object> PRODUCER_DEFAULT_OVERRIDES;
-    static {
-        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>();
-        tempProducerDefaultOverrides.put(ProducerConfig.LINGER_MS_CONFIG, "100");
-        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, 10);
-
-        PRODUCER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
-    }
-
-    private static final Map<String, Object> PRODUCER_EOS_OVERRIDES;
-    static {
-        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>(PRODUCER_DEFAULT_OVERRIDES);
-        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
-        tempProducerDefaultOverrides.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
-
-        PRODUCER_EOS_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
-    }
-
-    private static final Map<String, Object> CONSUMER_DEFAULT_OVERRIDES;
-    static {
-        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>();
-        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1000");
-        tempConsumerDefaultOverrides.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        tempConsumerDefaultOverrides.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        tempConsumerDefaultOverrides.put("internal.leave.group.on.close", false);
-        // MAX_POLL_INTERVAL_MS_CONFIG needs to be large for streams to handle cases when
-        // streams is recovering data from state stores. We may set it to Integer.MAX_VALUE since
-        // the streams code itself catches most exceptions and acts accordingly without needing
-        // this timeout. Note however that deadlocks are not detected (by definition) so we
-        // are losing the ability to detect them by setting this value to large. Hopefully
-        // deadlocks happen very rarely or never.
-        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
-        CONSUMER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
-    }
-
-    private static final Map<String, Object> CONSUMER_EOS_OVERRIDES;
-    static {
-        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>(CONSUMER_DEFAULT_OVERRIDES);
-        tempConsumerDefaultOverrides.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, READ_COMMITTED.name().toLowerCase(Locale.ROOT));
-        CONSUMER_EOS_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
-    }
-
-    public static class InternalConfig {
-        public static final String TASK_MANAGER_FOR_PARTITION_ASSIGNOR = "__task.manager.instance__";
-    }
-
-    /**
-     * Prefix a property with {@link #CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #CONSUMER_PREFIX} + {@code consumerProp}
-     */
-    public static String consumerPrefix(final String consumerProp) {
-        return CONSUMER_PREFIX + consumerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #MAIN_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig main consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #MAIN_CONSUMER_PREFIX} + {@code consumerProp}
-     */
-    public static String mainConsumerPrefix(final String consumerProp) {
-        return MAIN_CONSUMER_PREFIX + consumerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #RESTORE_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig restore consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #RESTORE_CONSUMER_PREFIX} + {@code consumerProp}
-     */
-    public static String restoreConsumerPrefix(final String consumerProp) {
-        return RESTORE_CONSUMER_PREFIX + consumerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #GLOBAL_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig global consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #GLOBAL_CONSUMER_PREFIX} + {@code consumerProp}
-     */
-    public static String globalConsumerPrefix(final String consumerProp) {
-        return GLOBAL_CONSUMER_PREFIX + consumerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #PRODUCER_PREFIX}. This is used to isolate {@link ProducerConfig producer configs}
-     * from other client configs.
-     *
-     * @param producerProp the producer property to be masked
-     * @return PRODUCER_PREFIX + {@code producerProp}
-     */
-    public static String producerPrefix(final String producerProp) {
-        return PRODUCER_PREFIX + producerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #ADMIN_CLIENT_PREFIX}. This is used to isolate {@link AdminClientConfig admin configs}
-     * from other client configs.
-     *
-     * @param adminClientProp the admin client property to be masked
-     * @return ADMIN_CLIENT_PREFIX + {@code adminClientProp}
-     */
-    public static String adminClientPrefix(final String adminClientProp) {
-        return ADMIN_CLIENT_PREFIX + adminClientProp;
-    }
-
-    /**
-     * Prefix a property with {@link #TOPIC_PREFIX}
-     * used to provide default topic configs to be applied when creating internal topics.
-     *
-     * @param topicProp the topic property to be masked
-     * @return TOPIC_PREFIX + {@code topicProp}
-     */
-    public static String topicPrefix(final String topicProp) {
-        return TOPIC_PREFIX + topicProp;
-    }
-
-    /**
-     * Return a copy of the config definition.
-     *
-     * @return a copy of the config definition
-     */
-    public static ConfigDef configDef() {
-        return new ConfigDef(CONFIG);
-    }
-
-    /**
-     * Create a new {@code StreamsConfig} using the given properties.
-     *
-     * @param props properties that specify Kafka Streams and internal consumer/producer configuration
-     */
-    public StreamsConfig(final Map<?, ?> props) {
-        super(CONFIG, props);
-        eosEnabled = EXACTLY_ONCE.equals(getString(PROCESSING_GUARANTEE_CONFIG));
-    }
-
-    @Override
-    protected Map<String, Object> postProcessParsedConfig(final Map<String, Object> parsedValues) {
-        final Map<String, Object> configUpdates =
-            CommonClientConfigs.postProcessReconnectBackoffConfigs(this, parsedValues);
-
-        final boolean eosEnabled = EXACTLY_ONCE.equals(parsedValues.get(PROCESSING_GUARANTEE_CONFIG));
-        if (eosEnabled && !originals().containsKey(COMMIT_INTERVAL_MS_CONFIG)) {
-            log.debug("Using {} default value of {} as exactly once is enabled.",
-                    COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
-            configUpdates.put(COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
-        }
-
-        return configUpdates;
-    }
-
-    private Map<String, Object> getCommonConsumerConfigs() {
-        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(CONSUMER_PREFIX, ConsumerConfig.configNames());
-
-        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS);
-        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS);
-
-        final Map<String, Object> consumerProps = new HashMap<>(eosEnabled ? CONSUMER_EOS_OVERRIDES : CONSUMER_DEFAULT_OVERRIDES);
-        consumerProps.putAll(getClientCustomProps());
-        consumerProps.putAll(clientProvidedProps);
-
-        // bootstrap.servers should be from StreamsConfig
-        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
-
-        return consumerProps;
-    }
-
-    private void checkIfUnexpectedUserSpecifiedConsumerConfig(final Map<String, Object> clientProvidedProps, final String[] nonConfigurableConfigs) {
-        // Streams does not allow users to configure certain consumer/producer configurations, for example,
-        // enable.auto.commit. In cases where user tries to override such non-configurable
-        // consumer/producer configurations, log a warning and remove the user defined value from the Map.
-        // Thus the default values for these consumer/producer configurations that are suitable for
-        // Streams will be used instead.
-        final Object maxInflightRequests = clientProvidedProps.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
-        if (eosEnabled && maxInflightRequests != null && 5 < (int) maxInflightRequests) {
-            throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + " can't exceed 5 when using the idempotent producer");
-        }
-        for (final String config: nonConfigurableConfigs) {
-            if (clientProvidedProps.containsKey(config)) {
-                final String eosMessage =  PROCESSING_GUARANTEE_CONFIG + " is set to " + EXACTLY_ONCE + ". Hence, ";
-                final String nonConfigurableConfigMessage = "Unexpected user-specified %s config: %s found. %sUser setting (%s) will be ignored and the Streams default setting (%s) will be used ";
-
-                if (CONSUMER_DEFAULT_OVERRIDES.containsKey(config)) {
-                    if (!clientProvidedProps.get(config).equals(CONSUMER_DEFAULT_OVERRIDES.get(config))) {
-                        log.warn(String.format(nonConfigurableConfigMessage, "consumer", config, "", clientProvidedProps.get(config),  CONSUMER_DEFAULT_OVERRIDES.get(config)));
-                        clientProvidedProps.remove(config);
-                    }
-                } else if (eosEnabled) {
-                    if (CONSUMER_EOS_OVERRIDES.containsKey(config)) {
-                        if (!clientProvidedProps.get(config).equals(CONSUMER_EOS_OVERRIDES.get(config))) {
-                            log.warn(String.format(nonConfigurableConfigMessage,
-                                    "consumer", config, eosMessage, clientProvidedProps.get(config), CONSUMER_EOS_OVERRIDES.get(config)));
-                            clientProvidedProps.remove(config);
+   public static final int NUM_PRIORITIES = 10;
+
+   public static final int MAX_DELIVERIES_IN_LOOP = 1000;
+
+   public static final int CHECK_QUEUE_SIZE_PERIOD = 100;
+
+   /**
+    * If The system gets slow for any reason, this is the maximum time a Delivery or
+    * or depage executor should be hanging on
+    */
+   public static final int DELIVERY_TIMEOUT = 1000;
+
+   private static final int FLUSH_TIMEOUT = 10000;
+
+   public static final int DEFAULT_FLUSH_LIMIT = 500;
+
+   private final long id;
+
+   private final SimpleString name;
+
+   private final SimpleString user;
+
+   private volatile Filter filter;
+
+   private final boolean durable;
+
+   private final boolean temporary;
+
+   private final boolean autoCreated;
+
+   private final PostOffice postOffice;
+
+   private volatile boolean queueDestroyed = false;
+
+   private final PageSubscription pageSubscription;
+
+   private ReferenceCounter refCountForConsumers;
+
+   private final LinkedListIterator<PagedReference> pageIterator;
+
+   // Messages will first enter intermediateMessageReferences
+   // Before they are added to messageReferences
+   // This is to avoid locking the queue on the producer
+   private final ConcurrentLinkedQueue<MessageReference> intermediateMessageReferences = new ConcurrentLinkedQueue<MessageReference>();
+
+   // This is where messages are stored
+   private final PriorityLinkedList<MessageReference> messageReferences = new PriorityLinkedListImpl<MessageReference>(QueueImpl.NUM_PRIORITIES);
+
+   // The quantity of pagedReferences on messageReferences priority list
+   private final AtomicInteger pagedReferences = new AtomicInteger(0);
+
+   // The estimate of memory being consumed by this queue. Used to calculate instances of messages to depage
+   private final AtomicInteger queueMemorySize = new AtomicInteger(0);
+
+   // used to control if we should recalculate certain positions inside deliverAsync
+   private volatile boolean consumersChanged = true;
+
+   private final List<ConsumerHolder> consumerList = new CopyOnWriteArrayList<ConsumerHolder>();
+
+   private final ScheduledDeliveryHandler scheduledDeliveryHandler;
+
+   private long messagesAdded;
+
+   private long messagesAcknowledged;
+
+   protected final AtomicInteger deliveringCount = new AtomicInteger(0);
+
+   private boolean paused;
+
+   private static final int MAX_SCHEDULED_RUNNERS = 2;
+
+   // We don't ever need more than two DeliverRunner on the executor's list
+   // that is getting the worse scenario possible when one runner is almost finishing before the second started
+   // for that we keep a counter of scheduled instances
+   private final AtomicInteger scheduledRunners = new AtomicInteger(0);
+
+   private final Runnable deliverRunner = new DeliverRunner();
+
+   private volatile boolean depagePending = false;
+
+   private final StorageManager storageManager;
+
+   private final HierarchicalRepository<AddressSettings> addressSettingsRepository;
+
+   private final ScheduledExecutorService scheduledExecutor;
+
+   private final SimpleString address;
+
+   private Redistributor redistributor;
+
+   private final Set<ScheduledFuture<?>> futures = new ConcurrentHashSet<ScheduledFuture<?>>();
+
+   private ScheduledFuture<?> redistributorFuture;
+
+   private ScheduledFuture<?> checkQueueSizeFuture;
+
+   // We cache the consumers here since we don't want to include the redistributor
+
+   private final Set<Consumer> consumerSet = new HashSet<Consumer>();
+
+   private final Map<SimpleString, Consumer> groups = new HashMap<SimpleString, Consumer>();
+
+   private volatile SimpleString expiryAddress;
+
+   private int pos;
+
+   private final Executor executor;
+
+   private boolean internalQueue;
+
+   private volatile long lastDirectDeliveryCheck = 0;
+
+   private volatile boolean directDeliver = true;
+
+   private AddressSettingsRepositoryListener addressSettingsRepositoryListener;
+
+   private final ExpiryScanner expiryScanner = new ExpiryScanner();
+
+   private final ReusableLatch deliveriesInTransit = new ReusableLatch(0);
+
+   private AtomicLong queueRateCheckTime = new AtomicLong(System.currentTimeMillis());
+
+   private AtomicLong messagesAddedSnapshot = new AtomicLong(0);
+
+   private ScheduledFuture slowConsumerReaperFuture;
+
+   private SlowConsumerReaperRunnable slowConsumerReaperRunnable;
+
+   /**
+    * This is to avoid multi-thread races on calculating direct delivery,
+    * to guarantee ordering will be always be correct
+    */
+   private final Object directDeliveryGuard = new Object();
+
+   /**
+    * For testing only
+    */
+   public List<SimpleString> getGroupsUsed() {
+      final CountDownLatch flush = new CountDownLatch(1);
+      executor.execute(new Runnable() {
+         @Override
+         public void run() {
+            flush.countDown();
+         }
+      });
+      try {
+         flush.await(10, TimeUnit.SECONDS);
+      }
+      catch (Exception ignored) {
+      }
+
+      synchronized (this) {
+         ArrayList<SimpleString> groupsUsed = new ArrayList<SimpleString>();
+         groupsUsed.addAll(groups.keySet());
+         return groupsUsed;
+      }
+   }
+
+   public String debug() {
+      StringWriter str = new StringWriter();
+      PrintWriter out = new PrintWriter(str);
+
+      out.println("queueMemorySize=" + queueMemorySize);
+
+      for (ConsumerHolder holder : consumerList) {
+         out.println("consumer: " + holder.consumer.debug());
+      }
+
+      for (MessageReference reference : intermediateMessageReferences) {
+         out.print("Intermediate reference:" + reference);
+      }
+
+      if (intermediateMessageReferences.isEmpty()) {
+         out.println("No intermediate references");
+      }
+
+      boolean foundRef = false;
+
+      synchronized (this) {
+         Iterator<MessageReference> iter = messageReferences.iterator();
+         while (iter.hasNext()) {
+            foundRef = true;
+            out.println("reference = " + iter.next());
+         }
+      }
+
+      if (!foundRef) {
+         out.println("No permanent references on queue");
+      }
+
+      System.out.println(str.toString());
+
+      return str.toString();
+   }
+
+   public QueueImpl(final long id,
+                    final SimpleString address,
+                    final SimpleString name,
+                    final Filter filter,
+                    final SimpleString user,
+                    final boolean durable,
+                    final boolean temporary,
+                    final boolean autoCreated,
+                    final ScheduledExecutorService scheduledExecutor,
+                    final PostOffice postOffice,
+                    final StorageManager storageManager,
+                    final HierarchicalRepository<AddressSettings> addressSettingsRepository,
+                    final Executor executor) {
+      this(id, address, name, filter, null, user, durable, temporary, autoCreated, scheduledExecutor, postOffice, storageManager, addressSettingsRepository, executor);
+   }
+
+   public QueueImpl(final long id,
+                    final SimpleString address,
+                    final SimpleString name,
+                    final Filter filter,
+                    final PageSubscription pageSubscription,
+                    final SimpleString user,
+                    final boolean durable,
+                    final boolean temporary,
+                    final boolean autoCreated,
+                    final ScheduledExecutorService scheduledExecutor,
+                    final PostOffice postOffice,
+                    final StorageManager storageManager,
+                    final HierarchicalRepository<AddressSettings> addressSettingsRepository,
+                    final Executor executor) {
+      this.id = id;
+
+      this.address = address;
+
+      this.name = name;
+
+      this.filter = filter;
+
+      this.pageSubscription = pageSubscription;
+
+      this.durable = durable;
+
+      this.temporary = temporary;
+
+      this.autoCreated = autoCreated;
+
+      this.postOffice = postOffice;
+
+      this.storageManager = storageManager;
+
+      this.addressSettingsRepository = addressSettingsRepository;
+
+      this.scheduledExecutor = scheduledExecutor;
+
+      scheduledDeliveryHandler = new ScheduledDeliveryHandlerImpl(scheduledExecutor);
+
+      if (addressSettingsRepository != null) {
+         addressSettingsRepositoryListener = new AddressSettingsRepositoryListener();
+         addressSettingsRepository.registerListener(addressSettingsRepositoryListener);
+      }
+      else {
+         expiryAddress = null;
+      }
+
+      if (pageSubscription != null) {
+         pageSubscription.setQueue(this);
+         this.pageIterator = pageSubscription.iterator();
+      }
+      else {
+         this.pageIterator = null;
+      }
+
+      this.executor = executor;
+
+      this.user = user;
+   }
+
+   // Bindable implementation -------------------------------------------------------------------------------------
+
+   public SimpleString getRoutingName() {
+      return name;
+   }
+
+   public SimpleString getUniqueName() {
+      return name;
+   }
+
+   @Override
+   public SimpleString getUser() {
+      return user;
+   }
+
+   public boolean isExclusive() {
+      return false;
+   }
+
+   @Override
+   public void route(final ServerMessage message, final RoutingContext context) throws Exception {
+      context.addQueue(address, this);
+   }
+
+   @Override
+   public void routeWithAck(ServerMessage message, RoutingContext context) {
+      context.addQueueWithAck(address, this);
+   }
+
+   // Queue implementation ----------------------------------------------------------------------------------------
+   @Override
+   public synchronized void setConsumersRefCount(final ReferenceCounter referenceCounter) {
+      if (refCountForConsumers == null) {
+         this.refCountForConsumers = referenceCounter;
+      }
+   }
+
+   @Override
+   public ReferenceCounter getConsumersRefCount() {
+      return refCountForConsumers;
+   }
+
+   @Override
+   public boolean isDurable() {
+      return durable;
+   }
+
+   @Override
+   public boolean isTemporary() {
+      return temporary;
+   }
+
+   @Override
+   public boolean isAutoCreated() {
+      return autoCreated;
+   }
+
+   @Override
+   public SimpleString getName() {
+      return name;
+   }
+
+   @Override
+   public SimpleString getAddress() {
+      return address;
+   }
+
+   @Override
+   public long getID() {
+      return id;
+   }
+
+   @Override
+   public PageSubscription getPageSubscription() {
+      return pageSubscription;
+   }
+
+   @Override
+   public Filter getFilter() {
+      return filter;
+   }
+
+   @Override
+   public void unproposed(final SimpleString groupID) {
+      if (groupID.toString().endsWith("." + this.getName())) {
+         // this means this unproposed belongs to this routing, so we will
+         // remove this group
+
+         // This is removing the name and a . added, giving us the original groupID used
+         // this is because a groupID is stored per queue, and only this queue is expiring at this point
+         final SimpleString groupIDToRemove = (SimpleString) groupID.subSequence(0, groupID.length() - getName().length() - 1);
+         // using an executor so we don't want to hold anyone just because of this
+         getExecutor().execute(new Runnable() {
+            @Override
+            public void run() {
+               synchronized (QueueImpl.this) {
+                  if (groups.remove(groupIDToRemove) != null) {
+                     ActiveMQServerLogger.LOGGER.debug("Removing group after unproposal " + groupID + " from queue " + QueueImpl.this);
+                  }
+                  else {
+                     ActiveMQServerLogger.LOGGER.debug("Couldn't remove Removing group " + groupIDToRemove + " after unproposal on queue " + QueueImpl.this);
+                  }
+               }
+            }
+         });
+      }
+   }
+
+   /* Called when a message is cancelled back into the queue */
+   @Override
+   public synchronized void addHead(final MessageReference ref) {
+      flushDeliveriesInTransit();
+      if (scheduledDeliveryHandler.checkAndSchedule(ref, false)) {
+         return;
+      }
+
+      internalAddHead(ref);
+
+      directDeliver = false;
+   }
+
+   /* Called when a message is cancelled back into the queue */
+   @Override
+   public synchronized void addHead(final List<MessageReference> refs) {
+      flushDeliveriesInTransit();
+      for (MessageReference ref : refs) {
+         addHead(ref);
+      }
+
+      resetAllIterators();
+
+      deliverAsync();
+   }
+
+   @Override
+   public synchronized void reload(final MessageReference ref) {
+      queueMemorySize.addAndGet(ref.getMessageMemoryEstimate());
+      if (!scheduledDeliveryHandler.checkAndSchedule(ref, true)) {
+         internalAddTail(ref);
+      }
+
+      directDeliver = false;
+
+      messagesAdded++;
+   }
+
+   @Override
+   public void addTail(final MessageReference ref) {
+      addTail(ref, false);
+   }
+
+   @Override
+   public void addTail(final MessageReference ref, final boolean direct) {
+      if (scheduledDeliveryHandler.checkAndSchedule(ref, true)) {
+         synchronized (this) {
+            messagesAdded++;
+         }
+
+         return;
+      }
+
+      synchronized (directDeliveryGuard) {
+         // The checkDirect flag is periodically set to true, if the delivery is specified as direct then this causes the
+         // directDeliver flag to be re-computed resulting in direct delivery if the queue is empty
+         // We don't recompute it on every delivery since executing isEmpty is expensive for a ConcurrentQueue
+         if (!directDeliver &&
+            direct &&
+            System.currentTimeMillis() - lastDirectDeliveryCheck > CHECK_QUEUE_SIZE_PERIOD) {
+            lastDirectDeliveryCheck = System.currentTimeMillis();
+
+            if (intermediateMessageReferences.isEmpty() &&
+               messageReferences.isEmpty() &&
+               !pageIterator.hasNext() &&
+               !pageSubscription.isPaging()) {
+               // We must block on the executor to ensure any async deliveries have completed or we might get out of order
+               // deliveries
+               if (flushExecutor() && flushDeliveriesInTransit()) {
+                  // Go into direct delivery mode
+                  directDeliver = true;
+               }
+            }
+         }
+      }
+
+      if (direct && directDeliver && deliveriesInTransit.getCount() == 0 && deliverDirect(ref)) {
+         return;
+      }
+
+      // We only add queueMemorySize if not being delivered directly
+      queueMemorySize.addAndGet(ref.getMessageMemoryEstimate());
+
+      intermediateMessageReferences.add(ref);
+
+      directDeliver = false;
+
+      // Delivery async will both poll for intermediate reference and deliver to clients
+      deliverAsync();
+   }
+
+   /**
+    * This will wait for any pending deliveries to finish
+    */
+   private boolean flushDeliveriesInTransit() {
+      try {
+
+         if (deliveriesInTransit.await(DELIVERY_TIMEOUT)) {
+            return true;
+         }
+         else {
+            ActiveMQServerLogger.LOGGER.timeoutFlushInTransit(getName().toString(), getAddress().toString());
+            return false;
+         }
+      }
+      catch (Exception e) {
+         ActiveMQServerLogger.LOGGER.warn(e.getMessage(), e);
+         return false;
+      }
+   }
+
+   @Override
+   public void forceDelivery() {
+      if (pageSubscription != null && pageSubscription.isPaging()) {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("Force delivery scheduling depage");
+         }
+         scheduleDepage(false);
+      }
+
+      if (isTrace) {
+         ActiveMQServerLogger.LOGGER.trace("Force delivery deliverying async");
+      }
+
+      deliverAsync();
+   }
+
+   @Override
+   public void deliverAsync() {
+      if (scheduledRunners.get() < MAX_SCHEDULED_RUNNERS) {
+         scheduledRunners.incrementAndGet();
+         try {
+            getExecutor().execute(deliverRunner);
+         }
+         catch (RejectedExecutionException ignored) {
+            // no-op
+            scheduledRunners.decrementAndGet();
+         }
+
+         checkDepage();
+      }
+
+   }
+
+   @Override
+   public void close() throws Exception {
+      if (checkQueueSizeFuture != null) {
+         checkQueueSizeFuture.cancel(false);
+      }
+
+      getExecutor().execute(new Runnable() {
+         @Override
+         public void run() {
+            try {
+               cancelRedistributor();
+            }
+            catch (Exception e) {
+               // nothing that could be done anyway.. just logging
+               ActiveMQServerLogger.LOGGER.warn(e.getMessage(), e);
+            }
+         }
+      });
+
+      if (addressSettingsRepository != null) {
+         addressSettingsRepository.unRegisterListener(addressSettingsRepositoryListener);
+      }
+   }
+
+   @Override
+   public Executor getExecutor() {
+      if (pageSubscription != null && pageSubscription.isPaging()) {
+         // When in page mode, we don't want to have concurrent IO on the same PageStore
+         return pageSubscription.getExecutor();
+      }
+      else {
+         return executor;
+      }
+   }
+
+   /* Only used on tests */
+   public void deliverNow() {
+      deliverAsync();
+
+      flushExecutor();
+   }
+
+   @Override
+   public boolean flushExecutor() {
+      boolean ok = internalFlushExecutor(10000);
+
+      if (!ok) {
+         ActiveMQServerLogger.LOGGER.errorFlushingExecutorsOnQueue();
+      }
+
+      return ok;
+   }
+
+   private boolean internalFlushExecutor(long timeout) {
+      FutureLatch future = new FutureLatch();
+
+      getExecutor().execute(future);
+
+      boolean result = future.await(timeout);
+
+      if (!result) {
+         ActiveMQServerLogger.LOGGER.queueBusy(this.name.toString(), timeout);
+      }
+      return result;
+   }
+
+   @Override
+   public void addConsumer(final Consumer consumer) throws Exception {
+      if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+         ActiveMQServerLogger.LOGGER.debug(this + " adding consumer " + consumer);
+      }
+
+      synchronized (this) {
+         flushDeliveriesInTransit();
+
+         consumersChanged = true;
+
+         cancelRedistributor();
+
+         consumerList.add(new ConsumerHolder(consumer));
+
+         consumerSet.add(consumer);
+
+         if (refCountForConsumers != null) {
+            refCountForConsumers.increment();
+         }
+      }
+
+   }
+
+   @Override
+   public void removeConsumer(final Consumer consumer) {
+      synchronized (this) {
+         consumersChanged = true;
+
+         for (ConsumerHolder holder : consumerList) {
+            if (holder.consumer == consumer) {
+               if (holder.iter != null) {
+                  holder.iter.close();
+               }
+               consumerList.remove(holder);
+               break;
+            }
+         }
+
+         if (pos > 0 && pos >= consumerList.size()) {
+            pos = consumerList.size() - 1;
+         }
+
+         consumerSet.remove(consumer);
+
+         LinkedList<SimpleString> groupsToRemove = null;
+
+         for (SimpleString groupID : groups.keySet()) {
+            if (consumer == groups.get(groupID)) {
+               if (groupsToRemove == null) {
+                  groupsToRemove = new LinkedList<SimpleString>();
+               }
+               groupsToRemove.add(groupID);
+            }
+         }
+
+         // We use an auxiliary List here to avoid concurrent modification exceptions on the keySet
+         // while the iteration is being done.
+         // Since that's a simple HashMap there's no Iterator's support with a remove operation
+         if (groupsToRemove != null) {
+            for (SimpleString groupID : groupsToRemove) {
+               groups.remove(groupID);
+            }
+         }
+
+         if (refCountForConsumers != null) {
+            refCountForConsumers.decrement();
+         }
+      }
+   }
+
+   @Override
+   public synchronized void addRedistributor(final long delay) {
+      if (redistributorFuture != null) {
+         redistributorFuture.cancel(false);
+
+         futures.remove(redistributorFuture);
+      }
+
+      if (redistributor != null) {
+         // Just prompt delivery
+         deliverAsync();
+      }
+
+      if (delay > 0) {
+         if (consumerSet.isEmpty()) {
+            DelayedAddRedistributor dar = new DelayedAddRedistributor(executor);
+
+            redistributorFuture = scheduledExecutor.schedule(dar, delay, TimeUnit.MILLISECONDS);
+
+            futures.add(redistributorFuture);
+         }
+      }
+      else {
+         internalAddRedistributor(executor);
+      }
+   }
+
+   @Override
+   public synchronized void cancelRedistributor() throws Exception {
+      if (redistributor != null) {
+         redistributor.stop();
+         Redistributor redistributorToRemove = redistributor;
+         redistributor = null;
+
+         removeConsumer(redistributorToRemove);
+      }
+
+      if (redistributorFuture != null) {
+         redistributorFuture.cancel(false);
+
+         redistributorFuture = null;
+      }
+   }
+
+   @Override
+   protected void finalize() throws Throwable {
+      if (checkQueueSizeFuture != null) {
+         checkQueueSizeFuture.cancel(false);
+      }
+
+      cancelRedistributor();
+
+      super.finalize();
+   }
+
+   @Override
+   public synchronized int getConsumerCount() {
+      return consumerSet.size();
+   }
+
+   @Override
+   public synchronized Set<Consumer> getConsumers() {
+      return new HashSet<Consumer>(consumerSet);
+   }
+
+   @Override
+   public boolean hasMatchingConsumer(final ServerMessage message) {
+      for (ConsumerHolder holder : consumerList) {
+         Consumer consumer = holder.consumer;
+
+         if (consumer instanceof Redistributor) {
+            continue;
+         }
+
+         Filter filter1 = consumer.getFilter();
+
+         if (filter1 == null) {
+            return true;
+         }
+         else {
+            if (filter1.match(message)) {
+               return true;
+            }
+         }
+      }
+      return false;
+   }
+
+   @Override
+   public LinkedListIterator<MessageReference> iterator() {
+      return new SynchronizedIterator(messageReferences.iterator());
+   }
+
+   @Override
+   public TotalQueueIterator totalIterator() {
+      return new TotalQueueIterator();
+   }
+
+   @Override
+   public synchronized MessageReference removeReferenceWithID(final long id1) throws Exception {
+      LinkedListIterator<MessageReference> iterator = iterator();
+
+      try {
+
+         MessageReference removed = null;
+
+         while (iterator.hasNext()) {
+            MessageReference ref = iterator.next();
+
+            if (ref.getMessage().getMessageID() == id1) {
+               iterator.remove();
+               refRemoved(ref);
+
+               removed = ref;
+
+               break;
+            }
+         }
+
+         if (removed == null) {
+            // Look in scheduled deliveries
+            removed = scheduledDeliveryHandler.removeReferenceWithID(id1);
+         }
+
+         return removed;
+      }
+      finally {
+         iterator.close();
+      }
+   }
+
+   @Override
+   public synchronized MessageReference getReference(final long id1) {
+      LinkedListIterator<MessageReference> iterator = iterator();
+
+      try {
+
+         while (iterator.hasNext()) {
+            MessageReference ref = iterator.next();
+
+            if (ref.getMessage().getMessageID() == id1) {
+               return ref;
+            }
+         }
+
+         return null;
+      }
+      finally {
+         iterator.close();
+      }
+   }
+
+   @Override
+   public long getMessageCount() {
+      synchronized (this) {
+         if (pageSubscription != null) {
+            // messageReferences will have depaged messages which we need to discount from the counter as they are
+            // counted on the pageSubscription as well
+            return messageReferences.size() + getScheduledCount() +
+               deliveringCount.get() +
+               pageSubscription.getMessageCount();
+         }
+         else {
+            return messageReferences.size() + getScheduledCount() + deliveringCount.get();
+         }
+      }
+   }
+
+   @Override
+   public synchronized int getScheduledCount() {
+      return scheduledDeliveryHandler.getScheduledCount();
+   }
+
+   @Override
+   public synchronized List<MessageReference> getScheduledMessages() {
+      return scheduledDeliveryHandler.getScheduledReferences();
+   }
+
+   @Override
+   public Map<String, List<MessageReference>> getDeliveringMessages() {
+
+      List<ConsumerHolder> consumerListClone = cloneConsumersList();
+
+      Map<String, List<MessageReference>> mapReturn = new HashMap<String, List<MessageReference>>();
+
+      for (ConsumerHolder holder : consumerListClone) {
+         List<MessageReference> msgs = holder.consumer.getDeliveringMessages();
+         if (msgs != null && msgs.size() > 0) {
+            mapReturn.put(holder.consumer.toManagementString(), msgs);
+         }
+      }
+
+      return mapReturn;
+   }
+
+   @Override
+   public int getDeliveringCount() {
+      return deliveringCount.get();
+   }
+
+   @Override
+   public void acknowledge(final MessageReference ref) throws Exception {
+      if (ref.isPaged()) {
+         pageSubscription.ack((PagedReference) ref);
+         postAcknowledge(ref);
+      }
+      else {
+         ServerMessage message = ref.getMessage();
+
+         boolean durableRef = message.isDurable() && durable;
+
+         if (durableRef) {
+            storageManager.storeAcknowledge(id, message.getMessageID());
+         }
+         postAcknowledge(ref);
+      }
+
+      messagesAcknowledged++;
+
+   }
+
+   @Override
+   public void acknowledge(final Transaction tx, final MessageReference ref) throws Exception {
+      if (ref.isPaged()) {
+         pageSubscription.ackTx(tx, (PagedReference) ref);
+
+         getRefsOperation(tx).addAck(ref);
+      }
+      else {
+         ServerMessage message = ref.getMessage();
+
+         boolean durableRef = message.isDurable() && durable;
+
+         if (durableRef) {
+            storageManager.storeAcknowledgeTransactional(tx.getID(), id, message.getMessageID());
+
+            tx.setContainsPersistent();
+         }
+
+         getRefsOperation(tx).addAck(ref);
+      }
+
+      messagesAcknowledged++;
+   }
+
+   @Override
+   public void reacknowledge(final Transaction tx, final MessageReference ref) throws Exception {
+      ServerMessage message = ref.getMessage();
+
+      if (message.isDurable() && durable) {
+         tx.setContainsPersistent();
+      }
+
+      getRefsOperation(tx).addAck(ref);
+
+      // https://issues.jboss.org/browse/HORNETQ-609
+      incDelivering();
+
+      messagesAcknowledged++;
+   }
+
+   private RefsOperation getRefsOperation(final Transaction tx) {
+      return getRefsOperation(tx, false);
+   }
+
+   private RefsOperation getRefsOperation(final Transaction tx, boolean ignoreRedlieveryCheck) {
+      synchronized (tx) {
+         RefsOperation oper = (RefsOperation) tx.getProperty(TransactionPropertyIndexes.REFS_OPERATION);
+
+         if (oper == null) {
+            oper = tx.createRefsOperation(this);
+
+            tx.putProperty(TransactionPropertyIndexes.REFS_OPERATION, oper);
+
+            tx.addOperation(oper);
+         }
+
+         if (ignoreRedlieveryCheck) {
+            oper.setIgnoreRedeliveryCheck();
+         }
+
+         return oper;
+      }
+   }
+
+   @Override
+   public void cancel(final Transaction tx, final MessageReference reference) {
+      cancel(tx, reference, false);
+   }
+
+   @Override
+   public void cancel(final Transaction tx, final MessageReference reference, boolean ignoreRedeliveryCheck) {
+      getRefsOperation(tx, ignoreRedeliveryCheck).addAck(reference);
+   }
+
+   @Override
+   public synchronized void cancel(final MessageReference reference, final long timeBase) throws Exception {
+      if (checkRedelivery(reference, timeBase, false)) {
+         if (!scheduledDeliveryHandler.checkAndSchedule(reference, false)) {
+            internalAddHead(reference);
+         }
+
+         resetAllIterators();
+      }
+      else {
+         decDelivering();
+      }
+   }
+
+   @Override
+   public void expire(final MessageReference ref) throws Exception {
+      if (expiryAddress != null) {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("moving expired reference " + ref + " to address = " + expiryAddress + " from queue=" + this.getName());
+         }
+         move(expiryAddress, ref, true, false);
+      }
+      else {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("expiry is null, just acking expired message for reference " + ref + " from queue=" + this.getName());
+         }
+         acknowledge(ref);
+      }
+   }
+
+   @Override
+   public SimpleString getExpiryAddress() {
+      return this.expiryAddress;
+   }
+
+   @Override
+   public void referenceHandled() {
+      incDelivering();
+   }
+
+   @Override
+   public void incrementMesssagesAdded() {
+      messagesAdded++;
+   }
+
+   @Override
+   public void deliverScheduledMessages() {
+      List<MessageReference> scheduledMessages = scheduledDeliveryHandler.cancel(null);
+      if (scheduledMessages != null && scheduledMessages.size() > 0) {
+         for (MessageReference ref : scheduledMessages) {
+            ref.getMessage().putLongProperty(MessageImpl.HDR_SCHEDULED_DELIVERY_TIME, ref.getScheduledDeliveryTime());
+            ref.setScheduledDeliveryTime(0);
+         }
+         this.addHead(scheduledMessages);
+      }
+   }
+
+   @Override
+   public long getMessagesAdded() {
+      if (pageSubscription != null) {
+         return messagesAdded + pageSubscription.getCounter().getValue() - pagedReferences.get();
+      }
+      else {
+         return messagesAdded;
+      }
+   }
+
+   @Override
+   public long getMessagesAcknowledged() {
+      return messagesAcknowledged;
+   }
+
+   @Override
+   public int deleteAllReferences() throws Exception {
+      return deleteAllReferences(DEFAULT_FLUSH_LIMIT);
+   }
+
+   @Override
+   public int deleteAllReferences(final int flushLimit) throws Exception {
+      return deleteMatchingReferences(flushLimit, null);
+   }
+
+   @Override
+   public int deleteMatchingReferences(Filter filter) throws Exception {
+      return deleteMatchingReferences(DEFAULT_FLUSH_LIMIT, filter);
+   }
+
+   @Override
+   public synchronized int deleteMatchingReferences(final int flushLimit, final Filter filter1) throws Exception {
+      return iterQueue(flushLimit, filter1, new QueueIterateAction() {
+         @Override
+         public void actMessage(Transaction tx, MessageReference ref) throws Exception {
+            incDelivering();
+            acknowledge(tx, ref);
+            refRemoved(ref);
+         }
+      });
+   }
+
+   /**
+    * This is a generic method for any method interacting on the Queue to move or delete messages
+    * Instead of duplicate the feature we created an abstract class where you pass the logic for
+    * each message.
+    *
+    * @param filter1
+    * @param messageAction
+    * @return
+    * @throws Exception
+    */
+   private synchronized int iterQueue(final int flushLimit,
+                                      final Filter filter1,
+                                      QueueIterateAction messageAction) throws Exception {
+      int count = 0;
+      int txCount = 0;
+
+      Transaction tx = new TransactionImpl(storageManager);
+
+      LinkedListIterator<MessageReference> iter = iterator();
+      try {
+
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+
+            if (ref.isPaged() && queueDestroyed) {
+               // this means the queue is being removed
+               // hence paged references are just going away through
+               // page cleanup
+               continue;
+            }
+
+            if (filter1 == null || filter1.match(ref.getMessage())) {
+               messageAction.actMessage(tx, ref);
+               iter.remove();
+               txCount++;
+               count++;
+            }
+         }
+
+         if (txCount > 0) {
+            tx.commit();
+
+            tx = new TransactionImpl(storageManager);
+
+            txCount = 0;
+         }
+
+         List<MessageReference> cancelled = scheduledDeliveryHandler.cancel(filter1);
+         for (MessageReference messageReference : cancelled) {
+            messageAction.actMessage(tx, messageReference);
+            count++;
+            txCount++;
+         }
+
+         if (txCount > 0) {
+            tx.commit();
+            tx = new TransactionImpl(storageManager);
+            txCount = 0;
+         }
+
+         if (pageIterator != null && !queueDestroyed) {
+            while (pageIterator.hasNext()) {
+               PagedReference reference = pageIterator.next();
+               pageIterator.remove();
+
+               if (filter1 == null || filter1.match(reference.getMessage())) {
+                  count++;
+                  txCount++;
+                  messageAction.actMessage(tx, reference);
+               }
+               else {
+                  addTail(reference, false);
+               }
+
+               if (txCount > 0 && txCount % flushLimit == 0) {
+                  tx.commit();
+                  tx = new TransactionImpl(storageManager);
+                  txCount = 0;
+               }
+            }
+         }
+
+         if (txCount > 0) {
+            tx.commit();
+            tx = null;
+         }
+
+         if (filter != null && !queueDestroyed && pageSubscription != null) {
+            scheduleDepage(false);
+         }
+
+         return count;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public void destroyPaging() throws Exception {
+      // it could be null on embedded or certain unit tests
+      if (pageSubscription != null) {
+         pageSubscription.destroy();
+         pageSubscription.cleanupEntries(true);
+      }
+   }
+
+   @Override
+   public synchronized boolean deleteReference(final long messageID) throws Exception {
+      boolean deleted = false;
+
+      Transaction tx = new TransactionImpl(storageManager);
+
+      LinkedListIterator<MessageReference> iter = iterator();
+      try {
+
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (ref.getMessage().getMessageID() == messageID) {
+               incDelivering();
+               acknowledge(tx, ref);
+               iter.remove();
+               refRemoved(ref);
+               deleted = true;
+               break;
+            }
+         }
+
+         if (!deleted) {
+            // Look in scheduled deliveries
+            deleted = scheduledDeliveryHandler.removeReferenceWithID(messageID) != null ? true : false;
+         }
+
+         tx.commit();
+
+         return deleted;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public void deleteQueue() throws Exception {
+      deleteQueue(false);
+   }
+
+   @Override
+   public void deleteQueue(boolean removeConsumers) throws Exception {
+      synchronized (this) {
+         this.queueDestroyed = true;
+      }
+
+      Transaction tx = new BindingsTransactionImpl(storageManager);
+
+      try {
+         postOffice.removeBinding(name, tx);
+
+         deleteAllReferences();
+
+         destroyPaging();
+
+         if (removeConsumers) {
+            for (ConsumerHolder consumerHolder : consumerList) {
+               consumerHolder.consumer.disconnect();
+            }
+         }
+
+         if (isDurable()) {
+            storageManager.deleteQueueBinding(tx.getID(), getID());
+            tx.setContainsPersistent();
+         }
+
+         if (slowConsumerReaperFuture != null) {
+            slowConsumerReaperFuture.cancel(false);
+         }
+
+         tx.commit();
+      }
+      catch (Exception e) {
+         tx.rollback();
+         throw e;
+      }
+
+   }
+
+   @Override
+   public synchronized boolean expireReference(final long messageID) throws Exception {
+      if (expiryAddress != null && expiryAddress.equals(this.address)) {
+         // check expire with itself would be silly (waste of time)
+         if (ActiveMQServerLogger.LOGGER.isDebugEnabled())
+            ActiveMQServerLogger.LOGGER.debug("Cannot expire from " + address + " into " + expiryAddress);
+         return false;
+      }
+
+      LinkedListIterator<MessageReference> iter = iterator();
+      try {
+
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (ref.getMessage().getMessageID() == messageID) {
+               incDelivering();
+               expire(ref);
+               iter.remove();
+               refRemoved(ref);
+               return true;
+            }
+         }
+         return false;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public synchronized int expireReferences(final Filter filter) throws Exception {
+      if (expiryAddress != null && expiryAddress.equals(this.address)) {
+         // check expire with itself would be silly (waste of time)
+         if (ActiveMQServerLogger.LOGGER.isDebugEnabled())
+            ActiveMQServerLogger.LOGGER.debug("Cannot expire from " + address + " into " + expiryAddress);
+         return 0;
+      }
+
+      Transaction tx = new TransactionImpl(storageManager);
+
+      int count = 0;
+      LinkedListIterator<MessageReference> iter = iterator();
+
+      try {
+
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (filter == null || filter.match(ref.getMessage())) {
+               incDelivering();
+               expire(tx, ref);
+               iter.remove();
+               refRemoved(ref);
+               count++;
+            }
+         }
+
+         tx.commit();
+
+         return count;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public void expireReferences() {
+      if (expiryAddress != null && expiryAddress.equals(this.address)) {
+         // check expire with itself would be silly (waste of time)
+         if (ActiveMQServerLogger.LOGGER.isDebugEnabled())
+            ActiveMQServerLogger.LOGGER.debug("Cannot expire from " + address + " into " + expiryAddress);
+         return;
+      }
+
+      if (!queueDestroyed && expiryScanner.scannerRunning.get() == 0) {
+         expiryScanner.scannerRunning.incrementAndGet();
+         getExecutor().execute(expiryScanner);
+      }
+   }
+
+   class ExpiryScanner implements Runnable {
+
+      public AtomicInteger scannerRunning = new AtomicInteger(0);
+
+      @Override
+      public void run() {
+         synchronized (QueueImpl.this) {
+            if (queueDestroyed) {
+               return;
+            }
+
+            LinkedListIterator<MessageReference> iter = iterator();
+
+            try {
+               boolean expired = false;
+               boolean hasElements = false;
+               while (postOffice.isStarted() && iter.hasNext()) {
+                  hasElements = true;
+                  MessageReference ref = iter.next();
+                  try {
+                     if (ref.getMessage().isExpired()) {
+                        incDelivering();
+                        expired = true;
+                        expire(ref);
+                        iter.remove();
+                        refRemoved(ref);
+                     }
+                  }
+                  catch (Exception e) {
+                     ActiveMQServerLogger.LOGGER.errorExpiringReferencesOnQueue(e, ref);
+                  }
+
+               }
+
+               // If empty we need to schedule depaging to make sure we would depage expired messages as well
+               if ((!hasElements || expired) && pageIterator != null && pageIterator.hasNext()) {
+                  scheduleDepage(true);
+               }
+            }
+            finally {
+               try {
+                  iter.close();
+               }
+               catch (Throwable ignored) {
+               }
+               scannerRunning.decrementAndGet();
+            }
+         }
+      }
+   }
+
+   @Override
+   public synchronized boolean sendMessageToDeadLetterAddress(final long messageID) throws Exception {
+      LinkedListIterator<MessageReference> iter = iterator();
+
+      try {
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (ref.getMessage().getMessageID() == messageID) {
+               incDelivering();
+               sendToDeadLetterAddress(ref);
+               iter.remove();
+               refRemoved(ref);
+               return true;
+            }
+         }
+         return false;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public synchronized int sendMessagesToDeadLetterAddress(Filter filter) throws Exception {
+      int count = 0;
+      LinkedListIterator<MessageReference> iter = iterator();
+
+      try {
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (filter == null || filter.match(ref.getMessage())) {
+               incDelivering();
+               sendToDeadLetterAddress(ref);
+               iter.remove();
+               refRemoved(ref);
+               count++;
+            }
+         }
+         return count;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public boolean moveReference(final long messageID, final SimpleString toAddress) throws Exception {
+      return moveReference(messageID, toAddress, false);
+   }
+
+   @Override
+   public synchronized boolean moveReference(final long messageID,
+                                             final SimpleString toAddress,
+                                             final boolean rejectDuplicate) throws Exception {
+      LinkedListIterator<MessageReference> iter = iterator();
+
+      try {
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (ref.getMessage().getMessageID() == messageID) {
+               iter.remove();
+               refRemoved(ref);
+               incDelivering();
+               try {
+                  move(toAddress, ref, false, rejectDuplicate);
+               }
+               catch (Exception e) {
+                  decDelivering();
+                  throw e;
+               }
+               return true;
+            }
+         }
+         return false;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public int moveReferences(final Filter filter, final SimpleString toAddress) throws Exception {
+      return moveReferences(DEFAULT_FLUSH_LIMIT, filter, toAddress, false);
+   }
+
+   @Override
+   public synchronized int moveReferences(final int flushLimit,
+                                          final Filter filter,
+                                          final SimpleString toAddress,
+                                          final boolean rejectDuplicates) throws Exception {
+      final DuplicateIDCache targetDuplicateCache = postOffice.getDuplicateIDCache(toAddress);
+
+      return iterQueue(flushLimit, filter, new QueueIterateAction() {
+         @Override
+         public void actMessage(Transaction tx, MessageReference ref) throws Exception {
+            boolean ignored = false;
+
+            incDelivering();
+
+            if (rejectDuplicates) {
+               byte[] duplicateBytes = ref.getMessage().getDuplicateIDBytes();
+               if (duplicateBytes != null) {
+                  if (targetDuplicateCache.contains(duplicateBytes)) {
+                     ActiveMQServerLogger.LOGGER.messageWithDuplicateID(ref.getMessage().getDuplicateProperty(), toAddress, address, address);
+                     acknowledge(tx, ref);
+                     ignored = true;
+                  }
+               }
+            }
+
+            if (!ignored) {
+               move(toAddress, tx, ref, false, rejectDuplicates);
+            }
+         }
+      });
+   }
+
+   public synchronized int moveReferencesBetweenSnFQueues(final SimpleString queueSuffix) throws Exception {
+      return iterQueue(DEFAULT_FLUSH_LIMIT, null, new QueueIterateAction() {
+         @Override
+         public void actMessage(Transaction tx, MessageReference ref) throws Exception {
+            moveBetweenSnFQueues(queueSuffix, tx, ref);
+         }
+      });
+   }
+
+   @Override
+   public int retryMessages(Filter filter) throws Exception {
+
+      final HashMap<SimpleString, Long> queues = new HashMap<>();
+
+      return iterQueue(DEFAULT_FLUSH_LIMIT, null, new QueueIterateAction() {
+         @Override
+         public void actMessage(Transaction tx, MessageReference ref) throws Exception {
+
+            SimpleString originalMessageAddress = ref.getMessage().getSimpleStringProperty(MessageImpl.HDR_ORIGINAL_ADDRESS);
+            SimpleString originalMessageQueue = ref.getMessage().getSimpleStringProperty(MessageImpl.HDR_ORIGINAL_QUEUE);
+
+            if (originalMessageAddress != null) {
+
+               incDelivering();
+
+               Long targetQueue = null;
+               if (originalMessageQueue != null && !originalMessageQueue.equals(originalMessageAddress)) {
+                  targetQueue = queues.get(originalMessageQueue);
+                  if (targetQueue == null) {
+                     Binding binding = postOffice.getBinding(originalMessageQueue);
+
+                     if (binding != null && binding instanceof LocalQueueBinding) {
+                        targetQueue = ((LocalQueueBinding) binding).getID();
+                        queues.put(originalMessageQueue, targetQueue);
+                     }
+                  }
+               }
+
+               if (targetQueue != null) {
+                  move(originalMessageAddress, tx, ref, false, false, targetQueue.longValue());
+               }
+               else {
+                  move(originalMessageAddress, tx, ref, false, false);
+
+               }
+
+            }
+         }
+      });
+
+   }
+
+   @Override
+   public synchronized boolean changeReferencePriority(final long messageID, final byte newPriority) throws Exception {
+      LinkedListIterator<MessageReference> iter = iterator();
+
+      try {
+
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (ref.getMessage().getMessageID() == messageID) {
+               iter.remove();
+               refRemoved(ref);
+               ref.getMessage().setPriority(newPriority);
+               addTail(ref, false);
+               return true;
+            }
+         }
+
+         return false;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public synchronized int changeReferencesPriority(final Filter filter, final byte newPriority) throws Exception {
+      LinkedListIterator<MessageReference> iter = iterator();
+
+      try {
+         int count = 0;
+         while (iter.hasNext()) {
+            MessageReference ref = iter.next();
+            if (filter == null || filter.match(ref.getMessage())) {
+               count++;
+               iter.remove();
+               refRemoved(ref);
+               ref.getMessage().setPriority(newPriority);
+               addTail(ref, false);
+            }
+         }
+         return count;
+      }
+      finally {
+         iter.close();
+      }
+   }
+
+   @Override
+   public synchronized void resetAllIterators() {
+      for (ConsumerHolder holder : this.consumerList) {
+         if (holder.iter != null) {
+            holder.iter.close();
+         }
+         holder.iter = null;
+      }
+   }
+
+   @Override
+   public synchronized void pause() {
+      try {
+         this.flushDeliveriesInTransit();
+      }
+      catch (Exception e) {
+         ActiveMQServerLogger.LOGGER.warn(e.getMessage(), e);
+      }
+      paused = true;
+   }
+
+   @Override
+   public synchronized void resume() {
+      paused = false;
+
+      deliverAsync();
+   }
+
+   @Override
+   public synchronized boolean isPaused() {
+      return paused;
+   }
+
+   @Override
+   public boolean isDirectDeliver() {
+      return directDeliver;
+   }
+
+   /**
+    * @return the internalQueue
+    */
+   @Override
+   public boolean isInternalQueue() {
+      return internalQueue;
+   }
+
+   /**
+    * @param internalQueue the internalQueue to set
+    */
+   @Override
+   public void setInternalQueue(boolean internalQueue) {
+      this.internalQueue = internalQueue;
+   }
+
+   // Public
+   // -----------------------------------------------------------------------------
+
+   @Override
+   public boolean equals(final Object other) {
+      if (this == other) {
+         return true;
+      }
+      if (!(other instanceof QueueImpl))
+         return false;
+
+      QueueImpl qother = (QueueImpl) other;
+
+      return name.equals(qother.name);
+   }
+
+   @Override
+   public int hashCode() {
+      return name.hashCode();
+   }
+
+   @Override
+   public String toString() {
+      return "QueueImpl[name=" + name.toString() + ", postOffice=" + this.postOffice + "]@" + Integer.toHexString(System.identityHashCode(this));
+   }
+
+   private synchronized void internalAddTail(final MessageReference ref) {
+      refAdded(ref);
+      messageReferences.addTail(ref, ref.getMessage().getPriority());
+   }
+
+   /**
+    * The caller of this method requires synchronized on the queue.
+    * I'm not going to add synchronized to this method just for a precaution,
+    * as I'm not 100% sure this won't cause any extra runtime.
+    *
+    * @param ref
+    */
+   private void internalAddHead(final MessageReference ref) {
+      queueMemorySize.addAndGet(ref.getMessageMemoryEstimate());
+      refAdded(ref);
+      messageReferences.addHead(ref, ref.getMessage().getPriority());
+   }
+
+   private synchronized void doInternalPoll() {
+
+      int added = 0;
+      MessageReference ref;
+
+      while ((ref = intermediateMessageReferences.poll()) != null) {
+         internalAddTail(ref);
+
+         messagesAdded++;
+         if (added++ > MAX_DELIVERIES_IN_LOOP) {
+            // if we just keep polling from the intermediate we could starve in case there's a sustained load
+            deliverAsync();
+            return;
+         }
+      }
+   }
+
+   /**
+    * This method will deliver as many messages as possible until all consumers are busy or there
+    * are no more matching or available messages.
+    */
+   private void deliver() {
+      if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+         ActiveMQServerLogger.LOGGER.debug(this + " doing deliver. messageReferences=" + messageReferences.size());
+      }
+
+      doInternalPoll();
+
+      // Either the iterator is empty or the consumer is busy
+      int noDelivery = 0;
+
+      int size = 0;
+
+      int endPos = -1;
+
+      int handled = 0;
+
+      long timeout = System.currentTimeMillis() + DELIVERY_TIMEOUT;
+
+      while (true) {
+         if (handled == MAX_DELIVERIES_IN_LOOP) {
+            // Schedule another one - we do this to prevent a single thread getting caught up in this loop for too
+            // long
+
+            deliverAsync();
+
+            return;
+         }
+
+         if (System.currentTimeMillis() > timeout) {
+            if (isTrace) {
+               ActiveMQServerLogger.LOGGER.trace("delivery has been running for too long. Scheduling another delivery task now");
+            }
+
+            deliverAsync();
+
+            return;
+         }
+
+         MessageReference ref;
+
+         Consumer handledconsumer = null;
+
+         synchronized (this) {
+
+            // Need to do these checks inside the synchronized
+            if (paused || consumerList.isEmpty()) {
+               return;
+            }
+
+            if (messageReferences.size() == 0) {
+               break;
+            }
+
+            if (endPos < 0 || consumersChanged) {
+               consumersChanged = false;
+
+               size = consumerList.size();
+
+               endPos = pos - 1;
+
+               if (endPos < 0) {
+                  endPos = size - 1;
+                  noDelivery = 0;
+               }
+            }
+
+            ConsumerHolder holder = consumerList.get(pos);
+
+            Consumer consumer = holder.consumer;
+            Consumer groupConsumer = null;
+
+            if (holder.iter == null) {
+               holder.iter = messageReferences.iterator();
+            }
+
+            if (holder.iter.hasNext()) {
+               ref = holder.iter.next();
+            }
+            else {
+               ref = null;
+            }
+            if (ref == null) {
+               noDelivery++;
+            }
+            else {
+               if (checkExpired(ref)) {
+                  if (isTrace) {
+                     ActiveMQServerLogger.LOGGER.trace("Reference " + ref + " being expired");
+                  }
+                  holder.iter.remove();
+
+                  refRemoved(ref);
+
+                  handled++;
+
+                  continue;
+               }
+
+               if (isTrace) {
+                  ActiveMQServerLogger.LOGGER.trace("Queue " + this.getName() + " is delivering reference " + ref);
+               }
+
+               // If a group id is set, then this overrides the consumer chosen round-robin
+
+               SimpleString groupID = extractGroupID(ref);
+
+               if (groupID != null) {
+                  groupConsumer = groups.get(groupID);
+
+                  if (groupConsumer != null) {
+                     consumer = groupConsumer;
+                  }
+               }
+
+               HandleStatus status = handle(ref, consumer);
+
+               if (status == HandleStatus.HANDLED) {
+
+                  deliveriesInTransit.countUp();
+
+                  handledconsumer = consumer;
+
+                  holder.iter.remove();
+
+                  refRemoved(ref);
+
+                  if (groupID != null && groupConsumer == null) {
+                     groups.put(groupID, consumer);
+                  }
+
+                  handled++;
+               }
+               else if (status == HandleStatus.BUSY) {
+                  holder.iter.repeat();
+
+                  noDelivery++;
+               }
+               else if (status == HandleStatus.NO_MATCH) {
+                  // nothing to be done on this case, the iterators will just jump next
+               }
+            }
+
+            if (pos == endPos) {
+               // Round robin'd all
+
+               if (noDelivery == size) {
+                  if (handledconsumer != null) {
+                     // this shouldn't really happen,
+                     // however I'm keeping this as an assertion case future developers ever change the logic here on this class
+                     ActiveMQServerLogger.LOGGER.nonDeliveryHandled();
+                  }
+                  else {
+                     if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+                        ActiveMQServerLogger.LOGGER.debug(this + "::All the consumers were busy, giving up now");
+                     }
+                     break;
+                  }
+               }
+
+               noDelivery = 0;
+            }
+
+            // Only move onto the next position if the consumer on the current position was used.
+            // When using group we don't need to load balance to the next position
+            if (groupConsumer == null) {
+               pos++;
+            }
+
+            if (pos >= size) {
+               pos = 0;
+            }
+         }
+
+         if (handledconsumer != null) {
+            proceedDeliver(handledconsumer, ref);
+         }
+      }
+
+      checkDepage();
+   }
+
+   private void checkDepage() {
+      if (pageIterator != null && pageSubscription.isPaging() && !depagePending && needsDepage() && pageIterator.hasNext()) {
+         scheduleDepage(false);
+      }
+   }
+
+   /**
+    * This is a common check we do before scheduling depaging.. or while depaging.
+    * Before scheduling a depage runnable we verify if it fits / needs depaging.
+    * We also check for while needsDepage While depaging.
+    * This is just to avoid a copy & paste dependency
+    *
+    * @return
+    */
+   private boolean needsDepage() {
+      return queueMemorySize.get() < pageSubscription.getPagingStore().getMaxSize();
+   }
+
+   private SimpleString extractGroupID(MessageReference ref) {
+      if (internalQueue) {
+         return null;
+      }
+      else {
+         // But we don't use the groupID on internal queues (clustered queues) otherwise the group map would leak forever
+         return ref.getMessage().getSimpleStringProperty(Message.HDR_GROUP_ID);
+      }
+   }
+
+   /**
+    * @param ref
+    */
+   protected void refRemoved(MessageReference ref) {
+      queueMemorySize.addAndGet(-ref.getMessageMemoryEstimate());
+      if (ref.isPaged()) {
+         pagedReferences.decrementAndGet();
+      }
+   }
+
+   /**
+    * @param ref
+    */
+   protected void refAdded(final MessageReference ref) {
+      if (ref.isPaged()) {
+         pagedReferences.incrementAndGet();
+      }
+   }
+
+   private void scheduleDepage(final boolean scheduleExpiry) {
+      if (!depagePending) {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("Scheduling depage for queue " + this.getName());
+         }
+         depagePending = true;
+         pageSubscription.getExecutor().execute(new DepageRunner(scheduleExpiry));
+      }
+   }
+
+   private void depage(final boolean scheduleExpiry) {
+      depagePending = false;
+
+      synchronized (this) {
+         if (paused || pageIterator == null) {
+            return;
+         }
+      }
+
+      long maxSize = pageSubscription.getPagingStore().getPageSizeBytes();
+
+      long timeout = System.currentTimeMillis() + DELIVERY_TIMEOUT;
+
+      if (isTrace) {
+         ActiveMQServerLogger.LOGGER.trace("QueueMemorySize before depage on queue=" + this.getName() + " is " + queueMemorySize.get());
+      }
+
+      this.directDeliver = false;
+
+      int depaged = 0;
+      while (timeout > System.currentTimeMillis() && needsDepage() && pageIterator.hasNext()) {
+         depaged++;
+         PagedReference reference = pageIterator.next();
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("Depaging reference " + reference + " on queue " + this.getName());
+         }
+         addTail(reference, false);
+         pageIterator.remove();
+      }
+
+      if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+         if (depaged == 0 && queueMemorySize.get() >= maxSize) {
+            ActiveMQServerLogger.LOGGER.debug("Couldn't depage any message as the maxSize on the queue was achieved. " + "There are too many pending messages to be acked in reference to the page configuration");
+         }
+
+         if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+            ActiveMQServerLogger.LOGGER.debug("Queue Memory Size after depage on queue=" + this.getName() +
+                                                 " is " +
+                                                 queueMemorySize.get() +
+                                                 " with maxSize = " +
+                                                 maxSize +
+                                                 ". Depaged " +
+                                                 depaged +
+                                                 " messages, pendingDelivery=" + messageReferences.size() + ", intermediateMessageReferences= " + intermediateMessageReferences.size() +
+                                                 ", queueDelivering=" + deliveringCount.get());
+
+         }
+      }
+
+      deliverAsync();
+
+      if (depaged > 0 && scheduleExpiry) {
+         // This will just call an executor
+         expireReferences();
+      }
+   }
+
+   private void internalAddRedistributor(final Executor executor) {
+      // create the redistributor only once if there are no local consumers
+      if (consumerSet.isEmpty() && redistributor == null) {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("QueueImpl::Adding redistributor on queue " + this.toString());
+         }
+         redistributor = new Redistributor(this, storageManager, postOffice, executor, QueueImpl.REDISTRIBUTOR_BATCH_SIZE);
+
+         consumerList.add(new ConsumerHolder(redistributor));
+
+         consumersChanged = true;
+
+         redistributor.start();
+
+         deliverAsync();
+      }
+   }
+
+   @Override
+   public boolean checkRedelivery(final MessageReference reference,
+                                  final long timeBase,
+                                  final boolean ignoreRedeliveryDelay) throws Exception {
+      ServerMessage message = reference.getMessage();
+
+      if (internalQueue) {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("Queue " + this.getName() + " is an internal queue, no checkRedelivery");
+         }
+         // no DLQ check on internal queues
+         return true;
+      }
+
+      if (!internalQueue && message.isDurable() && durable && !reference.isPaged()) {
+         storageManager.updateDeliveryCount(reference);
+      }
+
+      AddressSettings addressSettings = addressSettingsRepository.getMatch(address.toString());
+
+      int maxDeliveries = addressSettings.getMaxDeliveryAttempts();
+      long redeliveryDelay = addressSettings.getRedeliveryDelay();
+      int deliveryCount = reference.getDeliveryCount();
+
+      // First check DLA
+      if (maxDeliveries > 0 && deliveryCount >= maxDeliveries) {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("Sending reference " + reference + " to DLA = " + addressSettings.getDeadLetterAddress() + " since ref.getDeliveryCount=" + reference.getDeliveryCount() + "and maxDeliveries=" + maxDeliveries + " from queue=" + this.getName());
+         }
+         sendToDeadLetterAddress(reference, addressSettings.getDeadLetterAddress());
+
+         return false;
+      }
+      else {
+         // Second check Redelivery Delay
+         if (!ignoreRedeliveryDelay && redeliveryDelay > 0) {
+            redeliveryDelay = calculateRedeliveryDelay(addressSettings, deliveryCount);
+
+            if (isTrace) {
+               ActiveMQServerLogger.LOGGER.trace("Setting redeliveryDelay=" + redeliveryDelay + " on reference=" + reference);
+            }
+
+            reference.setScheduledDeliveryTime(timeBase + redeliveryDelay);
+
+            if (!reference.isPaged() && message.isDurable() && durable) {
+               storageManager.updateScheduledDeliveryTime(reference);
+            }
+         }
+
+         decDelivering();
+
+         return true;
+      }
+   }
+
+   /**
+    * Used on testing only *
+    */
+   public int getNumberOfReferences() {
+      return messageReferences.size();
+   }
+
+   private void move(final SimpleString toAddress,
+                     final Transaction tx,
+                     final MessageReference ref,
+                     final boolean expiry,
+                     final boolean rejectDuplicate,
+                     final long... queueIDs) throws Exception {
+      ServerMessage copyMessage = makeCopy(ref, expiry);
+
+      copyMessage.setAddress(toAddress);
+
+      if (queueIDs != null && queueIDs.length > 0) {
+         ByteBuffer buffer = ByteBuffer.allocate(8 * queueIDs.length);
+         for (long id : queueIDs) {
+            buffer.putLong(id);
+         }
+         copyMessage.putBytesProperty(MessageImpl.HDR_ROUTE_TO_IDS, buffer.array());
+      }
+
+      postOffice.route(copyMessage, null, tx, false, rejectDuplicate);
+
+      acknowledge(tx, ref);
+   }
+
+   @SuppressWarnings({"ArrayToString", "ArrayToStringConcatentation"})
+   private void moveBetweenSnFQueues(final SimpleString queueSuffix,
+                                     final Transaction tx,
+                                     final MessageReference ref) throws Exception {
+      ServerMessage copyMessage = makeCopy(ref, false, false);
+
+      byte[] oldRouteToIDs = null;
+      String targetNodeID;
+      Binding targetBinding;
+
+      // remove the old route
+      for (SimpleString propName : copyMessage.getPropertyNames()) {
+         if (propName.startsWith(MessageImpl.HDR_ROUTE_TO_IDS)) {
+            oldRouteToIDs = (byte[]) copyMessage.removeProperty(propName);
+            final String hashcodeToString = oldRouteToIDs.toString(); // don't use Arrays.toString(..) here
+            ActiveMQServerLogger.LOGGER.debug("Removed property from message: " + propName + " = " + hashcodeToString + " (" + ByteBuffer.wrap(oldRouteToIDs).getLong() + ")");
+
+            // there should only be one of these properties so potentially save some loop iterations
+            break;
+         }
+      }
+
+      ByteBuffer oldBuffer = ByteBuffer.wrap(oldRouteToIDs);
+
+      RoutingContext routingContext = new RoutingContextImpl(tx);
+
+      /* this algorithm will look at the old route and find the new remote queue bindings where the messages should go
+       * and route them there directly
+       */
+      while (oldBuffer.hasRemaining()) {
+         long oldQueueID = oldBuffer.getLong();
+
+         // look at all the bindings
+         Pair<String, Binding> result = locateTargetBinding(queueSuffix, copyMessage, oldQueueID);
+         targetBinding = result.getB();
+         targetNodeID = result.getA();
+
+         if (targetBinding == null) {
+            ActiveMQServerLogger.LOGGER.unableToFindTargetQueue(targetNodeID);
+         }
+         else {
+            ActiveMQServerLogger.LOGGER.debug("Routing on binding: " + targetBinding);
+            targetBinding.route(copyMessage, routingContext);
+         }
+      }
+
+      copyMessage.finishCopy();
+      postOffice.processRoute(copyMessage, routingContext, false);
+
+      ref.handled();
+
+      acknowledge(tx, ref);
+
+      storageManager.afterCompleteOperations(new IOCallback() {
+
+         @Override
+         public void onError(final int errorCode, final String errorMessage) {
+            ActiveMQServerLogger.LOGGER.ioErrorRedistributing(errorCode, errorMessage);
+         }
+
+         @Override
+         public void done() {
+            deliverAsync();
+         }
+      });
+   }
+
+   private Pair<String, Binding> locateTargetBinding(SimpleString queueSuffix,
+                                                     ServerMessage copyMessage,
+                                                     long oldQueueID) {
+      String targetNodeID = null;
+      Binding targetBinding = null;
+
+      for (Map.Entry<SimpleString, Binding> entry : postOffice.getAllBindings().entrySet()) {
+         Binding binding = entry.getValue();
+
+         // we only care about the remote queue bindings
+         if (binding instanceof RemoteQueueBinding) {
+            RemoteQueueBinding remoteQueueBinding = (RemoteQueueBinding) binding;
+
+            // does this remote queue binding point to the same queue as the message?
+            if (oldQueueID == remoteQueueBinding.getRemoteQueueID()) {
+               // get the name of this queue so we can find the corresponding remote queue binding pointing to the scale down target node
+               SimpleString oldQueueName = remoteQueueBinding.getRoutingName();
+
+               // parse the queue name of the remote queue binding to determine the node ID
+               String temp = remoteQueueBinding.getQueue().getName().toString();
+               targetNodeID = temp.substring(temp.lastIndexOf(".") + 1);
+               ActiveMQServerLogger.LOGGER.debug("Message formerly destined for " + oldQueueName + " with ID: " + oldQueueID + " on address " + copyMessage.getAddress() + " on node " + targetNodeID);
+
+               // now that we have the name of the queue we need to look through all the bindings again to find the new remote queue binding
+               for (Map.Entry<SimpleString, Binding> entry2 : postOffice.getAllBindings().entrySet()) {
+                  binding = entry2.getValue();
+
+                  // again, we only care about the remote queue bindings
+                  if (binding instanceof RemoteQueueBinding) {
+                     remoteQueueBinding = (RemoteQueueBinding) binding;
+                     temp = remoteQueueBinding.getQueue().getName().toString();
+                     targetNodeID = temp.substring(temp.lastIndexOf(".") + 1);
+                     if (oldQueueName.equals(remoteQueueBinding.getRoutingName()) && targetNodeID.equals(queueSuffix.toString())) {
+                        targetBinding = remoteQueueBinding;
+                        if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+                           ActiveMQServerLogger.LOGGER.debug("Message now destined for " + remoteQueueBinding.getRoutingName() + " with ID: " + remoteQueueBinding.getRemoteQueueID() + " on address " + copyMessage.getAddress() + " on node " + targetNodeID);
                         }
-                    } else if (PRODUCER_EOS_OVERRIDES.containsKey(config)) {
-                        if (!clientProvidedProps.get(config).equals(PRODUCER_EOS_OVERRIDES.get(config))) {
-                            log.warn(String.format(nonConfigurableConfigMessage,
-                                    "producer", config, eosMessage, clientProvidedProps.get(config), PRODUCER_EOS_OVERRIDES.get(config)));
-                            clientProvidedProps.remove(config);
+                        break;
+                     }
+                     else {
+                        ActiveMQServerLogger.LOGGER.debug("Failed to match: " + remoteQueueBinding);
+                     }
+                  }
+               }
+            }
+         }
+      }
+      return new Pair<>(targetNodeID, targetBinding);
+   }
+
+   private ServerMessage makeCopy(final MessageReference ref, final boolean expiry) throws Exception {
+      return makeCopy(ref, expiry, true);
+   }
+
+   private ServerMessage makeCopy(final MessageReference ref,
+                                  final boolean expiry,
+                                  final boolean copyOriginalHeaders) throws Exception {
+      ServerMessage message = ref.getMessage();
+      /*
+       We copy the message and send that to the dla/expiry queue - this is
+       because otherwise we may end up with a ref with the same message id in the
+       queue more than once which would barf - this might happen if the same message had been
+       expire from multiple subscriptions of a topic for example
+       We set headers that hold the original message address, expiry time
+       and original message id
+      */
+
+      long newID = storageManager.generateID();
+
+      ServerMessage copy = message.makeCopyForExpiryOrDLA(newID, ref, expiry, copyOriginalHeaders);
+
+      return copy;
+   }
+
+   private void expire(final Transaction tx, final MessageReference ref) throws Exception {
+      SimpleString expiryAddress = addressSettingsRepository.getMatch(address.toString()).getExpiryAddress();
+
+      if (expiryAddress != null) {
+         Bindings bindingList = postOffice.getBindingsForAddress(expiryAddress);
+
+         if (bindingList.getBindings().isEmpty()) {
+            ActiveMQServerLogger.LOGGER.errorExpiringReferencesNoBindings(expiryAddress);
+         }
+         else {
+            move(expiryAddress, tx, ref, true, true);
+         }
+      }
+      else {
+         ActiveMQServerLogger.LOGGER.errorExpiringReferencesNoQueue(name);
+
+         acknowledge(tx, ref);
+      }
+   }
+
+   public void sendToDeadLetterAddress(final MessageReference ref) throws Exception {
+      sendToDeadLetterAddress(ref, addressSettingsRepository.getMatch(address.toString()).getDeadLetterAddress());
+   }
+
+   private void sendToDeadLetterAddress(final MessageReference ref,
+                                        final SimpleString deadLetterAddress) throws Exception {
+      if (deadLetterAddress != null) {
+         Bindings bindingList = postOffice.getBindingsForAddress(deadLetterAddress);
+
+         if (bindingList.getBindings().isEmpty()) {
+            ActiveMQServerLogger.LOGGER.messageExceededMaxDelivery(ref, deadLetterAddress);
+            acknowledge(ref);
+         }
+         else {
+            ActiveMQServerLogger.LOGGER.messageExceededMaxDeliverySendtoDLA(ref, deadLetterAddress, name);
+            move(deadLetterAddress, ref, false, false);
+         }
+      }
+      else {
+         ActiveMQServerLogger.LOGGER.messageExceededMaxDeliveryNoDLA(name);
+
+         acknowledge(ref);
+      }
+   }
+
+   private void move(final SimpleString address,
+                     final MessageReference ref,
+                     final boolean expiry,
+                     final boolean rejectDuplicate) throws Exception {
+      Transaction tx = new TransactionImpl(storageManager);
+
+      ServerMessage copyMessage = makeCopy(ref, expiry);
+
+      copyMessage.setAddress(address);
+
+      postOffice.route(copyMessage, null, tx, false, rejectDuplicate);
+
+      acknowledge(tx, ref);
+
+      tx.commit();
+   }
+
+   /*
+    * This method delivers the reference on the callers thread - this can give us better latency in the case there is nothing in the queue
+    */
+   private boolean deliverDirect(final MessageReference ref) {
+      synchronized (this) {
+         if (paused || consumerList.isEmpty()) {
+            return false;
+         }
+
+         if (checkExpired(ref)) {
+            return true;
+         }
+
+         int startPos = pos;
+
+         int size = consumerList.size();
+
+         while (true) {
+            ConsumerHolder holder = consumerList.get(pos);
+
+            Consumer consumer = holder.consumer;
+
+            Consumer groupConsumer = null;
+
+            // If a group id is set, then this overrides the consumer chosen round-robin
+
+            SimpleString groupID = extractGroupID(ref);
+
+            if (groupID != null) {
+               groupConsumer = groups.get(groupID);
+
+               if (groupConsumer != null) {
+                  consumer = groupConsumer;
+               }
+            }
+
+            // Only move onto the next position if the consumer on the current position was used.
+            if (groupConsumer == null) {
+               pos++;
+            }
+
+            if (pos == size) {
+               pos = 0;
+            }
+
+            HandleStatus status = handle(ref, consumer);
+
+            if (status == HandleStatus.HANDLED) {
+               if (groupID != null && groupConsumer == null) {
+                  groups.put(groupID, consumer);
+               }
+
+               messagesAdded++;
+
+               deliveriesInTransit.countUp();
+               proceedDeliver(consumer, ref);
+               return true;
+            }
+
+            if (pos == startPos) {
+               // Tried them all
+               break;
+            }
+         }
+         return false;
+      }
+   }
+
+   private void proceedDeliver(Consumer consumer, MessageReference reference) {
+      try {
+         consumer.proceedDeliver(reference);
+      }
+      catch (Throwable t) {
+         ActiveMQServerLogger.LOGGER.removingBadConsumer(t, consumer, reference);
+
+         synchronized (this) {
+            // If the consumer throws an exception we remove the consumer
+            try {
+               removeConsumer(consumer);
+            }
+            catch (Exception e) {
+               ActiveMQServerLogger.LOGGER.errorRemovingConsumer(e);
+            }
+
+            // The message failed to be delivered, hence we try again
+            addHead(reference);
+         }
+      }
+      finally {
+         deliveriesInTransit.countDown();
+      }
+   }
+
+   private boolean checkExpired(final MessageReference reference) {
+      if (reference.getMessage().isExpired()) {
+         if (isTrace) {
+            ActiveMQServerLogger.LOGGER.trace("Reference " + reference + " is expired");
+         }
+         reference.handled();
+
+         try {
+            expire(reference);
+         }
+         catch (Exception e) {
+            ActiveMQServerLogger.LOGGER.errorExpiringRef(e);
+         }
+
+         return true;
+      }
+      else {
+         return false;
+      }
+   }
+
+   private synchronized HandleStatus handle(final MessageReference reference, final Consumer consumer) {
+      HandleStatus status;
+      try {
+         status = consumer.handle(reference);
+      }
+      catch (Throwable t) {
+         ActiveMQServerLogger.LOGGER.removingBadConsumer(t, consumer, reference);
+
+         // If the consumer throws an exception we remove the consumer
+         try {
+            removeConsumer(consumer);
+         }
+         catch (Exception e) {
+            ActiveMQServerLogger.LOGGER.errorRemovingConsumer(e);
+         }
+         return HandleStatus.BUSY;
+      }
+
+      if (status == null) {
+         throw new IllegalStateException("ClientConsumer.handle() should never return null");
+      }
+
+      return status;
+   }
+
+   private List<ConsumerHolder> cloneConsumersList() {
+      List<ConsumerHolder> consumerListClone;
+
+      synchronized (this) {
+         consumerListClone = new ArrayList<ConsumerHolder>(consumerList);
+      }
+      return consumerListClone;
+   }
+
+   @Override
+   public void postAcknowledge(final MessageReference ref) {
+      QueueImpl queue = (QueueImpl) ref.getQueue();
+
+      queue.decDelivering();
+
+      if (ref.isPaged()) {
+         // nothing to be done
+         return;
+      }
+
+      final ServerMessage message = ref.getMessage();
+
+      boolean durableRef = message.isDurable() && queue.durable;
+
+      try {
+         message.decrementRefCount();
+      }
+      catch (Exception e) {
+         ActiveMQServerLogger.LOGGER.errorDecrementingRefCount(e);
+      }
+
+      if (durableRef) {
+         int count = message.decrementDurableRefCount();
+
+         if (count == 0) {
+            // Note - we MUST store the delete after the preceding ack has been committed to storage, we cannot combine
+            // the last ack and delete into a single delete.
+            // This is because otherwise we could have a situation where the same message is being acked concurrently
+            // from two different queues on different sessions.
+            // One decrements the ref count, then the other stores a delete, the delete gets committed, but the first
+            // ack isn't committed, then the server crashes and on
+            // recovery the message is deleted even though the other ack never committed
+
+            // also note then when this happens as part of a transaction it is the tx commit of the ack that is
+            // important not this
+
+            // Also note that this delete shouldn't sync to disk, or else we would build up the executor's queue
+            // as we can't delete each messaging with sync=true while adding messages transactionally.
+            // There is a startup check to remove non referenced messages case these deletes fail
+            try {
+               storageManager.deleteMessage(message.getMessageID());
+            }
+            catch (Exception e) {
+               ActiveMQServerLogger.LOGGER.errorRemovingMessage(e, message.getMessageID());
+            }
+         }
+      }
+   }
+
+   void postRollback(final LinkedList<MessageReference> refs) {
+      addHead(refs);
+   }
+
+   private long calculateRedeliveryDelay(final AddressSettings addressSettings, final int deliveryCount) {
+      long redeliveryDelay = addressSettings.getRedeliveryDelay();
+      long maxRedeliveryDelay = addressSettings.getMaxRedeliveryDelay();
+      double redeliveryMultiplier = addressSettings.getRedeliveryMultiplier();
+
+      int tmpDeliveryCount = deliveryCount > 0 ? deliveryCount - 1 : 0;
+      long delay = (long) (redeliveryDelay * (Math.pow(redeliveryMultiplier, tmpDeliveryCount)));
+
+      if (delay > maxRedeliveryDelay) {
+         delay = maxRedeliveryDelay;
+      }
+
+      return delay;
+   }
+
+   @Override
+   public synchronized void resetMessagesAdded() {
+      messagesAdded = 0;
+   }
+
+   @Override
+   public synchronized void resetMessagesAcknowledged() {
+      messagesAcknowledged = 0;
+   }
+
+   @Override
+   public float getRate() {
+      float timeSlice = ((System.currentTimeMillis() - queueRateCheckTime.getAndSet(System.currentTimeMillis())) / 1000.0f);
+      if (timeSlice == 0) {
+         messagesAddedSnapshot.getAndSet(messagesAdded);
+         return 0.0f;
+      }
+      return BigDecimal.valueOf((messagesAdded - messagesAddedSnapshot.getAndSet(messagesAdded)) / timeSlice).setScale(2, BigDecimal.ROUND_UP).floatValue();
+   }
+
+   // Inner classes
+   // --------------------------------------------------------------------------
+
+   private static class ConsumerHolder {
+
+      ConsumerHolder(final Consumer consumer) {
+         this.consumer = consumer;
+      }
+
+      final Consumer consumer;
+
+      LinkedListIterator<MessageReference> iter;
+
+   }
+
+   private class DelayedAddRedistributor implements Runnable {
+
+      private final Executor executor1;
+
+      DelayedAddRedistributor(final Executor executor) {
+         this.executor1 = executor;
+      }
+
+      @Override
+      public void run() {
+         synchronized (QueueImpl.this) {
+            internalAddRedistributor(executor1);
+
+            futures.remove(this);
+         }
+      }
+   }
+
+   /**
+    * There's no need of having multiple instances of this class. a Single instance per QueueImpl should be more than sufficient.
+    * previous versions of this class were using a synchronized object. The current version is using the deliverRunner
+    * instance, and to avoid confusion on the implementation I'm requesting to keep this single instanced per QueueImpl.
+    */
+   private final class DeliverRunner implements Runnable {
+
+      @Override
+      public void run() {
+         try {
+            // during the transition between paging and nonpaging, we could have this using a different executor
+            // and at this short period we could have more than one delivery thread running in async mode
+            // this will avoid that possibility
+            // We will be using the deliverRunner instance as the guard object to avoid multiple threads executing
+            // an asynchronous delivery
+            synchronized (QueueImpl.this.deliverRunner) {
+               deliver();
+            }
+         }
+         catch (Exception e) {
+            ActiveMQServerLogger.LOGGER.errorDelivering(e);
+         }
+         finally {
+            scheduledRunners.decrementAndGet();
+         }
+      }
+   }
+
+   private final class DepageRunner implements Runnable {
+
+      final boolean scheduleExpiry;
+
+      public DepageRunner(boolean scheduleExpiry) {
+         this.scheduleExpiry = scheduleExpiry;
+      }
+
+      @Override
+      public void run() {
+         try {
+            depage(scheduleExpiry);
+         }
+         catch (Exception e) {
+            ActiveMQServerLogger.LOGGER.errorDelivering(e);
+         }
+      }
+   }
+
+   /**
+    * This will determine the actions that could be done while iterate the queue through iterQueue
+    */
+   abstract class QueueIterateAction {
+
+      public abstract void actMessage(Transaction tx, MessageReference ref) throws Exception;
+   }
+
+   /* For external use we need to use a synchronized version since the list is not thread safe */
+   private class SynchronizedIterator implements LinkedListIterator<MessageReference> {
+
+      private final LinkedListIterator<MessageReference> iter;
+
+      SynchronizedIterator(LinkedListIterator<MessageReference> iter) {
+         this.iter = iter;
+      }
+
+      @Override
+      public void close() {
+         synchronized (QueueImpl.this) {
+            iter.close();
+         }
+      }
+
+      @Override
+      public void repeat() {
+         synchronized (QueueImpl.this) {
+            iter.repeat();
+         }
+      }
+
+      @Override
+      public boolean hasNext() {
+         synchronized (QueueImpl.this) {
+            return iter.hasNext();
+         }
+      }
+
+      @Override
+      public MessageReference next() {
+         synchronized (QueueImpl.this) {
+            return iter.next();
+         }
+      }
+
+      @Override
+      public void remove() {
+         synchronized (QueueImpl.this) {
+            iter.remove();
+         }
+      }
+   }
+
+   //Readonly (no remove) iterator over the messages in the queue, in order of
+   //paging store, intermediateMessageReferences and MessageReferences
+   private class TotalQueueIterator implements LinkedListIterator<MessageReference> {
+
+      LinkedListIterator<PagedReference> pageIter = null;
+      LinkedListIterator<MessageReference> messagesIterator = null;
+
+      Iterator lastIterator = null;
+
+      public TotalQueueIterator() {
+         if (pageSubscription != null) {
+            pageIter = pageSubscription.iterator();
+         }
+         messagesIterator = new SynchronizedIterator(messageReferences.iterator());
+      }
+
+      @Override
+      public boolean hasNext() {
+         if (messagesIterator != null && messagesIterator.hasNext()) {
+            lastIterator = messagesIterator;
+            return true;
+         }
+         if (pageIter != null) {
+            if (pageIter.hasNext()) {
+               lastIterator = pageIter;
+               return true;
+            }
+         }
+
+         return false;
+      }
+
+      @Override
+      public MessageReference next() {
+         if (messagesIterator != null && messagesIterator.hasNext()) {
+            MessageReference msg = messagesIterator.next();
+            return msg;
+         }
+         if (pageIter != null) {
+            if (pageIter.hasNext()) {
+               lastIterator = pageIter;
+               return pageIter.next();
+            }
+         }
+
+         throw new NoSuchElementException();
+      }
+
+      @Override
+      public void remove() {
+         if (lastIterator != null) {
+            lastIterator.remove();
+         }
+      }
+
+      @Override
+      public void repeat() {
+      }
+
+      @Override
+      public void close() {
+         if (pageIter != null) {
+            pageIter.close();
+         }
+         if (messagesIterator != null) {
+            messagesIterator.close();
+         }
+      }
+   }
+
+   private int incDelivering() {
+      return deliveringCount.incrementAndGet();
+   }
+
+   public void decDelivering() {
+      deliveringCount.decrementAndGet();
+   }
+
+   private void configureExpiry(final AddressSettings settings) {
+      this.expiryAddress = settings == null ? null : settings.getExpiryAddress();
+   }
+
+   private void configureSlowConsumerReaper(final AddressSettings settings) {
+      if (settings == null || settings.getSlowConsumerThreshold() == AddressSettings.DEFAULT_SLOW_CONSUMER_THRESHOLD) {
+         if (slowConsumerReaperFuture != null) {
+            slowConsumerReaperFuture.cancel(false);
+            slowConsumerReaperFuture = null;
+            slowConsumerReaperRunnable = null;
+            if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+               ActiveMQServerLogger.LOGGER.debug("Cancelled slow-consumer-reaper thread for queue \"" + getName() + "\"");
+            }
+         }
+      }
+      else {
+         if (slowConsumerReaperRunnable == null) {
+            scheduleSlowConsumerReaper(settings);
+         }
+         else if (slowConsumerReaperRunnable.checkPeriod != settings.getSlowConsumerCheckPeriod() ||
+            slowConsumerReaperRunnable.threshold != settings.getSlowConsumerThreshold() ||
+            !slowConsumerReaperRunnable.policy.equals(settings.getSlowConsumerPolicy())) {
+            slowConsumerReaperFuture.cancel(false);
+            scheduleSlowConsumerReaper(settings);
+         }
+      }
+   }
+
+   void scheduleSlowConsumerReaper(AddressSettings settings) {
+      slowConsumerReaperRunnable = new SlowConsumerReaperRunnable(settings.getSlowConsumerCheckPeriod(), settings.getSlowConsumerThreshold(), settings.getSlowConsumerPolicy());
+
+      slowConsumerReaperFuture = scheduledExecutor.scheduleWithFixedDelay(slowConsumerReaperRunnable, settings.getSlowConsumerCheckPeriod(), settings.getSlowConsumerCheckPeriod(), TimeUnit.SECONDS);
+
+      if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+         ActiveMQServerLogger.LOGGER.debug("Scheduled slow-consumer-reaper thread for queue \"" + getName() +
+                                              "\"; slow-consumer-check-period=" + settings.getSlowConsumerCheckPeriod() +
+                                              ", slow-consumer-threshold=" + settings.getSlowConsumerThreshold() +
+                                              ", slow-consumer-policy=" + settings.getSlowConsumerPolicy());
+      }
+   }
+
+   private class AddressSettingsRepositoryListener implements HierarchicalRepositoryChangeListener {
+
+      @Override
+      public void onChange() {
+         AddressSettings settings = addressSettingsRepository.getMatch(address.toString());
+         configureExpiry(settings);
+         configureSlowConsumerReaper(settings);
+      }
+   }
+
+   private final class SlowConsumerReaperRunnable implements Runnable {
+
+      private SlowConsumerPolicy policy;
+      private float threshold;
+      private long checkPeriod;
+
+      public SlowConsumerReaperRunnable(long checkPeriod, float threshold, SlowConsumerPolicy policy) {
+         this.checkPeriod = checkPeriod;
+         this.policy = policy;
+         this.threshold = threshold;
+      }
+
+      @Override
+      public void run() {
+         float queueRate = getRate();
+         if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+            ActiveMQServerLogger.LOGGER.debug(getAddress() + ":" + getName() + " has " + getConsumerCount() + " consumer(s) and is receiving messages at a rate of " + queueRate + " msgs/second.");
+         }
+         for (Consumer consumer : getConsumers()) {
+            if (consumer instanceof ServerConsumerImpl) {
+               ServerConsumerImpl serverConsumer = (ServerConsumerImpl) consumer;
+               float consumerRate = serverConsumer.getRate();
+               if (queueRate < threshold) {
+                  if (ActiveMQServerLogger.LOGGER.isDebugEnabled()) {
+                     ActiveMQServerLogger.LOGGER.debug("Insufficient messages received on queue \"" + getName() + "\" to satisfy slow-consumer-threshold. Skipping inspection of consumer.");
+                  }
+               }
+               else if (consumerRate < threshold) {
+                  RemotingConnection connection = null;
+                  RemotingService remotingService = ((PostOfficeImpl) postOffice).getServer().getRemotingService();
+
+                  for (RemotingConnection potentialConnection : remotingService.getConnections()) {
+                     if (potentialConnection.getID().toString().equals(serverConsumer.getConnectionID())) {
+                        connection = potentialConnection;
+                     }
+                  }
+
+                  if (connection != null) {
+                     ActiveMQServerLogger.LOGGER.slowConsumerDetected(serverConsumer.getSessionID(), serverConsumer.getID(), getName().toString(), connection.getRemoteAddress(), threshold, consumerRate);
+                     if (policy.equals(SlowConsumerPolicy.KILL)) {
+                        remotingService.removeConnection(connection.getID());
+                        connection.fail(ActiveMQMessageBundle.BUNDLE.connectionsClosedByManagement(connection.getRemoteAddress()));
+                     }
+                     else if (policy.equals(SlowConsumerPolicy.NOTIFY)) {
+                        TypedProperties props = new TypedProperties();
+
+                        props.putIntProperty(ManagementHelper.HDR_CONSUMER_COUNT, getConsumerCount());
+
+                        props.putSimpleStringProperty(ManagementHelper.HDR_ADDRESS, address);
+
+                        if (connection != null) {
+                           props.putSimpleStringProperty(ManagementHelper.HDR_REMOTE_ADDRESS, SimpleString.toSimpleString(connection.getRemoteAddress()));
+
+                           if (connection.getID() != null) {
+                              props.putSimpleStringProperty(ManagementHelper.HDR_CONNECTION_NAME, SimpleString.toSimpleString(connection.getID().toString()));
+                           }
                         }
-                    }
-                }
+
+                        props.putLongProperty(ManagementHelper.HDR_CONSUMER_NAME, serverConsumer.getID());
+
+                        props.putSimpleStringProperty(ManagementHelper.HDR_SESSION_NAME, SimpleString.toSimpleString(serverConsumer.getSessionID()));
+
+                        Notification notification = new Notification(null, CoreNotificationType.CONSUMER_SLOW, props);
+
+                        ManagementService managementService = ((PostOfficeImpl) postOffice).getServer().getManagementService();
+                        try {
+                           managementService.sendNotification(notification);
+                        }
+                        catch (Exception e) {
+                           ActiveMQServerLogger.LOGGER.failedToSendSlowConsumerNotification(notification, e);
+                        }
+                     }
+                  }
+               }
             }
-
-        }
-    }
-
-    /**
-     * Get the configs to the {@link KafkaConsumer consumer}.
-     * Properties using the prefix {@link #CONSUMER_PREFIX} will be used in favor over their non-prefixed versions
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     *
-     * @param groupId      consumer groupId
-     * @param clientId     clientId
-     * @return Map of the consumer configuration.
-     * @Deprecated use {@link StreamsConfig#getMainConsumerConfigs(String, String)}
-     */
-    @Deprecated
-    public Map<String, Object> getConsumerConfigs(final String groupId,
-                                                  final String clientId) {
-        return getMainConsumerConfigs(groupId, clientId);
-    }
-
-    /**
-     * Get the configs to the {@link KafkaConsumer main consumer}.
-     * Properties using the prefix {@link #MAIN_CONSUMER_PREFIX} will be used in favor over
-     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
-     * (read the override precedence ordering in {@link #MAIN_CONSUMER_PREFIX)
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     * If not specified by {@link #MAIN_CONSUMER_PREFIX}, main consumer will share the general consumer configs
-     * prefixed by {@link #CONSUMER_PREFIX}.
-     *
-     * @param groupId      consumer groupId
-     * @param clientId     clientId
-     * @return Map of the consumer configuration.
-     */
-    public Map<String, Object> getMainConsumerConfigs(final String groupId,
-                                                      final String clientId) {
-        Map<String, Object> consumerProps = getCommonConsumerConfigs();
-
-        // Get main consumer override configs
-        Map<String, Object> mainConsumerProps = originalsWithPrefix(MAIN_CONSUMER_PREFIX);
-        for (Map.Entry<String, Object> entry: mainConsumerProps.entrySet()) {
-            consumerProps.put(entry.getKey(), entry.getValue());
-        }
-
-        // add client id with stream client id prefix, and group id
-        consumerProps.put(APPLICATION_ID_CONFIG, groupId);
-        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-        consumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-consumer");
-
-        // add configs required for stream partition assignor
-        consumerProps.put(UPGRADE_FROM_CONFIG, getString(UPGRADE_FROM_CONFIG));
-        consumerProps.put(REPLICATION_FACTOR_CONFIG, getInt(REPLICATION_FACTOR_CONFIG));
-        consumerProps.put(APPLICATION_SERVER_CONFIG, getString(APPLICATION_SERVER_CONFIG));
-        consumerProps.put(NUM_STANDBY_REPLICAS_CONFIG, getInt(NUM_STANDBY_REPLICAS_CONFIG));
-        consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, StreamsPartitionAssignor.class.getName());
-        consumerProps.put(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG, getLong(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG));
-
-        // add admin retries configs for creating topics
-        final AdminClientConfig adminClientDefaultConfig = new AdminClientConfig(getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames()));
-        consumerProps.put(adminClientPrefix(AdminClientConfig.RETRIES_CONFIG), adminClientDefaultConfig.getInt(AdminClientConfig.RETRIES_CONFIG));
-
-        // verify that producer batch config is no larger than segment size, then add topic configs required for creating topics
-        final Map<String, Object> topicProps = originalsWithPrefix(TOPIC_PREFIX, false);
-
-        if (topicProps.containsKey(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG))) {
-            final int segmentSize = Integer.parseInt(topicProps.get(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG)).toString());
-            final Map<String, Object> producerProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
-            final int batchSize;
-            if (producerProps.containsKey(ProducerConfig.BATCH_SIZE_CONFIG)) {
-                batchSize = Integer.parseInt(producerProps.get(ProducerConfig.BATCH_SIZE_CONFIG).toString());
-            } else {
-                final ProducerConfig producerDefaultConfig = new ProducerConfig(new Properties());
-                batchSize = producerDefaultConfig.getInt(ProducerConfig.BATCH_SIZE_CONFIG);
-            }
-
-            if (segmentSize < batchSize) {
-                throw new IllegalArgumentException(String.format("Specified topic segment size %d is is smaller than the configured producer batch size %d, this will cause produced batch not able to be appended to the topic",
-                        segmentSize,
-                        batchSize));
-            }
-        }
-
-        consumerProps.putAll(topicProps);
-
-        return consumerProps;
-    }
-
-    /**
-     * Get the configs for the {@link KafkaConsumer restore-consumer}.
-     * Properties using the prefix {@link #RESTORE_CONSUMER_PREFIX} will be used in favor over
-     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
-     * (read the override precedence ordering in {@link #RESTORE_CONSUMER_PREFIX)
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     * If not specified by {@link #RESTORE_CONSUMER_PREFIX}, restore consumer will share the general consumer configs
-     * prefixed by {@link #CONSUMER_PREFIX}.
-     *
-     * @param clientId clientId
-     * @return Map of the restore consumer configuration.
-     */
-    public Map<String, Object> getRestoreConsumerConfigs(final String clientId) {
-        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
-
-        // Get restore consumer override configs
-        Map<String, Object> restoreConsumerProps = originalsWithPrefix(RESTORE_CONSUMER_PREFIX);
-        for (Map.Entry<String, Object> entry: restoreConsumerProps.entrySet()) {
-            baseConsumerProps.put(entry.getKey(), entry.getValue());
-        }
-
-        // no need to set group id for a restore consumer
-        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
-        // add client id with stream client id prefix
-        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-restore-consumer");
-        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-
-        return baseConsumerProps;
-    }
-
-    /**
-     * Get the configs for the {@link KafkaConsumer global consumer}.
-     * Properties using the prefix {@link #GLOBAL_CONSUMER_PREFIX} will be used in favor over
-     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
-     * (read the override precedence ordering in {@link #GLOBAL_CONSUMER_PREFIX)
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     * If not specified by {@link #GLOBAL_CONSUMER_PREFIX}, global consumer will share the general consumer configs
-     * prefixed by {@link #CONSUMER_PREFIX}.
-     *
-     * @param clientId clientId
-     * @return Map of the global consumer configuration.
-     */
-    public Map<String, Object> getGlobalConsumerConfigs(final String clientId) {
-        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
-
-        // Get global consumer override configs
-        Map<String, Object> globalConsumerProps = originalsWithPrefix(GLOBAL_CONSUMER_PREFIX);
-        for (Map.Entry<String, Object> entry: globalConsumerProps.entrySet()) {
-            baseConsumerProps.put(entry.getKey(), entry.getValue());
-        }
-
-        // no need to set group id for a global consumer
-        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
-        // add client id with stream client id prefix
-        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-global-consumer");
-        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-
-        return baseConsumerProps;
-    }
-
-    /**
-     * Get the configs for the {@link KafkaProducer producer}.
-     * Properties using the prefix {@link #PRODUCER_PREFIX} will be used in favor over their non-prefixed versions
-     * except in the case of {@link ProducerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     *
-     * @param clientId clientId
-     * @return Map of the producer configuration.
-     */
-    public Map<String, Object> getProducerConfigs(final String clientId) {
-        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
-
-        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS);
-
-        // generate producer configs from original properties and overridden maps
-        final Map<String, Object> props = new HashMap<>(eosEnabled ? PRODUCER_EOS_OVERRIDES : PRODUCER_DEFAULT_OVERRIDES);
-        props.putAll(getClientCustomProps());
-        props.putAll(clientProvidedProps);
-
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
-        // add client id with stream client id prefix
-        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-producer");
-
-        return props;
-    }
-
-    /**
-     * Get the configs for the {@link org.apache.kafka.clients.admin.AdminClient admin client}.
-     * @param clientId clientId
-     * @return Map of the admin client configuration.
-     */
-    public Map<String, Object> getAdminConfigs(final String clientId) {
-        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames());
-
-        final Map<String, Object> props = new HashMap<>();
-        props.putAll(getClientCustomProps());
-        props.putAll(clientProvidedProps);
-
-        // add client id with stream client id prefix
-        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-admin");
-
-        return props;
-    }
-
-    private Map<String, Object> getClientPropsWithPrefix(final String prefix,
-                                                         final Set<String> configNames) {
-        final Map<String, Object> props = clientProps(configNames, originals());
-        props.putAll(originalsWithPrefix(prefix));
-        return props;
-    }
-
-    /**
-     * Get a map of custom configs by removing from the originals all the Streams, Consumer, Producer, and AdminClient configs.
-     * Prefixed properties are also removed because they are already added by {@link #getClientPropsWithPrefix(String, Set)}.
-     * This allows to set a custom property for a specific client alone if specified using a prefix, or for all
-     * when no prefix is used.
-     *
-     * @return a map with the custom properties
-     */
-    private Map<String, Object> getClientCustomProps() {
-        final Map<String, Object> props = originals();
-        props.keySet().removeAll(CONFIG.names());
-        props.keySet().removeAll(ConsumerConfig.configNames());
-        props.keySet().removeAll(ProducerConfig.configNames());
-        props.keySet().removeAll(AdminClientConfig.configNames());
-        props.keySet().removeAll(originalsWithPrefix(CONSUMER_PREFIX, false).keySet());
-        props.keySet().removeAll(originalsWithPrefix(PRODUCER_PREFIX, false).keySet());
-        props.keySet().removeAll(originalsWithPrefix(ADMIN_CLIENT_PREFIX, false).keySet());
-        return props;
-    }
-
-    /**
-     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_KEY_SERDE_CLASS_CONFIG key Serde
-     * class}.
-     *
-     * @return an configured instance of key Serde class
-     */
-    public Serde defaultKeySerde() {
-        Object keySerdeConfigSetting = get(DEFAULT_KEY_SERDE_CLASS_CONFIG);
-        try {
-            Serde<?> serde = getConfiguredInstance(DEFAULT_KEY_SERDE_CLASS_CONFIG, Serde.class);
-            serde.configure(originals(), true);
-            return serde;
-        } catch (final Exception e) {
-            throw new StreamsException(
-                String.format("Failed to configure key serde %s", keySerdeConfigSetting), e);
-        }
-    }
-
-    /**
-     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_VALUE_SERDE_CLASS_CONFIG value
-     * Serde class}.
-     *
-     * @return an configured instance of value Serde class
-     */
-    public Serde defaultValueSerde() {
-        Object valueSerdeConfigSetting = get(DEFAULT_VALUE_SERDE_CLASS_CONFIG);
-        try {
-            Serde<?> serde = getConfiguredInstance(DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serde.class);
-            serde.configure(originals(), false);
-            return serde;
-        } catch (final Exception e) {
-            throw new StreamsException(
-                String.format("Failed to configure value serde %s", valueSerdeConfigSetting), e);
-        }
-    }
-
-    public TimestampExtractor defaultTimestampExtractor() {
-        return getConfiguredInstance(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG, TimestampExtractor.class);
-    }
-
-    public DeserializationExceptionHandler defaultDeserializationExceptionHandler() {
-        return getConfiguredInstance(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG, DeserializationExceptionHandler.class);
-    }
-
-    public ProductionExceptionHandler defaultProductionExceptionHandler() {
-        return getConfiguredInstance(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG, ProductionExceptionHandler.class);
-    }
-
-    /**
-     * Override any client properties in the original configs with overrides
-     *
-     * @param configNames The given set of configuration names.
-     * @param originals   The original configs to be filtered.
-     * @return client config with any overrides
-     */
-    private Map<String, Object> clientProps(final Set<String> configNames,
-                                            final Map<String, Object> originals) {
-        // iterate all client config names, filter out non-client configs from the original
-        // property map and use the overridden values when they are not specified by users
-        final Map<String, Object> parsed = new HashMap<>();
-        for (final String configName: configNames) {
-            if (originals.containsKey(configName)) {
-                parsed.put(configName, originals.get(configName));
-            }
-        }
-
-        return parsed;
-    }
-
-    public static void main(final String[] args) {
-        System.out.println(CONFIG.toHtmlTable());
-    }
+         }
+      }
+   }
 }
+

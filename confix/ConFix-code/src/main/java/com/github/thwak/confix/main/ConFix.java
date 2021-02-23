@@ -14,6 +14,8 @@ import java.util.Properties;
 import java.util.Random;
 import java.util.Set;
 import java.util.Comparator;
+import java.util.Collections;
+import java.lang.Integer;
 
 import com.github.thwak.confix.coverage.CoverageManager;
 import com.github.thwak.confix.coverage.TestResult;
@@ -74,8 +76,8 @@ public class ConFix {
 	public static int maxChangeCount;
 
 	// TE
-	public static List<File> cleanFiles = new ArrayList<File>();
-	public static List<File> buggyFiles = new ArrayList<File>();
+	public static List<File> cleanFiles = new ArrayList<File>(11);
+	public static List<File> buggyFiles = new ArrayList<File>(11);
 	public static String projectName;
 	public static String bugId;
 
@@ -203,12 +205,12 @@ public class ConFix {
 						e.printStackTrace();
 					}
 					returnCode = Patcher.C_NOT_APPLIED;
-					break;
+					// break;
 				}
 				trial++;
 
 				if (returnCode == Patcher.C_NOT_INST) {
-					break;
+					// break;
 				} else {
 					if (returnCode == Patcher.C_APPLIED) {
 						System.out.println("\nPatch Candidate-" + candidateNum + " is generated.");
@@ -227,7 +229,7 @@ public class ConFix {
 						}
 
 						String newSource = patcher.getNewSource();
-						String candidateFileName = storeCandidate(newSource, editText, targetClass, change);
+						String candidateFileName = storeCandidate(newSource, editText, targetClass, change, candidateNum);
 
 						// ======= STEP 2-5. Verify Patch Candidate ======= //
 						System.out.println(
@@ -257,8 +259,8 @@ public class ConFix {
 						}
 						candidateNum++;
 						if (candidateNum > patchCount || result == TEST_TIMEOUT || result == BREAK_FUNC
-								|| !candidates.add(editText))
-							break;
+								|| !candidates.add(editText)){}
+							// break;
 					} else if (returnCode == Patcher.C_NO_FIXLOC) {
 						break;
 					} else if (returnCode == Patcher.C_NO_CHANGE) {
@@ -565,11 +567,12 @@ public class ConFix {
 		return filePath;
 	}
 
-	private static String storeCandidate(String newSource, String patch, String targetClass, Change change) {
+	private static String storeCandidate(String newSource, String patch, String targetClass, Change change, int candidateNum) {
 		int lastDotIndex = targetClass.lastIndexOf('.');
 		String packageName = targetClass.substring(0, lastDotIndex);
 		String fileName = targetClass.substring(lastDotIndex + 1) + ".java";
-		String candidatePath = candidateDir + File.separator + "candidate" + File.separator;
+		// String candidatePath = candidateDir + File.separator + "candidate_"+candidateNum + File.separator;
+		String candidatePath = candidateDir + File.separator + "candidate"+ File.separator;
 		String packagePath = candidatePath + packageName.replaceAll("\\.", File.separator + File.separator);
 		File dir = new File(packagePath);
 		if (!dir.exists())
@@ -640,40 +643,23 @@ public class ConFix {
 		File[] directoryListing = dir.listFiles();
 		//System.out.println("File list size: "+directoryListing.length()) ;
 
-		Arrays.sort(directoryListing, new Comparator<File>() {
-            @Override
-            public int compare(File o1, File o2) {
-                int n1 = extractNumber(o1.getName());
-                int n2 = extractNumber(o2.getName());
-                return n1 - n2;
-            }
-
-            private int extractNumber(String name) {
-                int i = 0;
-                try {
-                    int s = name.indexOf('-')+1;
-                    int e = name.lastIndexOf('_');
-                    String number = name.substring(s, e);
-                    i = Integer.parseInt(number);
-                } catch(Exception e) {
-                    i = 0; // if filename does not match the format
-                           // then default to 0
-                }
-                return i;
-            }
-        });
-
+		for(int i = 0; i<11 ; i++){
+			cleanFiles.add(null);
+			buggyFiles.add(null);
+		}
 
 		if (directoryListing != null) {
 			for (File child : directoryListing) {
-				
+					int start = child.getName().indexOf('-') + 1;
+                    int end = child.getName().lastIndexOf('_');
+                    int number = Integer.parseInt(child.getName().substring(start, end));
 				try {
-					System.out.println("Child path: "+child.getCanonicalPath()) ;
+					//System.out.println("Child path: " + child.getCanonicalPath()) ;
 					String[] childPath = child.getCanonicalPath().split("data/"); // "data/"" 뒤에는 파일 이름이 붙는다.
 					if (childPath[1].indexOf("new") > 0) {
-						cleanFiles.add(child);
+						cleanFiles.set(number, child);
 					} else {
-						buggyFiles.add(child);
+						buggyFiles.set(number, child);
 					}
 				} catch (IOException e) {
 					e.printStackTrace();

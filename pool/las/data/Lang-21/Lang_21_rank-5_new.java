@@ -1,1472 +1,844 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.felix.scr.impl.manager;
+package org.apache.lucene.search;
 
-import java.security.Permission;
+
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
-import java.util.Dictionary;
-import java.util.Enumeration;
-import java.util.Hashtable;
+import java.util.ConcurrentModificationException;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Predicate;
 
-import org.apache.felix.scr.Component;
-import org.apache.felix.scr.Reference;
-import org.apache.felix.scr.impl.Activator;
-import org.apache.felix.scr.impl.BundleComponentActivator;
-import org.apache.felix.scr.impl.config.ScrConfiguration;
-import org.apache.felix.scr.impl.helper.ComponentMethods;
-import org.apache.felix.scr.impl.helper.MethodResult;
-import org.apache.felix.scr.impl.helper.SimpleLogger;
-import org.apache.felix.scr.impl.metadata.ComponentMetadata;
-import org.apache.felix.scr.impl.metadata.ReferenceMetadata;
-import org.apache.felix.scr.impl.metadata.ServiceMetadata;
-import org.osgi.framework.Bundle;
-import org.osgi.framework.BundleContext;
-import org.osgi.framework.InvalidSyntaxException;
-import org.osgi.framework.ServicePermission;
-import org.osgi.framework.ServiceReference;
-import org.osgi.framework.ServiceRegistration;
-import org.osgi.service.component.ComponentConstants;
-import org.osgi.service.log.LogService;
-
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.IndexReaderContext;
+import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.ReaderUtil;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.TieredMergePolicy;
+import org.apache.lucene.util.Accountable;
+import org.apache.lucene.util.Accountables;
+import org.apache.lucene.util.BitDocIdSet;
+import org.apache.lucene.util.FixedBitSet;
+import org.apache.lucene.util.RamUsageEstimator;
+import org.apache.lucene.util.RoaringDocIdSet;
 
 /**
- * The default ComponentManager. Objects of this class are responsible for managing
- * implementation object's lifecycle.
+ * A {@link QueryCache} that evicts queries using a LRU (least-recently-used)
+ * eviction policy in order to remain under a given maximum size and number of
+ * bytes used.
  *
+ * This class is thread-safe.
+ *
+ * Note that query eviction runs in linear time with the total number of
+ * segments that have cache entries so this cache works best with
+ * {@link QueryCachingPolicy caching policies} that only cache on "large"
+ * segments, and it is advised to not share this cache across too many indices.
+ *
+ * A default query cache and policy instance is used in IndexSearcher. If you want to replace those defaults
+ * it is typically done like this:
+ * <pre class="prettyprint">
+ *   final int maxNumberOfCachedQueries = 256;
+ *   final long maxRamBytesUsed = 50 * 1024L * 1024L; // 50MB
+ *   // these cache and policy instances can be shared across several queries and readers
+ *   // it is fine to eg. store them into static variables
+ *   final QueryCache queryCache = new LRUQueryCache(maxNumberOfCachedQueries, maxRamBytesUsed);
+ *   final QueryCachingPolicy defaultCachingPolicy = new UsageTrackingQueryCachingPolicy();
+ *   indexSearcher.setQueryCache(queryCache);
+ *   indexSearcher.setQueryCachingPolicy(defaultCachingPolicy);
+ * </pre>
+ *
+ * This cache exposes some global statistics ({@link #getHitCount() hit count},
+ * {@link #getMissCount() miss count}, {@link #getCacheSize() number of cache
+ * entries}, {@link #getCacheCount() total number of DocIdSets that have ever
+ * been cached}, {@link #getEvictionCount() number of evicted entries}). In
+ * case you would like to have more fine-grained statistics, such as per-index
+ * or per-query-class statistics, it is possible to override various callbacks:
+ * {@link #onHit}, {@link #onMiss},
+ * {@link #onQueryCache}, {@link #onQueryEviction},
+ * {@link #onDocIdSetCache}, {@link #onDocIdSetEviction} and {@link #onClear}.
+ * It is better to not perform heavy computations in these methods though since
+ * they are called synchronously and under a lock.
+ *
+ * @see QueryCachingPolicy
+ * @lucene.experimental
  */
-public abstract class AbstractComponentManager<S> implements Component, SimpleLogger
-{
-    //useful text for deactivation reason numbers
-    static final String[] REASONS = {"Unspecified",
-        "Component disabled",
-        "Reference became unsatisfied",
-        "Configuration modified",
-        "Configuration deleted",
-        "Component disabled",
-        "Bundle stopped"};
+public class LRUQueryCache implements QueryCache, Accountable {
 
-    private final boolean m_factoryInstance;
-    // the ID of this component
-    private long m_componentId;
+  // memory usage of a simple term query
+  static final long QUERY_DEFAULT_RAM_BYTES_USED = 192;
 
-    // The metadata
-    private final ComponentMetadata m_componentMetadata;
+  static final long HASHTABLE_RAM_BYTES_PER_ENTRY =
+      2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF // key + value
+      * 2; // hash tables need to be oversized to avoid collisions, assume 2x capacity
 
-    private final ComponentMethods m_componentMethods;
+  static final long LINKED_HASHTABLE_RAM_BYTES_PER_ENTRY =
+      HASHTABLE_RAM_BYTES_PER_ENTRY
+      + 2 * RamUsageEstimator.NUM_BYTES_OBJECT_REF; // previous & next references
 
-    // The dependency managers that manage every dependency
-    private final List<DependencyManager<S, ?>> m_dependencyManagers;
+  private final int maxSize;
+  private final long maxRamBytesUsed;
+  private final Predicate<LeafReaderContext> leavesToCache;
+  // maps queries that are contained in the cache to a singleton so that this
+  // cache does not store several copies of the same query
+  private final Map<Query, Query> uniqueQueries;
+  // The contract between this set and the per-leaf caches is that per-leaf caches
+  // are only allowed to store sub-sets of the queries that are contained in
+  // mostRecentlyUsedQueries. This is why write operations are performed under a lock
+  private final Set<Query> mostRecentlyUsedQueries;
+  private final Map<IndexReader.CacheKey, LeafCache> cache;
+  private final ReentrantLock lock;
 
-    private volatile boolean m_dependencyManagersInitialized;
+  // these variables are volatile so that we do not need to sync reads
+  // but increments need to be performed under the lock
+  private volatile long ramBytesUsed;
+  private volatile long hitCount;
+  private volatile long missCount;
+  private volatile long cacheCount;
+  private volatile long cacheSize;
 
-    private volatile boolean m_dependenciesCollected;
+  /**
+   * Expert: Create a new instance that will cache at most <code>maxSize</code>
+   * queries with at most <code>maxRamBytesUsed</code> bytes of memory, only on
+   * leaves that satisfy {@code leavesToCache};
+   */
+  public LRUQueryCache(int maxSize, long maxRamBytesUsed,
+      Predicate<LeafReaderContext> leavesToCache) {
+    this.maxSize = maxSize;
+    this.maxRamBytesUsed = maxRamBytesUsed;
+    this.leavesToCache = leavesToCache;
+    uniqueQueries = new LinkedHashMap<>(16, 0.75f, true);
+    mostRecentlyUsedQueries = uniqueQueries.keySet();
+    cache = new IdentityHashMap<>();
+    lock = new ReentrantLock();
+    ramBytesUsed = 0;
+  }
 
-    private final AtomicInteger m_trackingCount = new AtomicInteger( );
+  /**
+   * Create a new instance that will cache at most <code>maxSize</code> queries
+   * with at most <code>maxRamBytesUsed</code> bytes of memory. Queries will
+   * only be cached on leaves that have more than 10k documents and have more
+   * than 3% of the total number of documents in the index.
+   * This should guarantee that all leaves from the upper
+   * {@link TieredMergePolicy tier} will be cached while ensuring that at most
+   * <tt>33</tt> leaves can make it to the cache (very likely less than 10 in
+   * practice), which is useful for this implementation since some operations
+   * perform in linear time with the number of cached leaves.
+   */
+  public LRUQueryCache(int maxSize, long maxRamBytesUsed) {
+    this(maxSize, maxRamBytesUsed, new MinSegmentSizePredicate(10000, .03f));
+  }
 
-    // A reference to the BundleComponentActivator
-    private BundleComponentActivator m_activator;
+  // pkg-private for testing
+  static class MinSegmentSizePredicate implements Predicate<LeafReaderContext> {
+    private final int minSize;
+    private final float minSizeRatio;
 
-    // The ServiceRegistration is now tracked in the RegistrationManager
-    
-    private final ReentrantLock m_stateLock;
-
-    protected volatile boolean m_enabled;
-    protected final AtomicReference< CountDownLatch> m_enabledLatchRef = new AtomicReference<CountDownLatch>( new CountDownLatch(0) );
-
-    protected volatile boolean m_internalEnabled;
-    
-    protected volatile boolean m_disposed;
-    
-    //service event tracking
-    private int m_floor;
-
-    private volatile int m_ceiling;
-
-    private final Lock m_missingLock = new ReentrantLock();
-    private final Condition m_missingCondition = m_missingLock.newCondition();
-    private final Set<Integer> m_missing = new TreeSet<Integer>( );
-
-    volatile boolean m_activated;
-    
-    protected final ReentrantReadWriteLock m_activationLock = new ReentrantReadWriteLock();
-
-    /**
-     * The constructor receives both the activator and the metadata
-     *
-     * @param activator
-     * @param metadata
-     * @param componentMethods
-     */
-    protected AbstractComponentManager( BundleComponentActivator activator, ComponentMetadata metadata, ComponentMethods componentMethods )
-    {
-        this( activator, metadata, componentMethods, false );
-    }
-    
-    protected AbstractComponentManager( BundleComponentActivator activator, ComponentMetadata metadata, ComponentMethods componentMethods, boolean factoryInstance )
-    {
-        m_factoryInstance = factoryInstance;
-        m_activator = activator;
-        m_componentMetadata = metadata;
-        this.m_componentMethods = componentMethods;
-        m_componentId = -1;
-
-        m_dependencyManagers = loadDependencyManagers( metadata );
-
-        m_stateLock = new ReentrantLock( true );
-
-        // dump component details
-        if ( isLogEnabled( LogService.LOG_DEBUG ) )
-        {
-            log(
-                LogService.LOG_DEBUG,
-                "Component {0} created: DS={1}, implementation={2}, immediate={3}, default-enabled={4}, factory={5}, configuration-policy={6}, activate={7}, deactivate={8}, modified={9} configuration-pid={10}",
-                new Object[]
-                    { metadata.getName(), metadata.getNamespaceCode(),
-                        metadata.getImplementationClassName(), metadata.isImmediate(),
-                        metadata.isEnabled(), metadata.getFactoryIdentifier(),
-                        metadata.getConfigurationPolicy(), metadata.getActivate(), metadata.getDeactivate(),
-                        metadata.getModified(), metadata.getConfigurationPid() }, null );
-
-            if ( metadata.getServiceMetadata() != null )
-            {
-                log( LogService.LOG_DEBUG, "Component {0} Services: servicefactory={1}, services={2}", new Object[]
-                    { metadata.getName(), Boolean.valueOf( metadata.getServiceMetadata().isServiceFactory() ),
-                        Arrays.asList( metadata.getServiceMetadata().getProvides() ) }, null );
-            }
-
-            if ( metadata.getProperties() != null )
-            {
-                log( LogService.LOG_DEBUG, "Component {0} Properties: {1}", new Object[]
-                    { metadata.getName(), metadata.getProperties() }, null );
-            }
-        }
+    MinSegmentSizePredicate(int minSize, float minSizeRatio) {
+      this.minSize = minSize;
+      this.minSizeRatio = minSizeRatio;
     }
 
-    final long getLockTimeout()
-    {
-        BundleComponentActivator activator = getActivator();
-        if ( activator != null )
-        {
-            return activator.getConfiguration().lockTimeout();
-        }
-        return ScrConfiguration.DEFAULT_LOCK_TIMEOUT_MILLISECONDS;
-    }
-
-    private void obtainLock( Lock lock, String source )
-    {
-        try
-        {
-            if (!lock.tryLock( getLockTimeout(), TimeUnit.MILLISECONDS ) )
-            {
-                dumpThreads();
-                throw new IllegalStateException( "Could not obtain lock" );
-            }
-        }
-        catch ( InterruptedException e )
-        {
-            try
-            {
-                if (!lock.tryLock( getLockTimeout(), TimeUnit.MILLISECONDS ) )
-                {
-                    dumpThreads();
-                    throw new IllegalStateException( "Could not obtain lock" );
-                }
-            }
-            catch ( InterruptedException e1 )
-            {
-                Thread.currentThread().interrupt();
-                //TODO is there a better exception to throw?
-                throw new IllegalStateException( "Interrupted twice: Could not obtain lock" );
-            }
-            Thread.currentThread().interrupt();
-        }
-    }
-    
-    final void obtainActivationReadLock( String source )
-    {
-        obtainLock( m_activationLock.readLock(), source);
-    }
-
-    final void releaseActivationReadLock( String source )
-    {
-        m_activationLock.readLock().unlock();
-    }
-    
-    final void obtainActivationWriteLock( String source )
-    {
-        obtainLock( m_activationLock.writeLock(), source);
-    }
-
-    final void releaseActivationWriteeLock( String source )
-    {
-        if ( m_activationLock.getWriteHoldCount() > 0 )
-        {
-            m_activationLock.writeLock().unlock();
-        }
-    }
-    
-    final void obtainStateLock( String source )
-    {
-        obtainLock( m_stateLock, source );
-    }
-
-    final void releaseStateLock( String source )
-    {
-        m_stateLock.unlock();
-    }
-
-    final boolean isStateLocked()
-    {
-        return m_stateLock.getHoldCount() > 0;
-    }
-    
-    final void dumpThreads()
-    {
-        try
-        {
-            String dump = new ThreadDump().call();
-            log( LogService.LOG_DEBUG, dump, null );
-        }
-        catch ( Throwable t )
-        {
-            log( LogService.LOG_DEBUG, "Could not dump threads", t );
-        }
-    }
-
-    //service event tracking
-    void tracked( int trackingCount )
-    {
-        m_missingLock.lock();
-        try
-        {
-            if (trackingCount == m_floor + 1 )
-            {
-                m_floor++;
-                m_missing.remove( trackingCount );
-            }
-            else if ( trackingCount < m_ceiling )
-            {
-                m_missing.remove( trackingCount );
-            }
-            if ( trackingCount > m_ceiling )
-            {
-                for (int i = m_ceiling + 1; i < trackingCount; i++ )
-                {
-                    m_missing.add( i );
-                }
-                m_ceiling = trackingCount;
-            }
-            m_missingCondition.signalAll();
-        }
-        finally
-        {
-            m_missingLock.unlock();
-        }
-    }
-
-    /**
-     * We effectively maintain the set of completely processed service event tracking counts.  This method waits for all events prior 
-     * to the parameter tracking count to complete, then returns.  See further documentation in EdgeInfo.
-     * @param trackingCount
-     */
-    void waitForTracked( int trackingCount )
-    {
-        m_missingLock.lock();
-        try
-        {
-            while ( m_ceiling  < trackingCount || ( !m_missing.isEmpty() && m_missing.iterator().next() < trackingCount))
-            {
-                log( LogService.LOG_DEBUG, "waitForTracked trackingCount: {0} ceiling: {1} missing: {2}",
-                        new Object[] {trackingCount, m_ceiling, m_missing}, null );
-                try
-                {
-                    if ( !doMissingWait())
-                    {
-                        return;                        
-                    }
-                }
-                catch ( InterruptedException e )
-                {
-                    try
-                    {
-                        if ( !doMissingWait())
-                        {
-                            return;                        
-                        }
-                    }
-                    catch ( InterruptedException e1 )
-                    {
-                        log( LogService.LOG_ERROR, "waitForTracked interrupted twice: {0} ceiling: {1} missing: {2},  Expect further errors",
-                                new Object[] {trackingCount, m_ceiling, m_missing}, e1 );
-                    }
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }
-        finally
-        {
-            m_missingLock.unlock();
-        }
-    }
-    
-    private boolean doMissingWait() throws InterruptedException
-    {
-        if ( !m_missingCondition.await( getLockTimeout(), TimeUnit.MILLISECONDS ))
-        {
-            log( LogService.LOG_ERROR, "waitForTracked timed out: {0} ceiling: {1} missing: {2},  Expect further errors",
-                    new Object[] {m_trackingCount, m_ceiling, m_missing}, null );
-            dumpThreads();
-            m_missing.clear();
-            return false;
-        }
-        return true;
-    }
-
-//---------- Component ID management
-
-    void registerComponentId()
-    {
-        final BundleComponentActivator activator = getActivator();
-        if ( activator != null )
-        {
-            this.m_componentId = activator.registerComponentId( this );
-        }
-    }
-
-
-    void unregisterComponentId()
-    {
-        if ( this.m_componentId >= 0 )
-        {
-            final BundleComponentActivator activator = getActivator();
-            if ( activator != null )
-            {
-                activator.unregisterComponentId( this );
-            }
-            this.m_componentId = -1;
-        }
-    }
-
-
-    //---------- Asynchronous frontend to state change methods ----------------
-    private static final AtomicLong taskCounter = new AtomicLong( );
-
-    /**
-     * Enables this component and - if satisfied - also activates it. If
-     * enabling the component fails for any reason, the component ends up
-     * disabled.
-     * <p>
-     * This method ignores the <i>enabled</i> flag of the component metadata
-     * and just enables as requested.
-     * <p>
-     * This method enables and activates the component immediately.
-     */
-    public final void enable()
-    {
-        enable( true );
-    }
-
-
-    public final void enable( final boolean async )
-    {
-        if (m_enabled)
-        {
-            return;
-        }
-        CountDownLatch enableLatch = null;
-        try
-        {
-            enableLatch = enableLatchWait();
-            enableInternal();
-            if ( !async )
-            {
-                activateInternal( m_trackingCount.get() );
-            }
-        }
-        finally
-        {
-            if ( !async )
-            {
-                enableLatch.countDown();
-            }
-            m_enabled = true;
-        }
-
-        if ( async )
-        {
-            final CountDownLatch latch = enableLatch;
-            m_activator.schedule( new Runnable()
-            {
-
-                long count = taskCounter.incrementAndGet();
-
-                public void run()
-                {
-                    try
-                    {
-                        activateInternal( m_trackingCount.get() );
-                    }
-                    finally
-                    {
-                        latch.countDown();
-                    }
-                }
-
-                public String toString()
-                {
-                    return "Async Activate: " + getComponentMetadata().getName() + " id: " + count;
-                }
-            } );
-        }
-    }
-
-    /**
-     * Use a CountDownLatch as a non-reentrant "lock" that can be passed between threads.
-     * This lock assures that enable, disable, and reconfigure operations do not overlap.
-     * 
-     * @return the latch to count down when the operation is complete (in the calling or another thread)
-     * @throws InterruptedException
-     */
-    CountDownLatch enableLatchWait()
-    {
-        CountDownLatch enabledLatch;
-        CountDownLatch newEnabledLatch;
-        do
-        {
-            enabledLatch = m_enabledLatchRef.get();
-            boolean waited = false;
-            boolean interrupted = false;
-            while ( !waited )
-            {
-                try
-                {
-                    enabledLatch.await();
-                    waited = true;
-                }
-                catch ( InterruptedException e )
-                {
-                    interrupted = true;
-                }
-            }
-            if ( interrupted )
-            {
-                Thread.currentThread().interrupt();
-            }
-            newEnabledLatch = new CountDownLatch(1);
-        }
-        while ( !m_enabledLatchRef.compareAndSet( enabledLatch, newEnabledLatch) );
-        return newEnabledLatch;  
-    }
-
-    /**
-     * Disables this component and - if active - first deactivates it. The
-     * component may be reenabled by calling the {@link #enable()} method.
-     * <p>
-     * This method deactivates and disables the component immediately.
-     */
-    public final void disable()
-    {
-        disable( true );
-    }
-
-
-    public final void disable( final boolean async )
-    {
-        if (!m_enabled)
-        {
-            return;
-        }
-        CountDownLatch enableLatch = null;
-        try
-        {
-            enableLatch = enableLatchWait();
-            if ( !async )
-            {
-                deactivateInternal( ComponentConstants.DEACTIVATION_REASON_DISABLED, true, m_trackingCount.get() );
-            }
-            disableInternal();
-        }
-        finally
-        {
-            if (!async)
-            {
-                enableLatch.countDown();
-            }
-            m_enabled = false;
-        }
-
-        if ( async )
-        {
-            final CountDownLatch latch = enableLatch;
-            m_activator.schedule( new Runnable()
-            {
-
-                long count = taskCounter.incrementAndGet();
-
-                public void run()
-                {
-                    try
-                    {
-                        deactivateInternal( ComponentConstants.DEACTIVATION_REASON_DISABLED, true, m_trackingCount.get() );
-                    }
-                    finally
-                    {
-                        latch.countDown();
-                    }
-                }
-
-                public String toString()
-                {
-                    return "Async Deactivate: " + getComponentMetadata().getName() + " id: " + count;
-                }
-
-            } );
-        }
-    }
-
-    // supports the ComponentInstance.dispose() method
-    void dispose()
-    {
-        dispose( ComponentConstants.DEACTIVATION_REASON_DISPOSED );
-    }
-
-    /**
-     * Disposes off this component deactivating and disabling it first as
-     * required. After disposing off the component, it may not be used anymore.
-     * <p>
-     * This method unlike the other state change methods immediately takes
-     * action and disposes the component. The reason for this is, that this
-     * method has to actually complete before other actions like bundle stopping
-     * may continue.
-     */
-    public void dispose( int reason )
-    {
-        m_disposed = true;
-        disposeInternal( reason );
-    }
-    
-    <T> void registerMissingDependency( DependencyManager<S, T> dm, ServiceReference<T> ref, int trackingCount)
-    {
-        BundleComponentActivator activator = getActivator();
-        if ( activator != null )
-        {
-            activator.registerMissingDependency( dm, ref, trackingCount );
-        }
-    }
-
-    //---------- Component interface ------------------------------------------
-
-    public long getId()
-    {
-        return m_componentId;
-    }
-
-    public String getName() {
-        return m_componentMetadata.getName();
-    }
-
-    /**
-     * Returns the <code>Bundle</code> providing this component. If the
-     * component as already been disposed off, this method returns
-     * <code>null</code>.
-     */
-    public Bundle getBundle()
-    {
-        final BundleContext context = getBundleContext();
-        if ( context != null )
-        {
-            try
-            {
-                return context.getBundle();
-            }
-            catch ( IllegalStateException ise )
-            {
-                // if the bundle context is not valid any more
-            }
-        }
-        // already disposed off component or bundle context is invalid
-        return null;
-    }
-    
-    BundleContext getBundleContext()
-    {
-        final BundleComponentActivator activator = getActivator();
-        if ( activator != null )
-        {
-            return activator.getBundleContext();
-        }
-        return null;        
-    }
-
-
-    public String getClassName()
-    {
-        return m_componentMetadata.getImplementationClassName();
-    }
-
-    public String getFactory()
-    {
-        return m_componentMetadata.getFactoryIdentifier();
-    }
-
-    public Reference[] getReferences()
-    {
-        if ( m_dependencyManagers != null && m_dependencyManagers.size() > 0 )
-        {
-            return (Reference[]) m_dependencyManagers.toArray(
-                    new Reference[m_dependencyManagers.size()] );
-        }
-
-        return null;
-    }
-
-    public boolean isImmediate()
-    {
-        return m_componentMetadata.isImmediate();
-
-    }
-
-    public boolean isDefaultEnabled()
-    {
-        return m_componentMetadata.isEnabled();
-    }
-
-
-    public String getActivate()
-    {
-        return m_componentMetadata.getActivate();
-    }
-
-
-    public boolean isActivateDeclared()
-    {
-        return m_componentMetadata.isActivateDeclared();
-    }
-
-
-    public String getDeactivate()
-    {
-        return m_componentMetadata.getDeactivate();
-    }
-
-
-    public boolean isDeactivateDeclared()
-    {
-        return m_componentMetadata.isDeactivateDeclared();
-    }
-
-
-    public String getModified()
-    {
-        return m_componentMetadata.getModified();
-    }
-
-
-    public String getConfigurationPolicy()
-    {
-        return m_componentMetadata.getConfigurationPolicy();
-    }
-
-    public String getConfigurationPid()
-    {
-        return m_componentMetadata.getConfigurationPid();
-    }
-
-    public boolean isConfigurationPidDeclared()
-    {
-        return m_componentMetadata.isConfigurationPidDeclared();
-    }
-
-    public boolean isServiceFactory()
-    {
-        return m_componentMetadata.getServiceMetadata() != null
-                && m_componentMetadata.getServiceMetadata().isServiceFactory();
-    }
-
-    public boolean isFactory()
-    {
+    @Override
+    public boolean test(LeafReaderContext context) {
+      final int maxDoc = context.reader().maxDoc();
+      if (maxDoc < minSize) {
         return false;
+      }
+      final IndexReaderContext topLevelContext = ReaderUtil.getTopLevelContext(context);
+      final float sizeRatio = (float) context.reader().maxDoc() / topLevelContext.reader().maxDoc();
+      return sizeRatio >= minSizeRatio;
+    }
+  }
+
+  /**
+   * Expert: callback when there is a cache hit on a given query.
+   * Implementing this method is typically useful in order to compute more
+   * fine-grained statistics about the query cache.
+   * @see #onMiss
+   * @lucene.experimental
+   */
+  protected void onHit(Object readerCoreKey, Query query) {
+    assert lock.isHeldByCurrentThread();
+    hitCount += 1;
+  }
+
+  /**
+   * Expert: callback when there is a cache miss on a given query.
+   * @see #onHit
+   * @lucene.experimental
+   */
+  protected void onMiss(Object readerCoreKey, Query query) {
+    assert lock.isHeldByCurrentThread();
+    assert query != null;
+    missCount += 1;
+  }
+
+  /**
+   * Expert: callback when a query is added to this cache.
+   * Implementing this method is typically useful in order to compute more
+   * fine-grained statistics about the query cache.
+   * @see #onQueryEviction
+   * @lucene.experimental
+   */
+  protected void onQueryCache(Query query, long ramBytesUsed) {
+    assert lock.isHeldByCurrentThread();
+    this.ramBytesUsed += ramBytesUsed;
+  }
+
+  /**
+   * Expert: callback when a query is evicted from this cache.
+   * @see #onQueryCache
+   * @lucene.experimental
+   */
+  protected void onQueryEviction(Query query, long ramBytesUsed) {
+    assert lock.isHeldByCurrentThread();
+    this.ramBytesUsed -= ramBytesUsed;
+  }
+
+  /**
+   * Expert: callback when a {@link DocIdSet} is added to this cache.
+   * Implementing this method is typically useful in order to compute more
+   * fine-grained statistics about the query cache.
+   * @see #onDocIdSetEviction
+   * @lucene.experimental
+   */
+  protected void onDocIdSetCache(Object readerCoreKey, long ramBytesUsed) {
+    assert lock.isHeldByCurrentThread();
+    cacheSize += 1;
+    cacheCount += 1;
+    this.ramBytesUsed += ramBytesUsed;
+  }
+
+  /**
+   * Expert: callback when one or more {@link DocIdSet}s are removed from this
+   * cache.
+   * @see #onDocIdSetCache
+   * @lucene.experimental
+   */
+  protected void onDocIdSetEviction(Object readerCoreKey, int numEntries, long sumRamBytesUsed) {
+    assert lock.isHeldByCurrentThread();
+    this.ramBytesUsed -= sumRamBytesUsed;
+    cacheSize -= numEntries;
+  }
+
+  /**
+   * Expert: callback when the cache is completely cleared.
+   * @lucene.experimental
+   */
+  protected void onClear() {
+    assert lock.isHeldByCurrentThread();
+    ramBytesUsed = 0;
+    cacheSize = 0;
+  }
+
+  /** Whether evictions are required. */
+  boolean requiresEviction() {
+    assert lock.isHeldByCurrentThread();
+    final int size = mostRecentlyUsedQueries.size();
+    if (size == 0) {
+      return false;
+    } else {
+      return size > maxSize || ramBytesUsed() > maxRamBytesUsed;
+    }
+  }
+
+  DocIdSet get(Query key, LeafReaderContext context, IndexReader.CacheHelper cacheHelper) {
+    assert lock.isHeldByCurrentThread();
+    assert key instanceof BoostQuery == false;
+    assert key instanceof ConstantScoreQuery == false;
+    final IndexReader.CacheKey readerKey = cacheHelper.getKey();
+    final LeafCache leafCache = cache.get(readerKey);
+    if (leafCache == null) {
+      onMiss(readerKey, key);
+      return null;
+    }
+    // this get call moves the query to the most-recently-used position
+    final Query singleton = uniqueQueries.get(key);
+    if (singleton == null) {
+      onMiss(readerKey, key);
+      return null;
+    }
+    final DocIdSet cached = leafCache.get(singleton);
+    if (cached == null) {
+      onMiss(readerKey, singleton);
+    } else {
+      onHit(readerKey, singleton);
+    }
+    return cached;
+  }
+
+  void putIfAbsent(Query query, LeafReaderContext context, DocIdSet set, IndexReader.CacheHelper cacheHelper) {
+    assert query instanceof BoostQuery == false;
+    assert query instanceof ConstantScoreQuery == false;
+    // under a lock to make sure that mostRecentlyUsedQueries and cache remain sync'ed
+    lock.lock();
+    try {
+      Query singleton = uniqueQueries.putIfAbsent(query, query);
+      if (singleton == null) {
+        onQueryCache(singleton, LINKED_HASHTABLE_RAM_BYTES_PER_ENTRY + ramBytesUsed(query));
+      } else {
+        query = singleton;
+      }
+      final IndexReader.CacheKey key = cacheHelper.getKey();
+      LeafCache leafCache = cache.get(key);
+      if (leafCache == null) {
+        leafCache = new LeafCache(key);
+        final LeafCache previous = cache.put(key, leafCache);
+        ramBytesUsed += HASHTABLE_RAM_BYTES_PER_ENTRY;
+        assert previous == null;
+        // we just created a new leaf cache, need to register a close listener
+        cacheHelper.addClosedListener(this::clearCoreCacheKey);
+      }
+      leafCache.putIfAbsent(query, set);
+      evictIfNecessary();
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  void evictIfNecessary() {
+    assert lock.isHeldByCurrentThread();
+    // under a lock to make sure that mostRecentlyUsedQueries and cache keep sync'ed
+    if (requiresEviction()) {
+
+      Iterator<Query> iterator = mostRecentlyUsedQueries.iterator();
+      do {
+        final Query query = iterator.next();
+        final int size = mostRecentlyUsedQueries.size();
+        iterator.remove();
+        if (size == mostRecentlyUsedQueries.size()) {
+          // size did not decrease, because the hash of the query changed since it has been
+          // put into the cache
+          throw new ConcurrentModificationException("Removal from the cache failed! This " +
+              "is probably due to a query which has been modified after having been put into " +
+              " the cache or a badly implemented clone(). Query class: [" + query.getClass() +
+              "], query: [" + query + "]");
+        }
+        onEviction(query);
+      } while (iterator.hasNext() && requiresEviction());
+    }
+  }
+
+  /**
+   * Remove all cache entries for the given core cache key.
+   */
+  public void clearCoreCacheKey(Object coreKey) {
+    lock.lock();
+    try {
+      final LeafCache leafCache = cache.remove(coreKey);
+      if (leafCache != null) {
+        ramBytesUsed -= HASHTABLE_RAM_BYTES_PER_ENTRY;
+        final int numEntries = leafCache.cache.size();
+        if (numEntries > 0) {
+          onDocIdSetEviction(coreKey, numEntries, leafCache.ramBytesUsed);
+        } else {
+          assert numEntries == 0;
+          assert leafCache.ramBytesUsed == 0;
+        }
+      }
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  /**
+   * Remove all cache entries for the given query.
+   */
+  public void clearQuery(Query query) {
+    lock.lock();
+    try {
+      final Query singleton = uniqueQueries.remove(query);
+      if (singleton != null) {
+        onEviction(singleton);
+      }
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  private void onEviction(Query singleton) {
+    assert lock.isHeldByCurrentThread();
+    onQueryEviction(singleton, LINKED_HASHTABLE_RAM_BYTES_PER_ENTRY + ramBytesUsed(singleton));
+    for (LeafCache leafCache : cache.values()) {
+      leafCache.remove(singleton);
+    }
+  }
+
+  /**
+   * Clear the content of this cache.
+   */
+  public void clear() {
+    lock.lock();
+    try {
+      cache.clear();
+      // Note that this also clears the uniqueQueries map since mostRecentlyUsedQueries is the uniqueQueries.keySet view:
+      mostRecentlyUsedQueries.clear();
+      onClear();
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  // pkg-private for testing
+  void assertConsistent() {
+    lock.lock();
+    try {
+      if (requiresEviction()) {
+        throw new AssertionError("requires evictions: size=" + mostRecentlyUsedQueries.size()
+            + ", maxSize=" + maxSize + ", ramBytesUsed=" + ramBytesUsed() + ", maxRamBytesUsed=" + maxRamBytesUsed);
+      }
+      for (LeafCache leafCache : cache.values()) {
+        Set<Query> keys = Collections.newSetFromMap(new IdentityHashMap<>());
+        keys.addAll(leafCache.cache.keySet());
+        keys.removeAll(mostRecentlyUsedQueries);
+        if (!keys.isEmpty()) {
+          throw new AssertionError("One leaf cache contains more keys than the top-level cache: " + keys);
+        }
+      }
+      long recomputedRamBytesUsed =
+            HASHTABLE_RAM_BYTES_PER_ENTRY * cache.size()
+          + LINKED_HASHTABLE_RAM_BYTES_PER_ENTRY * uniqueQueries.size();
+      for (Query query : mostRecentlyUsedQueries) {
+        recomputedRamBytesUsed += ramBytesUsed(query);
+      }
+      for (LeafCache leafCache : cache.values()) {
+        recomputedRamBytesUsed += HASHTABLE_RAM_BYTES_PER_ENTRY * leafCache.cache.size();
+        for (DocIdSet set : leafCache.cache.values()) {
+          recomputedRamBytesUsed += set.ramBytesUsed();
+        }
+      }
+      if (recomputedRamBytesUsed != ramBytesUsed) {
+        throw new AssertionError("ramBytesUsed mismatch : " + ramBytesUsed + " != " + recomputedRamBytesUsed);
+      }
+
+      long recomputedCacheSize = 0;
+      for (LeafCache leafCache : cache.values()) {
+        recomputedCacheSize += leafCache.cache.size();
+      }
+      if (recomputedCacheSize != getCacheSize()) {
+        throw new AssertionError("cacheSize mismatch : " + getCacheSize() + " != " + recomputedCacheSize);
+      }
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  // pkg-private for testing
+  // return the list of cached queries in LRU order
+  List<Query> cachedQueries() {
+    lock.lock();
+    try {
+      return new ArrayList<>(mostRecentlyUsedQueries);
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  @Override
+  public Weight doCache(Weight weight, QueryCachingPolicy policy) {
+    while (weight instanceof CachingWrapperWeight) {
+      weight = ((CachingWrapperWeight) weight).in;
     }
 
-    public String[] getServices()
-    {
-        if ( m_componentMetadata.getServiceMetadata() != null )
-        {
-            return m_componentMetadata.getServiceMetadata().getProvides();
-        }
+    return new CachingWrapperWeight(weight, policy);
+  }
 
+  @Override
+  public long ramBytesUsed() {
+    return ramBytesUsed;
+  }
+
+  @Override
+  public Collection<Accountable> getChildResources() {
+    lock.lock();
+    try {
+      return Accountables.namedAccountables("segment", cache);
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  /**
+   * Return the number of bytes used by the given query. The default
+   * implementation returns {@link Accountable#ramBytesUsed()} if the query
+   * implements {@link Accountable} and <code>1024</code> otherwise.
+   */
+  protected long ramBytesUsed(Query query) {
+    if (query instanceof Accountable) {
+      return ((Accountable) query).ramBytesUsed();
+    }
+    return QUERY_DEFAULT_RAM_BYTES_USED;
+  }
+
+  /**
+   * Default cache implementation: uses {@link RoaringDocIdSet} for sets that
+   * have a density &lt; 1% and a {@link BitDocIdSet} over a {@link FixedBitSet}
+   * otherwise.
+   */
+  protected DocIdSet cacheImpl(BulkScorer scorer, int maxDoc) throws IOException {
+    if (scorer.cost() * 100 >= maxDoc) {
+      // FixedBitSet is faster for dense sets and will enable the random-access
+      // optimization in ConjunctionDISI
+      return cacheIntoBitSet(scorer, maxDoc);
+    } else {
+      return cacheIntoRoaringDocIdSet(scorer, maxDoc);
+    }
+  }
+
+  private static DocIdSet cacheIntoBitSet(BulkScorer scorer, int maxDoc) throws IOException {
+    final FixedBitSet bitSet = new FixedBitSet(maxDoc);
+    long cost[] = new long[1];
+    scorer.score(new LeafCollector() {
+
+      @Override
+      public void setScorer(Scorer scorer) throws IOException {}
+
+      @Override
+      public void collect(int doc) throws IOException {
+        cost[0]++;
+        bitSet.set(doc);
+      }
+
+    }, null);
+    return new BitDocIdSet(bitSet, cost[0]);
+  }
+
+  private static DocIdSet cacheIntoRoaringDocIdSet(BulkScorer scorer, int maxDoc) throws IOException {
+    RoaringDocIdSet.Builder builder = new RoaringDocIdSet.Builder(maxDoc);
+    scorer.score(new LeafCollector() {
+
+      @Override
+      public void setScorer(Scorer scorer) throws IOException {}
+
+      @Override
+      public void collect(int doc) throws IOException {
+        builder.add(doc);
+      }
+
+    }, null);
+    return builder.build();
+  }
+
+  /**
+   * Return the total number of times that a {@link Query} has been looked up
+   * in this {@link QueryCache}. Note that this number is incremented once per
+   * segment so running a cached query only once will increment this counter
+   * by the number of segments that are wrapped by the searcher.
+   * Note that by definition, {@link #getTotalCount()} is the sum of
+   * {@link #getHitCount()} and {@link #getMissCount()}.
+   * @see #getHitCount()
+   * @see #getMissCount()
+   */
+  public final long getTotalCount() {
+    return getHitCount() + getMissCount();
+  }
+
+  /**
+   * Over the {@link #getTotalCount() total} number of times that a query has
+   * been looked up, return how many times a cached {@link DocIdSet} has been
+   * found and returned.
+   * @see #getTotalCount()
+   * @see #getMissCount()
+   */
+  public final long getHitCount() {
+    return hitCount;
+  }
+
+  /**
+   * Over the {@link #getTotalCount() total} number of times that a query has
+   * been looked up, return how many times this query was not contained in the
+   * cache.
+   * @see #getTotalCount()
+   * @see #getHitCount()
+   */
+  public final long getMissCount() {
+    return missCount;
+  }
+
+  /**
+   * Return the total number of {@link DocIdSet}s which are currently stored
+   * in the cache.
+   * @see #getCacheCount()
+   * @see #getEvictionCount()
+   */
+  public final long getCacheSize() {
+    return cacheSize;
+  }
+
+  /**
+   * Return the total number of cache entries that have been generated and put
+   * in the cache. It is highly desirable to have a {@link #getHitCount() hit
+   * count} that is much higher than the {@link #getCacheCount() cache count}
+   * as the opposite would indicate that the query cache makes efforts in order
+   * to cache queries but then they do not get reused.
+   * @see #getCacheSize()
+   * @see #getEvictionCount()
+   */
+  public final long getCacheCount() {
+    return cacheCount;
+  }
+
+  /**
+   * Return the number of cache entries that have been removed from the cache
+   * either in order to stay under the maximum configured size/ram usage, or
+   * because a segment has been closed. High numbers of evictions might mean
+   * that queries are not reused or that the {@link QueryCachingPolicy
+   * caching policy} caches too aggressively on NRT segments which get merged
+   * early.
+   * @see #getCacheCount()
+   * @see #getCacheSize()
+   */
+  public final long getEvictionCount() {
+    return getCacheCount() - getCacheSize();
+  }
+
+  // this class is not thread-safe, everything but ramBytesUsed needs to be called under a lock
+  private class LeafCache implements Accountable {
+
+    private final Object key;
+    private final Map<Query, DocIdSet> cache;
+    private volatile long ramBytesUsed;
+
+    LeafCache(Object key) {
+      this.key = key;
+      cache = new IdentityHashMap<>();
+      ramBytesUsed = 0;
+    }
+
+    private void onDocIdSetCache(long ramBytesUsed) {
+      this.ramBytesUsed += ramBytesUsed;
+      LRUQueryCache.this.onDocIdSetCache(key, ramBytesUsed);
+    }
+
+    private void onDocIdSetEviction(long ramBytesUsed) {
+      this.ramBytesUsed -= ramBytesUsed;
+      LRUQueryCache.this.onDocIdSetEviction(key, 1, ramBytesUsed);
+    }
+
+    DocIdSet get(Query query) {
+      assert query instanceof BoostQuery == false;
+      assert query instanceof ConstantScoreQuery == false;
+      return cache.get(query);
+    }
+
+    void putIfAbsent(Query query, DocIdSet set) {
+      assert query instanceof BoostQuery == false;
+      assert query instanceof ConstantScoreQuery == false;
+      if (cache.putIfAbsent(query, set) == null) {
+        // the set was actually put
+        onDocIdSetCache(HASHTABLE_RAM_BYTES_PER_ENTRY + set.ramBytesUsed());
+      }
+    }
+
+    void remove(Query query) {
+      assert query instanceof BoostQuery == false;
+      assert query instanceof ConstantScoreQuery == false;
+      DocIdSet removed = cache.remove(query);
+      if (removed != null) {
+        onDocIdSetEviction(HASHTABLE_RAM_BYTES_PER_ENTRY + removed.ramBytesUsed());
+      }
+    }
+
+    @Override
+    public long ramBytesUsed() {
+      return ramBytesUsed;
+    }
+
+  }
+
+  private class CachingWrapperWeight extends ConstantScoreWeight {
+
+    private final Weight in;
+    private final QueryCachingPolicy policy;
+    // we use an AtomicBoolean because Weight.scorer may be called from multiple
+    // threads when IndexSearcher is created with threads
+    private final AtomicBoolean used;
+
+    CachingWrapperWeight(Weight in, QueryCachingPolicy policy) {
+      super(in.getQuery(), 1f);
+      this.in = in;
+      this.policy = policy;
+      used = new AtomicBoolean(false);
+    }
+
+    @Override
+    public void extractTerms(Set<Term> terms) {
+      in.extractTerms(terms);
+    }
+
+    private boolean cacheEntryHasReasonableWorstCaseSize(int maxDoc) {
+      // The worst-case (dense) is a bit set which needs one bit per document
+      final long worstCaseRamUsage = maxDoc / 8;
+      final long totalRamAvailable = maxRamBytesUsed;
+      // Imagine the worst-case that a cache entry is large than the size of
+      // the cache: not only will this entry be trashed immediately but it
+      // will also evict all current entries from the cache. For this reason
+      // we only cache on an IndexReader if we have available room for
+      // 5 different filters on this reader to avoid excessive trashing
+      return worstCaseRamUsage * 5 < totalRamAvailable;
+    }
+
+    private DocIdSet cache(LeafReaderContext context) throws IOException {
+      final BulkScorer scorer = in.bulkScorer(context);
+      if (scorer == null) {
+        return DocIdSet.EMPTY;
+      } else {
+        return cacheImpl(scorer, context.reader().maxDoc());
+      }
+    }
+
+    /** Check whether this segment is eligible for caching, regardless of the query. */
+    private boolean shouldCache(LeafReaderContext context) throws IOException {
+      return cacheEntryHasReasonableWorstCaseSize(ReaderUtil.getTopLevelContext(context).reader().maxDoc())
+          && leavesToCache.test(context);
+    }
+
+    @Override
+    public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
+      if (used.compareAndSet(false, true)) {
+        policy.onUse(getQuery());
+      }
+
+      // TODO: should it be pluggable, eg. for queries that run on doc values?
+      final IndexReader.CacheHelper cacheHelper = context.reader().getCoreCacheHelper();
+      if (cacheHelper == null) {
+        // this segment is not suitable for caching
+        return in.scorerSupplier(context);
+      }
+
+      // Short-circuit: Check whether this segment is eligible for caching
+      // before we take a lock because of #get
+      if (shouldCache(context) == false) {
+        return in.scorerSupplier(context);
+      }
+
+      // If the lock is already busy, prefer using the uncached version than waiting
+      if (lock.tryLock() == false) {
+        return in.scorerSupplier(context);
+      }
+
+      DocIdSet docIdSet;
+      try {
+        docIdSet = get(in.getQuery(), context, cacheHelper);
+      } finally {
+        lock.unlock();
+      }
+
+      if (docIdSet == null) {
+        if (policy.shouldCache(in.getQuery())) {
+          docIdSet = cache(context);
+          putIfAbsent(in.getQuery(), context, docIdSet, cacheHelper);
+        } else {
+          return in.scorerSupplier(context);
+        }
+      }
+
+      assert docIdSet != null;
+      if (docIdSet == DocIdSet.EMPTY) {
         return null;
-    }
-
-    //-------------- atomic transition methods -------------------------------
-
-    final void enableInternal()
-    {
-        if ( m_disposed )
-        {
-            throw new IllegalStateException( "enable: " + this );
-        }
-        if ( !isActivatorActive() )
-        {
-            log( LogService.LOG_DEBUG, "Bundle's component activator is not active; not enabling component",
-                    null );
-            return;
-        }
-
-        registerComponentId();
-        // Before creating the implementation object, we are going to
-        // test if we have configuration if such is required
-        if ( hasConfiguration() || !getComponentMetadata().isConfigurationRequired() )
-        {
-            // Update our target filters.
-            log( LogService.LOG_DEBUG, "Updating target filters", null );
-            updateTargets( getProperties() );
-        }
-
-        m_internalEnabled = true;
-        log( LogService.LOG_DEBUG, "Component enabled", null );
-    }
-
-    final void activateInternal( int trackingCount )
-    {
-        log( LogService.LOG_DEBUG, "ActivateInternal",
-                null );
-        if ( m_disposed )
-        {
-            log( LogService.LOG_DEBUG, "ActivateInternal: disposed",
-                    null );
-            return;
-        }
-        if ( m_activated ) {
-            log( LogService.LOG_DEBUG, "ActivateInternal: already activated",
-                    null );
-            return;
-        }
-        if ( !isEnabled())
-        {
-            log( LogService.LOG_DEBUG, "Component is not enabled; not activating component",
-                    null );
-            return;
-        }
-        if ( !isActivatorActive() )
-        {
-            log( LogService.LOG_DEBUG, "Bundle's component activator is not active; not activating component",
-                    null );
-            return;
-        }
-
-        log( LogService.LOG_DEBUG, "Activating component from state {0}", new Object[] {getState()},  null );
-
-        // Before creating the implementation object, we are going to
-        // test if we have configuration if such is required
-        if ( !hasConfiguration() && getComponentMetadata().isConfigurationRequired() )
-        {
-            log( LogService.LOG_DEBUG, "Missing required configuration, cannot activate", null );
-            return;
-        }
-
-        // Before creating the implementation object, we are going to
-        // test that the bundle has enough permissions to register services
-        if ( !hasServiceRegistrationPermissions() )
-        {
-            log( LogService.LOG_DEBUG, "Component is not permitted to register all services, cannot activate",
-                    null );
-            return;
-        }
-
-        obtainActivationReadLock( "activateInternal" );
-        try
-        {
-            // Before creating the implementation object, we are going to
-            // test if all the mandatory dependencies are satisfied
-            if ( !verifyDependencyManagers() )
-            {
-                log( LogService.LOG_DEBUG, "Not all dependencies satisfied, cannot activate", null );
-                return;
-            }
-
-            if ( !registerService() )
-            {
-                //some other thread is activating us, or we got concurrently deactivated.
-                return;
-            }
-
-
-            if ( ( isImmediate() || getComponentMetadata().isFactory() ) )
-            {
-                getServiceInternal();
-            }
-        }
-        finally
-        {
-            releaseActivationReadLock( "activateInternal" );
-        }
-    }
-
-    final void deactivateInternal( int reason, boolean disable, int trackingCount )
-    {
-        if ( m_disposed )
-        {
-            return;
-        }
-        if ( m_factoryInstance )
-        {
-            disposeInternal( reason );
-            return;
-        }
-        log( LogService.LOG_DEBUG, "Deactivating component", null );
-
-        // catch any problems from deleting the component to prevent the
-        // component to remain in the deactivating state !
-        obtainActivationReadLock( "deactivateInternal" );
-        try
-        {
-            doDeactivate( reason, disable );
-        }
-        finally 
-        {
-            releaseActivationReadLock( "deactivateInternal" );
-        }
-        if ( isFactory() )
-        {
-            clear();
-        }
-    }
-
-    final void disableInternal()
-    {
-        m_internalEnabled = false;
-        if ( m_disposed )
-        {
-            throw new IllegalStateException( "Cannot disable a disposed component " + getName() );
-        }
-        unregisterComponentId();
-    }
-
-    /**
-     * Disposes off this component deactivating and disabling it first as
-     * required. After disposing off the component, it may not be used anymore.
-     * <p>
-     * This method unlike the other state change methods immediately takes
-     * action and disposes the component. The reason for this is, that this
-     * method has to actually complete before other actions like bundle stopping
-     * may continue.
-     */
-    final void disposeInternal( int reason )
-    {
-        log( LogService.LOG_DEBUG, "Disposing component (reason: " + reason + ")", null );
-        doDeactivate( reason, true );
-        clear();
-    }
-         
-    final void doDeactivate( int reason, boolean disable )
-    {
-        try
-        {
-            if ( !unregisterService() )
-            {
-                log( LogService.LOG_DEBUG, "Component deactivation occuring on another thread", null );
-            }
-            obtainStateLock( "AbstractComponentManager.State.doDeactivate.1" );
-            try
-            {
-                if ( m_activated )
-                {
-                    m_activated = false;
-                    deleteComponent( reason );
-                    deactivateDependencyManagers();
-                    if ( disable )
-                    {
-                        disableDependencyManagers();
-                    }
-                    unsetDependenciesCollected();
-                }
-            }
-            finally
-            {
-                releaseStateLock( "AbstractComponentManager.State.doDeactivate.1" );
-            }
-        }
-        catch ( Throwable t )
-        {
-            log( LogService.LOG_WARNING, "Component deactivation threw an exception", t );
-        }
-    }
-
-    final ServiceReference<S> getServiceReference()
-    {
-        ServiceRegistration<S> reg = getServiceRegistration();
-        if (reg != null)
-        {
-            return reg.getReference();
-        }
+      }
+      final DocIdSetIterator disi = docIdSet.iterator();
+      if (disi == null) {
         return null;
-    }
+      }
 
-    //---------- Component handling methods ----------------------------------
-    /**
-     * Method is called by {@link State#activate(AbstractComponentManager)} in STATE_ACTIVATING or by
-     * {@link DelayedComponentManager#getService(Bundle, ServiceRegistration)}
-     * in STATE_REGISTERED.
-     *
-     * @return <code>true</code> if creation of the component succeeded. If
-     *       <code>false</code> is returned, the cause should have been logged.
-     */
-    protected abstract boolean createComponent();
-
-    protected abstract void deleteComponent( int reason );
-
-    boolean getServiceInternal()
-    {
-        return false;
-    }
-
-    /**
-     * All ComponentManagers are ServiceFactory instances
-     *
-     * @return this as a ServiceFactory.
-     */
-    private Object getService()
-    {
-        return this;
-    }
-
-    ComponentMethods getComponentMethods()
-    {
-        return m_componentMethods;
-    }
-    
-    protected String[] getProvidedServices()
-    {
-        if ( getComponentMetadata().getServiceMetadata() != null )
-        {
-            String[] provides = getComponentMetadata().getServiceMetadata().getProvides();
-            return provides;
-        }
-        return null;
-        
-    }
-
-    private final RegistrationManager<ServiceRegistration<S>> registrationManager = new RegistrationManager<ServiceRegistration<S>>()
-    {
-
+      return new ScorerSupplier() {
         @Override
-        ServiceRegistration<S> register(String[] services)
-        {
-            BundleContext bundleContext = getBundleContext();
-            if (bundleContext == null) 
-            {
-                return null;
-            }
-            final Dictionary<String, Object> serviceProperties = getServiceProperties();
-            ServiceRegistration<S> serviceRegistration = ( ServiceRegistration<S> ) bundleContext
-                    .registerService( services, getService(), serviceProperties );
-            return serviceRegistration;
-        }
-
-        @Override
-        void unregister(ServiceRegistration<S> serviceRegistration)
-        {
-            serviceRegistration.unregister();
-        }
-
-        @Override
-        void log(int level, String message, Object[] arguments, Throwable ex)
-        {
-            AbstractComponentManager.this.log(level, message, arguments, ex);
-        }
-
-        @Override
-        long getTimeout()
-        {
-            return getLockTimeout();
-        }
-
-        @Override
-        void reportTimeout()
-        {
-            dumpThreads();
+        public Scorer get(boolean randomAccess) throws IOException {
+          return new ConstantScoreScorer(CachingWrapperWeight.this, 0f, disi);
         }
         
-    };
-    
-
-    /**
-     * Registers the service on behalf of the component.
-     *
-     */
-    protected boolean registerService()
-    {
-        String[] services = getProvidedServices();
-        if ( services != null )
-        {
-            return registrationManager.changeRegistration( RegistrationManager.RegState.registered, services);
+        @Override
+        public long cost() {
+          return disi.cost();
         }
-        return true;
+      };
+
     }
 
-    protected boolean unregisterService()
-    {
-        String[] services = getProvidedServices();
-        if ( services != null )
-        {
-            return registrationManager.changeRegistration( RegistrationManager.RegState.unregistered, services );
-        }
-        return true;
-    }
-    
-
-    AtomicInteger getTrackingCount()
-    {
-        return m_trackingCount;
-    }
-
-
-    private void initDependencyManagers()
-    {
-        if ( m_dependencyManagersInitialized )
-        {
-            return;
-        }
-        final Bundle bundle = getBundle();
-        if (bundle == null)
-        {
-            log( LogService.LOG_ERROR, "bundle shut down while trying to load implementation object class", null );
-            throw new IllegalStateException("bundle shut down while trying to load implementation object class");
-        }
-        Class<?> implementationObjectClass;
-        try
-        {
-            implementationObjectClass = bundle.loadClass(
-                    getComponentMetadata().getImplementationClassName() );
-        }
-        catch ( ClassNotFoundException e )
-        {
-            log( LogService.LOG_ERROR, "Could not load implementation object class", e );
-            throw new IllegalStateException("Could not load implementation object class");
-        }
-        m_componentMethods.initComponentMethods( m_componentMetadata, implementationObjectClass );
-
-        for ( DependencyManager dependencyManager : m_dependencyManagers )
-        {
-            dependencyManager.initBindingMethods( m_componentMethods.getBindMethods( dependencyManager.getName() ) );
-        }
-        m_dependencyManagersInitialized = true;
-    }
-
-    /**
-     * Collect and store in m_dependencies_map all the services for dependencies, outside of any locks.
-     * Throwing IllegalStateException on failure to collect all the dependencies is needed so getService can
-     * know to return null.
-     *
-     * @return true if this thread collected the dependencies;
-     *   false if some other thread successfully collected the dependencies;
-     * @throws IllegalStateException if some dependency is no longer available.
-     */
-    protected boolean collectDependencies() throws IllegalStateException
-    {
-        if ( m_dependenciesCollected)
-        {
-            log( LogService.LOG_DEBUG, "dependencies already collected, do not collect dependencies", null );
-            return false;
-        }
-        initDependencyManagers();
-        for ( DependencyManager<S, ?> dependencyManager : m_dependencyManagers )
-        {
-            if ( !dependencyManager.prebind() )
-            {
-                //not actually satisfied any longer
-                deactivateDependencyManagers();
-                log( LogService.LOG_DEBUG, "Could not get required dependency for dependency manager: {0}",
-                        new Object[] {dependencyManager.getName()}, null );
-                throw new IllegalStateException( "Missing dependencies, not satisfied" );
-            }
-        }
-        m_dependenciesCollected = true;
-        log( LogService.LOG_DEBUG, "This thread collected dependencies", null );
-        return true;
-    }
-
-    protected void unsetDependenciesCollected()
-    {
-        m_dependenciesCollected = false;
-    }
-
-    abstract <T> void invokeUpdatedMethod( DependencyManager<S, T> dependencyManager, RefPair<T> refPair, int trackingCount );
-
-    abstract <T> void invokeBindMethod( DependencyManager<S, T> dependencyManager, RefPair<T> refPair, int trackingCount );
-
-    abstract <T> void invokeUnbindMethod( DependencyManager<S, T> dependencyManager, RefPair<T> oldRefPair, int trackingCount );
-
-    //**********************************************************************************************************
-    public BundleComponentActivator getActivator()
-    {
-        return m_activator;
-    }
-
-
-    boolean isActivatorActive()
-    {
-        BundleComponentActivator activator = getActivator();
-        return activator != null && activator.isActive();
-    }
-
-
-    final ServiceRegistration<S> getServiceRegistration() 
-    {
-        return registrationManager.getServiceRegistration();
-    }
-
-
-    synchronized void clear()
-    {
-        // for some testing, the activator may be null
-        if ( m_activator != null )
-        {
-            m_activator.unregisterComponentId( this );
-        }
-    }
-
-    /**
-     * Returns <code>true</code> if logging for the given level is enabled.
-     */
-    public boolean isLogEnabled( int level )
-    {
-        return Activator.isLogEnabled( level );
-    }
-
-
-    public void log( int level, String message, Throwable ex )
-    {
-        BundleComponentActivator activator = getActivator();
-        if ( activator != null )
-        {
-            activator.log( level, message, getComponentMetadata(), m_componentId, ex );
-        }
-    }
-
-    public void log( int level, String message, Object[] arguments, Throwable ex )
-    {
-        BundleComponentActivator activator = getActivator();
-        if ( activator != null )
-        {
-            activator.log( level, message, arguments, getComponentMetadata(), m_componentId, ex );
-        }
-    }
-
-
-    public String toString()
-    {
-        return "Component: " + getName() + " (" + getId() + ")";
-    }
-
-
-    private boolean hasServiceRegistrationPermissions()
-    {
-        boolean allowed = true;
-        if ( System.getSecurityManager() != null )
-        {
-            final ServiceMetadata serviceMetadata = getComponentMetadata().getServiceMetadata();
-            if ( serviceMetadata != null )
-            {
-                final String[] services = serviceMetadata.getProvides();
-                if ( services != null && services.length > 0 )
-                {
-                    final Bundle bundle = getBundle();
-                    for ( String service : services )
-                    {
-                        final Permission perm = new ServicePermission( service, ServicePermission.REGISTER );
-                        if ( !bundle.hasPermission( perm ) )
-                        {
-                            log( LogService.LOG_DEBUG, "Permission to register service {0} is denied", new Object[]
-                                    {service}, null );
-                            allowed = false;
-                        }
-                    }
-                }
-            }
-        }
-
-        // no security manager or no services to register
-        return allowed;
-    }
-
-
-    private List<DependencyManager<S, ?>> loadDependencyManagers( ComponentMetadata metadata )
-    {
-        List<DependencyManager<S, ?>> depMgrList = new ArrayList<DependencyManager<S, ?>>(metadata.getDependencies().size());
-
-        // If this component has got dependencies, create dependency managers for each one of them.
-        if ( metadata.getDependencies().size() != 0 )
-        {
-            int index = 0;
-            for ( ReferenceMetadata currentdependency: metadata.getDependencies() )
-            {
-                DependencyManager<S, ?> depmanager = new DependencyManager( this, currentdependency, index++ );
-
-                depMgrList.add( depmanager );
-            }
-        }
-
-        return depMgrList;
-    }
-
-    final void updateTargets(Dictionary<String, Object> properties)
-    {
-        for ( DependencyManager<S, ?> dm: getDependencyManagers() )
-        {
-            dm.setTargetFilter( properties );
-        }
-    }
-
-    protected boolean verifyDependencyManagers()
-    {
-        // indicates whether all dependencies are satisfied
-        boolean satisfied = true;
-
-        for ( DependencyManager<S, ?> dm: getDependencyManagers() )
-        {
-
-            if ( !dm.hasGetPermission() )
-            {
-                // bundle has no service get permission
-                if ( dm.isOptional() )
-                {
-                    log( LogService.LOG_DEBUG, "No permission to get optional dependency: {0}; assuming satisfied",
-                        new Object[]
-                            { dm.getName() }, null );
-                }
-                else
-                {
-                    log( LogService.LOG_DEBUG, "No permission to get mandatory dependency: {0}; assuming unsatisfied",
-                        new Object[]
-                            { dm.getName() }, null );
-                    satisfied = false;
-                }
-            }
-            else if ( !dm.isSatisfied() )
-            {
-                // bundle would have permission but there are not enough services
-                log( LogService.LOG_DEBUG, "Dependency not satisfied: {0}", new Object[]
-                    { dm.getName() }, null );
-                satisfied = false;
-            }
-        }
-
-        return satisfied;
-    }
-
-    /**
-     * Returns an iterator over the {@link DependencyManager} objects
-     * representing the declared references in declaration order
-     */
-    List<DependencyManager<S, ?>> getDependencyManagers()
-    {
-        return m_dependencyManagers;
-    }
-
-    /**
-     * Returns an iterator over the {@link DependencyManager} objects
-     * representing the declared references in reversed declaration order
-     */
-    List<DependencyManager<S, ?>> getReversedDependencyManagers()
-    {
-        List<DependencyManager<S, ?>> list = new ArrayList<DependencyManager<S, ?>>( m_dependencyManagers );
-        Collections.reverse( list );
-        return list;
-    }
-
-
-    DependencyManager<S, ?> getDependencyManager(String name)
-    {
-        for ( DependencyManager<S, ?> dm: getDependencyManagers() )
-        {
-            if ( name.equals(dm.getName()) )
-            {
-                return dm;
-            }
-        }
-
-        // not found
+    @Override
+    public Scorer scorer(LeafReaderContext context) throws IOException {
+      ScorerSupplier scorerSupplier = scorerSupplier(context);
+      if (scorerSupplier == null) {
         return null;
+      }
+      return scorerSupplier.get(false);
     }
 
-    private void deactivateDependencyManagers()
-    {
-        log( LogService.LOG_DEBUG, "Deactivating dependency managers", null);
-        for ( DependencyManager<S, ?> dm: getDependencyManagers() )
-        {
-            dm.deactivate();
+    @Override
+    public BulkScorer bulkScorer(LeafReaderContext context) throws IOException {
+      if (used.compareAndSet(false, true)) {
+        policy.onUse(getQuery());
+      }
+
+      // TODO: should it be pluggable, eg. for queries that run on doc values?
+      final IndexReader.CacheHelper cacheHelper = context.reader().getCoreCacheHelper();
+      if (cacheHelper == null) {
+        // this segment is not suitable for caching
+        return in.bulkScorer(context);
+      }
+
+      // Short-circuit: Check whether this segment is eligible for caching
+      // before we take a lock because of #get
+      if (shouldCache(context) == false) {
+        return in.bulkScorer(context);
+      }
+
+      // If the lock is already busy, prefer using the uncached version than waiting
+      if (lock.tryLock() == false) {
+        return in.bulkScorer(context);
+      }
+
+      DocIdSet docIdSet;
+      try {
+        docIdSet = get(in.getQuery(), context, cacheHelper);
+      } finally {
+        lock.unlock();
+      }
+
+      if (docIdSet == null) {
+        if (policy.shouldCache(in.getQuery())) {
+          docIdSet = cache(context);
+          putIfAbsent(in.getQuery(), context, docIdSet, cacheHelper);
+        } else {
+          return in.bulkScorer(context);
         }
+      }
+
+      assert docIdSet != null;
+      if (docIdSet == DocIdSet.EMPTY) {
+        return null;
+      }
+      final DocIdSetIterator disi = docIdSet.iterator();
+      if (disi == null) {
+        return null;
+      }
+
+      return new DefaultBulkScorer(new ConstantScoreScorer(this, 0f, disi));
     }
 
-    private void disableDependencyManagers()
-    {
-        log( LogService.LOG_DEBUG, "Disabling dependency managers", null);
-        AtomicInteger trackingCount = new AtomicInteger();
-        for ( DependencyManager<S, ?> dm: getDependencyManagers() )
-        {
-            dm.unregisterServiceListener( trackingCount );
-        }
-    }
-
-    public abstract boolean hasConfiguration();
-
-    public abstract Dictionary<String, Object> getProperties();
-
-    public abstract void setServiceProperties( Dictionary<String, Object> serviceProperties );
-
-    /**
-     * Returns the subset of component properties to be used as service
-     * properties. These properties are all component properties where property
-     * name does not start with dot (.), properties which are considered
-     * private.
-     */
-    public Dictionary<String, Object> getServiceProperties()
-    {
-        return copyTo( null, getProperties(), false );
-    }
-
-    /**
-     * Copies the properties from the <code>source</code> <code>Dictionary</code>
-     * into the <code>target</code> <code>Dictionary</code>.
-     *
-     * @param target The <code>Dictionary</code> into which to copy the
-     *      properties. If <code>null</code> a new <code>Hashtable</code> is
-     *      created.
-     * @param source The <code>Dictionary</code> providing the properties to
-     *      copy. If <code>null</code> or empty, nothing is copied.
-     *
-     * @return The <code>target</code> is returned, which may be empty if
-     *      <code>source</code> is <code>null</code> or empty and
-     *      <code>target</code> was <code>null</code>.
-     */
-    protected static Dictionary<String, Object> copyTo( Dictionary<String, Object> target, Dictionary<String, Object> source )
-    {
-        return copyTo( target, source, true );
-    }
-
-    /**
-     * Copies the properties from the <code>source</code> <code>Dictionary</code>
-     * into the <code>target</code> <code>Dictionary</code> except for private
-     * properties (whose name has a leading dot) which are only copied if the
-     * <code>allProps</code> parameter is <code>true</code>.
-     *
-     * @param target    The <code>Dictionary</code> into which to copy the
-     *                  properties. If <code>null</code> a new <code>Hashtable</code> is
-     *                  created.
-     * @param source    The <code>Dictionary</code> providing the properties to
-     *                  copy. If <code>null</code> or empty, nothing is copied.
-     * @param allProps  Whether all properties (<code>true</code>) or only the
-     *                  public properties (<code>false</code>) are to be copied.
-     *
-     * @return The <code>target</code> is returned, which may be empty if
-     *         <code>source</code> is <code>null</code> or empty and
-     *         <code>target</code> was <code>null</code> or all properties are
-     *         private and had not to be copied
-     */
-    protected static Dictionary<String, Object> copyTo( Dictionary<String, Object> target, final Dictionary<String, Object> source, final boolean allProps )
-    {
-        if ( target == null )
-        {
-            target = new Hashtable<String, Object>();
-        }
-
-        if ( source != null && !source.isEmpty() )
-        {
-            for ( Enumeration ce = source.keys(); ce.hasMoreElements(); )
-            {
-                // cast is save, because key must be a string as per the spec
-                String key = ( String ) ce.nextElement();
-                if ( allProps || key.charAt( 0 ) != '.' )
-                {
-                    target.put( key, source.get( key ) );
-                }
-            }
-        }
-
-        return target;
-    }
-
-
-    /**
-     *
-     */
-    public ComponentMetadata getComponentMetadata()
-    {
-        return m_componentMetadata;
-    }
-
-    public int getState()
-    {
-        if (m_disposed)
-        {
-            return Component.STATE_DISPOSED;
-        }
-        if ( !m_internalEnabled)
-        {
-            return Component.STATE_DISABLED;
-        }
-        if ( getServiceRegistration() == null && (getProvidedServices() != null || !hasInstance()))
-        {
-            return Component.STATE_UNSATISFIED;
-        }
-        if ( isFactory() && !m_factoryInstance )
-        {
-            return Component.STATE_FACTORY;
-        }
-        if ( hasInstance() )
-        {
-            return Component.STATE_ACTIVE;
-        }
-        return Component.STATE_REGISTERED;
-    }
-
-    abstract boolean hasInstance();
-
-    public void setServiceProperties( MethodResult methodResult )
-    {
-        if ( methodResult.hasResult() )
-        {
-            Dictionary<String, Object> serviceProps = ( methodResult.getResult() == null) ? null : new Hashtable<String, Object>( methodResult.getResult() );
-            setServiceProperties(serviceProps );
-        }
-    }
-
-    boolean isEnabled()
-    {
-        return m_internalEnabled;
-    }
-    
+  }
 }

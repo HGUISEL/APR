@@ -1,157 +1,432 @@
-/*
- * Copyright (c) 2007 Mockito contributors
- * This program is made available under the terms of the MIT License.
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.mockito.internal.stubbing.defaultanswers;
+package org.apache.commons.cli;
 
-import static org.mockito.Mockito.withSettings;
-
-import java.io.IOException;
-import java.io.Serializable;
-import org.mockito.MockSettings;
-import org.mockito.Mockito;
-import org.mockito.internal.InternalMockHandler;
-import org.mockito.internal.MockitoCore;
-import org.mockito.internal.creation.settings.CreationSettings;
-import org.mockito.internal.stubbing.InvocationContainerImpl;
-import org.mockito.internal.stubbing.StubbedInvocationMatcher;
-import org.mockito.internal.util.MockUtil;
-import org.mockito.internal.util.reflection.GenericMetadataSupport;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Enumeration;
+import java.util.Iterator;
+import java.util.List;
+import java.util.ListIterator;
+import java.util.Properties;
 
 /**
- * Returning deep stub implementation.
+ * <p><code>Parser</code> creates {@link CommandLine}s.</p>
  *
- * Will return previously created mock if the invocation matches.
- *
- * <p>Supports nested generic information, with this answer you can write code like this :
- *
- * <pre class="code"><code class="java">
- *     interface GenericsNest&lt;K extends Comparable&lt;K&gt; & Cloneable&gt; extends Map&lt;K, Set&lt;Number&gt;&gt; {}
- *
- *     GenericsNest&lt;?&gt; mock = mock(GenericsNest.class, new ReturnsGenericDeepStubs());
- *     Number number = mock.entrySet().iterator().next().getValue().iterator().next();
- * </code></pre>
- * </p>
- *
- * @see org.mockito.Mockito#RETURNS_DEEP_STUBS
- * @see org.mockito.Answers#RETURNS_DEEP_STUBS
+ * @author John Keyes (john at integralsource.com)
+ * @see Parser
+ * @version $Revision$
  */
-public class ReturnsDeepStubs implements Answer<Object>, Serializable {
-    
-    private static final long serialVersionUID = -7105341425736035847L;
+public abstract class Parser implements CommandLineParser {
 
-    public Object answer(InvocationOnMock invocation) throws Throwable {
-        GenericMetadataSupport returnTypeGenericMetadata =
-                actualParameterizedType(invocation.getMock()).resolveGenericReturnType(invocation.getMethod());
+    /** commandline instance */
+    protected CommandLine cmd;
 
-        Class<?> rawType = returnTypeGenericMetadata.rawType();
-        if (!mockitoCore().isTypeMockable(rawType)) {
-            return delegate().returnValueFor(rawType);
-        }
+    /** current Options */
+    private Options options;
 
-        return deepStub(invocation, returnTypeGenericMetadata);
+    /** list of required options strings */
+    private List requiredOptions;
+
+    protected void setOptions(final Options options) {
+        this.options = options;
+        this.requiredOptions = new ArrayList(options.getRequiredOptions());
     }
 
-    private Object deepStub(InvocationOnMock invocation, GenericMetadataSupport returnTypeGenericMetadata) throws Throwable {
-    	InternalMockHandler<Object> handler = new MockUtil().getMockHandler(invocation.getMock());
-    	InvocationContainerImpl container = (InvocationContainerImpl) handler.getInvocationContainer();
+    protected Options getOptions() {
+        return options;
+    }
 
-        // matches invocation for verification
-        for (StubbedInvocationMatcher stubbedInvocationMatcher : container.getStubbedInvocations()) {
-    		if(container.getInvocationForStubbing().matches(stubbedInvocationMatcher.getInvocation())) {
-    			return stubbedInvocationMatcher.answer(invocation);
-    		}
-		}
+    protected List getRequiredOptions() {
+        return requiredOptions;
+    }
 
-        // record deep stub answer
-        return recordDeepStubAnswer(newDeepStubMock(returnTypeGenericMetadata), container);
+
+    /**
+     * <p>Subclasses must implement this method to reduce
+     * the <code>arguments</code> that have been passed to the parse 
+     * method.</p>
+     *
+     * @param opts The Options to parse the arguments by.
+     * @param arguments The arguments that have to be flattened.
+     * @param stopAtNonOption specifies whether to stop 
+     * flattening when a non option has been encountered
+     * @return a String array of the flattened arguments
+     */
+    protected abstract String[] flatten(Options opts, String[] arguments, 
+                                        boolean stopAtNonOption);
+
+    /**
+     * <p>Parses the specified <code>arguments</code> 
+     * based on the specifed {@link Options}.</p>
+     *
+     * @param options the <code>Options</code>
+     * @param arguments the <code>arguments</code>
+     * @return the <code>CommandLine</code>
+     * @throws ParseException if an error occurs when parsing the
+     * arguments.
+     */
+    public CommandLine parse(Options options, String[] arguments)
+                      throws ParseException
+    {
+        return parse(options, arguments, null, false);
     }
 
     /**
-     * Creates a mock using the Generics Metadata.
+     * Parse the arguments according to the specified options and
+     * properties.
      *
-     * <li>Finally as we want to mock the actual type, but we want to pass along the contextual generics meta-data
-     * that was resolved for the current return type, for this to happen we associate to the mock an new instance of
-     * {@link ReturnsDeepStubs} answer in which we will store the returned type generic metadata.
+     * @param options the specified Options
+     * @param arguments the command line arguments
+     * @param properties command line option name-value pairs
+     * @return the list of atomic option and value tokens
      *
-     * @param returnTypeGenericMetadata The metadata to use to create the new mock.
-     * @return The mock
+     * @throws ParseException if there are any problems encountered
+     * while parsing the command line tokens.
      */
-    private Object newDeepStubMock(GenericMetadataSupport returnTypeGenericMetadata) {
-        return mockitoCore().mock(
-                returnTypeGenericMetadata.rawType(),
-                withSettingsUsing(returnTypeGenericMetadata)
-        );
+    public CommandLine parse(Options options, String[] arguments, 
+                             Properties properties)
+        throws ParseException
+    {
+        return parse(options, arguments, properties, false);
     }
 
-    private MockSettings withSettingsUsing(GenericMetadataSupport returnTypeGenericMetadata) {
-        MockSettings mockSettings = returnTypeGenericMetadata.hasRawExtraInterfaces() ?
-                withSettings().extraInterfaces(returnTypeGenericMetadata.rawExtraInterfaces())
-                : withSettings();
-
-        return mockSettings
-		        .serializable()
-                .defaultAnswer(returnsDeepStubsAnswerUsing(returnTypeGenericMetadata));
+    /**
+     * <p>Parses the specified <code>arguments</code> 
+     * based on the specifed {@link Options}.</p>
+     *
+     * @param options the <code>Options</code>
+     * @param arguments the <code>arguments</code>
+     * @param stopAtNonOption specifies whether to stop 
+     * interpreting the arguments when a non option has 
+     * been encountered and to add them to the CommandLines
+     * args list.
+     *
+     * @return the <code>CommandLine</code>
+     * @throws ParseException if an error occurs when parsing the
+     * arguments.
+     */
+    public CommandLine parse(Options options, String[] arguments, 
+                             boolean stopAtNonOption)
+        throws ParseException
+    {
+        return parse(options, arguments, null, stopAtNonOption);
     }
 
-    private ReturnsDeepStubs returnsDeepStubsAnswerUsing(final GenericMetadataSupport returnTypeGenericMetadata) {
-        return new ReturnsDeepStubsSerializationFallback(returnTypeGenericMetadata);
-    }
-
-    private Object recordDeepStubAnswer(final Object mock, InvocationContainerImpl container) throws Throwable {
-        container.addAnswer(new DeeplyStubbedAnswer(mock), false);
-        return mock;
-    }
-
-    protected GenericMetadataSupport actualParameterizedType(Object mock) {
-        CreationSettings mockSettings = (CreationSettings) new MockUtil().getMockHandler(mock).getMockSettings();
-        return GenericMetadataSupport.inferFrom(mockSettings.getTypeToMock());
-    }
-
-
-    private static class ReturnsDeepStubsSerializationFallback extends ReturnsDeepStubs implements Serializable {
-        @SuppressWarnings("serial") // not gonna be serialized
-        private final GenericMetadataSupport returnTypeGenericMetadata;
-
-        public ReturnsDeepStubsSerializationFallback(GenericMetadataSupport returnTypeGenericMetadata) {
-            this.returnTypeGenericMetadata = returnTypeGenericMetadata;
+    /**
+     * Parse the arguments according to the specified options and
+     * properties.
+     *
+     * @param options the specified Options
+     * @param arguments the command line arguments
+     * @param properties command line option name-value pairs
+     * @param stopAtNonOption stop parsing the arguments when the first
+     * non option is encountered.
+     *
+     * @return the list of atomic option and value tokens
+     *
+     * @throws ParseException if there are any problems encountered
+     * while parsing the command line tokens.
+     */
+    public CommandLine parse(Options options, String[] arguments, 
+                             Properties properties, boolean stopAtNonOption)
+        throws ParseException
+    {
+        // clear out the data in options in case it's been used before (CLI-71)
+        for (Iterator it = options.helpOptions().iterator(); it.hasNext();) {
+            Option opt = (Option) it.next();
+            opt.clearValues();
         }
 
-        @Override
-        protected GenericMetadataSupport actualParameterizedType(Object mock) {
-            return returnTypeGenericMetadata;
+        // initialise members
+        setOptions(options);
+
+        cmd = new CommandLine();
+
+        boolean eatTheRest = false;
+
+        if (arguments == null)
+        {
+            arguments = new String[0];
         }
-        private Object writeReplace() throws IOException {
-            return Mockito.RETURNS_DEEP_STUBS;
+
+        List tokenList = Arrays.asList(flatten(getOptions(), 
+                                               arguments, 
+                                               stopAtNonOption));
+
+        ListIterator iterator = tokenList.listIterator();
+
+        // process each flattened token
+        while (iterator.hasNext())
+        {
+            String t = (String) iterator.next();
+
+            // the value is the double-dash
+            if ("--".equals(t))
+            {
+                eatTheRest = true;
+            }
+
+            // the value is a single dash
+            else if ("-".equals(t))
+            {
+                if (stopAtNonOption)
+                {
+                    eatTheRest = true;
+                }
+                else
+                {
+                    cmd.addArg(t);
+                }
+            }
+
+            // the value is an option
+            else if (t.startsWith("-"))
+            {
+                if (stopAtNonOption && !getOptions().hasOption(t))
+                {
+                    eatTheRest = true;
+                    cmd.addArg(t);
+                }
+                else
+                {
+                    processOption(t, iterator);
+                }
+            }
+
+            // the value is an argument
+            else
+            {
+                cmd.addArg(t);
+
+                if (stopAtNonOption)
+                {
+                    eatTheRest = true;
+                }
+            }
+
+            // eat the remaining tokens
+            if (eatTheRest)
+            {
+                while (iterator.hasNext())
+                {
+                    String str = (String) iterator.next();
+
+                    // ensure only one double-dash is added
+                    if (!"--".equals(str))
+                    {
+                        cmd.addArg(str);
+                    }
+                }
+            }
+        }
+
+        processProperties(properties);
+        checkRequiredOptions();
+
+        return cmd;
+    }
+
+    /**
+     * <p>Sets the values of Options using the values in 
+     * <code>properties</code>.</p>
+     *
+     * @param properties The value properties to be processed.
+     */
+    protected void processProperties(Properties properties)
+    {
+        if (properties == null)
+        {
+            return;
+        }
+
+        for (Enumeration e = properties.propertyNames(); e.hasMoreElements();)
+        {
+            String option = e.nextElement().toString();
+
+            if (!cmd.hasOption(option))
+            {
+                Option opt = getOptions().getOption(option);
+
+                // get the value from the properties instance
+                String value = properties.getProperty(option);
+
+                if (opt.hasArg())
+                {
+                    if ((opt.getValues() == null)
+                        || (opt.getValues().length == 0))
+                    {
+                        try
+                        {
+                            opt.addValueForProcessing(value);
+                        }
+                        catch (RuntimeException exp)
+                        {
+                            // if we cannot add the value don't worry about it
+                        }
+                    }
+                }
+                else if (!("yes".equalsIgnoreCase(value) 
+                           || "true".equalsIgnoreCase(value)
+                           || "1".equalsIgnoreCase(value)))
+                {
+                    // if the value is not yes, true or 1 then don't add the
+                    // option to the CommandLine
+                    break;
+                }
+
+                cmd.addOption(opt);
+            }
         }
     }
 
+    /**
+     * <p>Throws a {@link MissingOptionException} if all of the
+     * required options are no present.</p>
+     *
+     * @throws MissingOptionException if any of the required Options
+     * are not present.
+     */
+    protected void checkRequiredOptions()
+        throws MissingOptionException
+    {
+        // if there are required options that have not been
+        // processsed
+        if (getRequiredOptions().size() > 0)
+        {
+            Iterator iter = getRequiredOptions().iterator();
+            StringBuffer buff = new StringBuffer("Missing required option");
+            buff.append(getRequiredOptions().size() == 1 ? "" : "s");
+            buff.append(": ");
 
-    private static class DeeplyStubbedAnswer implements Answer<Object>, Serializable {
-        @SuppressWarnings("serial") // serialization will fail with a nice message if mock not serializable
-        private final Object mock;
 
-        DeeplyStubbedAnswer(Object mock) {
-            this.mock = mock;
+            // loop through the required options
+            while (iter.hasNext())
+            {
+                buff.append(iter.next());
+                buff.append(", ");
+            }
+
+            throw new MissingOptionException(buff.substring(0, buff.length() - 2));
         }
-        public Object answer(InvocationOnMock invocation) throws Throwable {
-            return mock;
+    }
+
+    /**
+     * <p>Process the argument values for the specified Option
+     * <code>opt</code> using the values retrieved from the 
+     * specified iterator <code>iter</code>.
+     *
+     * @param opt The current Option
+     * @param iter The iterator over the flattened command line
+     * Options.
+     *
+     * @throws ParseException if an argument value is required
+     * and it is has not been found.
+     */
+    public void processArgs(Option opt, ListIterator iter)
+        throws ParseException
+    {
+        // loop until an option is found
+        while (iter.hasNext())
+        {
+            String str = (String) iter.next();
+
+            // found an Option, not an argument
+            if (getOptions().hasOption(str) && str.startsWith("-"))
+            {
+                iter.previous();
+                break;
+            }
+
+            // found a value
+            try
+            {
+                opt.addValueForProcessing( Util.stripLeadingAndTrailingQuotes(str) );
+            }
+            catch (RuntimeException exp)
+            {
+                iter.previous();
+                break;
+            }
+        }
+
+        if ((opt.getValues() == null) && !opt.hasOptionalArg())
+        {
+            throw new MissingArgumentException("Missing argument for option:"
+                                               + opt.getKey());
         }
     }
 
+    /**
+     * <p>Process the Option specified by <code>arg</code>
+     * using the values retrieved from the specfied iterator
+     * <code>iter</code>.
+     *
+     * @param arg The String value representing an Option
+     * @param iter The iterator over the flattened command 
+     * line arguments.
+     *
+     * @throws ParseException if <code>arg</code> does not
+     * represent an Option
+     */
+    protected void processOption(String arg, ListIterator iter)
+        throws ParseException
+    {
+        boolean hasOption = getOptions().hasOption(arg);
 
-    private static MockitoCore mockitoCore() {
-        return LazyHolder.MOCKITO_CORE;
-    }
+        // if there is no option throw an UnrecognisedOptionException
+        if (!hasOption)
+        {
+            throw new UnrecognizedOptionException("Unrecognized option: " 
+                                                  + arg);
+        }
+        
+        // get the option represented by arg
+        final Option opt = getOptions().getOption(arg);
 
-    private static ReturnsEmptyValues delegate() {
-        return LazyHolder.DELEGATE;
-    }
+        // if the option is a required option remove the option from
+        // the requiredOptions list
+        if (opt.isRequired())
+        {
+            getRequiredOptions().remove(opt.getKey());
+        }
 
-    private static class LazyHolder {
-        private static final MockitoCore MOCKITO_CORE = new MockitoCore();
-        private static final ReturnsEmptyValues DELEGATE = new ReturnsEmptyValues();
+        // if the option is in an OptionGroup make that option the selected
+        // option of the group
+        if (getOptions().getOptionGroup(opt) != null)
+        {
+            OptionGroup group = getOptions().getOptionGroup(opt);
+
+            if (group.isRequired())
+            {
+                getRequiredOptions().remove(group);
+            }
+
+            group.setSelected(opt);
+        }
+
+        // if the option takes an argument value
+        if (opt.hasArg())
+        {
+            processArgs(opt, iter);
+        }
+
+
+        // set the option on the command line
+        cmd.addOption(opt);
     }
 }

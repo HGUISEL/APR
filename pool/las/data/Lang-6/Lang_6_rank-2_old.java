@@ -1,159 +1,72 @@
-/*
- * Copyright (c) 2007 Mockito contributors
- * This program is made available under the terms of the MIT License.
- */
-package org.mockito.internal.stubbing.defaultanswers;
+package com.fasterxml.jackson.databind.ser;
 
-import static org.mockito.Mockito.withSettings;
+import java.util.Map;
 
-import java.io.IOException;
-import java.io.Serializable;
-import org.mockito.MockSettings;
-import org.mockito.Mockito;
-import org.mockito.internal.InternalMockHandler;
-import org.mockito.internal.MockitoCore;
-import org.mockito.internal.creation.settings.CreationSettings;
-import org.mockito.internal.stubbing.InvocationContainerImpl;
-import org.mockito.internal.stubbing.StubbedInvocationMatcher;
-import org.mockito.internal.util.MockUtil;
-import org.mockito.internal.util.reflection.GenericMetadataSupport;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
+import com.fasterxml.jackson.databind.ser.std.MapSerializer;
 
 /**
- * Returning deep stub implementation.
- *
- * Will return previously created mock if the invocation matches.
- *
- * <p>Supports nested generic information, with this answer you can write code like this :
- *
- * <pre class="code"><code class="java">
- *     interface GenericsNest&lt;K extends Comparable&lt;K&gt; & Cloneable&gt; extends Map&lt;K, Set&lt;Number&gt;&gt; {}
- *
- *     GenericsNest&lt;?&gt; mock = mock(GenericsNest.class, new ReturnsGenericDeepStubs());
- *     Number number = mock.entrySet().iterator().next().getValue().iterator().next();
- * </code></pre>
- * </p>
- *
- * @see org.mockito.Mockito#RETURNS_DEEP_STUBS
- * @see org.mockito.Answers#RETURNS_DEEP_STUBS
+ * Class similar to {@link BeanPropertyWriter}, but that will be used
+ * for serializing {@link com.fasterxml.jackson.annotation.JsonAnyGetter} annotated
+ * (Map) properties
  */
-public class ReturnsDeepStubs implements Answer<Object>, Serializable {
+public class AnyGetterWriter
+{
+    protected final BeanProperty _property;
+
+    /**
+     * Method (or field) that represents the "any getter"
+     */
+    protected final AnnotatedMember _accessor;
     
-    private static final long serialVersionUID = -7105341425736035847L;
-
-    public Object answer(InvocationOnMock invocation) throws Throwable {
-        GenericMetadataSupport returnTypeGenericMetadata =
-                actualParameterizedType(invocation.getMock()).resolveGenericReturnType(invocation.getMethod());
-
-        Class<?> rawType = returnTypeGenericMetadata.rawType();
-        if (!mockitoCore().isTypeMockable(rawType)) {
-            return delegate().returnValueFor(rawType);
-        }
-
-        return makeDeepMock(invocation, returnTypeGenericMetadata);
+    protected MapSerializer _serializer;
+    
+    public AnyGetterWriter(BeanProperty property,
+            AnnotatedMember accessor, MapSerializer serializer)
+    {
+        _accessor = accessor;
+        _property = property;
+        _serializer = serializer;
     }
 
-	private void instantiateFieldsIfNeeded() {
-		if (mockitoCore == null) {
-			mockitoCore = new MockitoCore();
-		}
-		if (delegate == null) {
-			delegate = new ReturnsEmptyValues();
-		}
-	}
-
-	private Object getMock(InvocationOnMock invocation, GenericMetadataSupport returnTypeGenericMetadata) throws Throwable {
-    	InternalMockHandler<Object> handler = new MockUtil().getMockHandler(invocation.getMock());
-    	InvocationContainerImpl container = (InvocationContainerImpl) handler.getInvocationContainer();
-
-        // matches invocation for verification
-        for (StubbedInvocationMatcher stubbedInvocationMatcher : container.getStubbedInvocations()) {
-    		if(container.getInvocationForStubbing().matches(stubbedInvocationMatcher.getInvocation())) {
-    			return stubbedInvocationMatcher.answer(invocation);
-    		}
-		}
-
-        // deep stub
-        return recordDeepStubMock(createNewDeepStubMock(returnTypeGenericMetadata), container);
+    public void getAndSerialize(Object bean, JsonGenerator jgen, SerializerProvider provider)
+        throws Exception
+    {
+        Object value = _accessor.getValue(bean);
+        if (value == null) {
+            return;
+        }
+        if (!(value instanceof Map<?,?>)) {
+            throw new JsonMappingException("Value returned by 'any-getter' ("
+                    +_accessor.getName()+"()) not java.util.Map but "+value.getClass().getName());
+        }
+        _serializer.serializeFields((Map<?,?>) value, jgen, provider);
     }
 
     /**
-     * Creates a mock using the Generics Metadata.
-     *
-     * <li>Finally as we want to mock the actual type, but we want to pass along the contextual generics meta-data
-     * that was resolved for the current return type, for this to happen we associate to the mock an new instance of
-     * {@link ReturnsDeepStubs} answer in which we will store the returned type generic metadata.
-     *
-     * @param returnTypeGenericMetadata The metadata to use to create the new mock.
-     * @return The mock
+     * @since 2.3
      */
-    private Object createNewDeepStubMock(GenericMetadataSupport returnTypeGenericMetadata) {
-        return mockitoCore().mock(
-                returnTypeGenericMetadata.rawType(),
-                withSettingsUsing(returnTypeGenericMetadata)
-        );
-    }
-
-    private MockSettings withSettingsUsing(GenericMetadataSupport returnTypeGenericMetadata) {
-        MockSettings mockSettings =
-                returnTypeGenericMetadata.rawExtraInterfaces().length > 0 ?
-                withSettings().extraInterfaces(returnTypeGenericMetadata.rawExtraInterfaces())
-                : withSettings();
-
-        return mockSettings
-		        .serializable()
-                .defaultAnswer(returnsDeepStubsAnswerUsing(returnTypeGenericMetadata));
-    }
-
-    private ReturnsDeepStubs returnsDeepStubsAnswerUsing(final GenericMetadataSupport returnTypeGenericMetadata) {
-        return new NotSerializableGenericsAwareReturnsDeepStubs(returnTypeGenericMetadata);
-    }
-
-    private Object recordDeepStubMock(final Object mock, InvocationContainerImpl container) throws Throwable {
-        container.addAnswer(new SerializableAnswer() {
-            public Object answer(InvocationOnMock invocation) throws Throwable {
-                return mock;
+    public void getAndFilter(Object bean, JsonGenerator jgen, SerializerProvider provider,
+            PropertyFilter filter)
+        throws Exception
+        {
+            Object value = _accessor.getValue(bean);
+            if (value == null) {
+                return;
             }
-        }, false);
-        return mock;
-    }
-
-    private static class NotSerializableGenericsAwareReturnsDeepStubs extends ReturnsDeepStubs implements Serializable {
-        private final GenericMetadataSupport returnTypeGenericMetadata;
-
-        public NotSerializableGenericsAwareReturnsDeepStubs(GenericMetadataSupport returnTypeGenericMetadata) {
-            this.returnTypeGenericMetadata = returnTypeGenericMetadata;
+            if (!(value instanceof Map<?,?>)) {
+                throw new JsonMappingException("Value returned by 'any-getter' ("
+                        +_accessor.getName()+"()) not java.util.Map but "+value.getClass().getName());
+            }
+            _serializer.serializeFilteredFields((Map<?,?>) value, jgen, provider, filter);
         }
-
-        @Override
-        protected GenericMetadataSupport actualParameterizedType(Object mock) {
-            return returnTypeGenericMetadata;
-        }
-
-        private Object writeReplace() throws IOException {
-            return Mockito.RETURNS_DEEP_STUBS;
-        }
-    }
-
-    abstract class SerializableAnswer implements Answer<Object>, Serializable {
-	}
-	
-
-    protected GenericMetadataSupport actualParameterizedType(Object mock) {
-        CreationSettings mockSettings = (CreationSettings) new MockUtil().getMockHandler(mock).getMockSettings();
-        return GenericMetadataSupport.inferFrom(mockSettings.getTypeToMock());
-    }
-
-
-    private static MockitoCore mockitoCore() {
-        return LazyHolder.MOCKITO_CORE;
-    }
-    private static ReturnsEmptyValues delegate() {
-        return LazyHolder.DELEGATE;
-    }
-    private static class LazyHolder {
-        private static final MockitoCore MOCKITO_CORE = new MockitoCore();
-        private static final ReturnsEmptyValues DELEGATE = new ReturnsEmptyValues();
+    
+    // Note: NOT part of ResolvableSerializer...
+    public void resolve(SerializerProvider provider) throws JsonMappingException
+    {
+        // 05-Sep-2013, tatu: I _think_ this can be considered a primary property...
+        _serializer = (MapSerializer) provider.handlePrimaryContextualization(_serializer, _property);
     }
 }

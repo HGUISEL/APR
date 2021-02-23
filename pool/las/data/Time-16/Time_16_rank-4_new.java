@@ -1,294 +1,198 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.lucene.document;
+package com.fasterxml.jackson.databind.ser.std;
 
-import org.apache.lucene.util.BytesRef;
-import org.apache.lucene.util.NumericUtils;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.TimeZone;
 
-import org.apache.lucene.index.FieldInfo;
-import org.apache.lucene.search.BooleanClause;
-import org.apache.lucene.search.BooleanQuery;
-import org.apache.lucene.search.ConstantScoreQuery;
-import org.apache.lucene.search.PointRangeQuery;
-import org.apache.lucene.search.Query;
-import org.apache.lucene.spatial.util.GeoUtils;
+import com.fasterxml.jackson.annotation.JsonFormat;
 
-/** 
- * An indexed location field.
- * <p>
- * Finding all documents within a range at search time is
- * efficient.  Multiple values for the same field in one document
- * is allowed. 
- * <p>
- * This field defines static factory methods for creating common queries:
- * <ul>
- *   <li>{@link #newBoxQuery newBoxQuery()} for matching points within a bounding box.
- *   <li>{@link #newDistanceQuery newDistanceQuery()} for matching points within a specified distance.
- *   <li>{@link #newPolygonQuery newPolygonQuery()} for matching points within an arbitrary polygon.
- * </ul>
- * <p>
- * <b>WARNING</b>: Values are indexed with some loss of precision, incurring up to 1E-7 error from the
- * original {@code double} values. 
- */
-// TODO ^^^ that is very sandy and hurts the API, usage, and tests tremendously, because what the user passes
-// to the field is not actually what gets indexed. Float would be 1E-5 error vs 1E-7, but it might be
-// a better tradeoff? then it would be completely transparent to the user and lucene would be "lossless".
-public class LatLonPoint extends Field {
-  /**
-   * Type for an indexed LatLonPoint
-   * <p>
-   * Each point stores two dimensions with 4 bytes per dimension.
-   */
-  public static final FieldType TYPE = new FieldType();
-  static {
-    TYPE.setDimensions(2, Integer.BYTES);
-    TYPE.freeze();
-  }
-  
-  /**
-   * Change the values of this field
-   * @param latitude latitude value: must be within standard +/-90 coordinate bounds.
-   * @param longitude longitude value: must be within standard +/-180 coordinate bounds.
-   * @throws IllegalArgumentException if latitude or longitude are out of bounds
-   */
-  public void setLocationValue(double latitude, double longitude) {
-    byte[] bytes = new byte[8];
-    NumericUtils.intToBytes(encodeLatitude(latitude), bytes, 0);
-    NumericUtils.intToBytes(encodeLongitude(longitude), bytes, Integer.BYTES);
-    fieldsData = new BytesRef(bytes);
-  }
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
 
-  /** 
-   * Creates a new LatLonPoint with the specified latitude and longitude
-   * @param name field name
-   * @param latitude latitude value: must be within standard +/-90 coordinate bounds.
-   * @param longitude longitude value: must be within standard +/-180 coordinate bounds.
-   * @throws IllegalArgumentException if the field name is null or latitude or longitude are out of bounds
-   */
-  public LatLonPoint(String name, double latitude, double longitude) {
-    super(name, TYPE);
-    setLocationValue(latitude, longitude);
-  }
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.*;
+import com.fasterxml.jackson.databind.ser.ContextualSerializer;
+import com.fasterxml.jackson.databind.util.StdDateFormat;
 
-  private static final int BITS = 32;
-  private static final double LONGITUDE_SCALE = (0x1L<<BITS)/360.0D;
-  private static final double LATITUDE_SCALE = (0x1L<<BITS)/180.0D;
-  
-  @Override
-  public String toString() {
-    StringBuilder result = new StringBuilder();
-    result.append(getClass().getSimpleName());
-    result.append(" <");
-    result.append(name);
-    result.append(':');
+@SuppressWarnings("serial")
+public abstract class DateTimeSerializerBase<T>
+    extends StdScalarSerializer<T>
+    implements ContextualSerializer
+{
+    /**
+     * Flag that indicates that serialization must be done as the
+     * Java timestamp, regardless of other settings.
+     */
+    protected final Boolean _useTimestamp;
 
-    BytesRef bytes = (BytesRef) fieldsData;
-    result.append(decodeLatitude(BytesRef.deepCopyOf(bytes).bytes, 0));
-    result.append(',');
-    result.append(decodeLongitude(BytesRef.deepCopyOf(bytes).bytes, Integer.BYTES));
+    /**
+     * Specific format to use, if not default format: non null value
+     * also indicates that serialization is to be done as JSON String,
+     * not numeric timestamp, unless {@link #_useTimestamp} is true.
+     */
+    protected final DateFormat _customFormat;
 
-    result.append('>');
-    return result.toString();
-  }
-
-  // public helper methods (e.g. for queries)
-
-  /** 
-   * Quantizes double (64 bit) latitude into 32 bits 
-   * @param latitude latitude value: must be within standard +/-90 coordinate bounds.
-   * @return encoded value as a 32-bit {@code int}
-   * @throws IllegalArgumentException if latitude is out of bounds
-   */
-  public static int encodeLatitude(double latitude) {
-    if (GeoUtils.isValidLat(latitude) == false) {
-      throw new IllegalArgumentException("invalid latitude: " + latitude + ", must be -90 to 90");
+    protected DateTimeSerializerBase(Class<T> type,
+            Boolean useTimestamp, DateFormat customFormat)
+    {
+        super(type);
+        _useTimestamp = useTimestamp;
+        _customFormat = customFormat;
     }
-    // the maximum possible value cannot be encoded without overflow
-    if (latitude == 90.0D) {
-      latitude = Math.nextDown(latitude);
-    }
-    return Math.toIntExact((long) (latitude * LATITUDE_SCALE));
-  }
 
-  /** 
-   * Quantizes double (64 bit) longitude into 32 bits 
-   * @param longitude longitude value: must be within standard +/-180 coordinate bounds.
-   * @return encoded value as a 32-bit {@code int}
-   * @throws IllegalArgumentException if longitude is out of bounds
-   */
-  public static int encodeLongitude(double longitude) {
-    if (GeoUtils.isValidLon(longitude) == false) {
-      throw new IllegalArgumentException("invalid longitude: " + longitude + ", must be -180 to 180");
-    }
-    // the maximum possible value cannot be encoded without overflow
-    if (longitude == 180.0D) {
-      longitude = Math.nextDown(longitude);
-    }
-    return Math.toIntExact((long) (longitude * LONGITUDE_SCALE));
-  }
+    public abstract DateTimeSerializerBase<T> withFormat(Boolean timestamp, DateFormat customFormat);
 
-  /** 
-   * Turns quantized value from {@link #encodeLatitude} back into a double. 
-   * @param encoded encoded value: 32-bit quantized value.
-   * @return decoded latitude value.
-   */
-  public static double decodeLatitude(int encoded) {
-    double result = encoded / LATITUDE_SCALE;
-    assert GeoUtils.isValidLat(result);
-    return result;
-  }
-  
-  /** 
-   * Turns quantized value from byte array back into a double. 
-   * @param src byte array containing 4 bytes to decode at {@code offset}
-   * @param offset offset into {@code src} to decode from.
-   * @return decoded latitude value.
-   */
-  public static double decodeLatitude(byte[] src, int offset) {
-    return decodeLatitude(NumericUtils.bytesToInt(src, offset));
-  }
-
-  /** 
-   * Turns quantized value from {@link #encodeLongitude} back into a double. 
-   * @param encoded encoded value: 32-bit quantized value.
-   * @return decoded longitude value.
-   */  
-  public static double decodeLongitude(int encoded) {
-    double result = encoded / LONGITUDE_SCALE;
-    assert GeoUtils.isValidLon(result);
-    return result;
-  }
-
-  /** 
-   * Turns quantized value from byte array back into a double. 
-   * @param src byte array containing 4 bytes to decode at {@code offset}
-   * @param offset offset into {@code src} to decode from.
-   * @return decoded longitude value.
-   */
-  public static double decodeLongitude(byte[] src, int offset) {
-    return decodeLongitude(NumericUtils.bytesToInt(src, offset));
-  }
-  
-  /** sugar encodes a single point as a 2D byte array */
-  private static byte[][] encode(double latitude, double longitude) {
-    byte[][] bytes = new byte[2][];
-    bytes[0] = new byte[4];
-    NumericUtils.intToBytes(encodeLatitude(latitude), bytes[0], 0);
-    bytes[1] = new byte[4];
-    NumericUtils.intToBytes(encodeLongitude(longitude), bytes[1], 0);
-    return bytes;
-  }
-
-  /** helper: checks a fieldinfo and throws exception if its definitely not a LatLonPoint */
-  static void checkCompatible(FieldInfo fieldInfo) {
-    if (fieldInfo.getPointDimensionCount() != TYPE.pointDimensionCount()) {
-      throw new IllegalArgumentException("field=\"" + fieldInfo.name + "\" was indexed with numDims=" + fieldInfo.getPointDimensionCount() + 
-                                         " but this point type has numDims=" + TYPE.pointDimensionCount() + 
-                                         ", is the field really a LatLonPoint?");
-    }
-    if (fieldInfo.getPointNumBytes() != TYPE.pointNumBytes()) {
-      throw new IllegalArgumentException("field=\"" + fieldInfo.name + "\" was indexed with bytesPerDim=" + fieldInfo.getPointNumBytes() + 
-                                         " but this point type has bytesPerDim=" + TYPE.pointNumBytes() + 
-                                         ", is the field really a LatLonPoint?");
-    }
-  }
-
-  // static methods for generating queries
-
-  /**
-   * Create a query for matching a bounding box.
-   * <p>
-   * The box may cross over the dateline.
-   * @param field field name. cannot be null.
-   * @param minLatitude latitude lower bound: must be within standard +/-90 coordinate bounds.
-   * @param maxLatitude latitude upper bound: must be within standard +/-90 coordinate bounds.
-   * @param minLongitude longitude lower bound: must be within standard +/-180 coordinate bounds.
-   * @param maxLongitude longitude upper bound: must be within standard +/-180 coordinate bounds.
-   * @return query matching points within this box
-   * @throws IllegalArgumentException if {@code field} is null, or the box has invalid coordinates.
-   */
-  public static Query newBoxQuery(String field, double minLatitude, double maxLatitude, double minLongitude, double maxLongitude) {
-    byte[][] lower = encode(minLatitude, minLongitude);
-    byte[][] upper = encode(maxLatitude, maxLongitude);
-    // Crosses date line: we just rewrite into OR of two bboxes, with longitude as an open range:
-    if (maxLongitude < minLongitude) {
-      // Disable coord here because a multi-valued doc could match both rects and get unfairly boosted:
-      BooleanQuery.Builder q = new BooleanQuery.Builder();
-      q.setDisableCoord(true);
-
-      // E.g.: maxLon = -179, minLon = 179
-      byte[][] leftOpen = new byte[2][];
-      leftOpen[0] = lower[0];
-      // leave longitude open (null)
-      Query left = newBoxInternal(field, leftOpen, upper);
-      q.add(new BooleanClause(left, BooleanClause.Occur.SHOULD));
-      byte[][] rightOpen = new byte[2][];
-      rightOpen[0] = upper[0];
-      // leave longitude open (null)
-      Query right = newBoxInternal(field, lower, rightOpen);
-      q.add(new BooleanClause(right, BooleanClause.Occur.SHOULD));
-      return new ConstantScoreQuery(q.build());
-    } else {
-      return newBoxInternal(field, lower, upper);
-    }
-  }
-  
-  private static Query newBoxInternal(String field, byte[][] min, byte[][] max) {
-    return new PointRangeQuery(field, min, new boolean[] { true, true }, max, new boolean[] { false, false }) {
-      @Override
-      protected String toString(int dimension, byte[] value) {
-        if (dimension == 0) {
-          return Double.toString(decodeLatitude(value, 0));
-        } else if (dimension == 1) {
-          return Double.toString(decodeLongitude(value, 0));
-        } else {
-          throw new AssertionError();
+    @Override
+    public JsonSerializer<?> createContextual(SerializerProvider serializers,
+            BeanProperty property) throws JsonMappingException
+    {
+        if (property == null) {
+            return this;
         }
-      }
-    };
-  }
-  
-  /**
-   * Create a query for matching points within the specified distance of the supplied location.
-   * @param field field name. cannot be null.
-   * @param latitude latitude at the center: must be within standard +/-90 coordinate bounds.
-   * @param longitude longitude at the center: must be within standard +/-180 coordinate bounds.
-   * @param radiusMeters maximum distance from the center in meters: must be non-negative and finite.
-   * @return query matching points within this distance
-   * @throws IllegalArgumentException if {@code field} is null, location has invalid coordinates, or radius is invalid.
-   */
-  public static Query newDistanceQuery(String field, double latitude, double longitude, double radiusMeters) {
-    return new LatLonPointDistanceQuery(field, latitude, longitude, radiusMeters);
-  }
-  
-  /** 
-   * Create a query for matching a polygon.
-   * <p>
-   * The supplied {@code polyLats}/{@code polyLons} must be clockwise or counter-clockwise.
-   * @param field field name. cannot be null.
-   * @param polyLats latitude values for points of the polygon: must be within standard +/-90 coordinate bounds.
-   * @param polyLons longitude values for points of the polygon: must be within standard +/-180 coordinate bounds.
-   * @return query matching points within this polygon
-   * @throws IllegalArgumentException if {@code field} is null, {@code polyLats} is null or has invalid coordinates, 
-   *                                  {@code polyLons} is null or has invalid coordinates, if {@code polyLats} has a different
-   *                                  length than {@code polyLons}, if the polygon has less than 4 points, or if polygon is 
-   *                                  not closed (first and last points should be the same)
-   */
-  public static Query newPolygonQuery(String field, double[] polyLats, double[] polyLons) {
-    return new LatLonPointInPolygonQuery(field, polyLats, polyLons);
-  }
+        JsonFormat.Value format = findFormatOverrides(serializers, property, handledType());
+        if (format == null) {
+            return this;
+        }
+        // Simple case first: serialize as numeric timestamp?
+        JsonFormat.Shape shape = format.getShape();
+        if (shape.isNumeric()) {
+            return withFormat(Boolean.TRUE, null);
+        }
+
+        // 08-Jun-2017, tatu: With [databind#1648], this gets bit tricky..
+        // First: custom pattern will override things
+        if (format.hasPattern()) {
+            final Locale loc = format.hasLocale()
+                            ? format.getLocale()
+                            : serializers.getLocale();
+            SimpleDateFormat df = new SimpleDateFormat(format.getPattern(), loc);
+            TimeZone tz = format.hasTimeZone() ? format.getTimeZone()
+                    : serializers.getTimeZone();
+            df.setTimeZone(tz);
+            return withFormat(Boolean.FALSE, df);
+        }
+
+        // Otherwise, need one of these changes:
+        final boolean hasLocale = format.hasLocale();
+        final boolean hasTZ = format.hasTimeZone();
+        final boolean asString = (shape == JsonFormat.Shape.STRING);
+
+        if (!hasLocale && !hasTZ && !asString) {
+            return this;
+        }
+
+        DateFormat df0 = serializers.getConfig().getDateFormat();
+        // Jackson's own `StdDateFormat` is quite easy to deal with...
+        if (df0 instanceof StdDateFormat) {
+            StdDateFormat std = (StdDateFormat) df0;
+            if (format.hasLocale()) {
+                std = std.withLocale(format.getLocale());
+            }
+            if (format.hasTimeZone()) {
+                std = std.withTimeZone(format.getTimeZone());
+            }
+            return withFormat(Boolean.FALSE, std);
+        }
+
+        // 08-Jun-2017, tatu: Unfortunately there's no generally usable
+        //    mechanism for changing `DateFormat` instances (or even clone()ing)
+        //    So: require it be `SimpleDateFormat`; can't config other types
+        if (!(df0 instanceof SimpleDateFormat)) {
+//            serializers.reportBadDefinition(handledType(), String.format(
+            serializers.reportMappingProblem(
+"Configured `DateFormat` (%s) not a `SimpleDateFormat`; can not configure `Locale` or `TimeZone`",
+df0.getClass().getName());
+        }
+        SimpleDateFormat df = (SimpleDateFormat) df0;
+        if (hasLocale) {
+            // Ugh. No way to change `Locale`, create copy; must re-crete completely:
+            df = new SimpleDateFormat(df.toPattern(), format.getLocale());
+        } else {
+            df = (SimpleDateFormat) df.clone();
+        }
+        TimeZone newTz = format.getTimeZone();
+        boolean changeTZ = (newTz != null) && !newTz.equals(df.getTimeZone());
+        if (changeTZ) {
+            df.setTimeZone(newTz);
+        }
+        return withFormat(Boolean.FALSE, df);
+    }
+
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
+     */
+
+    @Deprecated
+    @Override
+    public boolean isEmpty(T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
+    }
+
+    @Override
+    public boolean isEmpty(SerializerProvider serializers, T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
+    }
+    
+    protected abstract long _timestamp(T value);
+    
+    @Override
+    public JsonNode getSchema(SerializerProvider serializers, Type typeHint) {
+        //todo: (ryan) add a format for the date in the schema?
+        return createSchemaNode(_asTimestamp(serializers) ? "number" : "string", true);
+    }
+
+    @Override
+    public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws JsonMappingException
+    {
+        _acceptJsonFormatVisitor(visitor, typeHint, _asTimestamp(visitor.getProvider()));
+    }
+
+    /*
+    /**********************************************************
+    /* Actual serialization
+    /**********************************************************
+     */
+
+    @Override
+    public abstract void serialize(T value, JsonGenerator gen, SerializerProvider serializers)
+        throws IOException;
+
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+    
+    protected boolean _asTimestamp(SerializerProvider serializers)
+    {
+        if (_useTimestamp != null) {
+            return _useTimestamp.booleanValue();
+        }
+        if (_customFormat == null) {
+            if (serializers != null) {
+                return serializers.isEnabled(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            }
+            // 12-Jun-2014, tatu: Is it legal not to have provider? Was NPE:ing earlier so leave a check
+            throw new IllegalArgumentException("Null SerializerProvider passed for "+handledType().getName());
+        }
+        return false;
+    }
+
+    protected void _acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint,
+		boolean asNumber) throws JsonMappingException
+    {
+        if (asNumber) {
+            visitIntFormat(visitor, typeHint,
+                    JsonParser.NumberType.LONG, JsonValueFormat.UTC_MILLISEC);
+        } else {
+            visitStringFormat(visitor, typeHint, JsonValueFormat.DATE_TIME);
+        }
+    }
 }

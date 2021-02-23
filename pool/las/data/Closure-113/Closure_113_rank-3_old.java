@@ -1,2153 +1,1986 @@
 /*
- *  Licensed to the Apache Software Foundation (ASF) under one
- *  or more contributor license agreements.  See the NOTICE file
- *  distributed with this work for additional information
- *  regarding copyright ownership.  The ASF licenses this file
- *  to you under the Apache License, Version 2.0 (the
- *  "License"); you may not use this file except in compliance
- *  with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
- *  Unless required by applicable law or agreed to in writing,
- *  software distributed under the License is distributed on an
- *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- *  KIND, either express or implied.  See the License for the
- *  specific language governing permissions and limitations
- *  under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.codehaus.groovy.classgen;
 
-import groovy.lang.GroovyRuntimeException;
-import org.apache.groovy.io.StringBuilderWriter;
-import org.codehaus.groovy.GroovyBugError;
-import org.codehaus.groovy.ast.ASTNode;
-import org.codehaus.groovy.ast.AnnotatedNode;
-import org.codehaus.groovy.ast.AnnotationNode;
-import org.codehaus.groovy.ast.ClassHelper;
-import org.codehaus.groovy.ast.ClassNode;
-import org.codehaus.groovy.ast.ConstructorNode;
-import org.codehaus.groovy.ast.FieldNode;
-import org.codehaus.groovy.ast.GenericsType;
-import org.codehaus.groovy.ast.InnerClassNode;
-import org.codehaus.groovy.ast.InterfaceHelperClassNode;
-import org.codehaus.groovy.ast.MethodNode;
-import org.codehaus.groovy.ast.ModuleNode;
-import org.codehaus.groovy.ast.PackageNode;
-import org.codehaus.groovy.ast.Parameter;
-import org.codehaus.groovy.ast.PropertyNode;
-import org.codehaus.groovy.ast.expr.AnnotationConstantExpression;
-import org.codehaus.groovy.ast.expr.ArgumentListExpression;
-import org.codehaus.groovy.ast.expr.ArrayExpression;
-import org.codehaus.groovy.ast.expr.AttributeExpression;
-import org.codehaus.groovy.ast.expr.BinaryExpression;
-import org.codehaus.groovy.ast.expr.BitwiseNegationExpression;
-import org.codehaus.groovy.ast.expr.BooleanExpression;
-import org.codehaus.groovy.ast.expr.CastExpression;
-import org.codehaus.groovy.ast.expr.ClassExpression;
-import org.codehaus.groovy.ast.expr.ClosureExpression;
-import org.codehaus.groovy.ast.expr.ClosureListExpression;
-import org.codehaus.groovy.ast.expr.ConstantExpression;
-import org.codehaus.groovy.ast.expr.ConstructorCallExpression;
-import org.codehaus.groovy.ast.expr.DeclarationExpression;
-import org.codehaus.groovy.ast.expr.EmptyExpression;
-import org.codehaus.groovy.ast.expr.Expression;
-import org.codehaus.groovy.ast.expr.FieldExpression;
-import org.codehaus.groovy.ast.expr.GStringExpression;
-import org.codehaus.groovy.ast.expr.LambdaExpression;
-import org.codehaus.groovy.ast.expr.ListExpression;
-import org.codehaus.groovy.ast.expr.MapEntryExpression;
-import org.codehaus.groovy.ast.expr.MapExpression;
-import org.codehaus.groovy.ast.expr.MethodCallExpression;
-import org.codehaus.groovy.ast.expr.MethodPointerExpression;
-import org.codehaus.groovy.ast.expr.MethodReferenceExpression;
-import org.codehaus.groovy.ast.expr.NotExpression;
-import org.codehaus.groovy.ast.expr.PostfixExpression;
-import org.codehaus.groovy.ast.expr.PrefixExpression;
-import org.codehaus.groovy.ast.expr.PropertyExpression;
-import org.codehaus.groovy.ast.expr.RangeExpression;
-import org.codehaus.groovy.ast.expr.SpreadExpression;
-import org.codehaus.groovy.ast.expr.SpreadMapExpression;
-import org.codehaus.groovy.ast.expr.StaticMethodCallExpression;
-import org.codehaus.groovy.ast.expr.TernaryExpression;
-import org.codehaus.groovy.ast.expr.TupleExpression;
-import org.codehaus.groovy.ast.expr.UnaryMinusExpression;
-import org.codehaus.groovy.ast.expr.UnaryPlusExpression;
-import org.codehaus.groovy.ast.expr.VariableExpression;
-import org.codehaus.groovy.ast.stmt.AssertStatement;
-import org.codehaus.groovy.ast.stmt.BlockStatement;
-import org.codehaus.groovy.ast.stmt.BreakStatement;
-import org.codehaus.groovy.ast.stmt.CaseStatement;
-import org.codehaus.groovy.ast.stmt.CatchStatement;
-import org.codehaus.groovy.ast.stmt.ContinueStatement;
-import org.codehaus.groovy.ast.stmt.DoWhileStatement;
-import org.codehaus.groovy.ast.stmt.ExpressionStatement;
-import org.codehaus.groovy.ast.stmt.ForStatement;
-import org.codehaus.groovy.ast.stmt.IfStatement;
-import org.codehaus.groovy.ast.stmt.ReturnStatement;
-import org.codehaus.groovy.ast.stmt.Statement;
-import org.codehaus.groovy.ast.stmt.SwitchStatement;
-import org.codehaus.groovy.ast.stmt.SynchronizedStatement;
-import org.codehaus.groovy.ast.stmt.ThrowStatement;
-import org.codehaus.groovy.ast.stmt.TryCatchStatement;
-import org.codehaus.groovy.ast.stmt.WhileStatement;
-import org.codehaus.groovy.ast.tools.WideningCategories;
-import org.codehaus.groovy.classgen.asm.BytecodeHelper;
-import org.codehaus.groovy.classgen.asm.BytecodeVariable;
-import org.codehaus.groovy.classgen.asm.MethodCaller;
-import org.codehaus.groovy.classgen.asm.MethodCallerMultiAdapter;
-import org.codehaus.groovy.classgen.asm.MopWriter;
-import org.codehaus.groovy.classgen.asm.OperandStack;
-import org.codehaus.groovy.classgen.asm.OptimizingStatementWriter;
-import org.codehaus.groovy.classgen.asm.WriterController;
-import org.codehaus.groovy.classgen.asm.WriterControllerFactory;
-import org.codehaus.groovy.control.SourceUnit;
-import org.codehaus.groovy.runtime.ScriptBytecodeAdapter;
-import org.codehaus.groovy.syntax.RuntimeParserException;
-import org.objectweb.asm.AnnotationVisitor;
-import org.objectweb.asm.ClassVisitor;
-import org.objectweb.asm.FieldVisitor;
-import org.objectweb.asm.Label;
-import org.objectweb.asm.MethodVisitor;
-import org.objectweb.asm.Type;
-import org.objectweb.asm.util.TraceMethodVisitor;
+package org.apache.ignite.internal.processors.cache;
 
-import java.io.PrintWriter;
-import java.io.Writer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
+import org.apache.ignite.*;
+import org.apache.ignite.cache.*;
+import org.apache.ignite.cache.affinity.*;
+import org.apache.ignite.cluster.*;
+import org.apache.ignite.configuration.*;
+import org.apache.ignite.internal.*;
+import org.apache.ignite.internal.managers.communication.*;
+import org.apache.ignite.internal.managers.deployment.*;
+import org.apache.ignite.internal.managers.discovery.*;
+import org.apache.ignite.internal.managers.eventstorage.*;
+import org.apache.ignite.internal.managers.swapspace.*;
+import org.apache.ignite.internal.processors.affinity.*;
+import org.apache.ignite.internal.processors.cache.datastructures.*;
+import org.apache.ignite.internal.processors.cache.distributed.dht.*;
+import org.apache.ignite.internal.processors.cache.distributed.dht.colocated.*;
+import org.apache.ignite.internal.processors.cache.distributed.near.*;
+import org.apache.ignite.internal.processors.cache.dr.*;
+import org.apache.ignite.internal.processors.cache.jta.*;
+import org.apache.ignite.internal.processors.cache.local.*;
+import org.apache.ignite.internal.processors.cache.query.*;
+import org.apache.ignite.internal.processors.cache.query.continuous.*;
+import org.apache.ignite.internal.processors.cache.transactions.*;
+import org.apache.ignite.internal.processors.cache.version.*;
+import org.apache.ignite.internal.processors.cacheobject.*;
+import org.apache.ignite.internal.processors.closure.*;
+import org.apache.ignite.internal.processors.offheap.*;
+import org.apache.ignite.internal.processors.timeout.*;
+import org.apache.ignite.internal.util.*;
+import org.apache.ignite.internal.util.lang.*;
+import org.apache.ignite.internal.util.offheap.unsafe.*;
+import org.apache.ignite.internal.util.tostring.*;
+import org.apache.ignite.internal.util.typedef.*;
+import org.apache.ignite.internal.util.typedef.internal.*;
+import org.apache.ignite.lang.*;
+import org.apache.ignite.marshaller.*;
+import org.apache.ignite.plugin.security.*;
+import org.jetbrains.annotations.*;
 
-import static org.apache.groovy.util.BeanUtils.capitalize;
+import javax.cache.*;
+import javax.cache.configuration.*;
+import javax.cache.expiry.*;
+import java.io.*;
+import java.util.*;
+import java.util.concurrent.*;
+
+import static org.apache.ignite.cache.CacheAtomicityMode.*;
+import static org.apache.ignite.cache.CacheMemoryMode.*;
+import static org.apache.ignite.cache.CacheRebalanceMode.*;
+import static org.apache.ignite.cache.CacheWriteSynchronizationMode.*;
+import static org.apache.ignite.internal.managers.communication.GridIoPolicy.*;
+import static org.apache.ignite.internal.processors.cache.CacheFlag.*;
 
 /**
- * Generates Java class versions of Groovy classes using ASM.
+ * Cache context.
  */
-public class AsmClassGenerator extends ClassGenerator {
+@GridToStringExclude
+public class GridCacheContext<K, V> implements Externalizable {
+    /** */
+    private static final long serialVersionUID = 0L;
 
-    // fields
-    public  static final MethodCallerMultiAdapter setField = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "setField", false, false);
-    public  static final MethodCallerMultiAdapter getField = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "getField", false, false);
-  //private static final MethodCallerMultiAdapter setFieldOnSuper = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "setFieldOnSuper", false, false);
-  //private static final MethodCallerMultiAdapter getFieldOnSuper = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "getFieldOnSuper", false, false);
-    public  static final MethodCallerMultiAdapter setGroovyObjectField = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "setGroovyObjectField", false, false);
-    public  static final MethodCallerMultiAdapter getGroovyObjectField = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "getGroovyObjectField", false, false);
-
-    // properties
-    public  static final MethodCallerMultiAdapter setProperty = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "setProperty", false, false);
-    private static final MethodCallerMultiAdapter getProperty = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "getProperty", false, false);
-  //private static final MethodCallerMultiAdapter setPropertyOnSuper = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "setPropertyOnSuper", false, false);
-  //private static final MethodCallerMultiAdapter getPropertyOnSuper = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "getPropertyOnSuper", false, false);
-    private static final MethodCallerMultiAdapter setGroovyObjectProperty = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "setGroovyObjectProperty", false, false);
-    private static final MethodCallerMultiAdapter getGroovyObjectProperty = MethodCallerMultiAdapter.newStatic(ScriptBytecodeAdapter.class, "getGroovyObjectProperty", false, false);
-
-    // spread expressions
-    private static final MethodCaller spreadMap = MethodCaller.newStatic(ScriptBytecodeAdapter.class, "spreadMap");
-    private static final MethodCaller despreadList = MethodCaller.newStatic(ScriptBytecodeAdapter.class, "despreadList");
-
-    // type conversions
-    private static final MethodCaller createMapMethod = MethodCaller.newStatic(ScriptBytecodeAdapter.class, "createMap");
-    private static final MethodCaller createListMethod = MethodCaller.newStatic(ScriptBytecodeAdapter.class, "createList");
-    private static final MethodCaller createRangeMethod = MethodCaller.newStatic(ScriptBytecodeAdapter.class, "createRange");
-    private static final MethodCaller createPojoWrapperMethod = MethodCaller.newStatic(ScriptBytecodeAdapter.class, "createPojoWrapper");
-    private static final MethodCaller createGroovyObjectWrapperMethod = MethodCaller.newStatic(ScriptBytecodeAdapter.class, "createGroovyObjectWrapper");
-
-    private final Map<String,ClassNode> referencedClasses = new HashMap<>();
-    private boolean passingParams;
-
-    public static final boolean CREATE_DEBUG_INFO = true;
-    public static final boolean CREATE_LINE_NUMBER_INFO = true;
-    public static final boolean ASM_DEBUG = false; // add marker in the bytecode to show source-bytecode relationship
-    public static final String MINIMUM_BYTECODE_VERSION = "_MINIMUM_BYTECODE_VERSION";
-
-    private WriterController controller;
-    private ASTNode currentASTNode;
-
-    private final SourceUnit source;
-    private final GeneratorContext context;
-    private ClassVisitor classVisitor;
-    private final String sourceFile;
-
-    public AsmClassGenerator(final SourceUnit source, final GeneratorContext context, final ClassVisitor classVisitor, final String sourceFile) {
-        this.source = source;
-        this.context = context;
-        this.classVisitor = classVisitor;
-        this.sourceFile = sourceFile;
-    }
-
-    @Override
-    public SourceUnit getSourceUnit() {
-        return source;
-    }
-
-    public WriterController getController() {
-        return controller;
-    }
-
-    // GroovyClassVisitor interface
-    //--------------------------------------------------------------------------
-
-    @Override
-    public void visitClass(final ClassNode classNode) {
-        referencedClasses.clear();
-        WriterControllerFactory factory = classNode.getNodeMetaData(WriterControllerFactory.class);
-        WriterController normalController = new WriterController();
-        if (factory != null) {
-            this.controller = factory.makeController(normalController);
-        } else {
-            this.controller = normalController;
+    /** Deserialization stash. */
+    private static final ThreadLocal<IgniteBiTuple<String, String>> stash = new ThreadLocal<IgniteBiTuple<String, String>>() {
+        @Override protected IgniteBiTuple<String, String> initialValue() {
+            return F.t2();
         }
-        this.controller.init(this, context, classVisitor, classNode);
-        this.classVisitor = this.controller.getClassVisitor();
+    };
 
-        if (controller.shouldOptimizeForInt() || factory != null) {
-            OptimizingStatementWriter.setNodeMeta(controller.getTypeChooser(),classNode);
-        }
+    /** Empty cache version array. */
+    private static final GridCacheVersion[] EMPTY_VERSION = new GridCacheVersion[0];
 
-        try {
-            int bytecodeVersion = controller.getBytecodeVersion();
-            Object min = classNode.getNodeMetaData(MINIMUM_BYTECODE_VERSION);
-            if (min instanceof Integer) {
-                int minVersion = (int) min;
-                if ((bytecodeVersion ^ V_PREVIEW) < minVersion) {
-                    bytecodeVersion = minVersion;
-                }
-            }
-            classVisitor.visit(
-                    bytecodeVersion,
-                    adjustedClassModifiersForClassWriting(classNode),
-                    controller.getInternalClassName(),
-                    BytecodeHelper.getGenericsSignature(classNode),
-                    controller.getInternalBaseClassName(),
-                    BytecodeHelper.getClassInternalNames(classNode.getInterfaces())
-            );
-            classVisitor.visitSource(sourceFile, null);
-            if (classNode instanceof InnerClassNode) {
-                InnerClassNode innerClass = (InnerClassNode) classNode;
-                MethodNode enclosingMethod = innerClass.getEnclosingMethod();
-                if (enclosingMethod != null) {
-                    String outerClassName = BytecodeHelper.getClassInternalName(innerClass.getOuterClass().getName());
-                    classVisitor.visitOuterClass(outerClassName, enclosingMethod.getName(), BytecodeHelper.getMethodDescriptor(enclosingMethod));
-                }
-            }
-            if (classNode.getName().endsWith("package-info")) {
-                PackageNode packageNode = classNode.getPackage();
-                if (packageNode != null) {
-                    // pull them out of package node but treat them like they were on class node
-                    visitAnnotations(classNode, packageNode, classVisitor);
-                }
-            } else {
-                visitAnnotations(classNode, classVisitor);
-                if (classNode.isInterface()) {
-                    ClassNode owner = classNode;
-                    if (owner instanceof InnerClassNode) {
-                        owner = owner.getOuterClass();
-                    }
-                    String outerClassName = classNode.getName();
-                    String name = outerClassName + "$" + context.getNextInnerClassIdx();
-                    controller.setInterfaceClassLoadingClass(
-                            new InterfaceHelperClassNode (
-                                    owner, name, ACC_SUPER | ACC_SYNTHETIC | ACC_STATIC, ClassHelper.OBJECT_TYPE,
-                                    controller.getCallSiteWriter().getCallSites()));
-                    super.visitClass(classNode);
-                    createInterfaceSyntheticStaticFields();
-                } else {
-                    super.visitClass(classNode);
-                    MopWriter.Factory mopWriterFactory = classNode.getNodeMetaData(MopWriter.Factory.class);
-                    if (mopWriterFactory == null) {
-                        mopWriterFactory = MopWriter.FACTORY;
-                    }
-                    MopWriter mopWriter = mopWriterFactory.create(controller);
-                    mopWriter.createMopMethods();
-                    controller.getCallSiteWriter().generateCallSiteArray();
-                    createSyntheticStaticFields();
-                }
-            }
+    /** Kernal context. */
+    private GridKernalContext ctx;
 
-            // GROOVY-6750 and GROOVY-6808
-            for (Iterator<InnerClassNode> iter = classNode.getInnerClasses(); iter.hasNext();) {
-                InnerClassNode innerClass = iter.next();
-                makeInnerClassEntry(innerClass);
-            }
-            makeInnerClassEntry(classNode);
+    /** Cache shared context. */
+    private GridCacheSharedContext<K, V> sharedCtx;
 
-            classVisitor.visitEnd();
-        } catch (GroovyRuntimeException e) {
-            e.setModule(classNode.getModule());
-            throw e;
-        } catch (NegativeArraySizeException nase) {
-            throw new GroovyRuntimeException("NegativeArraySizeException while processing " + sourceFile, nase);
-        } catch (NullPointerException npe) {
-            throw new GroovyRuntimeException("NPE while processing " + sourceFile, npe);
-        }
-    }
+    /** Logger. */
+    private IgniteLogger log;
 
-    private void makeInnerClassEntry(final ClassNode cn) {
-        if (!(cn instanceof InnerClassNode)) return;
-        InnerClassNode innerClass = (InnerClassNode) cn;
-        String innerClassName = innerClass.getName();
-        String innerClassInternalName = BytecodeHelper.getClassInternalName(innerClassName);
-        {
-            int index = innerClassName.lastIndexOf('$');
-            if (index >= 0) innerClassName = innerClassName.substring(index + 1);
-        }
-        String outerClassName = BytecodeHelper.getClassInternalName(innerClass.getOuterClass().getName());
-        MethodNode enclosingMethod = innerClass.getEnclosingMethod();
-        if (enclosingMethod != null) {
-            // local inner classes do not specify the outer class name
-            outerClassName = null;
-            if (innerClass.isAnonymous()) innerClassName = null;
-        }
-        int modifiers = adjustedClassModifiersForInnerClassTable(cn);
-        classVisitor.visitInnerClass(innerClassInternalName, outerClassName, innerClassName, modifiers);
-    }
+    /** Cache configuration. */
+    private CacheConfiguration cacheCfg;
 
-    /*
-     * See http://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.7.6-300-D.2-5
-     * for what flags are allowed depending on the fact we are writing the inner class table
-     * or the class itself
+    /** Unsafe memory object for direct memory allocation. */
+    private GridUnsafeMemory unsafeMemory;
+
+    /** Affinity manager. */
+    private GridCacheAffinityManager affMgr;
+
+    /** Event manager. */
+    private GridCacheEventManager evtMgr;
+
+    /** Query manager. */
+    private GridCacheQueryManager<K, V> qryMgr;
+
+    /** Continuous query manager. */
+    private CacheContinuousQueryManager contQryMgr;
+
+    /** Swap manager. */
+    private GridCacheSwapManager swapMgr;
+
+    /** Evictions manager. */
+    private GridCacheEvictionManager evictMgr;
+
+    /** Data structures manager. */
+    private CacheDataStructuresManager dataStructuresMgr;
+
+    /** Eager TTL manager. */
+    private GridCacheTtlManager ttlMgr;
+
+    /** Store manager. */
+    private GridCacheStoreManager storeMgr;
+
+    /** Replication manager. */
+    private GridCacheDrManager drMgr;
+
+    /** JTA manager. */
+    private CacheJtaManagerAdapter jtaMgr;
+
+    /** Managers. */
+    private List<GridCacheManager<K, V>> mgrs = new LinkedList<>();
+
+    /** Cache gateway. */
+    private GridCacheGateway<K, V> gate;
+
+    /** Grid cache. */
+    private GridCacheAdapter<K, V> cache;
+
+    /** Cached local rich node. */
+    private ClusterNode locNode;
+
+    /**
+     * Thread local projection. If it's set it means that method call was initiated
+     * by child projection of initial cache.
      */
-    private static int adjustedClassModifiersForInnerClassTable(final ClassNode classNode) {
-        int modifiers = classNode.getModifiers();
-        modifiers = modifiers & ~ACC_SUPER;
-        modifiers = fixInterfaceModifiers(classNode, modifiers);
-        return modifiers;
-    }
+    private ThreadLocal<GridCacheProjectionImpl<K, V>> prjPerCall = new ThreadLocal<>();
 
-    private static int fixInterfaceModifiers(final ClassNode classNode, int modifiers) {
-        // (JLS §9.1.1.1). Such a class file must not have its ACC_FINAL, ACC_SUPER or ACC_ENUM flags set.
-        if (classNode.isInterface()) {
-            modifiers = modifiers & ~ACC_ENUM;
-            modifiers = modifiers & ~ACC_FINAL;
-        }
-        return modifiers;
-    }
+    /** Thread local forced flags that affect any projection in the same thread. */
+    private ThreadLocal<CacheFlag[]> forcedFlags = new ThreadLocal<>();
 
-    private static int fixInnerClassModifiers(final ClassNode classNode, int modifiers) {
-        // on the inner class node itself, private/protected are not allowed
-        if (classNode.getOuterClass() != null) {
-            if ((modifiers & ACC_PRIVATE) != 0) {
-                // GROOVY-6357: The JVM does not allow private modifier on inner classes: should be package private
-                modifiers = (modifiers & ~ACC_PRIVATE);
-            }
-            if ((modifiers & ACC_PROTECTED) != 0) {
-                // GROOVY-6357: Following Java's behavior for protected modifier on inner classes: should be public
-                modifiers = (modifiers & ~ACC_PROTECTED) | ACC_PUBLIC;
-            }
-        }
-        return modifiers;
-    }
+    /** Cache name. */
+    private String cacheName;
 
-    /*
-     * Classes but not interfaces should have ACC_SUPER set
-     * See http://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.7.6-300-D.2-5
-     * for what flags are allowed depending on the fact we are writing the inner class table
-     * or the class itself
+    /** Cache ID. */
+    private int cacheId;
+
+    /** System cache flag. */
+    private boolean sys;
+
+    /** IO policy. */
+    private GridIoPolicy plc;
+
+    /** Default expiry policy. */
+    private ExpiryPolicy expiryPlc;
+
+    /** Cache weak query iterator holder. */
+    private CacheWeakQueryIteratorsHolder<Map.Entry<K, V>> itHolder;
+
+    /** Affinity node. */
+    private boolean affNode;
+
+    /** Conflict resolver. */
+    private GridCacheVersionAbstractConflictResolver conflictRslvr;
+
+    /** */
+    private CacheObjectContext cacheObjCtx;
+
+    /** */
+    private CountDownLatch startLatch = new CountDownLatch(1);
+
+    /** Start topology version. */
+    private AffinityTopologyVersion startTopVer;
+
+    /** Dynamic cache deployment ID. */
+    private IgniteUuid dynamicDeploymentId;
+
+    /**
+     * Empty constructor required for {@link Externalizable}.
      */
-    private static int adjustedClassModifiersForClassWriting(final ClassNode classNode) {
-        int modifiers = classNode.getModifiers();
-        boolean needsSuper = !classNode.isInterface();
-        modifiers = needsSuper ? modifiers | ACC_SUPER : modifiers & ~ACC_SUPER;
-        // eliminate static
-        modifiers = modifiers & ~ACC_STATIC;
-        modifiers = fixInnerClassModifiers(classNode, modifiers);
-        modifiers = fixInterfaceModifiers(classNode, modifiers);
-        return modifiers;
-    }
-
-    public void visitGenericType(final GenericsType genericsType) {
-    }
-
-    @Override
-    protected void visitConstructorOrMethod(final MethodNode node, final boolean isConstructor) {
-        controller.resetLineNumber();
-        Parameter[] parameters = node.getParameters();
-        String methodType = BytecodeHelper.getMethodDescriptor(node.getReturnType(), parameters);
-        String signature = BytecodeHelper.getGenericsMethodSignature(node);
-        int modifiers = node.getModifiers();
-        if (isVargs(node.getParameters())) modifiers |= ACC_VARARGS;
-        MethodVisitor mv = classVisitor.visitMethod(modifiers, node.getName(), methodType, signature, buildExceptions(node.getExceptions()));
-        controller.setMethodVisitor(mv);
-
-        visitAnnotations(node, mv);
-        for (int i = 0, n = parameters.length; i < n; i += 1) {
-            visitParameterAnnotations(parameters[i], i, mv);
-        }
-
-        // add parameter names to the MethodVisitor (jdk8+ only)
-        if (Optional.ofNullable(controller.getClassNode().getCompileUnit())
-                .orElseGet(context::getCompileUnit).getConfig().getParameters()) {
-            for (Parameter parameter : parameters) {
-                // TODO: handle ACC_SYNTHETIC for enum method parameters?
-                mv.visitParameter(parameter.getName(), 0);
-            }
-        }
-
-        if (controller.getClassNode().isAnnotationDefinition() && !node.isStaticConstructor()) {
-            visitAnnotationDefault(node, mv);
-        } else if (!node.isAbstract()) {
-            Statement code = node.getCode();
-            mv.visitCode();
-
-            BytecodeInstruction instruction; // fast path for getters, setters, etc.
-            if (code instanceof BytecodeSequence && (instruction = ((BytecodeSequence) code).getBytecodeInstruction()) != null) {
-               instruction.visit(mv);
-            } else {
-                visitStdMethod(node, isConstructor, parameters, code);
-            }
-
-            try {
-                mv.visitMaxs(0, 0);
-            } catch (Exception e) {
-                Writer writer = null;
-                if (mv instanceof TraceMethodVisitor) {
-                    TraceMethodVisitor tracer = (TraceMethodVisitor) mv;
-                    writer = new StringBuilderWriter();
-                    PrintWriter p = new PrintWriter(writer);
-                    tracer.p.print(p);
-                    p.flush();
-                }
-                StringBuilder message = new StringBuilder(64);
-                message.append("ASM reporting processing error for ");
-                message.append(controller.getClassNode().toString()).append("#").append(node.getName());
-                message.append(" with signature ").append(node.getTypeDescriptor());
-                message.append(" in ").append(sourceFile).append(":").append(node.getLineNumber());
-                if (writer != null) {
-                    message.append("\nLast known generated bytecode in last generated method or constructor:\n");
-                    message.append(writer);
-                }
-                throw new GroovyRuntimeException(message.toString(), e);
-            }
-        }
-        mv.visitEnd();
-    }
-
-    private void visitStdMethod(final MethodNode node, final boolean isConstructor, final Parameter[] parameters, final Statement code) {
-        controller.getCompileStack().init(node.getVariableScope(), parameters);
-        controller.getCallSiteWriter().makeSiteEntry();
-
-        MethodVisitor mv = controller.getMethodVisitor();
-        if (isConstructor && (code == null || !((ConstructorNode) node).firstStatementIsSpecialConstructorCall())) {
-            boolean hasCallToSuper = false;
-            if (code != null && isInnerClass()) {
-                // GROOVY-4471: if the class is an inner class node, there are chances that
-                // the call to super is already added so we must ensure not to add it twice
-                if (code instanceof BlockStatement) {
-                    hasCallToSuper = ((BlockStatement) code).getStatements().stream()
-                        .map(statement -> statement instanceof ExpressionStatement ? ((ExpressionStatement) statement).getExpression() : null)
-                        .anyMatch(expression -> expression instanceof ConstructorCallExpression && ((ConstructorCallExpression) expression).isSuperCall());
-                }
-            }
-            if (!hasCallToSuper) {
-                // invokes the super class constructor
-                mv.visitVarInsn(ALOAD, 0);
-                mv.visitMethodInsn(INVOKESPECIAL, controller.getInternalBaseClassName(), "<init>", "()V", false);
-            }
-        }
-
-        // handle body
-        super.visitConstructorOrMethod(node, isConstructor);
-
-        controller.getCompileStack().clear();
-        if (node.isVoidMethod()) {
-            mv.visitInsn(RETURN);
-        } else {
-            ClassNode type = node.getReturnType();
-            if (ClassHelper.isPrimitiveType(type)) {
-                mv.visitLdcInsn(0);
-                controller.getOperandStack().push(ClassHelper.int_TYPE);
-                controller.getOperandStack().doGroovyCast(type);
-                BytecodeHelper.doReturn(mv, type);
-                controller.getOperandStack().remove(1);
-            } else {
-                mv.visitInsn(ACONST_NULL);
-                BytecodeHelper.doReturn(mv, type);
-            }
-        }
-    }
-
-    private void visitAnnotationDefaultExpression(final AnnotationVisitor av, final ClassNode type, final Expression exp) {
-        if (exp instanceof ClosureExpression) {
-            ClassNode closureClass = controller.getClosureWriter().getOrAddClosureClass((ClosureExpression) exp, ACC_PUBLIC);
-            Type t = Type.getType(BytecodeHelper.getTypeDescription(closureClass));
-            av.visit(null, t);
-        } else if (type.isArray()) {
-            AnnotationVisitor avl = av.visitArray(null);
-            ClassNode componentType = type.getComponentType();
-            if (exp instanceof ListExpression) {
-                ListExpression list = (ListExpression) exp;
-                for (Expression lExp : list.getExpressions()) {
-                    visitAnnotationDefaultExpression(avl, componentType, lExp);
-                }
-            } else {
-                visitAnnotationDefaultExpression(avl, componentType, exp);
-            }
-        } else if (ClassHelper.isPrimitiveType(type) || type.equals(ClassHelper.STRING_TYPE)) {
-            ConstantExpression constExp = (ConstantExpression) exp;
-            av.visit(null, constExp.getValue());
-        } else if (ClassHelper.CLASS_Type.equals(type)) {
-            ClassNode clazz = exp.getType();
-            Type t = Type.getType(BytecodeHelper.getTypeDescription(clazz));
-            av.visit(null, t);
-        } else if (type.isDerivedFrom(ClassHelper.Enum_Type)) {
-            PropertyExpression pExp = (PropertyExpression) exp;
-            ClassExpression cExp = (ClassExpression) pExp.getObjectExpression();
-            String desc = BytecodeHelper.getTypeDescription(cExp.getType());
-            String name = pExp.getPropertyAsString();
-            av.visitEnum(null, desc, name);
-        } else if (type.implementsInterface(ClassHelper.Annotation_TYPE)) {
-            AnnotationConstantExpression avExp = (AnnotationConstantExpression) exp;
-            AnnotationNode value = (AnnotationNode) avExp.getValue();
-            AnnotationVisitor avc = av.visitAnnotation(null, BytecodeHelper.getTypeDescription(avExp.getType()));
-            visitAnnotationAttributes(value, avc);
-        } else {
-            throw new GroovyBugError("unexpected annotation type " + type.getName());
-        }
-        av.visitEnd();
-    }
-
-    private void visitAnnotationDefault(final MethodNode node, final MethodVisitor mv) {
-        if (!node.hasAnnotationDefault()) return;
-        Expression exp = ((ReturnStatement) node.getCode()).getExpression();
-        AnnotationVisitor av = mv.visitAnnotationDefault();
-        visitAnnotationDefaultExpression(av,node.getReturnType(),exp);
-    }
-
-    @Override
-    public void visitConstructor(final ConstructorNode node) {
-        controller.setConstructorNode(node);
-        super.visitConstructor(node);
-    }
-
-    @Override
-    public void visitMethod(final MethodNode node) {
-        controller.setMethodNode(node);
-        super.visitMethod(node);
-    }
-
-    @Override
-    public void visitField(final FieldNode fieldNode) {
-        onLineNumber(fieldNode, "visitField: " + fieldNode.getName());
-        ClassNode t = fieldNode.getType();
-        String signature = BytecodeHelper.getGenericsBounds(t);
-
-        Expression initialValueExpression = fieldNode.getInitialValueExpression();
-        ConstantExpression cexp = initialValueExpression instanceof ConstantExpression? (ConstantExpression) initialValueExpression :null;
-        if (cexp!=null) {
-            cexp = Verifier.transformToPrimitiveConstantIfPossible(cexp);
-        }
-        Object value = cexp != null && ClassHelper.isStaticConstantInitializerType(cexp.getType())
-                && cexp.getType().equals(t) && fieldNode.isStatic() && fieldNode.isFinal()
-                ? cexp.getValue() : null; // GROOVY-5150
-        if (value != null) {
-            // byte, char and short require an extra cast
-            if (ClassHelper.byte_TYPE.equals(t) || ClassHelper.short_TYPE.equals(t)) {
-                value = ((Number) value).intValue();
-            } else if (ClassHelper.char_TYPE.equals(t)) {
-                value = Integer.valueOf((Character)value);
-            }
-        }
-        FieldVisitor fv = classVisitor.visitField(
-                fieldNode.getModifiers(),
-                fieldNode.getName(),
-                BytecodeHelper.getTypeDescription(t),
-                signature,
-                value);
-        visitAnnotations(fieldNode, fv);
-        fv.visitEnd();
-    }
-
-    @Override
-    public void visitProperty(final PropertyNode statement) {
-        // the verifier created the field and the setter/getter methods, so here is
-        // not really something to do
-        onLineNumber(statement, "visitProperty:" + statement.getField().getName());
-        controller.setMethodNode(null);
-    }
-
-    // GroovyCodeVisitor interface
-    //-------------------------------------------------------------------------
-
-    // Statements
-    //-------------------------------------------------------------------------
-
-    @Override
-    protected void visitStatement(final Statement statement) {
-        throw new GroovyBugError("visitStatement should not be visited here.");
-    }
-
-    @Override
-    public void visitCatchStatement(final CatchStatement statement) {
-        statement.getCode().visit(this);
-    }
-
-    @Override
-    public void visitBlockStatement(final BlockStatement statement) {
-        controller.getStatementWriter().writeBlockStatement(statement);
-    }
-
-    @Override
-    public void visitForLoop(final ForStatement statement) {
-        controller.getStatementWriter().writeForStatement(statement);
-    }
-
-    @Override
-    public void visitWhileLoop(final WhileStatement statement) {
-        controller.getStatementWriter().writeWhileLoop(statement);
-    }
-
-    @Override
-    public void visitDoWhileLoop(final DoWhileStatement statement) {
-        controller.getStatementWriter().writeDoWhileLoop(statement);
-    }
-
-    @Override
-    public void visitIfElse(final IfStatement statement) {
-        controller.getStatementWriter().writeIfElse(statement);
-    }
-
-    @Override
-    public void visitAssertStatement(final AssertStatement statement) {
-        controller.getStatementWriter().writeAssert(statement);
-    }
-
-    @Override
-    public void visitTryCatchFinally(final TryCatchStatement statement) {
-        controller.getStatementWriter().writeTryCatchFinally(statement);
-    }
-
-    @Override
-    public void visitSwitch(final SwitchStatement statement) {
-        controller.getStatementWriter().writeSwitch(statement);
-    }
-
-    @Override
-    public void visitCaseStatement(final CaseStatement statement) {
-    }
-
-    @Override
-    public void visitBreakStatement(final BreakStatement statement) {
-        controller.getStatementWriter().writeBreak(statement);
-    }
-
-    @Override
-    public void visitContinueStatement(final ContinueStatement statement) {
-        controller.getStatementWriter().writeContinue(statement);
-    }
-
-    @Override
-    public void visitSynchronizedStatement(final SynchronizedStatement statement) {
-        controller.getStatementWriter().writeSynchronized(statement);
-    }
-
-    @Override
-    public void visitThrowStatement(final ThrowStatement statement) {
-        controller.getStatementWriter().writeThrow(statement);
-    }
-
-    @Override
-    public void visitReturnStatement(final ReturnStatement statement) {
-        controller.getStatementWriter().writeReturn(statement);
-    }
-
-    @Override
-    public void visitExpressionStatement(final ExpressionStatement statement) {
-        controller.getStatementWriter().writeExpressionStatement(statement);
-    }
-
-    // Expressions
-    //-------------------------------------------------------------------------
-
-    @Override
-    public void visitTernaryExpression(final TernaryExpression expression) {
-        onLineNumber(expression, "visitTernaryExpression");
-        controller.getBinaryExpressionHelper().evaluateTernary(expression);
-    }
-
-    @Override
-    public void visitDeclarationExpression(final DeclarationExpression expression) {
-        onLineNumber(expression, "visitDeclarationExpression: \"" + expression.getText() + "\"");
-        controller.getBinaryExpressionHelper().evaluateEqual(expression,true);
-    }
-
-    @Override
-    public void visitBinaryExpression(final BinaryExpression expression) {
-        onLineNumber(expression, "visitBinaryExpression: \"" + expression.getOperation().getText() + "\" ");
-        controller.getBinaryExpressionHelper().eval(expression);
-        controller.getAssertionWriter().record(expression.getOperation());
-    }
-
-    @Override
-    public void visitPostfixExpression(final PostfixExpression expression) {
-        controller.getBinaryExpressionHelper().evaluatePostfixMethod(expression);
-        controller.getAssertionWriter().record(expression);
-    }
-
-    @Override
-    public void visitPrefixExpression(final PrefixExpression expression) {
-        controller.getBinaryExpressionHelper().evaluatePrefixMethod(expression);
-        controller.getAssertionWriter().record(expression);
-    }
-
-    @Override
-    public void visitClosureExpression(final ClosureExpression expression) {
-        controller.getClosureWriter().writeClosure(expression);
-    }
-
-    @Override
-    public void visitLambdaExpression(final LambdaExpression expression) {
-        controller.getLambdaWriter().writeLambda(expression);
+    public GridCacheContext() {
+        // No-op.
     }
 
     /**
-     * Loads either this object or if we're inside a closure then load the top level owner
+     * @param ctx Kernal context.
+     * @param sharedCtx Cache shared context.
+     * @param cacheCfg Cache configuration.
+     * @param evtMgr Cache event manager.
+     * @param swapMgr Cache swap manager.
+     * @param storeMgr Store manager.
+     * @param evictMgr Cache eviction manager.
+     * @param qryMgr Cache query manager.
+     * @param contQryMgr Continuous query manager.
+     * @param affMgr Affinity manager.
+     * @param dataStructuresMgr Cache dataStructures manager.
+     * @param ttlMgr TTL manager.
+     * @param drMgr Data center replication manager.
+     * @param jtaMgr JTA manager.
      */
-    protected void loadThisOrOwner() {
-        if (isInnerClass()) {
-            visitFieldExpression(new FieldExpression(controller.getClassNode().getDeclaredField("owner")));
-        } else {
-            loadThis(null);
-        }
+    @SuppressWarnings({"unchecked"})
+    public GridCacheContext(
+        GridKernalContext ctx,
+        GridCacheSharedContext sharedCtx,
+        CacheConfiguration cacheCfg,
+        boolean affNode,
+
+        /*
+         * Managers in starting order!
+         * ===========================
+         */
+
+        GridCacheEventManager evtMgr,
+        GridCacheSwapManager swapMgr,
+        GridCacheStoreManager storeMgr,
+        GridCacheEvictionManager evictMgr,
+        GridCacheQueryManager<K, V> qryMgr,
+        CacheContinuousQueryManager contQryMgr,
+        GridCacheAffinityManager affMgr,
+        CacheDataStructuresManager dataStructuresMgr,
+        GridCacheTtlManager ttlMgr,
+        GridCacheDrManager drMgr,
+        CacheJtaManagerAdapter jtaMgr) {
+        assert ctx != null;
+        assert sharedCtx != null;
+        assert cacheCfg != null;
+
+        assert evtMgr != null;
+        assert swapMgr != null;
+        assert storeMgr != null;
+        assert evictMgr != null;
+        assert qryMgr != null;
+        assert contQryMgr != null;
+        assert affMgr != null;
+        assert dataStructuresMgr != null;
+        assert ttlMgr != null;
+
+        this.ctx = ctx;
+        this.sharedCtx = sharedCtx;
+        this.cacheCfg = cacheCfg;
+        this.affNode = affNode;
+
+        /*
+         * Managers in starting order!
+         * ===========================
+         */
+        this.evtMgr = add(evtMgr);
+        this.swapMgr = add(swapMgr);
+        this.storeMgr = add(storeMgr);
+        this.evictMgr = add(evictMgr);
+        this.qryMgr = add(qryMgr);
+        this.contQryMgr = add(contQryMgr);
+        this.affMgr = add(affMgr);
+        this.dataStructuresMgr = add(dataStructuresMgr);
+        this.ttlMgr = add(ttlMgr);
+        this.drMgr = add(drMgr);
+        this.jtaMgr = add(jtaMgr);
+
+        log = ctx.log(getClass());
+
+        // Create unsafe memory only if writing values
+        unsafeMemory = (cacheCfg.getMemoryMode() == OFFHEAP_VALUES || cacheCfg.getMemoryMode() == OFFHEAP_TIERED) ?
+            new GridUnsafeMemory(cacheCfg.getOffHeapMaxMemory()) : null;
+
+        gate = new GridCacheGateway<>(this);
+
+        cacheName = cacheCfg.getName();
+
+        cacheId = CU.cacheId(cacheName);
+
+        sys = ctx.cache().systemCache(cacheName);
+
+        plc = CU.isMarshallerCache(cacheName) ? MARSH_CACHE_POOL : sys ? UTILITY_CACHE_POOL : SYSTEM_POOL;
+
+        Factory<ExpiryPolicy> factory = cacheCfg.getExpiryPolicyFactory();
+
+        expiryPlc = factory != null ? factory.create() : null;
+
+        if (expiryPlc instanceof EternalExpiryPolicy)
+            expiryPlc = null;
+
+        itHolder = new CacheWeakQueryIteratorsHolder(log);
     }
 
     /**
-     * Generates byte code for constants.
+     * @param dynamicDeploymentId Dynamic deployment ID.
+     */
+    void dynamicDeploymentId(IgniteUuid dynamicDeploymentId) {
+        this.dynamicDeploymentId = dynamicDeploymentId;
+    }
+
+    /**
+     * @return Dynamic deployment ID.
+     */
+    public IgniteUuid dynamicDeploymentId() {
+        return dynamicDeploymentId;
+    }
+
+    /**
+     * Initialize conflict resolver after all managers are started.
+     */
+    void initConflictResolver() {
+        // Conflict resolver is determined in two stages:
+        // 1. If DR receiver hub is enabled, then pick it from DR manager.
+        // 2. Otherwise instantiate default resolver in case local store is configured.
+        conflictRslvr = drMgr.conflictResolver();
+
+        if (conflictRslvr == null && storeMgr.isLocalStore())
+            conflictRslvr = new GridCacheVersionConflictResolver();
+    }
+
+    /**
+     * @return {@code True} if local node is affinity node.
+     */
+    public boolean affinityNode() {
+        return affNode;
+    }
+
+    /**
+     * @throws IgniteCheckedException If failed to wait.
+     */
+    public void awaitStarted() throws IgniteCheckedException {
+        U.await(startLatch);
+
+        GridCachePreloader<K, V> prldr = preloader();
+
+        if (prldr != null)
+            prldr.startFuture().get();
+    }
+
+    /**
+     * @return Started flag.
+     */
+    public boolean started() {
+        if (startLatch.getCount() != 0)
+            return false;
+
+        GridCachePreloader<K, V> prldr = preloader();
+
+        return prldr == null || prldr.startFuture().isDone();
+    }
+
+    /**
      *
-     * @see <a href="http://java.sun.com/docs/books/vmspec/2nd-edition/html/ClassFile.doc.html#14152">Class field types</a>
      */
-    @Override
-    public void visitConstantExpression(final ConstantExpression expression) {
-        final String constantName = expression.getConstantName();
-        if (controller.isStaticConstructor() || constantName == null) {
-            controller.getOperandStack().pushConstant(expression);
-        } else {
-            controller.getMethodVisitor().visitFieldInsn(GETSTATIC, controller.getInternalClassName(),constantName, BytecodeHelper.getTypeDescription(expression.getType()));
-            controller.getOperandStack().push(expression.getType());
+    public void onStarted() {
+        startLatch.countDown();
+    }
+
+    /**
+     * @return Start topology version.
+     */
+    public AffinityTopologyVersion startTopologyVersion() {
+        return startTopVer;
+    }
+
+    /**
+     * @param startTopVer Start topology version.
+     */
+    public void startTopologyVersion(AffinityTopologyVersion startTopVer) {
+        this.startTopVer = startTopVer;
+    }
+
+    /**
+     * @return Cache default {@link ExpiryPolicy}.
+     */
+    @Nullable public ExpiryPolicy expiry() {
+        return expiryPlc;
+    }
+
+    /**
+     * @param txEntry TX entry.
+     * @return Expiry policy for the given TX entry.
+     */
+    @Nullable public ExpiryPolicy expiryForTxEntry(IgniteTxEntry txEntry) {
+        ExpiryPolicy plc = txEntry.expiry();
+
+        return plc != null ? plc : expiryPlc;
+    }
+
+    /**
+     * @param mgr Manager to add.
+     * @return Added manager.
+     */
+    @Nullable private <T extends GridCacheManager<K, V>> T add(@Nullable T mgr) {
+        if (mgr != null)
+            mgrs.add(mgr);
+
+        return mgr;
+    }
+
+    /**
+     * @return Cache managers.
+     */
+    public List<GridCacheManager<K, V>> managers() {
+        return mgrs;
+    }
+
+    /**
+     * @return Shared cache context.
+     */
+    public GridCacheSharedContext<K, V> shared() {
+        return sharedCtx;
+    }
+
+    /**
+     * @return Cache ID.
+     */
+    public int cacheId() {
+        return cacheId;
+    }
+
+    /**
+     * @return System cache flag.
+     */
+    public boolean system() {
+        return sys;
+    }
+
+    /**
+     * @return IO policy for the given cache.
+     */
+    public GridIoPolicy ioPolicy() {
+        return plc;
+    }
+
+    /**
+     * @param cache Cache.
+     */
+    public void cache(GridCacheAdapter<K, V> cache) {
+        this.cache = cache;
+    }
+
+    /**
+     * @return Local cache.
+     */
+    public GridLocalCache<K, V> local() {
+        return (GridLocalCache<K, V>)cache;
+    }
+
+    /**
+     * @return {@code True} if cache is DHT.
+     */
+    public boolean isDht() {
+        return cache != null && cache.isDht();
+    }
+
+    /**
+     * @return {@code True} if cache is DHT atomic.
+     */
+    public boolean isDhtAtomic() {
+        return cache != null && cache.isDhtAtomic();
+    }
+
+    /**
+     * @return {@code True} if cache is colocated (dht with near disabled).
+     */
+    public boolean isColocated() {
+        return cache != null && cache.isColocated();
+    }
+
+    /**
+     * @return {@code True} if cache is near cache.
+     */
+    public boolean isNear() {
+        return cache != null && cache.isNear();
+    }
+
+    /**
+     * @return {@code True} if cache is local.
+     */
+    public boolean isLocal() {
+        return cache != null && cache.isLocal();
+    }
+
+    /**
+     * @return {@code True} if cache is replicated cache.
+     */
+    public boolean isReplicated() {
+        return cacheCfg.getCacheMode() == CacheMode.REPLICATED;
+    }
+
+    /**
+     * @return {@code True} in case replication is enabled.
+     */
+    public boolean isDrEnabled() {
+        return dr().enabled();
+    }
+
+    /**
+     * @return {@code True} if entries should not be deleted from cache immediately.
+     */
+    public boolean deferredDelete() {
+        return isDht() || isDhtAtomic() || isColocated() || (isNear() && atomic());
+    }
+
+    /**
+     * @param e Entry.
+     */
+    public void incrementPublicSize(GridCacheMapEntry e) {
+        assert deferredDelete();
+        assert e != null;
+        assert !e.isInternal();
+
+        cache.map().incrementSize(e);
+
+        if (isDht() || isColocated() || isDhtAtomic()) {
+            GridDhtLocalPartition part = topology().localPartition(e.partition(), AffinityTopologyVersion.NONE, false);
+
+            if (part != null)
+                part.incrementPublicSize();
         }
     }
 
-    @Override
-    public void visitSpreadExpression(final SpreadExpression expression) {
-        throw new GroovyBugError("SpreadExpression should not be visited here");
-    }
+    /**
+     * @param e Entry.
+     */
+    public void decrementPublicSize(GridCacheMapEntry e) {
+        assert deferredDelete();
+        assert e != null;
+        assert !e.isInternal();
 
-    @Override
-    public void visitSpreadMapExpression(final SpreadMapExpression expression) {
-        Expression subExpression = expression.getExpression();
-        // to not record the underlying MapExpression twice,
-        // we disable the assertion tracker
-        // see https://issues.apache.org/jira/browse/GROOVY-3421
-        controller.getAssertionWriter().disableTracker();
-        subExpression.visit(this);
-        controller.getOperandStack().box();
-        spreadMap.call(controller.getMethodVisitor());
-        controller.getAssertionWriter().reenableTracker();
-        controller.getOperandStack().replace(ClassHelper.OBJECT_TYPE);
-    }
+        cache.map().decrementSize(e);
 
-    @Override
-    public void visitMethodPointerExpression(final MethodPointerExpression expression) {
-        controller.getMethodPointerExpressionWriter().writeMethodPointerExpression(expression);
-    }
+        if (isDht() || isColocated() || isDhtAtomic()) {
+            GridDhtLocalPartition part = topology().localPartition(e.partition(), AffinityTopologyVersion.NONE, false);
 
-    @Override
-    public void visitMethodReferenceExpression(final MethodReferenceExpression expression) {
-        controller.getMethodReferenceExpressionWriter().writeMethodReferenceExpression(expression);
-    }
-
-    @Override
-    public void visitUnaryMinusExpression(final UnaryMinusExpression expression) {
-        controller.getUnaryExpressionHelper().writeUnaryMinus(expression);
-    }
-
-    @Override
-    public void visitUnaryPlusExpression(final UnaryPlusExpression expression) {
-        controller.getUnaryExpressionHelper().writeUnaryPlus(expression);
-    }
-
-    @Override
-    public void visitBitwiseNegationExpression(final BitwiseNegationExpression expression) {
-        controller.getUnaryExpressionHelper().writeBitwiseNegate(expression);
-    }
-
-    @Override
-    public void visitCastExpression(final CastExpression castExpression) {
-        ClassNode type = castExpression.getType();
-        Expression subExpression = castExpression.getExpression();
-        subExpression.visit(this);
-        if (ClassHelper.OBJECT_TYPE.equals(type)) return;
-        if (castExpression.isCoerce()) {
-            controller.getOperandStack().doAsType(type);
-        } else {
-            if (isNullConstant(subExpression) && !ClassHelper.isPrimitiveType(type)) {
-                controller.getOperandStack().replace(type);
-            } else {
-                ClassNode subExprType = controller.getTypeChooser().resolveType(subExpression, controller.getClassNode());
-                if (castExpression.isStrict() ||
-                        (!ClassHelper.isPrimitiveType(type) && WideningCategories.implementsInterfaceOrSubclassOf(subExprType, type))) {
-                    BytecodeHelper.doCast(controller.getMethodVisitor(), type);
-                    controller.getOperandStack().replace(type);
-                } else {
-                    controller.getOperandStack().doGroovyCast(type);
-                }
-            }
+            if (part != null)
+                part.decrementPublicSize();
         }
     }
 
-    @Override
-    public void visitNotExpression(final NotExpression expression) {
-        controller.getUnaryExpressionHelper().writeNotExpression(expression);
+    /**
+     * @return DHT cache.
+     */
+    public GridDhtCacheAdapter<K, V> dht() {
+        return (GridDhtCacheAdapter<K, V>)cache;
     }
 
-    @Override
-    public void visitBooleanExpression(final BooleanExpression expression) {
-        int mark = controller.getOperandStack().getStackLength();
-
-        expression.getExpression().visit(this);
-        controller.getOperandStack().castToBool(mark, true);
+    /**
+     * @return Transactional DHT cache.
+     */
+    public GridDhtTransactionalCacheAdapter<K, V> dhtTx() {
+        return (GridDhtTransactionalCacheAdapter<K, V>)cache;
     }
 
-    @Override
-    public void visitMethodCallExpression(final MethodCallExpression call) {
-        onLineNumber(call, "visitMethodCallExpression: \"" + call.getMethod() + "\":");
-        controller.getInvocationWriter().writeInvokeMethod(call);
-        controller.getAssertionWriter().record(call.getMethod());
+    /**
+     * @return Colocated cache.
+     */
+    public GridDhtColocatedCache<K, V> colocated() {
+        return (GridDhtColocatedCache<K, V>)cache;
     }
 
-    @Override
-    public void visitStaticMethodCallExpression(final StaticMethodCallExpression call) {
-        onLineNumber(call, "visitStaticMethodCallExpression: \"" + call.getMethod() + "\":");
-        controller.getInvocationWriter().writeInvokeStaticMethod(call);
-        controller.getAssertionWriter().record(call);
+    /**
+     * @return Near cache.
+     */
+    public GridNearCacheAdapter<K, V> near() {
+        return (GridNearCacheAdapter<K, V>)cache;
     }
 
-    @Override
-    public void visitConstructorCallExpression(final ConstructorCallExpression call) {
-        onLineNumber(call, "visitConstructorCallExpression: \"" + call.getType().getName() + "\":");
-        if (call.isSpecialCall()) {
-            controller.getInvocationWriter().writeSpecialConstructorCall(call);
+    /**
+     * @return Near cache for transactional mode.
+     */
+    public GridNearTransactionalCache<K, V> nearTx() {
+        return (GridNearTransactionalCache<K, V>)cache;
+    }
+
+    /**
+     * @return Cache gateway.
+     */
+    public GridCacheGateway<K, V> gate() {
+        return gate;
+    }
+
+    /**
+     * @return Instance of {@link GridUnsafeMemory} object.
+     */
+    @Nullable public GridUnsafeMemory unsafeMemory() {
+        return unsafeMemory;
+    }
+
+    /**
+     * @return Kernal context.
+     */
+    public GridKernalContext kernalContext() {
+        return ctx;
+    }
+
+    /**
+     * @return Grid instance.
+     */
+    public IgniteEx grid() {
+        return ctx.grid();
+    }
+
+    /**
+     * @return Grid name.
+     */
+    public String gridName() {
+        return ctx.gridName();
+    }
+
+    /**
+     * @return Cache name.
+     */
+    public String name() {
+        return cacheName;
+    }
+
+    /**
+     * Gets public name for cache.
+     *
+     * @return Public name of the cache.
+     */
+    public String namex() {
+        return isDht() ? dht().near().name() : name();
+    }
+
+    /**
+     * Gets public cache name substituting null name by {@code 'default'}.
+     *
+     * @return Public cache name substituting null name by {@code 'default'}.
+     */
+    public String namexx() {
+        String name = namex();
+
+        return name == null ? "default" : name;
+    }
+
+    /**
+     * @param key Key to construct tx key for.
+     * @return Transaction key.
+     */
+    public IgniteTxKey txKey(KeyCacheObject key) {
+        return new IgniteTxKey(key, cacheId);
+    }
+
+    /**
+     * @param op Operation to check.
+     * @throws GridSecurityException If security check failed.
+     */
+    public void checkSecurity(GridSecurityPermission op) throws GridSecurityException {
+        if (CU.isSystemCache(name()))
             return;
-        }
-        controller.getInvocationWriter().writeInvokeConstructor(call);
-        controller.getAssertionWriter().record(call);
+
+        ctx.security().authorize(name(), op, null);
     }
 
-    private static String makeFieldClassName(final ClassNode type) {
-        String internalName = BytecodeHelper.getClassInternalName(type);
-        StringBuilder ret = new StringBuilder(internalName.length());
-        for (int i = 0, n = internalName.length(); i < n; i += 1) {
-            char c = internalName.charAt(i);
-            if (c == '/') {
-                ret.append('$');
-            } else if (c == ';') {
-                //append nothing -> delete ';'
-            } else {
-                ret.append(c);
-            }
-        }
-        return ret.toString();
+    /**
+     * @return Preloader.
+     */
+    public GridCachePreloader<K, V> preloader() {
+        return cache().preloader();
     }
 
-    private static String getStaticFieldName(final ClassNode type) {
-        ClassNode componentType = type;
-        StringBuilder prefix = new StringBuilder();
-        for (; componentType.isArray(); componentType = componentType.getComponentType()) {
-            prefix.append("$");
-        }
-        if (prefix.length() != 0) prefix.insert(0, "array");
-        String name = prefix + "$class$" + makeFieldClassName(componentType);
-        return name;
+    /**
+     * @return Local node ID.
+     */
+    public UUID nodeId() {
+        return ctx.localNodeId();
     }
 
-    private static boolean isValidFieldNodeForByteCodeAccess(final FieldNode fn, final ClassNode accessingNode) {
-        if (fn == null) return false;
-        ClassNode declaringClass = fn.getDeclaringClass();
-        // same class is always allowed access
-        if (fn.isPublic() || declaringClass.equals(accessingNode)) return true;
-        boolean samePackages = Objects.equals(declaringClass.getPackageName(), accessingNode.getPackageName());
-        // protected means same class or same package, or subclass
-        if (fn.isProtected() && (samePackages || accessingNode.isDerivedFrom(declaringClass))) {
+    /**
+     * @return {@code True} if rebalance is enabled.
+     */
+    public boolean rebalanceEnabled() {
+        return cacheCfg.getRebalanceMode() != NONE;
+    }
+
+    /**
+     * @return {@code True} if atomic.
+     */
+    public boolean atomic() {
+        return cacheCfg.getAtomicityMode() == ATOMIC;
+    }
+
+    /**
+     * @return {@code True} if transactional.
+     */
+    public boolean transactional() {
+        return cacheCfg.getAtomicityMode() == TRANSACTIONAL;
+    }
+
+    /**
+     * @return Local node.
+     */
+    public ClusterNode localNode() {
+        if (locNode == null)
+            locNode = ctx.discovery().localNode();
+
+        return locNode;
+    }
+
+    /**
+     * @return Local node ID.
+     */
+    public UUID localNodeId() {
+        return ctx.localNodeId();
+    }
+
+    /**
+     * @param n Node to check.
+     * @return {@code True} if node is local.
+     */
+    public boolean isLocalNode(ClusterNode n) {
+        assert n != null;
+
+        return localNode().id().equals(n.id());
+    }
+
+    /**
+     * @param id Node ID to check.
+     * @return {@code True} if node ID is local.
+     */
+    public boolean isLocalNode(UUID id) {
+        assert id != null;
+
+        return localNode().id().equals(id);
+    }
+
+    /**
+     * @param nodeId Node id.
+     * @return Node.
+     */
+    @Nullable public ClusterNode node(UUID nodeId) {
+        assert nodeId != null;
+
+        return ctx.discovery().node(nodeId);
+    }
+
+    /**
+     * @return Partition topology.
+     */
+    public GridDhtPartitionTopology topology() {
+        assert isNear() || isDht() || isColocated() || isDhtAtomic();
+
+        return isNear() ? near().dht().topology() : dht().topology();
+    }
+
+    /**
+     * @return Topology version future.
+     */
+    public GridDhtTopologyFuture topologyVersionFuture() {
+        assert isNear() || isDht() || isColocated() || isDhtAtomic();
+
+        GridDhtTopologyFuture fut = null;
+
+        if (!isDhtAtomic()) {
+            GridDhtCacheAdapter<K, V> cache = isNear() ? near().dht() : colocated();
+
+            fut = cache.multiUpdateTopologyFuture();
+        }
+
+        return fut == null ? topology().topologyVersionFuture() : fut;
+    }
+
+    /**
+     * @return Marshaller.
+     */
+    public Marshaller marshaller() {
+        return ctx.config().getMarshaller();
+    }
+
+    /**
+     * @param ctgr Category to log.
+     * @return Logger.
+     */
+    public IgniteLogger logger(String ctgr) {
+        return new GridCacheLogger(this, ctgr);
+    }
+
+    /**
+     * @param cls Class to log.
+     * @return Logger.
+     */
+    public IgniteLogger logger(Class<?> cls) {
+        return logger(cls.getName());
+    }
+
+    /**
+     * @return Grid configuration.
+     */
+    public IgniteConfiguration gridConfig() {
+        return ctx.config();
+    }
+
+    /**
+     * @return Grid communication manager.
+     */
+    public GridIoManager gridIO() {
+        return ctx.io();
+    }
+
+    /**
+     * @return Grid timeout processor.
+     */
+    public GridTimeoutProcessor time() {
+        return ctx.timeout();
+    }
+
+    /**
+     * @return Grid off-heap processor.
+     */
+    public GridOffHeapProcessor offheap() {
+        return ctx.offheap();
+    }
+
+    /**
+     * @return Grid deployment manager.
+     */
+    public GridDeploymentManager gridDeploy() {
+        return ctx.deploy();
+    }
+
+    /**
+     * @return Grid swap space manager.
+     */
+    public GridSwapSpaceManager gridSwap() {
+        return ctx.swap();
+    }
+
+    /**
+     * @return Grid event storage manager.
+     */
+    public GridEventStorageManager gridEvents() {
+        return ctx.event();
+    }
+
+    /**
+     * @return Closures processor.
+     */
+    public GridClosureProcessor closures() {
+        return ctx.closure();
+    }
+
+    /**
+     * @return Grid discovery manager.
+     */
+    public GridDiscoveryManager discovery() {
+        return ctx.discovery();
+    }
+
+    /**
+     * @return Cache instance.
+     */
+    public GridCacheAdapter<K, V> cache() {
+        return cache;
+    }
+
+    /**
+     * @return Cache configuration for given cache instance.
+     */
+    public CacheConfiguration config() {
+        return cacheCfg;
+    }
+
+    /**
+     * @return {@code True} If store writes should be performed from dht transactions. This happens if both
+     *      {@code writeBehindEnabled} and {@code writeBehindPreferPrimary} cache configuration properties
+     *      are set to {@code true} or the store is local.
+     */
+    public boolean writeToStoreFromDht() {
+        return store().isLocalStore() || cacheCfg.isWriteBehindEnabled();
+    }
+
+    /**
+     * @return Cache transaction manager.
+     */
+    public IgniteTxManager tm() {
+         return sharedCtx.tm();
+    }
+
+    /**
+     * @return Lock order manager.
+     */
+    public GridCacheVersionManager versions() {
+        return sharedCtx.versions();
+    }
+
+    /**
+     * @return Lock manager.
+     */
+    public GridCacheMvccManager mvcc() {
+        return sharedCtx.mvcc();
+    }
+
+    /**
+     * @return Event manager.
+     */
+    public GridCacheEventManager events() {
+        return evtMgr;
+    }
+
+    /**
+     * @return Cache affinity manager.
+     */
+    public GridCacheAffinityManager affinity() {
+        return affMgr;
+    }
+
+    /**
+     * @return Query manager, {@code null} if disabled.
+     */
+    public GridCacheQueryManager<K, V> queries() {
+        return qryMgr;
+    }
+
+    /**
+     * @return Continuous query manager, {@code null} if disabled.
+     */
+    public CacheContinuousQueryManager continuousQueries() {
+        return contQryMgr;
+    }
+
+    /**
+     * @return Iterators Holder.
+     */
+    public CacheWeakQueryIteratorsHolder<Map.Entry<K, V>> itHolder() {
+        return itHolder;
+    }
+
+    /**
+     * @return Swap manager.
+     */
+    public GridCacheSwapManager swap() {
+        return swapMgr;
+    }
+
+    /**
+     * @return Store manager.
+     */
+    public GridCacheStoreManager store() {
+        return storeMgr;
+    }
+
+    /**
+     * @return Cache deployment manager.
+     */
+    public GridCacheDeploymentManager<K, V> deploy() {
+        return sharedCtx.deploy();
+    }
+
+    /**
+     * @return Cache communication manager.
+     */
+    public GridCacheIoManager io() {
+        return sharedCtx.io();
+    }
+
+    /**
+     * @return Eviction manager.
+     */
+    public GridCacheEvictionManager evicts() {
+        return evictMgr;
+    }
+
+    /**
+     * @return Data structures manager.
+     */
+    public CacheDataStructuresManager dataStructures() {
+        return dataStructuresMgr;
+    }
+
+    /**
+     * @return DR manager.
+     */
+    public GridCacheDrManager dr() {
+        return drMgr;
+    }
+
+    /**
+     * @return TTL manager.
+     */
+    public GridCacheTtlManager ttl() {
+        return ttlMgr;
+    }
+
+    /**
+     * @return JTA manager.
+     */
+    public CacheJtaManagerAdapter jta() {
+        return jtaMgr;
+    }
+
+    /**
+     * @param p Predicate.
+     * @return {@code True} if given predicate is filter for {@code putIfAbsent} operation.
+     */
+    public boolean putIfAbsentFilter(@Nullable CacheEntryPredicate[] p) {
+        if (p == null || p.length == 0)
+            return false;
+
+        for (CacheEntryPredicate p0 : p) {
+            if ((p0 instanceof CacheEntrySerializablePredicate) &&
+               ((CacheEntrySerializablePredicate)p0).predicate() instanceof CacheEntryPredicateNoValue)
             return true;
         }
-        if (!fn.isPrivate()) {
-            // package private is the only modifier left. It means  same package is allowed, subclass not, same class is
-            return samePackages;
-        }
+
         return false;
     }
 
-    public static FieldNode getDeclaredFieldOfCurrentClassOrAccessibleFieldOfSuper(final ClassNode accessingNode, final ClassNode current, final String name, final boolean skipCurrent) {
-        if (!skipCurrent) {
-            FieldNode currentClassField = current.getDeclaredField(name);
-            if (isValidFieldNodeForByteCodeAccess(currentClassField, accessingNode)) return currentClassField;
-        }
-        for (ClassNode node = current.getSuperClass(); node != null; node = node.getSuperClass()) {
-            FieldNode fn = node.getDeclaredField(name);
-            if (isValidFieldNodeForByteCodeAccess(fn, accessingNode)) return fn;
-        }
-        return null;
-    }
-
-    private void visitAttributeOrProperty(final PropertyExpression expression, final MethodCallerMultiAdapter adapter) {
-        ClassNode classNode = controller.getClassNode();
-        String propertyName = expression.getPropertyAsString();
-        Expression objectExpression = expression.getObjectExpression();
-
-        if (objectExpression instanceof ClassExpression && "this".equals(propertyName)) {
-            // we have something like A.B.this, and need to make it
-            // into this.this$0.this$0, where this.this$0 returns
-            // A.B and this.this$0.this$0 return A.
-            ClassNode type = objectExpression.getType();
-            if (controller.getCompileStack().isInSpecialConstructorCall() && type.equals(classNode.getOuterClass())) {
-                // Outer.this in a special constructor call
-                ConstructorNode ctor = controller.getConstructorNode();
-                Expression receiver = !classNode.isStaticClass() ? new VariableExpression(ctor.getParameters()[0]) : new ClassExpression(type);
-                receiver.setSourcePosition(expression);
-                receiver.visit(this);
-                return;
-            }
-
-            MethodVisitor mv = controller.getMethodVisitor();
-            mv.visitVarInsn(ALOAD, 0);
-            ClassNode iterType = classNode;
-            while (!iterType.equals(type)) {
-                String ownerName = BytecodeHelper.getClassInternalName(iterType);
-                if (iterType.getOuterClass() == null) break;
-                FieldNode thisField = iterType.getField("this$0");
-                iterType = iterType.getOuterClass();
-                if (thisField == null) {
-                    // closure within inner class
-                    while (ClassHelper.isGeneratedFunction(iterType)) {
-                        // GROOVY-8881: cater for closures within closures - getThisObject is already outer class of all closures
-                        iterType = iterType.getOuterClass();
-                    }
-                    mv.visitMethodInsn(INVOKEVIRTUAL, BytecodeHelper.getClassInternalName(ClassHelper.CLOSURE_TYPE), "getThisObject", "()Ljava/lang/Object;", false);
-                    mv.visitTypeInsn(CHECKCAST, BytecodeHelper.getClassInternalName(iterType));
-                } else {
-                    ClassNode thisFieldType = thisField.getType();
-                    if (ClassHelper.CLOSURE_TYPE.equals(thisFieldType)) {
-                        mv.visitFieldInsn(GETFIELD, ownerName, "this$0", BytecodeHelper.getTypeDescription(ClassHelper.CLOSURE_TYPE));
-                        mv.visitMethodInsn(INVOKEVIRTUAL, BytecodeHelper.getClassInternalName(ClassHelper.CLOSURE_TYPE), "getThisObject", "()Ljava/lang/Object;", false);
-                        mv.visitTypeInsn(CHECKCAST, BytecodeHelper.getClassInternalName(iterType));
-                    } else {
-                        String typeName = BytecodeHelper.getTypeDescription(iterType);
-                        mv.visitFieldInsn(GETFIELD, ownerName, "this$0", typeName);
-                    }
-                }
-            }
-            controller.getOperandStack().push(type);
-            return;
-        }
-
-        if (propertyName != null) {
-            // TODO: spread safe should be handled inside
-            if (adapter == getProperty && !expression.isSpreadSafe()) {
-                controller.getCallSiteWriter().makeGetPropertySite(objectExpression, propertyName, expression.isSafe(), expression.isImplicitThis());
-            } else if (adapter == getGroovyObjectProperty && !expression.isSpreadSafe()) {
-                controller.getCallSiteWriter().makeGroovyObjectGetPropertySite(objectExpression, propertyName, expression.isSafe(), expression.isImplicitThis());
-            } else {
-                controller.getCallSiteWriter().fallbackAttributeOrPropertySite(expression, objectExpression, propertyName, adapter);
-            }
-        } else {
-            controller.getCallSiteWriter().fallbackAttributeOrPropertySite(expression, objectExpression, null, adapter);
-        }
-    }
-
-    private void setPropertyOfSuperClass(final ClassNode classNode, final PropertyExpression expression, final MethodVisitor mv) {
-        String fieldName = expression.getPropertyAsString();
-        FieldNode fieldNode = classNode.getSuperClass().getField(fieldName);
-
-        if (null == fieldNode) {
-            throw new RuntimeParserException("Failed to find field[" + fieldName + "] of " + classNode.getName() + "'s super class", expression);
-        }
-
-        if (fieldNode.isFinal()) {
-            throw new RuntimeParserException("Cannot modify final field[" + fieldName + "] of " + classNode.getName() + "'s super class", expression);
-        }
-
-        MethodNode setter = findSetterOfSuperClass(classNode, fieldNode);
-        MethodNode getter = findGetterOfSuperClass(classNode, fieldNode);
-
-        if (fieldNode.isPrivate() && !getterAndSetterExists(setter, getter)) {
-            throw new RuntimeParserException("Cannot access private field[" + fieldName + "] of " + classNode.getName() + "'s super class", expression);
-        }
-
-        OperandStack operandStack = controller.getOperandStack();
-        operandStack.doAsType(fieldNode.getType());
-
-        mv.visitVarInsn(ALOAD, 0);
-        operandStack.push(classNode);
-
-        operandStack.swap();
-
-        String owner = BytecodeHelper.getClassInternalName(classNode.getSuperClass().getName());
-        String desc = BytecodeHelper.getTypeDescription(fieldNode.getType());
-        if (fieldNode.isPublic() || fieldNode.isProtected()) {
-            mv.visitFieldInsn(PUTFIELD, owner, fieldName, desc);
-        } else {
-            mv.visitMethodInsn(INVOKESPECIAL, owner, setter.getName(), BytecodeHelper.getMethodDescriptor(setter), false);
-        }
-    }
-
-    private static boolean getterAndSetterExists(final MethodNode setter, final MethodNode getter) {
-        return setter != null && getter != null && setter.getDeclaringClass().equals(getter.getDeclaringClass());
-    }
-
-    private static MethodNode findSetterOfSuperClass(final ClassNode classNode, final FieldNode fieldNode) {
-        String setterMethodName = "set" + capitalize(fieldNode.getName());
-        return classNode.getSuperClass().getSetterMethod(setterMethodName);
-    }
-
-    private static MethodNode findGetterOfSuperClass(final ClassNode classNode, final FieldNode fieldNode) {
-        String getterMethodName = "get" + capitalize(fieldNode.getName());
-        return classNode.getSuperClass().getGetterMethod(getterMethodName);
-    }
-
-    private boolean isGroovyObject(final Expression objectExpression) {
-        if (isThisExpression(objectExpression)) return true;
-        if (objectExpression instanceof ClassExpression) return false;
-
-        ClassNode objectExpressionType = controller.getTypeChooser().resolveType(objectExpression, controller.getClassNode());
-        if (objectExpressionType.equals(ClassHelper.OBJECT_TYPE)) objectExpressionType = objectExpression.getType();
-        return objectExpressionType.isDerivedFromGroovyObject();
-    }
-
-    @Override
-    public void visitPropertyExpression(final PropertyExpression expression) {
-        Expression objectExpression = expression.getObjectExpression();
-        OperandStack operandStack = controller.getOperandStack();
-        int mark = operandStack.getStackLength() - 1;
-        boolean visited = false;
-
-        if (isThisOrSuper(objectExpression)) {
-            String name = expression.getPropertyAsString();
-            if (name != null) {
-                FieldNode field = null;
-                boolean privateSuperField = false;
-                ClassNode classNode = controller.getClassNode();
-
-                if (isSuperExpression(objectExpression)) {
-                    field = classNode.getSuperClass().getDeclaredField(name);
-                    privateSuperField = (field != null && field.isPrivate());
-                } else if (expression.isImplicitThis() || !controller.isInGeneratedFunction()) {
-                    field = classNode.getDeclaredField(name);
-
-                    ClassNode outer = classNode.getOuterClass();
-                    if (field == null && outer != null) {
-                        do {
-                            FieldNode outerClassField = outer.getDeclaredField(name);
-                            if (outerClassField != null && outerClassField.isStatic() && outerClassField.isFinal()) {
-                                if (outerClassField.isPrivate() && classNode.getOuterClass() != outer) {
-                                    throw new GroovyBugError("Trying to access private field [" + outerClassField.getDeclaringClass() + "#" + outerClassField.getName() + "] from inner class");
-                                }
-                                PropertyExpression staticOuterField = new PropertyExpression(new ClassExpression(outer), expression.getProperty());
-                                staticOuterField.getObjectExpression().setSourcePosition(objectExpression);
-                                staticOuterField.visit(this);
-                                return;
-                            }
-                            outer = outer.getSuperClass();
-                        } while (outer != null);
-                    }
-                }
-
-                if (field != null && !privateSuperField) { // GROOVY-4497: don't visit super field if it is private
-                    visitFieldExpression(new FieldExpression(field));
-                    visited = true;
-                } else if (isSuperExpression(objectExpression)) {
-                    if (controller.getCompileStack().isLHS()) {
-                        setPropertyOfSuperClass(classNode, expression, controller.getMethodVisitor());
-                    } else {
-                        visitMethodCallExpression(new MethodCallExpression(objectExpression, "get" + capitalize(name), MethodCallExpression.NO_ARGUMENTS));
-                    }
-                    visited = true;
-                }
-            }
-        }
-
-        if (!visited) {
-            boolean useMetaObjectProtocol = isGroovyObject(objectExpression)
-                    && (!isThisOrSuper(objectExpression) || !controller.isStaticContext() || controller.isInGeneratedFunction());
-
-            MethodCallerMultiAdapter adapter;
-            if (controller.getCompileStack().isLHS()) {
-                adapter = useMetaObjectProtocol ? setGroovyObjectProperty : setProperty;
-            } else {
-                adapter = useMetaObjectProtocol ? getGroovyObjectProperty : getProperty;
-            }
-            visitAttributeOrProperty(expression, adapter);
-        }
-
-        if (controller.getCompileStack().isLHS()) {
-            operandStack.remove(operandStack.getStackLength() - mark);
-        } else {
-            controller.getAssertionWriter().record(expression.getProperty());
-        }
-    }
-
-    @Override
-    public void visitAttributeExpression(final AttributeExpression expression) {
-        Expression objectExpression = expression.getObjectExpression();
-        OperandStack operandStack = controller.getOperandStack();
-        int mark = operandStack.getStackLength() - 1;
-        boolean visited = false;
-
-        if (isThisOrSuper(objectExpression)) {
-            String name = expression.getPropertyAsString();
-            if (name != null) {
-                ClassNode classNode = controller.getClassNode();
-                FieldNode field = getDeclaredFieldOfCurrentClassOrAccessibleFieldOfSuper(classNode, classNode, name, isSuperExpression(objectExpression));
-                if (field != null) {
-                    visitFieldExpression(new FieldExpression(field));
-                    visited = true;
-                } else if (isSuperExpression(objectExpression)) {
-                    if (controller.getCompileStack().isLHS()) {
-                        setPropertyOfSuperClass(classNode, expression, controller.getMethodVisitor());
-                    } else {
-                        visitMethodCallExpression(new MethodCallExpression(objectExpression, "get" + capitalize(name), MethodCallExpression.NO_ARGUMENTS));
-                    }
-                    visited = true;
-                }
-            }
-        }
-
-        if (!visited) {
-            MethodCallerMultiAdapter adapter;
-            if (controller.getCompileStack().isLHS()) {
-                adapter = isGroovyObject(objectExpression) ? setGroovyObjectField : setField;
-            } else {
-                adapter = isGroovyObject(objectExpression) ? getGroovyObjectField : getField;
-            }
-            visitAttributeOrProperty(expression, adapter);
-        }
-
-        if (controller.getCompileStack().isLHS()) {
-            operandStack.remove(operandStack.getStackLength() - mark);
-        } else {
-            controller.getAssertionWriter().record(expression.getProperty());
-        }
-    }
-
-    @Override
-    public void visitFieldExpression(final FieldExpression expression) {
-        FieldNode field = expression.getField();
-        if (field.isStatic()) {
-            if (controller.getCompileStack().isLHS()) {
-                storeStaticField(expression);
-            } else {
-                loadStaticField(expression);
-            }
-        } else {
-            if (controller.getCompileStack().isLHS()) {
-                storeThisInstanceField(expression);
-            } else {
-                loadInstanceField(expression);
-            }
-        }
-    }
-
-    public void loadStaticField(final FieldExpression fldExp) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        FieldNode field = fldExp.getField();
-        boolean holder = field.isHolder() && !controller.isInGeneratedFunctionConstructor();
-        ClassNode type = field.getType();
-
-        String ownerName = (field.getOwner().equals(controller.getClassNode()))
-                ? controller.getInternalClassName()
-                : BytecodeHelper.getClassInternalName(field.getOwner());
-        if (holder) {
-            mv.visitFieldInsn(GETSTATIC, ownerName, fldExp.getFieldName(), BytecodeHelper.getTypeDescription(type));
-            mv.visitMethodInsn(INVOKEVIRTUAL, "groovy/lang/Reference", "get", "()Ljava/lang/Object;", false);
-            controller.getOperandStack().push(ClassHelper.OBJECT_TYPE);
-        } else {
-            mv.visitFieldInsn(GETSTATIC, ownerName, fldExp.getFieldName(), BytecodeHelper.getTypeDescription(type));
-            controller.getOperandStack().push(field.getType());
-        }
-    }
-
     /**
-     * RHS instance field. should move most of the code in the BytecodeHelper
+     * @return No value filter.
      */
-    public void loadInstanceField(final FieldExpression fldExp) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        FieldNode field = fldExp.getField();
-        boolean holder = field.isHolder() && !controller.isInGeneratedFunctionConstructor();
-        ClassNode type = field.getType();
-        String ownerName = (field.getOwner().equals(controller.getClassNode()))
-                ? controller.getInternalClassName()
-                : BytecodeHelper.getClassInternalName(field.getOwner());
-
-        mv.visitVarInsn(ALOAD, 0);
-        mv.visitFieldInsn(GETFIELD, ownerName, fldExp.getFieldName(), BytecodeHelper.getTypeDescription(type));
-
-        if (holder) {
-            mv.visitMethodInsn(INVOKEVIRTUAL, "groovy/lang/Reference", "get", "()Ljava/lang/Object;", false);
-            controller.getOperandStack().push(ClassHelper.OBJECT_TYPE);
-        } else {
-            controller.getOperandStack().push(field.getType());
-        }
-    }
-
-    private void storeThisInstanceField(final FieldExpression expression) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        FieldNode field = expression.getField();
-
-        boolean setReferenceFromReference = field.isHolder() && expression.isUseReferenceDirectly();
-        String ownerName = (field.getOwner().equals(controller.getClassNode()))
-                ? controller.getInternalClassName() : BytecodeHelper.getClassInternalName(field.getOwner());
-        OperandStack operandStack = controller.getOperandStack();
-
-        if (setReferenceFromReference) {
-            // rhs is ready to use reference, just put it in the field
-            mv.visitVarInsn(ALOAD, 0);
-            operandStack.push(controller.getClassNode());
-            operandStack.swap();
-            mv.visitFieldInsn(PUTFIELD, ownerName, field.getName(), BytecodeHelper.getTypeDescription(field.getType()));
-        } else if (field.isHolder()) {
-            // rhs is normal value, set the value in the Reference
-            operandStack.doGroovyCast(field.getOriginType());
-            operandStack.box();
-            mv.visitVarInsn(ALOAD, 0);
-            mv.visitFieldInsn(GETFIELD, ownerName, expression.getFieldName(), BytecodeHelper.getTypeDescription(field.getType()));
-            mv.visitInsn(SWAP);
-            mv.visitMethodInsn(INVOKEVIRTUAL, "groovy/lang/Reference", "set", "(Ljava/lang/Object;)V", false);
-        } else {
-            // rhs is normal value, set normal value
-            operandStack.doGroovyCast(field.getOriginType());
-            mv.visitVarInsn(ALOAD, 0);
-            operandStack.push(controller.getClassNode());
-            operandStack.swap();
-            mv.visitFieldInsn(PUTFIELD, ownerName, field.getName(), BytecodeHelper.getTypeDescription(field.getType()));
-        }
-    }
-
-    private void storeStaticField(final FieldExpression expression) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        FieldNode field = expression.getField();
-
-        boolean holder = field.isHolder() && !controller.isInGeneratedFunctionConstructor();
-        controller.getOperandStack().doGroovyCast(field);
-
-        String ownerName = (field.getOwner().equals(controller.getClassNode()))
-                ? controller.getInternalClassName() : BytecodeHelper.getClassInternalName(field.getOwner());
-        if (holder) {
-            controller.getOperandStack().box();
-            mv.visitFieldInsn(GETSTATIC, ownerName, expression.getFieldName(), BytecodeHelper.getTypeDescription(field.getType()));
-            mv.visitInsn(SWAP);
-            mv.visitMethodInsn(INVOKEVIRTUAL, "groovy/lang/Reference", "set", "(Ljava/lang/Object;)V", false);
-        } else {
-            mv.visitFieldInsn(PUTSTATIC, ownerName, expression.getFieldName(), BytecodeHelper.getTypeDescription(field.getType()));
-        }
-        controller.getOperandStack().remove(1);
-    }
-
-    @Override
-    public void visitVariableExpression(final VariableExpression expression) {
-        String variableName = expression.getName();
-
-        //-----------------------------------------------------------------------
-        // SPECIAL CASES
-
-        // "this" for static methods is the Class instance
-        ClassNode classNode = controller.getClassNode();
-
-        if (expression.isThisExpression()) {
-            if (controller.isStaticMethod() || (!controller.getCompileStack().isImplicitThis() && controller.isStaticContext())) {
-                if (controller.isInGeneratedFunction()) classNode = controller.getOutermostClass();
-                visitClassExpression(new ClassExpression(classNode));
-            } else {
-                loadThis(expression);
-            }
-            return;
-        }
-
-        // "super" also requires special handling
-        if (expression.isSuperExpression()) {
-            if (controller.isStaticMethod()) {
-                visitClassExpression(new ClassExpression(classNode.getSuperClass()));
-            } else {
-                loadThis(expression);
-            }
-            return;
-        }
-
-        BytecodeVariable variable = controller.getCompileStack().getVariable(variableName, false);
-        if (variable == null) {
-            processClassVariable(expression);
-        } else {
-            controller.getOperandStack().loadOrStoreVariable(variable, expression.isUseReferenceDirectly());
-        }
-        if (!controller.getCompileStack().isLHS()) {
-            controller.getAssertionWriter().record(expression);
-        }
-    }
-
-    private void loadThis(final VariableExpression thisExpression) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        mv.visitVarInsn(ALOAD, 0);
-        if (controller.isInGeneratedFunction() && !controller.getCompileStack().isImplicitThis()) {
-            mv.visitMethodInsn(INVOKEVIRTUAL, "groovy/lang/Closure", "getThisObject", "()Ljava/lang/Object;", false);
-            ClassNode expectedType = thisExpression!=null?controller.getTypeChooser().resolveType(thisExpression, controller.getOutermostClass()):null;
-            if (!ClassHelper.OBJECT_TYPE.equals(expectedType) && !ClassHelper.isPrimitiveType(expectedType)) {
-                BytecodeHelper.doCast(mv, expectedType);
-                controller.getOperandStack().push(expectedType);
-            } else {
-                controller.getOperandStack().push(ClassHelper.OBJECT_TYPE);
-            }
-        } else {
-            controller.getOperandStack().push(controller.getClassNode());
-        }
-    }
-
-    private void processClassVariable(final VariableExpression expression) {
-        if (passingParams && controller.isInScriptBody()) {
-            //TODO: check if this part is actually used
-            MethodVisitor mv = controller.getMethodVisitor();
-            // let's create a ScriptReference to pass into the closure
-            mv.visitTypeInsn(NEW, "org/codehaus/groovy/runtime/ScriptReference");
-            mv.visitInsn(DUP);
-
-            loadThisOrOwner();
-            mv.visitLdcInsn(expression.getName());
-
-            mv.visitMethodInsn(INVOKESPECIAL, "org/codehaus/groovy/runtime/ScriptReference", "<init>", "(Lgroovy/lang/Script;Ljava/lang/String;)V", false);
-        } else {
-            PropertyExpression pexp = new PropertyExpression(new VariableExpression("this"), expression.getName());
-            pexp.getObjectExpression().setSourcePosition(expression);
-            pexp.getProperty().setSourcePosition(expression);
-            pexp.setImplicitThis(true);
-            visitPropertyExpression(pexp);
-        }
-    }
-
-    protected void createInterfaceSyntheticStaticFields() {
-        ClassNode icl =  controller.getInterfaceClassLoadingClass();
-
-        if (referencedClasses.isEmpty()) {
-            Iterator<InnerClassNode> it = icl.getOuterClass().getInnerClasses();
-            while(it.hasNext()) {
-                InnerClassNode inner = it.next();
-                if (inner==icl) {
-                    it.remove();
-                    return;
-                }
-            }
-            return;
-        }
-
-        addInnerClass(icl);
-        for (Map.Entry<String, ClassNode> entry : referencedClasses.entrySet()) {
-            // generate a field node
-            String staticFieldName = entry.getKey();
-            ClassNode cn = entry.getValue();
-            icl.addField(staticFieldName, ACC_STATIC + ACC_SYNTHETIC, ClassHelper.CLASS_Type.getPlainNodeReference(), new ClassExpression(cn));
-        }
-    }
-
-    protected void createSyntheticStaticFields() {
-        if (referencedClasses.isEmpty()) {
-            return;
-        }
-        MethodVisitor mv;
-        for (Map.Entry<String, ClassNode> entry : referencedClasses.entrySet()) {
-            String staticFieldName = entry.getKey();
-            ClassNode cn = entry.getValue();
-            // generate a field node
-            FieldNode fn = controller.getClassNode().getDeclaredField(staticFieldName);
-            if (fn != null) {
-                boolean type = fn.getType().equals(ClassHelper.CLASS_Type);
-                boolean modifiers = fn.getModifiers() == ACC_STATIC + ACC_SYNTHETIC;
-                if (!type || !modifiers) {
-                    String text = "";
-                    if (!type) text = " with wrong type: " + fn.getType() + " (java.lang.Class needed)";
-                    if (!modifiers)
-                        text = " with wrong modifiers: " + fn.getModifiers() + " (" + (ACC_STATIC + ACC_SYNTHETIC) + " needed)";
-                    throwException("tried to set a static synthetic field " + staticFieldName + " in " + controller.getClassNode().getName() +
-                            " for class resolving, but found already a node of that name " + text);
-                }
-            } else {
-                classVisitor.visitField(ACC_PRIVATE + ACC_STATIC + ACC_SYNTHETIC, staticFieldName, "Ljava/lang/Class;", null, null);
-            }
-
-            mv = classVisitor.visitMethod(ACC_PRIVATE + ACC_STATIC + ACC_SYNTHETIC, "$get$" + staticFieldName,"()Ljava/lang/Class;",null, null);
-            mv.visitCode();
-            mv.visitFieldInsn(GETSTATIC,controller.getInternalClassName(),staticFieldName,"Ljava/lang/Class;");
-            mv.visitInsn(DUP);
-            Label l0 = new Label();
-            mv.visitJumpInsn(IFNONNULL,l0);
-            mv.visitInsn(POP);
-            mv.visitLdcInsn(BytecodeHelper.getClassLoadingTypeDescription(cn));
-            mv.visitMethodInsn(INVOKESTATIC, controller.getInternalClassName(), "class$", "(Ljava/lang/String;)Ljava/lang/Class;", false);
-            mv.visitInsn(DUP);
-            mv.visitFieldInsn(PUTSTATIC,controller.getInternalClassName(),staticFieldName,"Ljava/lang/Class;");
-            mv.visitLabel(l0);
-            mv.visitInsn(ARETURN);
-            mv.visitMaxs(0,0);
-            mv.visitEnd();
-        }
-
-        mv = classVisitor.visitMethod(ACC_STATIC + ACC_SYNTHETIC, "class$", "(Ljava/lang/String;)Ljava/lang/Class;", null, null);
-        Label l0 = new Label();
-        mv.visitLabel(l0);
-        mv.visitVarInsn(ALOAD, 0);
-        mv.visitMethodInsn(INVOKESTATIC, "java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;", false);
-        Label l1 = new Label();
-        mv.visitLabel(l1);
-        mv.visitInsn(ARETURN);
-        Label l2 = new Label();
-        mv.visitLabel(l2);
-        mv.visitVarInsn(ASTORE, 1);
-        mv.visitTypeInsn(NEW, "java/lang/NoClassDefFoundError");
-        mv.visitInsn(DUP);
-        mv.visitVarInsn(ALOAD, 1);
-        mv.visitMethodInsn(INVOKEVIRTUAL, "java/lang/ClassNotFoundException", "getMessage", "()Ljava/lang/String;", false);
-        mv.visitMethodInsn(INVOKESPECIAL, "java/lang/NoClassDefFoundError", "<init>", "(Ljava/lang/String;)V", false);
-        mv.visitInsn(ATHROW);
-        mv.visitTryCatchBlock(l0, l2, l2, "java/lang/ClassNotFoundException"); // br using l2 as the 2nd param seems create the right table entry
-        mv.visitMaxs(3, 2);
-    }
-
-    @Override
-    public void visitClassExpression(final ClassExpression expression) {
-        ClassNode type = expression.getType();
-        MethodVisitor mv = controller.getMethodVisitor();
-        if (BytecodeHelper.isClassLiteralPossible(type) || BytecodeHelper.isSameCompilationUnit(controller.getClassNode(), type)) {
-            if (controller.getClassNode().isInterface()) {
-                InterfaceHelperClassNode interfaceClassLoadingClass = controller.getInterfaceClassLoadingClass();
-                if (BytecodeHelper.isClassLiteralPossible(interfaceClassLoadingClass)) {
-                    BytecodeHelper.visitClassLiteral(mv, interfaceClassLoadingClass);
-                    controller.getOperandStack().push(ClassHelper.CLASS_Type);
-                    return;
-                }
-            } else {
-                BytecodeHelper.visitClassLiteral(mv, type);
-                controller.getOperandStack().push(ClassHelper.CLASS_Type);
-                return;
-            }
-        }
-        String staticFieldName = getStaticFieldName(type);
-        referencedClasses.put(staticFieldName, type);
-
-        String internalClassName = controller.getInternalClassName();
-        if (controller.getClassNode().isInterface()) {
-            internalClassName = BytecodeHelper.getClassInternalName(controller.getInterfaceClassLoadingClass());
-            mv.visitFieldInsn(GETSTATIC, internalClassName, staticFieldName, "Ljava/lang/Class;");
-        } else {
-            mv.visitMethodInsn(INVOKESTATIC, internalClassName, "$get$" + staticFieldName, "()Ljava/lang/Class;", false);
-        }
-        controller.getOperandStack().push(ClassHelper.CLASS_Type);
-    }
-
-    @Override
-    public void visitRangeExpression(final RangeExpression expression) {
-        OperandStack operandStack = controller.getOperandStack();
-        expression.getFrom().visit(this);
-        operandStack.box();
-        expression.getTo().visit(this);
-        operandStack.box();
-        operandStack.pushBool(expression.isInclusive());
-
-        createRangeMethod.call(controller.getMethodVisitor());
-        operandStack.replace(ClassHelper.RANGE_TYPE, 3);
-    }
-
-    @Override
-    public void visitMapEntryExpression(final MapEntryExpression expression) {
-        throw new GroovyBugError("MapEntryExpression should not be visited here");
-    }
-
-    @Override
-    public void visitMapExpression(final MapExpression expression) {
-        MethodVisitor mv = controller.getMethodVisitor();
-
-        List<MapEntryExpression> entries = expression.getMapEntryExpressions();
-        int size = entries.size();
-        BytecodeHelper.pushConstant(mv, size * 2);
-
-        mv.visitTypeInsn(ANEWARRAY, "java/lang/Object");
-
-        int i = 0;
-        for (Object object : entries) {
-            MapEntryExpression entry = (MapEntryExpression) object;
-
-            mv.visitInsn(DUP);
-            BytecodeHelper.pushConstant(mv, i++);
-            entry.getKeyExpression().visit(this);
-            controller.getOperandStack().box();
-            mv.visitInsn(AASTORE);
-
-            mv.visitInsn(DUP);
-            BytecodeHelper.pushConstant(mv, i++);
-            entry.getValueExpression().visit(this);
-            controller.getOperandStack().box();
-            mv.visitInsn(AASTORE);
-
-            controller.getOperandStack().remove(2);
-        }
-        createMapMethod.call(mv);
-        controller.getOperandStack().push(ClassHelper.MAP_TYPE);
-    }
-
-    @Override
-    public void visitArgumentlistExpression(final ArgumentListExpression ale) {
-        if (containsSpreadExpression(ale)) {
-            despreadList(ale.getExpressions(), true);
-        } else {
-            visitTupleExpression(ale, true);
-        }
-    }
-
-    public void despreadList(final List<Expression> expressions, final boolean wrap) {
-        List<Expression> spreadIndexes = new ArrayList<>();
-        List<Expression> spreadExpressions = new ArrayList<>();
-        List<Expression> normalArguments = new ArrayList<>();
-        for (int i = 0, n = expressions.size(); i < n; i += 1) {
-            Expression expr = expressions.get(i);
-            if (!(expr instanceof SpreadExpression)) {
-                normalArguments.add(expr);
-            } else {
-                spreadIndexes.add(new ConstantExpression(i - spreadExpressions.size(), true));
-                spreadExpressions.add(((SpreadExpression) expr).getExpression());
-            }
-        }
-
-        // load normal arguments as array
-        visitTupleExpression(new ArgumentListExpression(normalArguments), wrap);
-        // load spread expressions as array
-        new TupleExpression(spreadExpressions).visit(this);
-        // load insertion index
-        new ArrayExpression(ClassHelper.int_TYPE, spreadIndexes, null).visit(this);
-
-        controller.getOperandStack().remove(1);
-        despreadList.call(controller.getMethodVisitor());
-    }
-
-    @Override
-    public void visitTupleExpression(final TupleExpression expression) {
-        visitTupleExpression(expression, false);
-    }
-
-    void visitTupleExpression(final TupleExpression expression, final boolean useWrapper) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        int size = expression.getExpressions().size();
-
-        BytecodeHelper.pushConstant(mv, size);
-        mv.visitTypeInsn(ANEWARRAY, "java/lang/Object");
-
-        for (int i = 0; i < size; i += 1) {
-            mv.visitInsn(DUP);
-            BytecodeHelper.pushConstant(mv, i);
-            Expression argument = expression.getExpression(i);
-            argument.visit(this);
-            controller.getOperandStack().box();
-            if (useWrapper && argument instanceof CastExpression) loadWrapper(argument);
-
-            mv.visitInsn(AASTORE);
-            controller.getOperandStack().remove(1);
-        }
-    }
-
-    public void loadWrapper(final Expression argument) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        ClassNode goalClass = argument.getType();
-        visitClassExpression(new ClassExpression(goalClass));
-        if (goalClass.isDerivedFromGroovyObject()) {
-            createGroovyObjectWrapperMethod.call(mv);
-        } else {
-            createPojoWrapperMethod.call(mv);
-        }
-        controller.getOperandStack().remove(1);
-    }
-
-    @Override
-    public void visitArrayExpression(final ArrayExpression expression) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        ClassNode elementType = expression.getElementType();
-        String arrayTypeName = BytecodeHelper.getClassInternalName(elementType);
-        List<Expression> sizeExpression = expression.getSizeExpression();
-
-        int size = 0;
-        int dimensions = 0;
-        if (sizeExpression != null) {
-            for (Expression element : sizeExpression) {
-                if (element == ConstantExpression.EMPTY_EXPRESSION) break;
-                dimensions += 1;
-                // let's convert to an int
-                element.visit(this);
-                controller.getOperandStack().doGroovyCast(ClassHelper.int_TYPE);
-            }
-            controller.getOperandStack().remove(dimensions);
-        } else {
-            size = expression.getExpressions().size();
-            BytecodeHelper.pushConstant(mv, size);
-        }
-
-        int storeIns = AASTORE;
-        if (sizeExpression != null) {
-            arrayTypeName = BytecodeHelper.getTypeDescription(expression.getType());
-            mv.visitMultiANewArrayInsn(arrayTypeName, dimensions);
-        } else if (ClassHelper.isPrimitiveType(elementType)) {
-            int primType = 0;
-            if (elementType == ClassHelper.boolean_TYPE) {
-                primType = T_BOOLEAN;
-                storeIns = BASTORE;
-            } else if (elementType == ClassHelper.char_TYPE) {
-                primType = T_CHAR;
-                storeIns = CASTORE;
-            } else if (elementType == ClassHelper.float_TYPE) {
-                primType = T_FLOAT;
-                storeIns = FASTORE;
-            } else if (elementType == ClassHelper.double_TYPE) {
-                primType = T_DOUBLE;
-                storeIns = DASTORE;
-            } else if (elementType == ClassHelper.byte_TYPE) {
-                primType = T_BYTE;
-                storeIns = BASTORE;
-            } else if (elementType == ClassHelper.short_TYPE) {
-                primType = T_SHORT;
-                storeIns = SASTORE;
-            } else if (elementType == ClassHelper.int_TYPE) {
-                primType = T_INT;
-                storeIns = IASTORE;
-            } else if (elementType == ClassHelper.long_TYPE) {
-                primType = T_LONG;
-                storeIns = LASTORE;
-            }
-            mv.visitIntInsn(NEWARRAY, primType);
-        } else {
-            mv.visitTypeInsn(ANEWARRAY, arrayTypeName);
-        }
-
-        for (int i = 0; i < size; i += 1) {
-            mv.visitInsn(DUP);
-            BytecodeHelper.pushConstant(mv, i);
-            Expression elementExpression = expression.getExpression(i);
-            if (elementExpression == null) {
-                ConstantExpression.NULL.visit(this);
-            } else {
-                elementExpression.visit(this);
-                controller.getOperandStack().doGroovyCast(elementType);
-            }
-            mv.visitInsn(storeIns);
-            controller.getOperandStack().remove(1);
-        }
-
-        controller.getOperandStack().push(expression.getType());
-    }
-
-    @Override
-    public void visitClosureListExpression(final ClosureListExpression expression) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        controller.getCompileStack().pushVariableScope(expression.getVariableScope());
-
-        List<Expression> expressions = expression.getExpressions();
-        final int size = expressions.size();
-        // init declarations
-        for (int i = 0; i < size; i += 1) {
-            Expression expr = expressions.get(i);
-            if (expr instanceof DeclarationExpression) {
-                DeclarationExpression de = (DeclarationExpression) expr;
-                BinaryExpression be = new BinaryExpression(
-                        de.getLeftExpression(),
-                        de.getOperation(),
-                        de.getRightExpression());
-                expressions.set(i, be);
-                de.setRightExpression(ConstantExpression.NULL);
-                visitDeclarationExpression(de);
-            }
-        }
-
-        List<Object> instructions = new LinkedList<>();
-        // to keep stack height put a null on stack
-        instructions.add(ConstantExpression.NULL);
-
-        // init table
-        final Label dflt = new Label();
-        final Label tableEnd = new Label();
-        final Label[] labels = new Label[size];
-        instructions.add(new BytecodeInstruction() {
-            public void visit(MethodVisitor mv) {
-                mv.visitVarInsn(ILOAD, 1);
-                mv.visitTableSwitchInsn(0, size - 1, dflt, labels);
-            }
-        });
-
-        // visit cases
-        for (int i = 0; i < size; i += 1) {
-            Label label = new Label();
-            Expression expr = expressions.get(i);
-            labels[i] = label;
-            instructions.add(new BytecodeInstruction() {
-                public void visit(MethodVisitor mv) {
-                    mv.visitLabel(label);
-                    // expressions will leave a value on stack, so need to pop the alibi null
-                    mv.visitInsn(POP);
-                }
-            });
-            instructions.add(expr);
-            instructions.add(new BytecodeInstruction() {
-                public void visit(MethodVisitor mv) {
-                    mv.visitJumpInsn(GOTO, tableEnd);
-                }
-            });
-        }
-
-        // default case
-        instructions.add(new BytecodeInstruction() {
-            public void visit(MethodVisitor mv) {
-                mv.visitLabel(dflt);
-            }
-        });
-        ConstantExpression text = new ConstantExpression("invalid index for closure");
-        ConstructorCallExpression cce = new ConstructorCallExpression(ClassHelper.make(IllegalArgumentException.class), text);
-        ThrowStatement ts = new ThrowStatement(cce);
-        instructions.add(ts);
-
-        // return
-        instructions.add(new BytecodeInstruction() {
-            public void visit(MethodVisitor mv) {
-                mv.visitLabel(tableEnd);
-                mv.visitInsn(ARETURN);
-            }
-        });
-
-        BlockStatement bs = new BlockStatement();
-        bs.addStatement(new BytecodeSequence(instructions));
-        Parameter closureIndex = new Parameter(ClassHelper.int_TYPE, "__closureIndex");
-        ClosureExpression ce = new ClosureExpression(new Parameter[]{closureIndex}, bs);
-        ce.setVariableScope(expression.getVariableScope());
-        visitClosureExpression(ce);
-
-        // we need later an array to store the curried
-        // closures, so we create it here and ave it
-        // in a temporary variable
-        BytecodeHelper.pushConstant(mv, size);
-        mv.visitTypeInsn(ANEWARRAY, "java/lang/Object");
-        int listArrayVar = controller.getCompileStack().defineTemporaryVariable("_listOfClosures", true);
-
-        // add curried versions
-        for (int i = 0; i < size; i += 1) {
-            // stack: closure
-
-            // we need to create a curried closure version
-            // so we store the type on stack
-            mv.visitTypeInsn(NEW, "org/codehaus/groovy/runtime/CurriedClosure");
-            // stack: closure, type
-            // for a constructor call we need the type two times
-
-            // and the closure after them
-            mv.visitInsn(DUP2);
-            mv.visitInsn(SWAP);
-            // stack: closure,type,type,closure
-
-            // so we can create the curried closure
-            mv.visitInsn(ICONST_1);
-            mv.visitTypeInsn(ANEWARRAY, "java/lang/Object");
-            mv.visitInsn(DUP);
-            mv.visitInsn(ICONST_0);
-            mv.visitLdcInsn(i);
-            mv.visitMethodInsn(INVOKESTATIC, "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", false);
-            mv.visitInsn(AASTORE);
-            mv.visitMethodInsn(INVOKESPECIAL, "org/codehaus/groovy/runtime/CurriedClosure", "<init>", "(Lgroovy/lang/Closure;[Ljava/lang/Object;)V", false);
-            // stack: closure,curriedClosure
-
-            // we need to save the result
-            mv.visitVarInsn(ALOAD, listArrayVar);
-            mv.visitInsn(SWAP);
-            BytecodeHelper.pushConstant(mv, i);
-            mv.visitInsn(SWAP);
-            mv.visitInsn(AASTORE);
-            // stack: closure
-        }
-
-        // we don't need the closure any longer, so remove it
-        mv.visitInsn(POP);
-        // we load the array and create a list from it
-        mv.visitVarInsn(ALOAD, listArrayVar);
-        createListMethod.call(mv);
-
-        // remove the temporary variable to keep the
-        // stack clean
-        controller.getCompileStack().removeVar(listArrayVar);
-        controller.getOperandStack().pop();
-    }
-
-    @Override
-    public void visitBytecodeExpression(final BytecodeExpression expression) {
-        expression.visit(controller.getMethodVisitor());
-        controller.getOperandStack().push(expression.getType());
-    }
-
-    @Override
-    public void visitBytecodeSequence(final BytecodeSequence bytecodeSequence) {
-        MethodVisitor mv = controller.getMethodVisitor();
-        List<?> sequence = bytecodeSequence.getInstructions();
-        int mark = controller.getOperandStack().getStackLength();
-
-        for (Object element : sequence) {
-            if (element instanceof EmptyExpression) {
-                mv.visitInsn(ACONST_NULL);
-            } else if (element instanceof Expression) {
-                ((Expression) element).visit(this);
-            } else if (element instanceof Statement) {
-                ((Statement) element).visit(this);
-                mv.visitInsn(ACONST_NULL);
-            } else {
-                ((BytecodeInstruction) element).visit(mv);
-            }
-        }
-
-        controller.getOperandStack().remove(mark - controller.getOperandStack().getStackLength());
-    }
-
-    @Override
-    public void visitListExpression(final ListExpression expression) {
-        onLineNumber(expression, "ListExpression");
-
-        int size = expression.getExpressions().size();
-        boolean containsSpreadExpression = containsSpreadExpression(expression);
-        boolean containsOnlyConstants = !containsSpreadExpression && containsOnlyConstants(expression);
-        OperandStack operandStack = controller.getOperandStack();
-        if (!containsSpreadExpression) {
-            MethodVisitor mv = controller.getMethodVisitor();
-            BytecodeHelper.pushConstant(mv, size);
-            mv.visitTypeInsn(ANEWARRAY, "java/lang/Object");
-            int maxInit = 1000;
-            if (size<maxInit || !containsOnlyConstants) {
-                for (int i = 0; i < size; i += 1) {
-                    mv.visitInsn(DUP);
-                    BytecodeHelper.pushConstant(mv, i);
-                    expression.getExpression(i).visit(this);
-                    operandStack.box();
-                    mv.visitInsn(AASTORE);
-                }
-                controller.getOperandStack().remove(size);
-            } else {
-                List<Expression> expressions = expression.getExpressions();
-                List<String> methods = new ArrayList<>();
-                MethodVisitor oldMv = mv;
-                int index = 0;
-                while (index<size) {
-                    String methodName = "$createListEntry_" + controller.getNextHelperMethodIndex();
-                    methods.add(methodName);
-                    mv = controller.getClassVisitor().visitMethod(
-                            ACC_PRIVATE + ACC_STATIC + ACC_SYNTHETIC,
-                            methodName,
-                            "([Ljava/lang/Object;)V",
-                            null, null);
-                    controller.setMethodVisitor(mv);
-                    mv.visitCode();
-                    int methodBlockSize = Math.min(size-index, maxInit);
-                    int methodBlockEnd = index + methodBlockSize;
-                    for (; index < methodBlockEnd; index += 1) {
-                        mv.visitVarInsn(ALOAD, 0);
-                        mv.visitLdcInsn(index);
-                        expressions.get(index).visit(this);
-                        operandStack.box();
-                        mv.visitInsn(AASTORE);
-                    }
-                    operandStack.remove(methodBlockSize);
-                    mv.visitInsn(RETURN);
-                    mv.visitMaxs(0,0);
-                    mv.visitEnd();
-                }
-                mv = oldMv;
-                controller.setMethodVisitor(mv);
-                for (String methodName : methods) {
-                    mv.visitInsn(DUP);
-                    mv.visitMethodInsn(INVOKESTATIC, controller.getInternalClassName(), methodName, "([Ljava/lang/Object;)V", false);
-                }
-            }
-        } else {
-            despreadList(expression.getExpressions(), false);
-        }
-        createListMethod.call(controller.getMethodVisitor());
-        operandStack.push(ClassHelper.LIST_TYPE);
-    }
-
-    @Override
-    public void visitGStringExpression(final GStringExpression expression) {
-        MethodVisitor mv = controller.getMethodVisitor();
-
-        mv.visitTypeInsn(NEW, "org/codehaus/groovy/runtime/GStringImpl");
-        mv.visitInsn(DUP);
-
-        int size = expression.getValues().size();
-        BytecodeHelper.pushConstant(mv, size);
-        mv.visitTypeInsn(ANEWARRAY, "java/lang/Object");
-
-        for (int i = 0; i < size; i += 1) {
-            mv.visitInsn(DUP);
-            BytecodeHelper.pushConstant(mv, i);
-            expression.getValue(i).visit(this);
-            controller.getOperandStack().box();
-            mv.visitInsn(AASTORE);
-        }
-        controller.getOperandStack().remove(size);
-
-        List<ConstantExpression> strings = expression.getStrings();
-        size = strings.size();
-        BytecodeHelper.pushConstant(mv, size);
-        mv.visitTypeInsn(ANEWARRAY, "java/lang/String");
-
-        for (int i = 0; i < size; i += 1) {
-            mv.visitInsn(DUP);
-            BytecodeHelper.pushConstant(mv, i);
-            controller.getOperandStack().pushConstant(strings.get(i));
-            controller.getOperandStack().box();
-            mv.visitInsn(AASTORE);
-        }
-        controller.getOperandStack().remove(size);
-
-        mv.visitMethodInsn(INVOKESPECIAL, "org/codehaus/groovy/runtime/GStringImpl", "<init>", "([Ljava/lang/Object;[Ljava/lang/String;)V", false);
-        controller.getOperandStack().push(ClassHelper.GSTRING_TYPE);
-    }
-
-    @Override
-    public void visitAnnotations(final AnnotatedNode node) {
-        // ignore it; annotation generation needs the current visitor
-    }
-
-    private void visitAnnotations(final AnnotatedNode targetNode, final Object visitor) {
-        visitAnnotations(targetNode, targetNode, visitor);
-    }
-
-    private void visitAnnotations(final AnnotatedNode targetNode, final AnnotatedNode sourceNode, final Object visitor) {
-        for (AnnotationNode an : sourceNode.getAnnotations()) {
-            // skip built-in properties
-            if (an.isBuiltIn()) continue;
-            if (an.hasSourceRetention()) continue;
-
-            AnnotationVisitor av = getAnnotationVisitor(targetNode, an, visitor);
-            visitAnnotationAttributes(an, av);
-            av.visitEnd();
-        }
-    }
-
-    private void visitParameterAnnotations(final Parameter parameter, final int paramNumber, final MethodVisitor mv) {
-        for (AnnotationNode an : parameter.getAnnotations()) {
-            // skip built-in properties
-            if (an.isBuiltIn()) continue;
-            if (an.hasSourceRetention()) continue;
-
-            final String annotationDescriptor = BytecodeHelper.getTypeDescription(an.getClassNode());
-            AnnotationVisitor av = mv.visitParameterAnnotation(paramNumber, annotationDescriptor, an.hasRuntimeRetention());
-            visitAnnotationAttributes(an, av);
-            av.visitEnd();
-        }
-    }
-
-    private AnnotationVisitor getAnnotationVisitor(final AnnotatedNode targetNode, final AnnotationNode an, final Object visitor) {
-        final String annotationDescriptor = BytecodeHelper.getTypeDescription(an.getClassNode());
-        if (targetNode instanceof MethodNode) {
-            return ((MethodVisitor) visitor).visitAnnotation(annotationDescriptor, an.hasRuntimeRetention());
-        } else if (targetNode instanceof FieldNode) {
-            return ((FieldVisitor) visitor).visitAnnotation(annotationDescriptor, an.hasRuntimeRetention());
-        } else if (targetNode instanceof ClassNode) {
-            return ((ClassVisitor) visitor).visitAnnotation(annotationDescriptor, an.hasRuntimeRetention());
-        }
-        throwException("Cannot create an AnnotationVisitor. Please report Groovy bug");
-        return null;
+    public CacheEntryPredicate[] noValArray() {
+        return new CacheEntryPredicate[]{new CacheEntrySerializablePredicate(new CacheEntryPredicateNoValue())};
     }
 
     /**
-     * Generates the annotation attributes.
+     * @return Has value filter.
+     */
+    public CacheEntryPredicate[] hasValArray() {
+        return new CacheEntryPredicate[]{new CacheEntrySerializablePredicate(new CacheEntryPredicateHasValue())};
+    }
+
+    /**
+     * @param val Value to check.
+     * @return Predicate array that checks for value.
+     */
+    public CacheEntryPredicate[] equalsValArray(V val) {
+        return new CacheEntryPredicate[]{new CacheEntryPredicateContainsValue(toCacheObject(val))};
+    }
+
+    /**
+     * @param val Value to check.
+     * @return Predicate that checks for value.
+     */
+    public CacheEntryPredicate equalsValue(V val) {
+        return new CacheEntryPredicateContainsValue(toCacheObject(val));
+    }
+
+    /**
+     * @return Empty cache version array.
+     */
+    public GridCacheVersion[] emptyVersion() {
+        return EMPTY_VERSION;
+    }
+
+    /**
+     * @return Default affinity key mapper.
+     */
+    public AffinityKeyMapper defaultAffMapper() {
+        return cacheObjCtx.defaultAffMapper();
+    }
+
+    /**
+     * Sets cache object context.
      *
-     * @param an the node with an annotation
-     * @param av the visitor to use
+     * @param cacheObjCtx Cache object context.
      */
-    private void visitAnnotationAttributes(final AnnotationNode an, final AnnotationVisitor av) {
-        Map<String, Object> constantAttrs = new HashMap<>();
-        Map<String, PropertyExpression> enumAttrs = new HashMap<>();
-        Map<String, Object> atAttrs = new HashMap<>();
-        Map<String, ListExpression> arrayAttrs = new HashMap<>();
+    public void cacheObjectContext(CacheObjectContext cacheObjCtx) {
+        this.cacheObjCtx = cacheObjCtx;
+    }
 
-        for (Map.Entry<String, Expression> member : an.getMembers().entrySet()) {
-            String name = member.getKey();
-            Expression expr = member.getValue();
-            if (expr instanceof AnnotationConstantExpression) {
-                atAttrs.put(name, ((AnnotationConstantExpression) expr).getValue());
-            } else if (expr instanceof ConstantExpression) {
-                constantAttrs.put(name, ((ConstantExpression) expr).getValue());
-            } else if (expr instanceof ClassExpression) {
-                constantAttrs.put(name, Type.getType(BytecodeHelper.getTypeDescription((expr.getType()))));
-            } else if (expr instanceof PropertyExpression) {
-                enumAttrs.put(name, (PropertyExpression) expr);
-            } else if (expr instanceof ListExpression) {
-                arrayAttrs.put(name, (ListExpression) expr);
-            } else if (expr instanceof ClosureExpression) {
-                ClassNode closureClass = controller.getClosureWriter().getOrAddClosureClass((ClosureExpression) expr, ACC_PUBLIC);
-                constantAttrs.put(name, Type.getType(BytecodeHelper.getTypeDescription(closureClass)));
+    /**
+     * @param p Single predicate.
+     * @return Array containing single predicate.
+     */
+    @SuppressWarnings({"unchecked"})
+    public IgnitePredicate<Cache.Entry<K, V>>[] vararg(IgnitePredicate<Cache.Entry<K, V>> p) {
+        return p == null ? CU.<K, V>empty() : new IgnitePredicate[]{p};
+    }
+
+    /**
+     * Same as {@link GridFunc#isAll(Object, IgnitePredicate[])}, but safely unwraps exceptions.
+     *
+     * @param e Element.
+     * @param p Predicates.
+     * @return {@code True} if predicates passed.
+     * @throws IgniteCheckedException If failed.
+     */
+    public <K1, V1> boolean isAll(
+        GridCacheEntryEx e,
+        @Nullable IgnitePredicate<Cache.Entry<K1, V1>>[] p
+    ) throws IgniteCheckedException {
+        return F.isEmpty(p) || isAll(e.<K1, V1>wrapLazyValue(), p);
+    }
+
+    /**
+     * Same as {@link GridFunc#isAll(Object, IgnitePredicate[])}, but safely unwraps exceptions.
+     *
+     * @param e Element.
+     * @param p Predicates.
+     * @param <E> Element type.
+     * @return {@code True} if predicates passed.
+     * @throws IgniteCheckedException If failed.
+     */
+    @SuppressWarnings({"ErrorNotRethrown"})
+    public <E> boolean isAll(E e, @Nullable IgnitePredicate<? super E>[] p) throws IgniteCheckedException {
+        if (F.isEmpty(p))
+            return true;
+
+        try {
+            boolean pass = F.isAll(e, p);
+
+            if (log.isDebugEnabled())
+                log.debug("Evaluated filters for entry [pass=" + pass + ", entry=" + e + ", filters=" +
+                    Arrays.toString(p) + ']');
+
+            return pass;
+        }
+        catch (RuntimeException ex) {
+            throw U.cast(ex);
+        }
+    }
+
+    /**
+     * @param e Entry.
+     * @param p Predicates.
+     * @return {@code True} if predicates passed.
+     * @throws IgniteCheckedException If failed.
+     */
+    public boolean isAll(GridCacheEntryEx e, CacheEntryPredicate[] p) throws IgniteCheckedException {
+        if (p == null || p.length == 0)
+            return true;
+
+        try {
+            for (CacheEntryPredicate p0 : p) {
+                if (p0 != null && !p0.apply(e))
+                    return false;
             }
         }
-
-        for (Map.Entry<String, Object> entry : constantAttrs.entrySet()) {
-            av.visit(entry.getKey(), entry.getValue());
+        catch (RuntimeException ex) {
+            throw U.cast(ex);
         }
-        for (Map.Entry<String, PropertyExpression> entry : enumAttrs.entrySet()) {
-            PropertyExpression propExp = entry.getValue();
-            av.visitEnum(entry.getKey(),
-                    BytecodeHelper.getTypeDescription(propExp.getObjectExpression().getType()),
-                    String.valueOf(((ConstantExpression) propExp.getProperty()).getValue()));
-        }
-        for (Map.Entry<String, Object> entry : atAttrs.entrySet()) {
-            AnnotationNode atNode = (AnnotationNode) entry.getValue();
-            AnnotationVisitor av2 = av.visitAnnotation(entry.getKey(),
-                    BytecodeHelper.getTypeDescription(atNode.getClassNode()));
-            visitAnnotationAttributes(atNode, av2);
-            av2.visitEnd();
-        }
-        visitArrayAttributes(an, arrayAttrs, av);
-    }
 
-    private void visitArrayAttributes(final AnnotationNode an, final Map<String, ListExpression> arrayAttr, final AnnotationVisitor av) {
-        if (arrayAttr.isEmpty()) return;
-        for (Map.Entry<String, ListExpression> entry : arrayAttr.entrySet()) {
-            AnnotationVisitor av2 = av.visitArray(entry.getKey());
-            List<Expression> values = entry.getValue().getExpressions();
-            if (!values.isEmpty()) {
-                int arrayElementType = determineCommonArrayType(values);
-                for (Expression exprChild : values) {
-                    visitAnnotationArrayElement(exprChild, arrayElementType, av2);
-                }
-            }
-            av2.visitEnd();
-        }
-    }
-
-    private static int determineCommonArrayType(final List<Expression> values) {
-        Expression expr = values.get(0);
-        int arrayElementType = -1;
-        if (expr instanceof AnnotationConstantExpression) {
-            arrayElementType = 1;
-        } else if (expr instanceof ConstantExpression) {
-            arrayElementType = 2;
-        } else if (expr instanceof ClassExpression) {
-            arrayElementType = 3;
-        } else if (expr instanceof PropertyExpression) {
-            arrayElementType = 4;
-        }
-        return arrayElementType;
-    }
-
-    private void visitAnnotationArrayElement(final Expression expr, final int arrayElementType, final AnnotationVisitor av) {
-        switch (arrayElementType) {
-            case 1:
-                AnnotationNode atAttr = (AnnotationNode) ((AnnotationConstantExpression) expr).getValue();
-                AnnotationVisitor av2 = av.visitAnnotation(null, BytecodeHelper.getTypeDescription(atAttr.getClassNode()));
-                visitAnnotationAttributes(atAttr, av2);
-                av2.visitEnd();
-                break;
-            case 2:
-                av.visit(null, ((ConstantExpression) expr).getValue());
-                break;
-            case 3:
-                av.visit(null, Type.getType(BytecodeHelper.getTypeDescription(expr.getType())));
-                break;
-            case 4:
-                PropertyExpression propExpr = (PropertyExpression) expr;
-                av.visitEnum(null,
-                        BytecodeHelper.getTypeDescription(propExpr.getObjectExpression().getType()),
-                        String.valueOf(((ConstantExpression) propExpr.getProperty()).getValue()));
-                break;
-        }
-    }
-
-    // Implementation methods
-    //-------------------------------------------------------------------------
-
-    public static int argumentSize(final Expression arguments) {
-        if (arguments instanceof TupleExpression) {
-            TupleExpression tupleExpression = (TupleExpression) arguments;
-            int size = tupleExpression.getExpressions().size();
-            return size;
-        }
-        return 1;
-    }
-
-    private static String[] buildExceptions(final ClassNode[] exceptions) {
-        if (exceptions == null) return null;
-        return Arrays.stream(exceptions).map(BytecodeHelper::getClassInternalName).toArray(String[]::new);
-    }
-
-    private static boolean containsOnlyConstants(final ListExpression list) {
-        for (Expression exp : list.getExpressions()) {
-            if (exp instanceof ConstantExpression) continue;
-            return false;
-        }
         return true;
     }
 
-    public static boolean containsSpreadExpression(final Expression arguments) {
-        List<Expression> args = null;
-        if (arguments instanceof TupleExpression) {
-            TupleExpression tupleExpression = (TupleExpression) arguments;
-            args = tupleExpression.getExpressions();
-        } else if (arguments instanceof ListExpression) {
-            ListExpression le = (ListExpression) arguments;
-            args = le.getExpressions();
-        } else {
-            return arguments instanceof SpreadExpression;
+    /**
+     * @param e Entry.
+     * @param p Predicates.
+     * @return {@code True} if predicates passed.
+     * @throws IgniteCheckedException If failed.
+     */
+    public boolean isAllLocked(GridCacheEntryEx e, CacheEntryPredicate[] p) throws IgniteCheckedException {
+        if (p == null || p.length == 0)
+            return true;
+
+        try {
+            for (CacheEntryPredicate p0 : p) {
+                if (p0 != null) {
+                    p0.entryLocked(true);
+
+                    if (!p0.apply(e))
+                        return false;
+                }
+            }
         }
-        for (Expression arg : args) {
-            if (arg instanceof SpreadExpression) return true;
+        catch (RuntimeException ex) {
+            throw U.cast(ex);
         }
+        finally {
+            for (CacheEntryPredicate p0 : p) {
+                if (p0 != null)
+                    p0.entryLocked(false);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Force projection flags for the current thread. These flags will affect all
+     * projections (even without flags) used within the current thread.
+     *
+     * @param flags Flags to force.
+     * @return Forced flags that were set prior to method call.
+     */
+    @Nullable public CacheFlag[] forceFlags(@Nullable CacheFlag[] flags) {
+        CacheFlag[] oldFlags = forcedFlags.get();
+
+        forcedFlags.set(F.isEmpty(flags) ? null : flags);
+
+        return oldFlags;
+    }
+
+    /**
+     * Gets forced flags for current thread.
+     *
+     * @return Forced flags.
+     */
+    public CacheFlag[] forcedFlags() {
+        return forcedFlags.get();
+    }
+
+    /**
+     * Clone cached object.
+     *
+     * @param obj Object to clone
+     * @return Clone of the given object.
+     * @throws IgniteCheckedException If failed to clone object.
+     */
+    @SuppressWarnings({"unchecked"})
+    @Nullable public <T> T cloneValue(@Nullable T obj) throws IgniteCheckedException {
+        return obj == null ? null : X.cloneObject(obj, false, true);
+    }
+
+    /**
+     * Sets thread local projection.
+     *
+     * @param prj Flags to set.
+     */
+    public void projectionPerCall(@Nullable GridCacheProjectionImpl<K, V> prj) {
+        if (nearContext())
+            dht().near().context().prjPerCall.set(prj);
+        else
+            prjPerCall.set(prj);
+    }
+
+    /**
+     * Gets thread local projection.
+     *
+     * @return Projection per call.
+     */
+    public GridCacheProjectionImpl<K, V> projectionPerCall() {
+        return nearContext() ? dht().near().context().prjPerCall.get() : prjPerCall.get();
+    }
+
+    /**
+     * Gets subject ID per call.
+     *
+     * @param subjId Optional already existing subject ID.
+     * @return Subject ID per call.
+     */
+    public UUID subjectIdPerCall(@Nullable UUID subjId) {
+        if (subjId != null)
+            return subjId;
+
+        return subjectIdPerCall(subjId, projectionPerCall());
+    }
+
+    /**
+     * Gets subject ID per call.
+     *
+     * @param subjId Optional already existing subject ID.
+     * @param prj Optional thread local projection.
+     * @return Subject ID per call.
+     */
+    public UUID subjectIdPerCall(@Nullable UUID subjId, @Nullable GridCacheProjectionImpl<K, V> prj) {
+        if (prj != null)
+            subjId = prj.subjectId();
+
+        if (subjId == null)
+            subjId = ctx.localNodeId();
+
+        return subjId;
+    }
+
+    /**
+     *
+     * @param flag Flag to check.
+     * @return {@code true} if the given flag is set.
+     */
+    public boolean hasFlag(CacheFlag flag) {
+        assert flag != null;
+
+        if (nearContext())
+            return dht().near().context().hasFlag(flag);
+
+        GridCacheProjectionImpl<K, V> prj = prjPerCall.get();
+
+        CacheFlag[] forced = forcedFlags.get();
+
+        return (prj != null && prj.flags().contains(flag)) || (forced != null && U.containsObjectArray(forced, flag));
+    }
+
+    /**
+     * Checks whether any of the given flags is set.
+     *
+     * @param flags Flags to check.
+     * @return {@code true} if any of the given flags is set.
+     */
+    public boolean hasAnyFlags(CacheFlag[] flags) {
+        assert !F.isEmpty(flags);
+
+        if (nearContext())
+            return dht().near().context().hasAnyFlags(flags);
+
+        GridCacheProjectionImpl<K, V> prj = prjPerCall.get();
+
+        if (prj == null && F.isEmpty(forcedFlags.get()))
+            return false;
+
+        for (CacheFlag f : flags)
+            if (hasFlag(f))
+                return true;
+
         return false;
     }
 
-    private boolean isInnerClass() {
-        return controller.getClassNode().getOuterClass() != null;
+    /**
+     * Checks whether any of the given flags is set.
+     *
+     * @param flags Flags to check.
+     * @return {@code true} if any of the given flags is set.
+     */
+    public boolean hasAnyFlags(Collection<CacheFlag> flags) {
+        assert !F.isEmpty(flags);
+
+        if (nearContext())
+            return dht().near().context().hasAnyFlags(flags);
+
+        GridCacheProjectionImpl<K, V> prj = prjPerCall.get();
+
+        if (prj == null && F.isEmpty(forcedFlags.get()))
+            return false;
+
+        for (CacheFlag f : flags)
+            if (hasFlag(f))
+                return true;
+
+        return false;
     }
 
-    public static boolean isNullConstant(final Expression expression) {
-        return expression instanceof ConstantExpression && ((ConstantExpression) expression).isNullExpression();
+    /**
+     * @return {@code True} if need check near cache context.
+     */
+    private boolean nearContext() {
+        return isDht() || (isDhtAtomic() && dht().near() != null);
     }
 
-    public static boolean isThisExpression(final Expression expression) {
-        return expression instanceof VariableExpression && ((VariableExpression) expression).isThisExpression();
+    /**
+     * @param flag Flag to check.
+     */
+    public void denyOnFlag(CacheFlag flag) {
+        assert flag != null;
+
+        if (hasFlag(flag))
+            throw new CacheFlagException(flag);
     }
 
-    public static boolean isSuperExpression(final Expression expression) {
-        return expression instanceof VariableExpression && ((VariableExpression) expression).isSuperExpression();
+    /**
+     * @param flags Flags.
+     */
+    public void denyOnFlags(CacheFlag[] flags) {
+        assert !F.isEmpty(flags);
+
+        if (hasAnyFlags(flags))
+            throw new CacheFlagException(flags);
     }
 
-    private static boolean isThisOrSuper(final Expression expression) {
-        return isThisExpression(expression) || isSuperExpression(expression);
+    /**
+     * @param flags Flags.
+     */
+    public void denyOnFlags(Collection<CacheFlag> flags) {
+        assert !F.isEmpty(flags);
+
+        if (hasAnyFlags(flags))
+            throw new CacheFlagException(flags);
     }
 
-    private static boolean isVargs(final Parameter[] parameters) {
-        return (parameters.length > 0 && parameters[parameters.length - 1].getType().isArray());
+    /**
+     * Clones cached object depending on whether or not {@link CacheFlag#CLONE} flag
+     * is set thread locally.
+     *
+     * @param obj Object to clone.
+     * @return Clone of the given object.
+     * @throws IgniteCheckedException If failed to clone.
+     */
+    @Nullable public <T> T cloneOnFlag(@Nullable T obj) throws IgniteCheckedException {
+        return hasFlag(CLONE) ? cloneValue(obj) : obj;
     }
 
-    public boolean addInnerClass(final ClassNode innerClass) {
-        ModuleNode mn = controller.getClassNode().getModule();
-        innerClass.setModule(mn);
-        mn.getUnit().addGeneratedInnerClass((InnerClassNode)innerClass);
-        return innerClasses.add(innerClass);
+    /**
+     * @param f Target future.
+     * @return Wrapped future that is aware of cloning behaviour.
+     */
+    public IgniteInternalFuture<V> wrapClone(IgniteInternalFuture<V> f) {
+        if (!hasFlag(CLONE))
+            return f;
+
+        return f.chain(new CX1<IgniteInternalFuture<V>, V>() {
+            @Override public V applyx(IgniteInternalFuture<V> f) throws IgniteCheckedException {
+                return cloneValue(f.get());
+            }
+        });
     }
 
-    public void onLineNumber(final ASTNode statement, final String message) {
-        if (statement == null || statement instanceof BlockStatement) return;
+    /**
+     * Creates Runnable that can be executed safely in a different thread inheriting
+     * the same thread local projection as for the current thread. If no projection is
+     * set for current thread then there's no need to create new object and method simply
+     * returns given Runnable.
+     *
+     * @param r Runnable.
+     * @return Runnable that can be executed in a different thread with the same
+     *      projection as for current thread.
+     */
+    public Runnable projectSafe(final Runnable r) {
+        assert r != null;
 
-        currentASTNode = statement;
-        int line = statement.getLineNumber();
-        if (line < 0 || (!ASM_DEBUG && line == controller.getLineNumber())) return;
+        // Have to get projection per call used by calling thread to use it in a new thread.
+        final GridCacheProjectionImpl<K, V> prj = projectionPerCall();
 
-        controller.setLineNumber(line);
-        MethodVisitor mv = controller.getMethodVisitor();
-        if (mv != null) {
-            Label l = new Label();
-            mv.visitLabel(l);
-            mv.visitLineNumber(line, l);
+        // Get flags in the same thread.
+        final CacheFlag[] flags = forcedFlags();
+
+        if (prj == null && F.isEmpty(flags))
+            return r;
+
+        return new GPR() {
+            @Override public void run() {
+                GridCacheProjectionImpl<K, V> oldPrj = projectionPerCall();
+
+                projectionPerCall(prj);
+
+                CacheFlag[] oldFlags = forceFlags(flags);
+
+                try {
+                    r.run();
+                }
+                finally {
+                    projectionPerCall(oldPrj);
+
+                    forceFlags(oldFlags);
+                }
+            }
+        };
+    }
+
+    /**
+     * Creates callable that can be executed safely in a different thread inheriting
+     * the same thread local projection as for the current thread. If no projection is
+     * set for current thread then there's no need to create new object and method simply
+     * returns given callable.
+     *
+     * @param r Callable.
+     * @return Callable that can be executed in a different thread with the same
+     *      projection as for current thread.
+     */
+    public <T> Callable<T> projectSafe(final Callable<T> r) {
+        assert r != null;
+
+        // Have to get projection per call used by calling thread to use it in a new thread.
+        final GridCacheProjectionImpl<K, V> prj = projectionPerCall();
+
+        // Get flags in the same thread.
+        final CacheFlag[] flags = forcedFlags();
+
+        if (prj == null && F.isEmpty(flags))
+            return r;
+
+        return new GPC<T>() {
+            @Override public T call() throws Exception {
+                GridCacheProjectionImpl<K, V> oldPrj = projectionPerCall();
+
+                projectionPerCall(prj);
+
+                CacheFlag[] oldFlags = forceFlags(flags);
+
+                try {
+                    return r.call();
+                }
+                finally {
+                    projectionPerCall(oldPrj);
+
+                    forceFlags(oldFlags);
+                }
+            }
+        };
+    }
+
+    /**
+     * @return {@code True} if deployment enabled.
+     */
+    public boolean deploymentEnabled() {
+        return ctx.deploy().enabled();
+    }
+
+    /**
+     * @return {@code True} if swap store of off-heap cache are enabled.
+     */
+    public boolean isSwapOrOffheapEnabled() {
+        return (swapMgr.swapEnabled() && !hasFlag(SKIP_SWAP)) || isOffHeapEnabled();
+    }
+
+    /**
+     * @return {@code True} if offheap storage is enabled.
+     */
+    public boolean isOffHeapEnabled() {
+        return swapMgr.offHeapEnabled();
+    }
+
+    /**
+     * @return {@code True} if store read-through mode is enabled.
+     */
+    public boolean readThrough() {
+        return cacheCfg.isReadThrough() && !hasFlag(SKIP_STORE);
+    }
+
+    /**
+     * @return {@code True} if store read-through mode is enabled.
+     */
+    public boolean loadPreviousValue() {
+        return cacheCfg.isLoadPreviousValue();
+    }
+
+    /**
+     * @return {@code True} if store write-through is enabled.
+     */
+    public boolean writeThrough() {
+        return cacheCfg.isWriteThrough() && !hasFlag(SKIP_STORE);
+    }
+
+    /**
+     * @return {@code True} if invalidation is enabled.
+     */
+    public boolean isInvalidate() {
+        return cacheCfg.isInvalidate() || hasFlag(INVALIDATE);
+    }
+
+    /**
+     * @return {@code True} if synchronous commit is enabled.
+     */
+    public boolean syncCommit() {
+        return cacheCfg.getWriteSynchronizationMode() == FULL_SYNC;
+    }
+
+    /**
+     * @return {@code True} if synchronous rollback is enabled.
+     */
+    public boolean syncRollback() {
+        return cacheCfg.getWriteSynchronizationMode() == FULL_SYNC;
+    }
+
+    /**
+     * @return {@code True} if only primary node should be updated synchronously.
+     */
+    public boolean syncPrimary() {
+        return cacheCfg.getWriteSynchronizationMode() == PRIMARY_SYNC;
+    }
+
+    /**
+     * @param nearNodeId Near node ID.
+     * @param topVer Topology version.
+     * @param entry Entry.
+     * @param log Log.
+     * @param dhtMap Dht mappings.
+     * @param nearMap Near mappings.
+     * @return {@code True} if mapped.
+     * @throws GridCacheEntryRemovedException If reader for entry is removed.
+     */
+    public boolean dhtMap(
+        UUID nearNodeId,
+        AffinityTopologyVersion topVer,
+        GridDhtCacheEntry entry,
+        IgniteLogger log,
+        Map<ClusterNode, List<GridDhtCacheEntry>> dhtMap,
+        @Nullable Map<ClusterNode, List<GridDhtCacheEntry>> nearMap
+    ) throws GridCacheEntryRemovedException {
+        assert !AffinityTopologyVersion.NONE.equals(topVer);
+
+        Collection<ClusterNode> dhtNodes = dht().topology().nodes(entry.partition(), topVer);
+
+        if (log.isDebugEnabled())
+            log.debug("Mapping entry to DHT nodes [nodes=" + U.nodeIds(dhtNodes) + ", entry=" + entry + ']');
+
+        Collection<ClusterNode> dhtRemoteNodes = F.view(dhtNodes, F.remoteNodes(nodeId())); // Exclude local node.
+
+        boolean ret = map(entry, dhtRemoteNodes, dhtMap);
+
+        if (nearMap != null) {
+            Collection<UUID> readers = entry.readers();
+
+            Collection<ClusterNode> nearNodes = null;
+
+            if (!F.isEmpty(readers)) {
+                nearNodes = discovery().nodes(readers, F0.notEqualTo(nearNodeId));
+
+                if (log.isDebugEnabled())
+                    log.debug("Mapping entry to near nodes [nodes=" + U.nodeIds(nearNodes) + ", entry=" + entry + ']');
+            }
+            else if (log.isDebugEnabled())
+                log.debug("Entry has no near readers: " + entry);
+
+            if (nearNodes != null && !nearNodes.isEmpty())
+                ret |= map(entry, F.view(nearNodes, F.notIn(dhtNodes)), nearMap);
+        }
+
+        return ret;
+    }
+
+    /**
+     * @param entry Entry.
+     * @param nodes Nodes.
+     * @param map Map.
+     * @return {@code True} if mapped.
+     */
+    private boolean map(GridDhtCacheEntry entry, Iterable<ClusterNode> nodes,
+        Map<ClusterNode, List<GridDhtCacheEntry>> map) {
+        boolean ret = false;
+
+        if (nodes != null) {
+            for (ClusterNode n : nodes) {
+                List<GridDhtCacheEntry> entries = map.get(n);
+
+                if (entries == null)
+                    map.put(n, entries = new LinkedList<>());
+
+                entries.add(entry);
+
+                ret = true;
+            }
+        }
+
+        return ret;
+    }
+
+    /**
+     * Checks if at least one of the given keys belongs to one of the given partitions.
+     *
+     * @param keys Collection of keys to check.
+     * @param movingParts Collection of partitions to check against.
+     * @return {@code True} if there exist a key in collection {@code keys} that belongs
+     *      to one of partitions in {@code movingParts}
+     */
+    public boolean hasKey(Iterable<? extends K> keys, Collection<Integer> movingParts) {
+        for (K key : keys) {
+            if (movingParts.contains(affinity().partition(key)))
+                return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Check whether conflict resolution is required.
+     *
+     * @return {@code True} in case DR is required.
+     */
+    public boolean conflictNeedResolve() {
+        return conflictRslvr != null;
+    }
+
+    /**
+     * Resolve DR conflict.
+     *
+     * @param oldEntry Old entry.
+     * @param newEntry New entry.
+     * @param atomicVerComp Whether to use atomic version comparator.
+     * @return Conflict resolution result.
+     * @throws IgniteCheckedException In case of exception.
+     */
+    public GridCacheVersionConflictContext<K, V> conflictResolve(GridCacheVersionedEntryEx<K, V> oldEntry,
+        GridCacheVersionedEntryEx<K, V> newEntry, boolean atomicVerComp) throws IgniteCheckedException {
+        assert conflictRslvr != null : "Should not reach this place.";
+
+        GridCacheVersionConflictContext<K, V> ctx = conflictRslvr.resolve(oldEntry, newEntry, atomicVerComp);
+
+        if (ctx.isManualResolve())
+            drMgr.onReceiveCacheConflictResolved(ctx.isUseNew(), ctx.isUseOld(), ctx.isMerge());
+
+        return ctx;
+    }
+
+    /**
+     * @return Data center ID.
+     */
+    public byte dataCenterId() {
+        return dr().dataCenterId();
+    }
+
+    /**
+     * @param entry Entry.
+     * @param ver Version.
+     */
+    public void onDeferredDelete(GridCacheEntryEx entry, GridCacheVersion ver) {
+        assert entry != null;
+        assert !Thread.holdsLock(entry);
+        assert ver != null;
+        assert deferredDelete();
+
+        cache.onDeferredDelete(entry, ver);
+    }
+
+    /**
+     * @param interceptorRes Result of {@link CacheInterceptor#onBeforeRemove} callback.
+     * @return {@code True} if interceptor cancels remove.
+     */
+    public boolean cancelRemove(@Nullable IgniteBiTuple<Boolean, ?> interceptorRes) {
+        if (interceptorRes != null) {
+            if (interceptorRes.get1() == null) {
+                U.warn(log, "CacheInterceptor must not return null as cancellation flag value from " +
+                    "'onBeforeRemove' method.");
+
+                return false;
+            }
+            else
+                return interceptorRes.get1();
+        }
+        else {
+            U.warn(log, "CacheInterceptor must not return null from 'onBeforeRemove' method.");
+
+            return false;
         }
     }
 
-    public void throwException(final String message) {
-        throw new RuntimeParserException(message, currentASTNode);
+    /**
+     * @return Portable processor.
+     */
+    public IgniteCacheObjectProcessor cacheObjects() {
+        return kernalContext().cacheObjects();
+    }
+
+    /**
+     * @return Keep portable flag.
+     */
+    public boolean keepPortable() {
+        GridCacheProjectionImpl<K, V> prj = projectionPerCall();
+
+        return prj != null && prj.isKeepPortable();
+    }
+
+    /**
+     * @return {@code True} if OFFHEAP_TIERED memory mode is enabled.
+     */
+    public boolean offheapTiered() {
+        return cacheCfg.getMemoryMode() == OFFHEAP_TIERED && isOffHeapEnabled();
+    }
+
+    /**
+     * Converts temporary offheap object to heap-based.
+     *
+     * @param obj Object.
+     * @return Heap-based object.
+     */
+    @Nullable public <T> T unwrapTemporary(@Nullable Object obj) {
+        if (!offheapTiered())
+            return (T)obj;
+
+        return (T) cacheObjects().unwrapTemporary(this, obj);
+    }
+
+    /**
+     * Unwraps collection.
+     *
+     * @param col Collection to unwrap.
+     * @param keepPortable Keep portable flag.
+     * @return Unwrapped collection.
+     */
+    public Collection<Object> unwrapPortablesIfNeeded(Collection<Object> col, boolean keepPortable) {
+        return cacheObjCtx.unwrapPortablesIfNeeded(col, keepPortable);
+    }
+
+    /**
+     * Unwraps object for portables.
+     *
+     * @param o Object to unwrap.
+     * @param keepPortable Keep portable flag.
+     * @return Unwrapped object.
+     */
+    @SuppressWarnings("IfMayBeConditional")
+    public Object unwrapPortableIfNeeded(Object o, boolean keepPortable) {
+        return cacheObjCtx.unwrapPortableIfNeeded(o, keepPortable);
+    }
+
+    /**
+     * @return Cache object context.
+     */
+    public CacheObjectContext cacheObjectContext() {
+        return cacheObjCtx;
+    }
+
+    /**
+     * @param obj Object.
+     * @return Cache object.
+     */
+    @Nullable public CacheObject toCacheObject(@Nullable Object obj) {
+        return cacheObjects().toCacheObject(cacheObjCtx, obj, true);
+    }
+
+    /**
+     * @param obj Object.
+     * @return Cache key object.
+     */
+    public KeyCacheObject toCacheKeyObject(Object obj) {
+        return cacheObjects().toCacheKeyObject(cacheObjCtx, obj, true);
+    }
+
+    /**
+     * @param bytes Bytes.
+     * @return Cache key object.
+     * @throws IgniteCheckedException If failed.
+     */
+    public KeyCacheObject toCacheKeyObject(byte[] bytes) throws IgniteCheckedException {
+        Object obj = ctx.cacheObjects().unmarshal(cacheObjCtx, bytes, deploy().localLoader());
+
+        return cacheObjects().toCacheKeyObject(cacheObjCtx, obj, false);
+    }
+
+    /**
+     * @param type Type.
+     * @param bytes Bytes.
+     * @param clsLdrId Class loader ID.
+     * @return Cache object.
+     * @throws IgniteCheckedException If failed.
+     */
+    @Nullable public CacheObject unswapCacheObject(byte type, byte[] bytes, @Nullable IgniteUuid clsLdrId)
+        throws IgniteCheckedException
+    {
+        if (ctx.config().isPeerClassLoadingEnabled() && type != CacheObject.TYPE_BYTE_ARR) {
+            ClassLoader ldr = clsLdrId != null ? deploy().getClassLoader(clsLdrId) : deploy().localLoader();
+
+            if (ldr == null)
+                return null;
+
+            return ctx.cacheObjects().toCacheObject(cacheObjCtx,
+                ctx.cacheObjects().unmarshal(cacheObjCtx, bytes, ldr),
+                false);
+        }
+
+        return ctx.cacheObjects().toCacheObject(cacheObjCtx, type, bytes);
+    }
+
+    /**
+     * @param valPtr Value pointer.
+     * @param tmp If {@code true} can return temporary instance which is valid while entry lock is held.
+     * @return Cache object.
+     * @throws IgniteCheckedException If failed.
+     */
+    public CacheObject fromOffheap(long valPtr, boolean tmp) throws IgniteCheckedException {
+        assert config().getMemoryMode() == OFFHEAP_TIERED || config().getMemoryMode() == OFFHEAP_VALUES;
+        assert valPtr != 0;
+
+        return ctx.cacheObjects().toCacheObject(this, valPtr, tmp);
+    }
+
+    /**
+     * @param map Map.
+     * @param key Key.
+     * @param val Value.
+     * @param skipVals Skip values flag.
+     * @param keepCacheObjects Keep cache objects flag.
+     * @param deserializePortable Deserialize portable flag.
+     * @param cpy Copy flag.
+     */
+    @SuppressWarnings("unchecked")
+    public <K1, V1> void addResult(Map<K1, V1> map,
+        KeyCacheObject key,
+        CacheObject val,
+        boolean skipVals,
+        boolean keepCacheObjects,
+        boolean deserializePortable,
+        boolean cpy) {
+        assert key != null;
+        assert val != null;
+
+        if (!keepCacheObjects) {
+            Object key0 = key.value(cacheObjCtx, false);
+            Object val0 = skipVals ? true : val.value(cacheObjCtx, cpy);
+
+            if (deserializePortable) {
+                key0 = unwrapPortableIfNeeded(key0, false);
+
+                if (!skipVals)
+                    val0 = unwrapPortableIfNeeded(val0, false);
+            }
+
+            assert key0 != null : key;
+            assert val0 != null : val;
+
+            map.put((K1)key0, (V1)val0);
+        }
+        else
+            map.put((K1)key, (V1)(skipVals ? true : val));
+    }
+
+    /**
+     * Nulling references to potentially leak-prone objects.
+     */
+    public void cleanup() {
+        cache = null;
+        cacheCfg = null;
+        evictMgr = null;
+        qryMgr = null;
+        dataStructuresMgr = null;
+        cacheObjCtx = null;
+
+        mgrs.clear();
+    }
+
+    /**
+     * Print memory statistics of all cache managers.
+     *
+     * NOTE: this method is for testing and profiling purposes only.
+     */
+    public void printMemoryStats() {
+        X.println(">>> ");
+        X.println(">>> Cache memory stats [grid=" + ctx.gridName() + ", cache=" + name() + ']');
+
+        cache().printMemoryStats();
+
+        Collection<GridCacheManager> printed = new LinkedList<>();
+
+        for (GridCacheManager mgr : managers()) {
+            mgr.printMemoryStats();
+
+            printed.add(mgr);
+        }
+
+        if (isNear())
+            for (GridCacheManager mgr : near().dht().context().managers())
+                if (!printed.contains(mgr))
+                    mgr.printMemoryStats();
+    }
+
+    /**
+     * @param keys Keys.
+     * @return Co
+     */
+    public Collection<KeyCacheObject> cacheKeysView(Collection<?> keys) {
+        return F.viewReadOnly(keys, new C1<Object, KeyCacheObject>() {
+            @Override public KeyCacheObject apply(Object key) {
+                if (key == null)
+                    throw new NullPointerException("Null key.");
+
+                return toCacheKeyObject(key);
+            }
+        });
+    }
+
+    /** {@inheritDoc} */
+    @Override public void writeExternal(ObjectOutput out) throws IOException {
+        U.writeString(out, gridName());
+        U.writeString(out, namex());
+    }
+
+    /** {@inheritDoc} */
+    @SuppressWarnings({"MismatchedQueryAndUpdateOfCollection"})
+    @Override public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
+        IgniteBiTuple<String, String> t = stash.get();
+
+        t.set1(U.readString(in));
+        t.set2(U.readString(in));
+    }
+
+    /**
+     * Reconstructs object on unmarshalling.
+     *
+     * @return Reconstructed object.
+     * @throws ObjectStreamException Thrown in case of unmarshalling error.
+     */
+    protected Object readResolve() throws ObjectStreamException {
+        try {
+            IgniteBiTuple<String, String> t = stash.get();
+
+            IgniteKernal grid = IgnitionEx.gridx(t.get1());
+
+            GridCacheAdapter<K, V> cache = grid.internalCache(t.get2());
+
+            if (cache == null)
+                throw new IllegalStateException("Failed to find cache for name: " + t.get2());
+
+            return cache.context();
+        }
+        catch (IllegalStateException e) {
+            throw U.withCause(new InvalidObjectException(e.getMessage()), e);
+        }
+        finally {
+            stash.remove();
+        }
+    }
+
+    /** {@inheritDoc} */
+    @Override public String toString() {
+        return "GridCacheContext: " + name();
     }
 }

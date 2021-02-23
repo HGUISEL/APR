@@ -1,0 +1,3323 @@
+,DFJ ID,Rank,orig change info,suggested change info,original change count,suggested change count,Found All Ingredients?
+0,Closure3,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+1,Closure3,2,"insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+insert SwitchCase SwitchStatement
+","insert SingleVariableDeclaration MethodDeclaration
+",3,1,False
+2,Closure3,3,"insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+insert SwitchCase SwitchStatement
+","insert MethodInvocation MethodInvocation
+",3,1,False
+3,Closure3,4,"insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+insert SwitchCase SwitchStatement
+","insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+",3,2,False
+4,Closure3,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+5,Closure3,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+6,Closure3,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+7,Closure3,8,"insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+insert SwitchCase SwitchStatement
+","insert SingleVariableDeclaration MethodDeclaration
+",3,1,False
+8,Closure3,9,"insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+insert SwitchCase SwitchStatement
+",,3,0,False
+9,Closure3,10,"insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+insert SwitchCase SwitchStatement
+","insert MethodInvocation MethodInvocation
+insert SingleVariableDeclaration MethodDeclaration
+",3,2,False
+10,Closure4,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+11,Closure4,2,"delete MethodInvocation IfStatement
+delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+",,4,0,False
+12,Closure4,3,"delete MethodInvocation IfStatement
+delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+","delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+",4,2,False
+13,Closure4,4,"delete MethodInvocation IfStatement
+delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+",,4,0,False
+14,Closure4,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+15,Closure4,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+16,Closure4,7,"delete MethodInvocation IfStatement
+delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+","delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+",4,2,False
+17,Closure4,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+18,Closure4,9,"delete MethodInvocation IfStatement
+delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+",,4,0,False
+19,Closure4,10,"delete MethodInvocation IfStatement
+delete MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+insert MethodInvocation IfStatement
+",,4,0,False
+20,Closure6,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+21,Closure6,2,"delete Block IfStatement
+delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+move Block IfStatement IfStatement
+",,5,0,False
+22,Closure6,3,"delete Block IfStatement
+delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+move Block IfStatement IfStatement
+",,5,0,False
+23,Closure6,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+24,Closure6,5,"delete Block IfStatement
+delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+move Block IfStatement IfStatement
+","insert ReturnStatement Block
+",5,1,False
+25,Closure6,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+26,Closure6,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+27,Closure6,8,"delete Block IfStatement
+delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+move Block IfStatement IfStatement
+","insert ReturnStatement Block
+move Block IfStatement IfStatement
+",5,2,False
+28,Closure6,9,"delete Block IfStatement
+delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+move Block IfStatement IfStatement
+","delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+",5,3,False
+29,Closure6,10,"delete Block IfStatement
+delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+move Block IfStatement IfStatement
+","delete Block IfStatement
+insert ReturnStatement Block
+move Block IfStatement IfStatement
+",5,3,False
+30,Closure10,1,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+31,Closure10,2,"update SimpleName SimpleName
+",,1,0,False
+32,Closure10,3,"update SimpleName SimpleName
+",,1,0,False
+33,Closure10,4,"update SimpleName SimpleName
+",,1,0,False
+34,Closure10,5,"update SimpleName SimpleName
+",,1,0,False
+35,Closure10,6,"update SimpleName SimpleName
+",,1,0,False
+36,Closure10,7,"update SimpleName SimpleName
+",,1,0,False
+37,Closure10,8,"update SimpleName SimpleName
+",,1,0,False
+38,Closure10,9,"update SimpleName SimpleName
+",,1,0,False
+39,Closure10,10,"update SimpleName SimpleName
+",,1,0,False
+40,Closure11,1,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+41,Closure11,2,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+42,Closure11,3,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+43,Closure11,4,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+44,Closure11,5,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+45,Closure11,6,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+46,Closure11,7,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+47,Closure11,8,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+48,Closure11,9,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+49,Closure11,10,"delete IfStatement IfStatement
+move IfStatement IfStatement IfStatement
+",,2,0,False
+50,Closure13,1,"move MethodInvocation Block Block
+",,1,0,False
+51,Closure13,2,"move MethodInvocation Block Block
+",,1,0,False
+52,Closure13,3,"move MethodInvocation Block Block
+",,1,0,False
+53,Closure13,4,"move MethodInvocation Block Block
+","move MethodInvocation Block Block
+",1,1,True
+54,Closure13,5,"move MethodInvocation Block Block
+",,1,0,False
+55,Closure13,6,"move MethodInvocation Block Block
+",,1,0,False
+56,Closure13,7,"move MethodInvocation Block Block
+","move MethodInvocation Block Block
+",1,1,True
+57,Closure13,8,"move MethodInvocation Block Block
+","move MethodInvocation Block Block
+",1,1,True
+58,Closure13,9,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+59,Closure13,10,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+60,Closure14,1,"update QualifiedName QualifiedName
+",,1,0,False
+61,Closure14,2,"update QualifiedName QualifiedName
+",,1,0,False
+62,Closure14,3,"update QualifiedName QualifiedName
+",,1,0,False
+63,Closure14,4,"update QualifiedName QualifiedName
+",,1,0,False
+64,Closure14,5,"update QualifiedName QualifiedName
+",,1,0,False
+65,Closure14,6,"update QualifiedName QualifiedName
+",,1,0,False
+66,Closure14,7,"update QualifiedName QualifiedName
+",,1,0,False
+67,Closure14,8,"update QualifiedName QualifiedName
+",,1,0,False
+68,Closure14,9,"update QualifiedName QualifiedName
+",,1,0,False
+69,Closure14,10,"update QualifiedName QualifiedName
+",,1,0,False
+70,Closure18,1,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+71,Closure18,2,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+72,Closure18,3,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+73,Closure18,4,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+74,Closure18,5,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+75,Closure18,6,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+76,Closure18,7,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+77,Closure18,8,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+78,Closure18,9,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+79,Closure18,10,"delete InfixExpression IfStatement
+move MethodInvocation InfixExpression IfStatement
+",,2,0,False
+80,Closure20,1,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",2,2,True
+81,Closure20,2,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+82,Closure20,3,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+83,Closure20,4,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+84,Closure20,5,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+85,Closure20,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+86,Closure20,7,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+87,Closure20,8,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+88,Closure20,9,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+89,Closure20,10,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+90,Closure31,1,"delete PrefixExpression InfixExpression
+",,1,0,False
+91,Closure31,2,"delete PrefixExpression InfixExpression
+",,1,0,False
+92,Closure31,3,"delete PrefixExpression InfixExpression
+",,1,0,False
+93,Closure31,4,"delete PrefixExpression InfixExpression
+",,1,0,False
+94,Closure31,5,"delete PrefixExpression InfixExpression
+",,1,0,False
+95,Closure31,6,"delete PrefixExpression InfixExpression
+",,1,0,False
+96,Closure31,7,"delete PrefixExpression InfixExpression
+",,1,0,False
+97,Closure31,8,"delete PrefixExpression InfixExpression
+",,1,0,False
+98,Closure31,9,"delete PrefixExpression InfixExpression
+",,1,0,False
+99,Closure31,10,"delete PrefixExpression InfixExpression
+",,1,0,False
+100,Closure38,1,"insert ParenthesizedExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+101,Closure38,2,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+102,Closure38,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+103,Closure38,4,"insert ParenthesizedExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+","insert ParenthesizedExpression InfixExpression
+",2,1,False
+104,Closure38,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+105,Closure38,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+106,Closure38,7,"insert ParenthesizedExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+107,Closure38,8,"insert ParenthesizedExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+108,Closure38,9,"insert ParenthesizedExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+","move InfixExpression InfixExpression InfixExpression
+",2,1,False
+109,Closure38,10,"insert ParenthesizedExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+110,Closure40,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+111,Closure40,2,"delete IfStatement Block
+move MethodInvocation Block Block
+update BooleanLiteral BooleanLiteral
+",,3,0,False
+112,Closure40,3,"delete IfStatement Block
+move MethodInvocation Block Block
+update BooleanLiteral BooleanLiteral
+","delete IfStatement Block
+move MethodInvocation Block Block
+",3,2,False
+113,Closure40,4,"delete IfStatement Block
+move MethodInvocation Block Block
+update BooleanLiteral BooleanLiteral
+","delete IfStatement Block
+move MethodInvocation Block Block
+",3,2,False
+114,Closure40,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+115,Closure40,6,"delete IfStatement Block
+move MethodInvocation Block Block
+update BooleanLiteral BooleanLiteral
+","delete IfStatement Block
+move MethodInvocation Block Block
+",3,2,False
+116,Closure40,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+117,Closure40,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+118,Closure40,9,"delete IfStatement Block
+move MethodInvocation Block Block
+update BooleanLiteral BooleanLiteral
+","delete IfStatement Block
+move MethodInvocation Block Block
+",3,2,False
+119,Closure40,10,"delete IfStatement Block
+move MethodInvocation Block Block
+update BooleanLiteral BooleanLiteral
+","delete IfStatement Block
+",3,1,False
+120,Closure46,1,"delete MethodDeclaration TypeDeclaration
+","delete MethodDeclaration TypeDeclaration
+",1,1,True
+121,Closure46,2,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+122,Closure46,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+123,Closure46,4,"delete MethodDeclaration TypeDeclaration
+",,1,0,False
+124,Closure46,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+125,Closure46,6,"delete MethodDeclaration TypeDeclaration
+",,1,0,False
+126,Closure46,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+127,Closure46,8,"delete MethodDeclaration TypeDeclaration
+",,1,0,False
+128,Closure46,9,"delete MethodDeclaration TypeDeclaration
+",,1,0,False
+129,Closure46,10,"delete MethodDeclaration TypeDeclaration
+",,1,0,False
+130,Closure51,1,"insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+move InfixExpression IfStatement InfixExpression
+",,3,0,False
+131,Closure51,2,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+132,Closure51,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+133,Closure51,4,"insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+",3,2,False
+134,Closure51,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+135,Closure51,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+136,Closure51,7,"insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+",3,2,False
+137,Closure51,8,"insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+move InfixExpression IfStatement InfixExpression
+",,3,0,False
+138,Closure51,9,"insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+",3,2,False
+139,Closure51,10,"insert InfixExpression IfStatement
+insert MethodDeclaration TypeDeclaration
+move InfixExpression IfStatement InfixExpression
+","insert MethodDeclaration TypeDeclaration
+",3,1,False
+140,Closure52,1,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",3,2,False
+141,Closure52,2,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+",,3,0,False
+142,Closure52,3,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+",,3,0,False
+143,Closure52,4,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",3,2,False
+144,Closure52,5,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",3,2,False
+145,Closure52,6,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+","delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+",3,3,True
+146,Closure52,7,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+",,3,0,False
+147,Closure52,8,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+",,3,0,False
+148,Closure52,9,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+",,3,0,False
+149,Closure52,10,"delete ReturnStatement Block
+insert ReturnStatement Block
+move InfixExpression ReturnStatement InfixExpression
+",,3,0,False
+150,Closure55,1,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+",,3,0,False
+151,Closure55,2,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",3,2,False
+152,Closure55,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+153,Closure55,4,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+",,3,0,False
+154,Closure55,5,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",3,2,False
+155,Closure55,6,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",3,2,False
+156,Closure55,7,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+",,3,0,False
+157,Closure55,8,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+",,3,0,False
+158,Closure55,9,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+",,3,0,False
+159,Closure55,10,"delete ReturnStatement Block
+insert ReturnStatement Block
+move MethodInvocation ReturnStatement InfixExpression
+",,3,0,False
+160,Closure57,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+161,Closure57,2,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+162,Closure57,3,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+163,Closure57,4,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+164,Closure57,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+165,Closure57,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+166,Closure57,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+167,Closure57,8,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+168,Closure57,9,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+169,Closure57,10,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+170,Closure59,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+171,Closure59,2,"insert InfixExpression IfStatement
+move MethodInvocation IfStatement InfixExpression
+","insert InfixExpression IfStatement
+move MethodInvocation IfStatement InfixExpression
+",2,2,True
+172,Closure59,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+173,Closure59,4,"insert InfixExpression IfStatement
+move MethodInvocation IfStatement InfixExpression
+",,2,0,False
+174,Closure59,5,"insert InfixExpression IfStatement
+move MethodInvocation IfStatement InfixExpression
+",,2,0,False
+175,Closure59,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+176,Closure59,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+177,Closure59,8,"insert InfixExpression IfStatement
+move MethodInvocation IfStatement InfixExpression
+",,2,0,False
+178,Closure59,9,"insert InfixExpression IfStatement
+move MethodInvocation IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+179,Closure59,10,"insert InfixExpression IfStatement
+move MethodInvocation IfStatement InfixExpression
+",,2,0,False
+180,Closure62,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+181,Closure62,2,"update InfixExpression InfixExpression
+",,1,0,False
+182,Closure62,3,"update InfixExpression InfixExpression
+",,1,0,False
+183,Closure62,4,"update InfixExpression InfixExpression
+",,1,0,False
+184,Closure62,5,"update InfixExpression InfixExpression
+",,1,0,False
+185,Closure62,6,"update InfixExpression InfixExpression
+",,1,0,False
+186,Closure62,7,"update InfixExpression InfixExpression
+",,1,0,False
+187,Closure62,8,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+188,Closure62,9,"update InfixExpression InfixExpression
+",,1,0,False
+189,Closure62,10,"update InfixExpression InfixExpression
+",,1,0,False
+190,Closure65,1,"update StringLiteral StringLiteral
+",,1,0,False
+191,Closure65,2,"update StringLiteral StringLiteral
+",,1,0,False
+192,Closure65,3,"update StringLiteral StringLiteral
+",,1,0,False
+193,Closure65,4,"update StringLiteral StringLiteral
+","update StringLiteral StringLiteral
+",1,1,True
+194,Closure65,5,"update StringLiteral StringLiteral
+",,1,0,False
+195,Closure65,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+196,Closure65,7,"update StringLiteral StringLiteral
+",,1,0,False
+197,Closure65,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+198,Closure65,9,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+199,Closure65,10,"update StringLiteral StringLiteral
+",,1,0,False
+200,Closure67,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+201,Closure67,2,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+202,Closure67,3,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+203,Closure67,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+204,Closure67,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+205,Closure67,6,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+206,Closure67,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+207,Closure67,8,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+208,Closure67,9,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+209,Closure67,10,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+210,Closure70,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+211,Closure70,2,"update BooleanLiteral BooleanLiteral
+",,1,0,False
+212,Closure70,3,"update BooleanLiteral BooleanLiteral
+",,1,0,False
+213,Closure70,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+214,Closure70,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+215,Closure70,6,"update BooleanLiteral BooleanLiteral
+",,1,0,False
+216,Closure70,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+217,Closure70,8,"update BooleanLiteral BooleanLiteral
+",,1,0,False
+218,Closure70,9,"update BooleanLiteral BooleanLiteral
+",,1,0,False
+219,Closure70,10,"update BooleanLiteral BooleanLiteral
+",,1,0,False
+220,Closure71,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+221,Closure71,2,"delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+",,2,0,False
+222,Closure71,3,"delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+","delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+",2,2,True
+223,Closure71,4,"delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+","delete MethodInvocation InfixExpression
+",2,1,False
+224,Closure71,5,"delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+",,2,0,False
+225,Closure71,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+226,Closure71,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+227,Closure71,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+228,Closure71,9,"delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+",,2,0,False
+229,Closure71,10,"delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+","delete MethodInvocation InfixExpression
+insert InfixExpression InfixExpression
+",2,2,True
+230,Closure73,1,"update InfixExpression InfixExpression
+",,1,0,False
+231,Closure73,2,"update InfixExpression InfixExpression
+",,1,0,False
+232,Closure73,3,"update InfixExpression InfixExpression
+",,1,0,False
+233,Closure73,4,"update InfixExpression InfixExpression
+",,1,0,False
+234,Closure73,5,"update InfixExpression InfixExpression
+",,1,0,False
+235,Closure73,6,"update InfixExpression InfixExpression
+",,1,0,False
+236,Closure73,7,"update InfixExpression InfixExpression
+",,1,0,False
+237,Closure73,8,"update InfixExpression InfixExpression
+",,1,0,False
+238,Closure73,9,"update InfixExpression InfixExpression
+",,1,0,False
+239,Closure73,10,"update InfixExpression InfixExpression
+",,1,0,False
+240,Closure78,1,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+","delete Block IfStatement
+insert Block IfStatement
+",4,2,False
+241,Closure78,2,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+","delete Block IfStatement
+insert Block IfStatement
+move Block IfStatement IfStatement
+",4,3,False
+242,Closure78,3,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+",,4,0,False
+243,Closure78,4,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+",,4,0,False
+244,Closure78,5,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+",,4,0,False
+245,Closure78,6,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+","delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+",4,4,True
+246,Closure78,7,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+","delete MethodInvocation Block
+",4,1,False
+247,Closure78,8,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+","delete MethodInvocation Block
+",4,1,False
+248,Closure78,9,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+",,4,0,False
+249,Closure78,10,"delete Block IfStatement
+delete MethodInvocation Block
+insert Block IfStatement
+move Block IfStatement IfStatement
+","delete MethodInvocation Block
+",4,1,False
+250,Closure86,1,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+251,Closure86,2,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+252,Closure86,3,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+253,Closure86,4,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+254,Closure86,5,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+255,Closure86,6,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+256,Closure86,7,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+257,Closure86,8,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+258,Closure86,9,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+259,Closure86,10,"delete ReturnStatement SwitchCase
+insert ReturnStatement SwitchCase
+",,2,0,False
+260,Closure92,1,"update SimpleName SimpleName
+",,1,0,False
+261,Closure92,2,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+262,Closure92,3,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+263,Closure92,4,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+264,Closure92,5,"update SimpleName SimpleName
+",,1,0,False
+265,Closure92,6,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+266,Closure92,7,"update SimpleName SimpleName
+",,1,0,False
+267,Closure92,8,"update SimpleName SimpleName
+",,1,0,False
+268,Closure92,9,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+269,Closure92,10,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+270,Closure97,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+271,Closure97,2,,,0,0,True
+272,Closure97,3,,,0,0,True
+273,Closure97,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+274,Closure97,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+275,Closure97,6,,,0,0,True
+276,Closure97,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+277,Closure97,8,,,0,0,True
+278,Closure97,9,,,0,0,True
+279,Closure97,10,,,0,0,True
+280,Closure101,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+281,Closure101,2,"delete IfStatement Block
+insert QualifiedName Assignment
+move Assignment Block Block
+",,3,0,False
+282,Closure101,3,"delete IfStatement Block
+insert QualifiedName Assignment
+move Assignment Block Block
+","delete IfStatement Block
+move Assignment Block Block
+",3,2,False
+283,Closure101,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+284,Closure101,5,"delete IfStatement Block
+insert QualifiedName Assignment
+move Assignment Block Block
+","delete IfStatement Block
+",3,1,False
+285,Closure101,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+286,Closure101,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+287,Closure101,8,"delete IfStatement Block
+insert QualifiedName Assignment
+move Assignment Block Block
+","delete IfStatement Block
+move Assignment Block Block
+",3,2,False
+288,Closure101,9,"delete IfStatement Block
+insert QualifiedName Assignment
+move Assignment Block Block
+","delete IfStatement Block
+move Assignment Block Block
+",3,2,False
+289,Closure101,10,"delete IfStatement Block
+insert QualifiedName Assignment
+move Assignment Block Block
+","delete IfStatement Block
+",3,1,False
+290,Closure102,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+291,Closure102,2,"move IfStatement Block Block
+",,1,0,False
+292,Closure102,3,"move IfStatement Block Block
+","move IfStatement Block Block
+",1,1,True
+293,Closure102,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+294,Closure102,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+295,Closure102,6,"move IfStatement Block Block
+","move IfStatement Block Block
+",1,1,True
+296,Closure102,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+297,Closure102,8,"move IfStatement Block Block
+","move IfStatement Block Block
+",1,1,True
+298,Closure102,9,"move IfStatement Block Block
+",,1,0,False
+299,Closure102,10,"move IfStatement Block Block
+","move IfStatement Block Block
+",1,1,True
+300,Closure104,1,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+","delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",2,2,True
+301,Closure104,2,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+","delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",2,2,True
+302,Closure104,3,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+","delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",2,2,True
+303,Closure104,4,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+","delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",2,2,True
+304,Closure104,5,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",,2,0,False
+305,Closure104,6,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",,2,0,False
+306,Closure104,7,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",,2,0,False
+307,Closure104,8,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+","delete InfixExpression IfStatement
+",2,1,False
+308,Closure104,9,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",,2,0,False
+309,Closure104,10,"delete InfixExpression IfStatement
+insert PrefixExpression IfStatement
+",,2,0,False
+310,Closure111,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+311,Closure111,2,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+312,Closure111,3,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+313,Closure111,4,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+314,Closure111,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+315,Closure111,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+316,Closure111,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+317,Closure111,8,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+318,Closure111,9,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+319,Closure111,10,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+320,Closure113,1,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+321,Closure113,2,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+322,Closure113,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+323,Closure113,4,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+324,Closure113,5,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+325,Closure113,6,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+326,Closure113,7,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+327,Closure113,8,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+328,Closure113,9,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+329,Closure113,10,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",2,2,True
+330,Closure114,1,"insert IfStatement IfStatement
+move Block IfStatement IfStatement
+","move Block IfStatement IfStatement
+",2,1,False
+331,Closure114,2,"insert IfStatement IfStatement
+move Block IfStatement IfStatement
+",,2,0,False
+332,Closure114,3,"insert IfStatement IfStatement
+move Block IfStatement IfStatement
+",,2,0,False
+333,Closure114,4,"insert IfStatement IfStatement
+move Block IfStatement IfStatement
+",,2,0,False
+334,Closure114,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+335,Closure114,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+336,Closure114,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+337,Closure114,8,"insert IfStatement IfStatement
+move Block IfStatement IfStatement
+","move Block IfStatement IfStatement
+",2,1,False
+338,Closure114,9,"insert IfStatement IfStatement
+move Block IfStatement IfStatement
+","move Block IfStatement IfStatement
+",2,1,False
+339,Closure114,10,"insert IfStatement IfStatement
+move Block IfStatement IfStatement
+","move Block IfStatement IfStatement
+",2,1,False
+340,Closure115,1,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,2,False
+341,Closure115,2,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete VariableDeclarationStatement Block
+",3,1,False
+342,Closure115,3,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete VariableDeclarationStatement Block
+",3,1,False
+343,Closure115,4,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,2,False
+344,Closure115,5,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,2,False
+345,Closure115,6,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,2,False
+346,Closure115,7,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,2,False
+347,Closure115,8,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,2,False
+348,Closure115,9,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+",,3,0,False
+349,Closure115,10,"delete IfStatement Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+",,3,0,False
+350,Closure123,1,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+351,Closure123,2,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+352,Closure123,3,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+","delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",2,2,True
+353,Closure123,4,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+354,Closure123,5,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+355,Closure123,6,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+356,Closure123,7,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+357,Closure123,8,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+358,Closure123,9,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+","delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",2,2,True
+359,Closure123,10,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,2,0,False
+360,Closure125,1,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+361,Closure125,2,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+362,Closure125,3,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+363,Closure125,4,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",2,2,True
+364,Closure125,5,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",2,2,True
+365,Closure125,6,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+366,Closure125,7,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+367,Closure125,8,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+368,Closure125,9,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+369,Closure125,10,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+370,Closure126,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+371,Closure126,2,"delete IfStatement Block
+",,1,0,False
+372,Closure126,3,"delete IfStatement Block
+","delete IfStatement Block
+",1,1,True
+373,Closure126,4,"delete IfStatement Block
+","delete IfStatement Block
+",1,1,True
+374,Closure126,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+375,Closure126,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+376,Closure126,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+377,Closure126,8,"delete IfStatement Block
+","delete IfStatement Block
+",1,1,True
+378,Closure126,9,"delete IfStatement Block
+","delete IfStatement Block
+",1,1,True
+379,Closure126,10,"delete IfStatement Block
+","delete IfStatement Block
+",1,1,True
+380,Closure130,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+381,Closure130,2,"insert InfixExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+382,Closure130,3,"insert InfixExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+","insert InfixExpression InfixExpression
+",2,1,False
+383,Closure130,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+384,Closure130,5,"insert InfixExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+385,Closure130,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+386,Closure130,7,"insert InfixExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+387,Closure130,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+388,Closure130,9,"insert InfixExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+",,2,0,False
+389,Closure130,10,"insert InfixExpression InfixExpression
+move InfixExpression InfixExpression InfixExpression
+","insert InfixExpression InfixExpression
+",2,1,False
+390,Closure131,1,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+",,6,0,False
+391,Closure131,2,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+",,6,0,False
+392,Closure131,3,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+","insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+",6,2,False
+393,Closure131,4,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+",,6,0,False
+394,Closure131,5,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+",,6,0,False
+395,Closure131,6,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+","insert InfixExpression IfStatement
+",6,1,False
+396,Closure131,7,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+","insert InfixExpression IfStatement
+",6,1,False
+397,Closure131,8,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+",,6,0,False
+398,Closure131,9,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+399,Closure131,10,"insert InfixExpression IfStatement
+insert InfixExpression IfStatement
+insert MethodInvocation InfixExpression
+move InfixExpression IfStatement InfixExpression
+move PrefixExpression IfStatement InfixExpression
+move PrefixExpression InfixExpression InfixExpression
+","insert InfixExpression IfStatement
+",6,1,False
+400,Closure132,1,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+401,Closure132,2,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+402,Closure132,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+403,Closure132,4,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+404,Closure132,5,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+405,Closure132,6,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+406,Closure132,7,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+407,Closure132,8,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+408,Closure132,9,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+409,Closure132,10,"insert ParenthesizedExpression InfixExpression
+",,1,0,False
+410,Lang6,1,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+411,Lang6,2,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+412,Lang6,3,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+413,Lang6,4,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+414,Lang6,5,"update SimpleName SimpleName
+",,1,0,False
+415,Lang6,6,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+416,Lang6,7,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+417,Lang6,8,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+418,Lang6,9,"update SimpleName SimpleName
+",,1,0,False
+419,Lang6,10,"update SimpleName SimpleName
+",,1,0,False
+420,Lang7,1,"delete IfStatement Block
+insert IfStatement Block
+","delete IfStatement Block
+insert IfStatement Block
+",2,2,True
+421,Lang7,2,"delete IfStatement Block
+insert IfStatement Block
+","delete IfStatement Block
+insert IfStatement Block
+",2,2,True
+422,Lang7,3,"delete IfStatement Block
+insert IfStatement Block
+","delete IfStatement Block
+insert IfStatement Block
+",2,2,True
+423,Lang7,4,"delete IfStatement Block
+insert IfStatement Block
+","delete IfStatement Block
+insert IfStatement Block
+",2,2,True
+424,Lang7,5,"delete IfStatement Block
+insert IfStatement Block
+",,2,0,False
+425,Lang7,6,"delete IfStatement Block
+insert IfStatement Block
+","delete IfStatement Block
+insert IfStatement Block
+",2,2,True
+426,Lang7,7,"delete IfStatement Block
+insert IfStatement Block
+",,2,0,False
+427,Lang7,8,"delete IfStatement Block
+insert IfStatement Block
+","delete IfStatement Block
+insert IfStatement Block
+",2,2,True
+428,Lang7,9,"delete IfStatement Block
+insert IfStatement Block
+","delete IfStatement Block
+insert IfStatement Block
+",2,2,True
+429,Lang7,10,"delete IfStatement Block
+insert IfStatement Block
+",,2,0,False
+430,Lang10,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+431,Lang10,2,"delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+",,3,0,False
+432,Lang10,3,"delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,3,True
+433,Lang10,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+434,Lang10,5,"delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,3,True
+435,Lang10,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+436,Lang10,7,"delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,2,False
+437,Lang10,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+438,Lang10,9,"delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,3,True
+439,Lang10,10,"delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+","delete Assignment Block
+delete IfStatement Block
+delete VariableDeclarationStatement Block
+",3,3,True
+440,Lang16,1,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+441,Lang16,2,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+442,Lang16,3,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+443,Lang16,4,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+444,Lang16,5,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+445,Lang16,6,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+","insert MethodInvocation InfixExpression
+",2,1,False
+446,Lang16,7,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+","insert MethodInvocation InfixExpression
+",2,1,False
+447,Lang16,8,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+448,Lang16,9,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+449,Lang16,10,"insert MethodInvocation InfixExpression
+insert MethodInvocation InfixExpression
+",,2,0,False
+450,Lang21,1,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+451,Lang21,2,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+452,Lang21,3,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+","update QualifiedName QualifiedName
+",2,1,False
+453,Lang21,4,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+","update QualifiedName QualifiedName
+",2,1,False
+454,Lang21,5,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+455,Lang21,6,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+456,Lang21,7,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+457,Lang21,8,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+458,Lang21,9,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+459,Lang21,10,"update QualifiedName QualifiedName
+update QualifiedName QualifiedName
+",,2,0,False
+460,Lang24,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+461,Lang24,2,"insert PrefixExpression InfixExpression
+",,1,0,False
+462,Lang24,3,"insert PrefixExpression InfixExpression
+",,1,0,False
+463,Lang24,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+464,Lang24,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+465,Lang24,6,"insert PrefixExpression InfixExpression
+",,1,0,False
+466,Lang24,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+467,Lang24,8,"insert PrefixExpression InfixExpression
+",,1,0,False
+468,Lang24,9,"insert PrefixExpression InfixExpression
+",,1,0,False
+469,Lang24,10,"insert PrefixExpression InfixExpression
+",,1,0,False
+470,Lang26,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+471,Lang26,2,"insert SimpleName ClassInstanceCreation
+",,1,0,False
+472,Lang26,3,"insert SimpleName ClassInstanceCreation
+",,1,0,False
+473,Lang26,4,"insert SimpleName ClassInstanceCreation
+",,1,0,False
+474,Lang26,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+475,Lang26,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+476,Lang26,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+477,Lang26,8,"insert SimpleName ClassInstanceCreation
+",,1,0,False
+478,Lang26,9,"insert SimpleName ClassInstanceCreation
+",,1,0,False
+479,Lang26,10,"insert SimpleName ClassInstanceCreation
+",,1,0,False
+480,Lang29,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+481,Lang29,2,"update PrimitiveType PrimitiveType
+",,1,0,False
+482,Lang29,3,"update PrimitiveType PrimitiveType
+",,1,0,False
+483,Lang29,4,"update PrimitiveType PrimitiveType
+",,1,0,False
+484,Lang29,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+485,Lang29,6,"update PrimitiveType PrimitiveType
+",,1,0,False
+486,Lang29,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+487,Lang29,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+488,Lang29,9,"update PrimitiveType PrimitiveType
+","update PrimitiveType PrimitiveType
+",1,1,True
+489,Lang29,10,"update PrimitiveType PrimitiveType
+",,1,0,False
+490,Lang33,1,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+491,Lang33,2,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+492,Lang33,3,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+493,Lang33,4,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+494,Lang33,5,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+495,Lang33,6,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+496,Lang33,7,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+497,Lang33,8,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+498,Lang33,9,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+499,Lang33,10,"insert ConditionalExpression Assignment
+move MethodInvocation Assignment ConditionalExpression
+",,2,0,False
+500,Lang53,1,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+501,Lang53,2,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+502,Lang53,3,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+503,Lang53,4,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+504,Lang53,5,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+505,Lang53,6,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+506,Lang53,7,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+507,Lang53,8,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+508,Lang53,9,"move IfStatement Block Block
+move IfStatement Block Block
+","move IfStatement Block Block
+",2,1,False
+509,Lang53,10,"move IfStatement Block Block
+move IfStatement Block Block
+",,2,0,False
+510,Lang57,1,"delete SimpleName MethodInvocation
+insert MethodInvocation MethodInvocation
+","insert MethodInvocation MethodInvocation
+",2,1,False
+511,Lang57,2,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+512,Lang57,3,"delete SimpleName MethodInvocation
+insert MethodInvocation MethodInvocation
+",,2,0,False
+513,Lang57,4,"delete SimpleName MethodInvocation
+insert MethodInvocation MethodInvocation
+",,2,0,False
+514,Lang57,5,"delete SimpleName MethodInvocation
+insert MethodInvocation MethodInvocation
+","delete SimpleName MethodInvocation
+insert MethodInvocation MethodInvocation
+",2,2,True
+515,Lang57,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+516,Lang57,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+517,Lang57,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+518,Lang57,9,"delete SimpleName MethodInvocation
+insert MethodInvocation MethodInvocation
+","insert MethodInvocation MethodInvocation
+",2,1,False
+519,Lang57,10,"delete SimpleName MethodInvocation
+insert MethodInvocation MethodInvocation
+","insert MethodInvocation MethodInvocation
+",2,1,False
+520,Lang58,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+521,Lang58,2,"delete InfixExpression InfixExpression
+delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+move InfixExpression InfixExpression InfixExpression
+move InfixExpression ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+",,6,0,False
+522,Lang58,3,"delete InfixExpression InfixExpression
+delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+move InfixExpression InfixExpression InfixExpression
+move InfixExpression ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+","delete InfixExpression InfixExpression
+delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+",6,3,False
+523,Lang58,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+524,Lang58,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+525,Lang58,6,"delete InfixExpression InfixExpression
+delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+move InfixExpression InfixExpression InfixExpression
+move InfixExpression ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+","delete MethodInvocation InfixExpression
+",6,1,False
+526,Lang58,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+527,Lang58,8,"delete InfixExpression InfixExpression
+delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+move InfixExpression InfixExpression InfixExpression
+move InfixExpression ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+",,6,0,False
+528,Lang58,9,"delete InfixExpression InfixExpression
+delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+move InfixExpression InfixExpression InfixExpression
+move InfixExpression ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+",,6,0,False
+529,Lang58,10,"delete InfixExpression InfixExpression
+delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+move InfixExpression InfixExpression InfixExpression
+move InfixExpression ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+","delete MethodInvocation InfixExpression
+insert InfixExpression ParenthesizedExpression
+move InfixExpression ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+",6,4,False
+530,Lang59,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+531,Lang59,2,,,0,0,True
+532,Lang59,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+533,Lang59,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+534,Lang59,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+535,Lang59,6,,,0,0,True
+536,Lang59,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+537,Lang59,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+538,Lang59,9,,,0,0,True
+539,Lang59,10,,,0,0,True
+540,Lang60,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+541,Lang60,2,"delete QualifiedName InfixExpression
+delete QualifiedName InfixExpression
+insert FieldAccess InfixExpression
+insert SimpleName InfixExpression
+",,4,0,False
+542,Lang60,3,"delete QualifiedName InfixExpression
+delete QualifiedName InfixExpression
+insert FieldAccess InfixExpression
+insert SimpleName InfixExpression
+",,4,0,False
+543,Lang60,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+544,Lang60,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+545,Lang60,6,"delete QualifiedName InfixExpression
+delete QualifiedName InfixExpression
+insert FieldAccess InfixExpression
+insert SimpleName InfixExpression
+",,4,0,False
+546,Lang60,7,"delete QualifiedName InfixExpression
+delete QualifiedName InfixExpression
+insert FieldAccess InfixExpression
+insert SimpleName InfixExpression
+",,4,0,False
+547,Lang60,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+548,Lang60,9,"delete QualifiedName InfixExpression
+delete QualifiedName InfixExpression
+insert FieldAccess InfixExpression
+insert SimpleName InfixExpression
+",,4,0,False
+549,Lang60,10,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+550,Lang61,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+551,Lang61,2,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+552,Lang61,3,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+553,Lang61,4,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+554,Lang61,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+555,Lang61,6,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+556,Lang61,7,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+557,Lang61,8,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+558,Lang61,9,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+559,Lang61,10,"delete QualifiedName InfixExpression
+insert InfixExpression VariableDeclarationFragment
+insert SimpleName InfixExpression
+move InfixExpression VariableDeclarationFragment InfixExpression
+",,4,0,False
+560,Math5,1,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+561,Math5,2,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+562,Math5,3,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+563,Math5,4,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+564,Math5,5,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+565,Math5,6,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+566,Math5,7,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+567,Math5,8,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+568,Math5,9,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+569,Math5,10,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+570,Math9,1,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,3,0,False
+571,Math9,2,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,3,0,False
+572,Math9,3,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,3,0,False
+573,Math9,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+574,Math9,5,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,3,0,False
+575,Math9,6,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+","insert Assignment Block
+",3,1,False
+576,Math9,7,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,3,0,False
+577,Math9,8,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+","insert Assignment Block
+",3,1,False
+578,Math9,9,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+","insert Assignment Block
+",3,1,False
+579,Math9,10,"delete VariableDeclarationFragment VariableDeclarationStatement
+insert Assignment Block
+insert VariableDeclarationFragment VariableDeclarationStatement
+",,3,0,False
+580,Math11,1,"delete InfixExpression MethodInvocation
+insert InfixExpression MethodInvocation
+",,2,0,False
+581,Math11,2,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+582,Math11,3,"delete InfixExpression MethodInvocation
+insert InfixExpression MethodInvocation
+",,2,0,False
+583,Math11,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+584,Math11,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+585,Math11,6,"delete InfixExpression MethodInvocation
+insert InfixExpression MethodInvocation
+",,2,0,False
+586,Math11,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+587,Math11,8,"delete InfixExpression MethodInvocation
+insert InfixExpression MethodInvocation
+",,2,0,False
+588,Math11,9,"delete InfixExpression MethodInvocation
+insert InfixExpression MethodInvocation
+",,2,0,False
+589,Math11,10,"delete InfixExpression MethodInvocation
+insert InfixExpression MethodInvocation
+",,2,0,False
+590,Math24,1,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+591,Math24,2,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",4,2,False
+592,Math24,3,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+593,Math24,4,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+594,Math24,5,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",4,2,False
+595,Math24,6,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+596,Math24,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+597,Math24,8,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+598,Math24,9,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+599,Math24,10,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+600,Math27,1,"delete MethodInvocation ReturnStatement
+insert InfixExpression ReturnStatement
+",,2,0,False
+601,Math27,2,"delete MethodInvocation ReturnStatement
+insert InfixExpression ReturnStatement
+",,2,0,False
+602,Math27,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+603,Math27,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+604,Math27,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+605,Math27,6,"delete MethodInvocation ReturnStatement
+insert InfixExpression ReturnStatement
+",,2,0,False
+606,Math27,7,"delete MethodInvocation ReturnStatement
+insert InfixExpression ReturnStatement
+",,2,0,False
+607,Math27,8,"delete MethodInvocation ReturnStatement
+insert InfixExpression ReturnStatement
+",,2,0,False
+608,Math27,9,"delete MethodInvocation ReturnStatement
+insert InfixExpression ReturnStatement
+",,2,0,False
+609,Math27,10,"delete MethodInvocation ReturnStatement
+insert InfixExpression ReturnStatement
+",,2,0,False
+610,Math30,1,"update PrimitiveType PrimitiveType
+",,1,0,False
+611,Math30,2,"update PrimitiveType PrimitiveType
+",,1,0,False
+612,Math30,3,"update PrimitiveType PrimitiveType
+",,1,0,False
+613,Math30,4,"update PrimitiveType PrimitiveType
+",,1,0,False
+614,Math30,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+615,Math30,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+616,Math30,7,"update PrimitiveType PrimitiveType
+",,1,0,False
+617,Math30,8,"update PrimitiveType PrimitiveType
+",,1,0,False
+618,Math30,9,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+619,Math30,10,"update PrimitiveType PrimitiveType
+",,1,0,False
+620,Math32,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+621,Math32,2,"insert InfixExpression IfStatement
+move CastExpression IfStatement InfixExpression
+",,2,0,False
+622,Math32,3,"insert InfixExpression IfStatement
+move CastExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+623,Math32,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+624,Math32,5,"insert InfixExpression IfStatement
+move CastExpression IfStatement InfixExpression
+",,2,0,False
+625,Math32,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+626,Math32,7,"insert InfixExpression IfStatement
+move CastExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+627,Math32,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+628,Math32,9,"insert InfixExpression IfStatement
+move CastExpression IfStatement InfixExpression
+",,2,0,False
+629,Math32,10,"insert InfixExpression IfStatement
+move CastExpression IfStatement InfixExpression
+",,2,0,False
+630,Math33,1,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+631,Math33,2,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+632,Math33,3,"update SimpleName SimpleName
+",,1,0,False
+633,Math33,4,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+634,Math33,5,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+635,Math33,6,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+636,Math33,7,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+637,Math33,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+638,Math33,9,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+639,Math33,10,"update SimpleName SimpleName
+",,1,0,False
+640,Math34,1,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+641,Math34,2,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+642,Math34,3,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+643,Math34,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+644,Math34,5,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+645,Math34,6,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+646,Math34,7,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+647,Math34,8,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+648,Math34,9,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+649,Math34,10,"delete MethodInvocation ReturnStatement
+insert MethodInvocation ReturnStatement
+",,2,0,False
+650,Math35,1,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+",,4,0,False
+651,Math35,2,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","delete Assignment Block
+",4,1,False
+652,Math35,3,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","delete Assignment Block
+",4,1,False
+653,Math35,4,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","delete Assignment Block
+",4,1,False
+654,Math35,5,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","delete Assignment Block
+",4,1,False
+655,Math35,6,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","delete Assignment Block
+insert MethodInvocation Block
+",4,2,False
+656,Math35,7,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","delete Assignment Block
+insert MethodInvocation Block
+",4,2,False
+657,Math35,8,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","delete Assignment Block
+insert MethodInvocation Block
+",4,2,False
+658,Math35,9,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","insert MethodInvocation Block
+",4,1,False
+659,Math35,10,"delete Assignment Block
+delete Assignment Block
+insert MethodInvocation Block
+insert MethodInvocation Block
+","insert MethodInvocation Block
+",4,1,False
+660,Math41,1,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+661,Math41,2,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+662,Math41,3,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+663,Math41,4,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+664,Math41,5,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+665,Math41,6,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+666,Math41,7,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+667,Math41,8,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+668,Math41,9,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+669,Math41,10,"delete NumberLiteral VariableDeclarationFragment
+delete QualifiedName InfixExpression
+insert InfixExpression InfixExpression
+insert SimpleName VariableDeclarationFragment
+",,4,0,False
+670,Math46,1,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",4,2,False
+671,Math46,2,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+672,Math46,3,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+673,Math46,4,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+674,Math46,5,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+675,Math46,6,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+676,Math46,7,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+677,Math46,8,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+678,Math46,9,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+679,Math46,10,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+680,Math50,1,"delete IfStatement SwitchCase
+",,1,0,False
+681,Math50,2,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+682,Math50,3,"delete IfStatement SwitchCase
+",,1,0,False
+683,Math50,4,"delete IfStatement SwitchCase
+",,1,0,False
+684,Math50,5,"delete IfStatement SwitchCase
+",,1,0,False
+685,Math50,6,"delete IfStatement SwitchCase
+",,1,0,False
+686,Math50,7,"delete IfStatement SwitchCase
+",,1,0,False
+687,Math50,8,"delete IfStatement SwitchCase
+",,1,0,False
+688,Math50,9,"delete IfStatement SwitchCase
+",,1,0,False
+689,Math50,10,"delete IfStatement SwitchCase
+",,1,0,False
+690,Math57,1,"update PrimitiveType PrimitiveType
+",,1,0,False
+691,Math57,2,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+692,Math57,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+693,Math57,4,"update PrimitiveType PrimitiveType
+",,1,0,False
+694,Math57,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+695,Math57,6,"update PrimitiveType PrimitiveType
+",,1,0,False
+696,Math57,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+697,Math57,8,"update PrimitiveType PrimitiveType
+",,1,0,False
+698,Math57,9,"update PrimitiveType PrimitiveType
+",,1,0,False
+699,Math57,10,"update PrimitiveType PrimitiveType
+","update PrimitiveType PrimitiveType
+",1,1,True
+700,Math58,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+701,Math58,2,"delete ClassInstanceCreation MethodInvocation
+",,1,0,False
+702,Math58,3,"delete ClassInstanceCreation MethodInvocation
+","delete ClassInstanceCreation MethodInvocation
+",1,1,True
+703,Math58,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+704,Math58,5,"delete ClassInstanceCreation MethodInvocation
+",,1,0,False
+705,Math58,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+706,Math58,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+707,Math58,8,"delete ClassInstanceCreation MethodInvocation
+",,1,0,False
+708,Math58,9,"delete ClassInstanceCreation MethodInvocation
+",,1,0,False
+709,Math58,10,"delete ClassInstanceCreation MethodInvocation
+","delete ClassInstanceCreation MethodInvocation
+",1,1,True
+710,Math59,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+711,Math59,2,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+712,Math59,3,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+713,Math59,4,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+714,Math59,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+715,Math59,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+716,Math59,7,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+717,Math59,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+718,Math59,9,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+719,Math59,10,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+720,Math63,1,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+721,Math63,2,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+722,Math63,3,"delete ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",2,2,True
+723,Math63,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+724,Math63,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+725,Math63,6,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+726,Math63,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+727,Math63,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+728,Math63,9,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+729,Math63,10,"delete ReturnStatement Block
+insert ReturnStatement Block
+",,2,0,False
+730,Math67,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+731,Math67,2,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+732,Math67,3,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+",,4,0,False
+733,Math67,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+734,Math67,5,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",4,2,False
+735,Math67,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+736,Math67,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+737,Math67,8,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",4,2,False
+738,Math67,9,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",4,2,False
+739,Math67,10,"delete ReturnStatement Block
+delete ReturnStatement Block
+insert ReturnStatement Block
+insert ReturnStatement Block
+","delete ReturnStatement Block
+insert ReturnStatement Block
+",4,2,False
+740,Math69,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+741,Math69,2,"delete ParenthesizedExpression InfixExpression
+insert PrefixExpression MethodInvocation
+move MethodInvocation InfixExpression InfixExpression
+",,3,0,False
+742,Math69,3,"delete ParenthesizedExpression InfixExpression
+insert PrefixExpression MethodInvocation
+move MethodInvocation InfixExpression InfixExpression
+","delete ParenthesizedExpression InfixExpression
+",3,1,False
+743,Math69,4,"delete ParenthesizedExpression InfixExpression
+insert PrefixExpression MethodInvocation
+move MethodInvocation InfixExpression InfixExpression
+",,3,0,False
+744,Math69,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+745,Math69,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+746,Math69,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+747,Math69,8,"delete ParenthesizedExpression InfixExpression
+insert PrefixExpression MethodInvocation
+move MethodInvocation InfixExpression InfixExpression
+","move MethodInvocation InfixExpression InfixExpression
+",3,1,False
+748,Math69,9,"delete ParenthesizedExpression InfixExpression
+insert PrefixExpression MethodInvocation
+move MethodInvocation InfixExpression InfixExpression
+","move MethodInvocation InfixExpression InfixExpression
+",3,1,False
+749,Math69,10,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+750,Math70,1,"insert SimpleName MethodInvocation
+",,1,0,False
+751,Math70,2,"insert SimpleName MethodInvocation
+",,1,0,False
+752,Math70,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+753,Math70,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+754,Math70,5,"insert SimpleName MethodInvocation
+",,1,0,False
+755,Math70,6,"insert SimpleName MethodInvocation
+",,1,0,False
+756,Math70,7,"insert SimpleName MethodInvocation
+","insert SimpleName MethodInvocation
+",1,1,True
+757,Math70,8,"insert SimpleName MethodInvocation
+",,1,0,False
+758,Math70,9,"insert SimpleName MethodInvocation
+",,1,0,False
+759,Math70,10,"insert SimpleName MethodInvocation
+",,1,0,False
+760,Math72,1,"update SimpleName SimpleName
+update SimpleName SimpleName
+",,2,0,False
+761,Math72,2,"update SimpleName SimpleName
+update SimpleName SimpleName
+",,2,0,False
+762,Math72,3,"update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",2,1,False
+763,Math72,4,"update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",2,1,False
+764,Math72,5,"update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",2,1,False
+765,Math72,6,"update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",2,1,False
+766,Math72,7,"update SimpleName SimpleName
+update SimpleName SimpleName
+",,2,0,False
+767,Math72,8,"update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",2,1,False
+768,Math72,9,"update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",2,1,False
+769,Math72,10,"update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",2,1,False
+770,Math75,1,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+771,Math75,2,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+772,Math75,3,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+773,Math75,4,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+774,Math75,5,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+775,Math75,6,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+776,Math75,7,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+777,Math75,8,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+778,Math75,9,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+779,Math75,10,"update SimpleName SimpleName
+","update SimpleName SimpleName
+",1,1,True
+780,Math79,1,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+781,Math79,2,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+782,Math79,3,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+783,Math79,4,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+784,Math79,5,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+785,Math79,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+786,Math79,7,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+787,Math79,8,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+788,Math79,9,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+",,2,0,False
+789,Math79,10,"update PrimitiveType PrimitiveType
+update PrimitiveType PrimitiveType
+","update PrimitiveType PrimitiveType
+",2,1,False
+790,Math80,1,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+791,Math80,2,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+792,Math80,3,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+793,Math80,4,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+794,Math80,5,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+795,Math80,6,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+796,Math80,7,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+797,Math80,8,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+798,Math80,9,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+",,4,0,False
+799,Math80,10,"delete InfixExpression InfixExpression
+insert ParenthesizedExpression InfixExpression
+update InfixExpression InfixExpression
+update NumberLiteral NumberLiteral
+","update InfixExpression InfixExpression
+",4,1,False
+800,Math82,1,"update InfixExpression InfixExpression
+",,1,0,False
+801,Math82,2,"update InfixExpression InfixExpression
+",,1,0,False
+802,Math82,3,"update InfixExpression InfixExpression
+",,1,0,False
+803,Math82,4,"update InfixExpression InfixExpression
+",,1,0,False
+804,Math82,5,"update InfixExpression InfixExpression
+",,1,0,False
+805,Math82,6,"update InfixExpression InfixExpression
+",,1,0,False
+806,Math82,7,"update InfixExpression InfixExpression
+",,1,0,False
+807,Math82,8,"update InfixExpression InfixExpression
+",,1,0,False
+808,Math82,9,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+809,Math82,10,"update InfixExpression InfixExpression
+",,1,0,False
+810,Math85,1,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+811,Math85,2,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+812,Math85,3,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+813,Math85,4,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+814,Math85,5,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+815,Math85,6,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+816,Math85,7,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+817,Math85,8,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+818,Math85,9,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+819,Math85,10,"update InfixExpression InfixExpression
+",,1,0,False
+820,Math91,1,"delete VariableDeclarationStatement Block
+delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+",,4,0,False
+821,Math91,2,"delete VariableDeclarationStatement Block
+delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+","delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+",4,2,False
+822,Math91,3,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+823,Math91,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+824,Math91,5,"delete VariableDeclarationStatement Block
+delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+",,4,0,False
+825,Math91,6,"delete VariableDeclarationStatement Block
+delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+",,4,0,False
+826,Math91,7,"delete VariableDeclarationStatement Block
+delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+","delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+",4,2,False
+827,Math91,8,"delete VariableDeclarationStatement Block
+delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+","delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+",4,2,False
+828,Math91,9,"delete VariableDeclarationStatement Block
+delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+","delete VariableDeclarationStatement Block
+insert VariableDeclarationStatement Block
+",4,2,False
+829,Math91,10,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+830,Math94,1,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+",,4,0,False
+831,Math94,2,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+",,4,0,False
+832,Math94,3,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+",,4,0,False
+833,Math94,4,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+",,4,0,False
+834,Math94,5,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+",,4,0,False
+835,Math94,6,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+",,4,0,False
+836,Math94,7,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+",,4,0,False
+837,Math94,8,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+","insert SimpleName InfixExpression
+",4,1,False
+838,Math94,9,"delete InfixExpression InfixExpression
+insert InfixExpression IfStatement
+insert SimpleName InfixExpression
+move InfixExpression IfStatement ParenthesizedExpression
+","insert SimpleName InfixExpression
+",4,1,False
+839,Math94,10,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+840,Math100,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+841,Math100,2,"update SimpleName SimpleName
+update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",3,1,False
+842,Math100,3,"update SimpleName SimpleName
+update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",3,1,False
+843,Math100,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+844,Math100,5,"update SimpleName SimpleName
+update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",3,1,False
+845,Math100,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+846,Math100,7,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+847,Math100,8,"update SimpleName SimpleName
+update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",3,1,False
+848,Math100,9,"update SimpleName SimpleName
+update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",3,1,False
+849,Math100,10,"update SimpleName SimpleName
+update SimpleName SimpleName
+update SimpleName SimpleName
+","update SimpleName SimpleName
+",3,1,False
+850,Math101,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+851,Math101,2,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+852,Math101,3,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+853,Math101,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+854,Math101,5,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+855,Math101,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+856,Math101,7,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+857,Math101,8,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+","insert InfixExpression IfStatement
+",2,1,False
+858,Math101,9,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+859,Math101,10,"insert InfixExpression IfStatement
+move InfixExpression IfStatement InfixExpression
+",,2,0,False
+860,Math104,1,"update NumberLiteral NumberLiteral
+",,1,0,False
+861,Math104,2,"update NumberLiteral NumberLiteral
+",,1,0,False
+862,Math104,3,"update NumberLiteral NumberLiteral
+",,1,0,False
+863,Math104,4,"update NumberLiteral NumberLiteral
+",,1,0,False
+864,Math104,5,"update NumberLiteral NumberLiteral
+",,1,0,False
+865,Math104,6,"update NumberLiteral NumberLiteral
+",,1,0,False
+866,Math104,7,"update NumberLiteral NumberLiteral
+",,1,0,False
+867,Math104,8,"update NumberLiteral NumberLiteral
+",,1,0,False
+868,Math104,9,"update NumberLiteral NumberLiteral
+",,1,0,False
+869,Math104,10,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+870,Time4,1,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+871,Time4,2,"move SimpleName ClassInstanceCreation ClassInstanceCreation
+",,1,0,False
+872,Time4,3,"move SimpleName ClassInstanceCreation ClassInstanceCreation
+",,1,0,False
+873,Time4,4,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+874,Time4,5,"move SimpleName ClassInstanceCreation ClassInstanceCreation
+",,1,0,False
+875,Time4,6,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+876,Time4,7,"move SimpleName ClassInstanceCreation ClassInstanceCreation
+",,1,0,False
+877,Time4,8,"orig_dummy
+","suggested_dummy
+dummy
+",1,2,False
+878,Time4,9,"move SimpleName ClassInstanceCreation ClassInstanceCreation
+",,1,0,False
+879,Time4,10,"move SimpleName ClassInstanceCreation ClassInstanceCreation
+",,1,0,False
+880,Time16,1,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+881,Time16,2,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+882,Time16,3,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+883,Time16,4,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+884,Time16,5,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+885,Time16,6,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+886,Time16,7,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+887,Time16,8,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+888,Time16,9,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+889,Time16,10,"delete ClassInstanceCreation VariableDeclarationFragment
+insert ClassInstanceCreation VariableDeclarationFragment
+",,2,0,False
+890,Time19,1,"update InfixExpression InfixExpression
+",,1,0,False
+891,Time19,2,"update InfixExpression InfixExpression
+",,1,0,False
+892,Time19,3,"update InfixExpression InfixExpression
+",,1,0,False
+893,Time19,4,"update InfixExpression InfixExpression
+",,1,0,False
+894,Time19,5,"update InfixExpression InfixExpression
+",,1,0,False
+895,Time19,6,"update InfixExpression InfixExpression
+",,1,0,False
+896,Time19,7,"update InfixExpression InfixExpression
+",,1,0,False
+897,Time19,8,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+898,Time19,9,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True
+899,Time19,10,"update InfixExpression InfixExpression
+","update InfixExpression InfixExpression
+",1,1,True

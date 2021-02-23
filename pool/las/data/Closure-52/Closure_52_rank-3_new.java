@@ -1,125 +1,73 @@
-package com.fasterxml.jackson.databind.type;
+package com.fasterxml.jackson.core.exc;
 
-import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.util.RequestPayload;
 
 /**
- * Type that represents Java Collection types (Lists, Sets).
+ * Exception type for read-side problems that are not direct decoding ("parsing")
+ * problems (those would be reported as {@link com.fasterxml.jackson.core.JsonParseException}s),
+ * but rather result from failed attempts to convert specific Java value out of valid
+ * but incompatible input value. One example is numeric coercions where target number type's
+ * range does not allow mapping of too large/too small input value.
+ *
+ * @since 2.10
  */
-public final class CollectionType
-    extends CollectionLikeType
-{
+public class InputCoercionException extends StreamReadException {
     private static final long serialVersionUID = 1L;
 
-    /*
-    /**********************************************************
-    /* Life-cycle
-    /**********************************************************
+    /**
+     * Input token that represents input value that failed to coerce.
      */
-
-    private CollectionType(Class<?> collT, TypeBindings bindings,
-            JavaType superClass, JavaType[] superInts, JavaType elemT,
-            Object valueHandler, Object typeHandler, boolean asStatic)
-    {
-        super(collT, bindings, superClass, superInts, elemT, valueHandler, typeHandler, asStatic);
-    }
+    protected final JsonToken _inputType;
 
     /**
-     * @since 2.7
+     * Target type that input value failed to coerce to.
      */
-    protected CollectionType(TypeBase base, JavaType elemT) {
-        super(base, elemT);
-    }
-
-    /**
-     * @since 2.7
-     */
-    public static CollectionType construct(Class<?> rawType, TypeBindings bindings,
-            JavaType superClass, JavaType[] superInts, JavaType elemT) {
-        return new CollectionType(rawType, bindings, superClass, superInts, elemT,
-                null, null, false);
-    }
-
-    /**
-     * @deprecated Since 2.7, remove from 2.8
-     */
-    @Deprecated // since 2.7
-    public static CollectionType construct(Class<?> rawType, JavaType elemT) {
-        // nominally component types will be just Object.class
-        return new CollectionType(rawType, null,
-                // !!! TODO: Wrong, does have supertypes, but:
-                _bogusSuperClass(rawType), null, elemT,
-                null, null, false);
-    }
-
-    @Override
-    protected JavaType _narrow(Class<?> subclass) {
-        return new CollectionType(subclass, _bindings,
-                _superClass, _superInterfaces, _elementType, null, null, _asStatic);
-    }
-
-    @Override
-    public JavaType withContentType(JavaType contentType) {
-        if (_elementType == contentType) {
-            return this;
-        }
-        return new CollectionType(_class, _bindings, _superClass, _superInterfaces,
-                contentType, _valueHandler, _typeHandler, _asStatic);
-    }
+    protected final Class<?> _targetType;
     
-    @Override
-    public CollectionType withTypeHandler(Object h) {
-        return new CollectionType(_class, _bindings,
-                _superClass, _superInterfaces, _elementType, _valueHandler, h, _asStatic);
-    }
-
-    @Override
-    public CollectionType withContentTypeHandler(Object h)
-    {
-        return new CollectionType(_class, _bindings,
-                _superClass, _superInterfaces, _elementType.withTypeHandler(h),
-                _valueHandler, _typeHandler, _asStatic);
-    }
-
-    @Override
-    public CollectionType withValueHandler(Object h) {
-        return new CollectionType(_class, _bindings,
-                _superClass, _superInterfaces, _elementType, h, _typeHandler, _asStatic);
-    }
-
-    @Override
-    public  CollectionType withContentValueHandler(Object h) {
-        return new CollectionType(_class, _bindings,
-                _superClass, _superInterfaces, _elementType.withValueHandler(h),
-                _valueHandler, _typeHandler, _asStatic);
-    }
-
-    @Override
-    public CollectionType withStaticTyping() {
-        if (_asStatic) {
-            return this;
-        }
-        return new CollectionType(_class, _bindings,
-                _superClass, _superInterfaces, _elementType.withStaticTyping(),
-                _valueHandler, _typeHandler, true);
-    }
-
-    @Override
-    public JavaType refine(Class<?> rawType, TypeBindings bindings,
-            JavaType superClass, JavaType[] superInterfaces) {
-        return new CollectionType(rawType, bindings,
-                superClass, superInterfaces, _elementType,
-                _valueHandler, _typeHandler, _asStatic);
-    }
-
-    /*
-    /**********************************************************
-    /* Standard methods
-    /**********************************************************
+    /**
+     * Constructor that uses current parsing location as location, and
+     * sets processor (accessible via {@link #getProcessor()}) to
+     * specified parser.
      */
+    public InputCoercionException(JsonParser p, String msg,
+            JsonToken inputType, Class<?> targetType) {
+        super(p, msg);
+        _inputType = inputType;
+        _targetType = targetType;
+    }
+
+    /**
+     * Fluent method that may be used to assign originating {@link JsonParser},
+     * to be accessed using {@link #getProcessor()}.
+     *<p>
+     * NOTE: `this` instance is modified and no new instance is constructed.
+     */
+    @Override
+    public InputCoercionException withParser(JsonParser p) {
+        _processor = p;
+        return this;
+    }
 
     @Override
-    public String toString()
-    {
-        return "[collection type; class "+_class.getName()+", contains "+_elementType+"]";
+    public InputCoercionException withRequestPayload(RequestPayload p) {
+        _requestPayload = p;
+        return this;
+    }
+
+    /**
+     * Accessor for getting information about input type (in form of token, giving "shape"
+     * of input) for which coercion failed.
+     */
+    public JsonToken getInputType() {
+        return _inputType;
+    }
+
+    /**
+     * Accessor for getting information about target type (in form of Java {@link java.lang.Class})
+     * for which coercion failed.
+     */
+    public Class<?> getTargetType() {
+        return _targetType;
     }
 }

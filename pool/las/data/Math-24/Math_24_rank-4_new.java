@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,299 +14,399 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.zeppelin.spark;
 
-package org.apache.commons.cli;
+import org.apache.commons.exec.*;
+import org.apache.commons.exec.environment.EnvironmentUtils;
+import org.apache.commons.io.IOUtils;
+import org.apache.spark.SparkRBackend;
+import org.apache.zeppelin.interpreter.InterpreterException;
+import org.apache.zeppelin.interpreter.InterpreterOutput;
+import org.apache.zeppelin.interpreter.util.ProcessLauncher;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
+import java.io.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * The class PosixParser provides an implementation of the 
- * {@link Parser#flatten(Options,String[],boolean) flatten} method.
- *
- * @author John Keyes (john at integralsource.com)
- * @see Parser
- * @version $Revision$
+ * R repl interaction
  */
-public class PosixParser extends Parser {
+public class ZeppelinR {
+  private static Logger LOGGER = LoggerFactory.getLogger(ZeppelinR.class);
 
-    /** holder for flattened tokens */
-    private List tokens = new ArrayList();
+  private final SparkRInterpreter sparkRInterpreter;
+  private final String rCmdPath;
+  private final SparkVersion sparkVersion;
+  private final int timeout;
+  private RProcessLogOutputStream processOutputStream;
+  private final String scriptPath;
+  private final String libPath;
+  static Map<Integer, ZeppelinR> zeppelinR = Collections.synchronizedMap(new HashMap());
+  private final int port;
+  private RProcessLauncher rProcessLauncher;
 
-    /** specifies if bursting should continue */
-    private boolean eatTheRest;
+  /**
+   * Request to R repl
+   */
+  Request rRequestObject = null;
+  Integer rRequestNotifier = new Integer(0);
 
-    /** holder for the current option */
-    private Option currentOption;
+  public void setInterpreterOutput(InterpreterOutput out) {
+    processOutputStream.setInterpreterOutput(out);
+  }
 
-    /** the command line Options */
-    private Options options;
+  /**
+   * Request object
+   *
+   * type : "eval", "set", "get"
+   * stmt : statement to evaluate when type is "eval"
+   *        key when type is "set" or "get"
+   * value : value object when type is "put"
+   */
+  public static class Request {
+    String type;
+    String stmt;
+    Object value;
 
-    /**
-     * Resets the members to their original state i.e. remove
-     * all of <code>tokens</code> entries, set <code>eatTheRest</code>
-     * to false and set <code>currentOption</code> to null.
-     */
-    private void init()
-    {
-        eatTheRest = false;
-        tokens.clear();
-        currentOption = null;
+    public Request(String type, String stmt, Object value) {
+      this.type = type;
+      this.stmt = stmt;
+      this.value = value;
+    }
+
+    public String getType() {
+      return type;
+    }
+
+    public String getStmt() {
+      return stmt;
+    }
+
+    public Object getValue() {
+      return value;
+    }
+  }
+
+  /**
+   * Response from R repl
+   */
+  Object rResponseValue = null;
+  boolean rResponseError = false;
+  Integer rResponseNotifier = new Integer(0);
+
+  /**
+   * Create ZeppelinR instance
+   * @param rCmdPath R repl commandline path
+   * @param libPath sparkr library path
+   */
+  public ZeppelinR(String rCmdPath, String libPath, int sparkRBackendPort,
+      SparkVersion sparkVersion, int timeout, SparkRInterpreter sparkRInterpreter) {
+    this.rCmdPath = rCmdPath;
+    this.libPath = libPath;
+    this.sparkVersion = sparkVersion;
+    this.port = sparkRBackendPort;
+    this.timeout = timeout;
+    this.sparkRInterpreter = sparkRInterpreter;
+    try {
+      File scriptFile = File.createTempFile("zeppelin_sparkr-", ".R");
+      scriptPath = scriptFile.getAbsolutePath();
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  /**
+   * Start R repl
+   * @throws IOException
+   */
+  public void open() throws IOException, InterpreterException {
+    createRScript();
+
+    zeppelinR.put(hashCode(), this);
+
+    CommandLine cmd = CommandLine.parse(rCmdPath);
+    cmd.addArgument("--no-save");
+    cmd.addArgument("--no-restore");
+    cmd.addArgument("-f");
+    cmd.addArgument(scriptPath);
+    cmd.addArgument("--args");
+    cmd.addArgument(Integer.toString(hashCode()));
+    cmd.addArgument(Integer.toString(port));
+    cmd.addArgument(libPath);
+    cmd.addArgument(Integer.toString(sparkVersion.toNumber()));
+    cmd.addArgument(Integer.toString(timeout));
+    if (sparkVersion.isSecretSocketSupported()) {
+      cmd.addArgument(SparkRBackend.socketSecret());
+    }
+    // dump out the R command to facilitate manually running it, e.g. for fault diagnosis purposes
+    LOGGER.info("R Command: " + cmd.toString());
+    processOutputStream = new RProcessLogOutputStream(sparkRInterpreter);
+    Map env = EnvironmentUtils.getProcEnvironment();
+    rProcessLauncher = new RProcessLauncher(cmd, env, processOutputStream);
+    rProcessLauncher.launch();
+    rProcessLauncher.waitForReady(30 * 1000);
+
+    if (!rProcessLauncher.isRunning()) {
+      if (rProcessLauncher.isLaunchTimeout()) {
+        throw new IOException("Launch r process is time out.\n" +
+                rProcessLauncher.getErrorMessage());
+      } else {
+        throw new IOException("Fail to launch r process.\n" +
+                rProcessLauncher.getErrorMessage());
+      }
+    }
+    // flush output
+    eval("cat('')");
+  }
+
+  /**
+   * Evaluate expression
+   * @param expr
+   * @return
+   */
+  public Object eval(String expr) throws InterpreterException {
+    synchronized (this) {
+      rRequestObject = new Request("eval", expr, null);
+      return request();
+    }
+  }
+
+  /**
+   * assign value to key
+   * @param key
+   * @param value
+   */
+  public void set(String key, Object value) throws InterpreterException {
+    synchronized (this) {
+      rRequestObject = new Request("set", key, value);
+      request();
+    }
+  }
+
+  /**
+   * get value of key
+   * @param key
+   * @return
+   */
+  public Object get(String key) throws InterpreterException {
+    synchronized (this) {
+      rRequestObject = new Request("get", key, null);
+      return request();
+    }
+  }
+
+  /**
+   * get value of key, as a string
+   * @param key
+   * @return
+   */
+  public String getS0(String key) throws InterpreterException {
+    synchronized (this) {
+      rRequestObject = new Request("getS", key, null);
+      return (String) request();
+    }
+  }
+
+  private boolean isRProcessInitialized() {
+    return rProcessLauncher != null && rProcessLauncher.isRunning();
+  }
+
+  /**
+   * Send request to r repl and return response
+   * @return responseValue
+   */
+  private Object request() throws RuntimeException {
+    if (!isRProcessInitialized()) {
+      throw new RuntimeException("r repl is not running");
+    }
+
+    rResponseValue = null;
+    synchronized (rRequestNotifier) {
+      rRequestNotifier.notify();
+    }
+
+    Object respValue = null;
+    synchronized (rResponseNotifier) {
+      while (rResponseValue == null && isRProcessInitialized()) {
+        try {
+          rResponseNotifier.wait(1000);
+        } catch (InterruptedException e) {
+          LOGGER.error(e.getMessage(), e);
+        }
+      }
+      respValue = rResponseValue;
+      rResponseValue = null;
+    }
+
+    if (rResponseError) {
+      throw new RuntimeException(respValue.toString());
+    } else {
+      return respValue;
+    }
+  }
+
+  /**
+   * invoked by src/main/resources/R/zeppelin_sparkr.R
+   * @return
+   */
+  public Request getRequest() {
+    synchronized (rRequestNotifier) {
+      while (rRequestObject == null) {
+        try {
+          rRequestNotifier.wait(1000);
+        } catch (InterruptedException e) {
+          LOGGER.error(e.getMessage(), e);
+        }
+      }
+
+      Request req = rRequestObject;
+      rRequestObject = null;
+      return req;
+    }
+  }
+
+  /**
+   * invoked by src/main/resources/R/zeppelin_sparkr.R
+   * @param value
+   * @param error
+   */
+  public void setResponse(Object value, boolean error) {
+    synchronized (rResponseNotifier) {
+      rResponseValue = value;
+      rResponseError = error;
+      rResponseNotifier.notify();
+    }
+  }
+
+  /**
+   * invoked by src/main/resources/R/zeppelin_sparkr.R
+   */
+  public void onScriptInitialized() {
+    rProcessLauncher.initialized();
+  }
+
+  /**
+   * Create R script in tmp dir
+   */
+  private void createRScript() throws InterpreterException {
+    ClassLoader classLoader = getClass().getClassLoader();
+    File out = new File(scriptPath);
+
+    if (out.exists() && out.isDirectory()) {
+      throw new InterpreterException("Can't create r script " + out.getAbsolutePath());
+    }
+
+    try {
+      FileOutputStream outStream = new FileOutputStream(out);
+      IOUtils.copy(
+          classLoader.getResourceAsStream("R/zeppelin_sparkr.R"),
+          outStream);
+      outStream.close();
+    } catch (IOException e) {
+      throw new InterpreterException(e);
+    }
+
+    LOGGER.info("File {} created", scriptPath);
+  }
+
+  /**
+   * Terminate this R repl
+   */
+  public void close() {
+    if (rProcessLauncher != null) {
+      rProcessLauncher.stop();
+    }
+    new File(scriptPath).delete();
+    zeppelinR.remove(hashCode());
+  }
+
+  /**
+   * Get instance
+   * This method will be invoded from zeppelin_sparkr.R
+   * @param hashcode
+   * @return
+   */
+  public static ZeppelinR getZeppelinR(int hashcode) {
+    return zeppelinR.get(hashcode);
+  }
+
+  class RProcessLauncher extends ProcessLauncher {
+
+    public RProcessLauncher(CommandLine commandLine,
+                           Map<String, String> envs,
+                           ProcessLogOutputStream processLogOutput) {
+      super(commandLine, envs, processLogOutput);
+    }
+
+    @Override
+    public void waitForReady(int timeout) {
+      long startTime = System.currentTimeMillis();
+      synchronized (this) {
+        while (state == State.LAUNCHED) {
+          LOGGER.info("Waiting for R process initialized");
+          try {
+            wait(100);
+          } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+          }
+          if ((System.currentTimeMillis() - startTime) > timeout) {
+            onTimeout();
+            break;
+          }
+        }
+      }
+    }
+
+    public void initialized() {
+      synchronized (this) {
+        this.state = State.RUNNING;
+        notify();
+      }
+    }
+  }
+
+  public static class RProcessLogOutputStream extends ProcessLauncher.ProcessLogOutputStream {
+
+    private InterpreterOutput interpreterOutput;
+    private SparkRInterpreter sparkRInterpreter;
+
+    public RProcessLogOutputStream(SparkRInterpreter sparkRInterpreter) {
+      this.sparkRInterpreter = sparkRInterpreter;
     }
 
     /**
-     * <p>An implementation of {@link Parser}'s abstract
-     * {@link Parser#flatten(Options,String[],boolean) flatten} method.</p>
-     *
-     * <p>The following are the rules used by this flatten method.
-     * <ol>
-     *  <li>if <code>stopAtNonOption</code> is <b>true</b> then do not
-     *  burst anymore of <code>arguments</code> entries, just add each
-     *  successive entry without further processing.  Otherwise, ignore
-     *  <code>stopAtNonOption</code>.</li>
-     *  <li>if the current <code>arguments</code> entry is "<b>--</b>"
-     *  just add the entry to the list of processed tokens</li>
-     *  <li>if the current <code>arguments</code> entry is "<b>-</b>"
-     *  just add the entry to the list of processed tokens</li>
-     *  <li>if the current <code>arguments</code> entry is two characters
-     *  in length and the first character is "<b>-</b>" then check if this
-     *  is a valid {@link Option} id.  If it is a valid id, then add the
-     *  entry to the list of processed tokens and set the current {@link Option}
-     *  member.  If it is not a valid id and <code>stopAtNonOption</code>
-     *  is true, then the remaining entries are copied to the list of 
-     *  processed tokens.  Otherwise, the current entry is ignored.</li>
-     *  <li>if the current <code>arguments</code> entry is more than two
-     *  characters in length and the first character is "<b>-</b>" then
-     *  we need to burst the entry to determine its constituents.  For more
-     *  information on the bursting algorithm see 
-     *  {@link PosixParser#burstToken(String, boolean) burstToken}.</li>
-     *  <li>if the current <code>arguments</code> entry is not handled 
-     *  by any of the previous rules, then the entry is added to the list
-     *  of processed tokens.</li>
-     * </ol>
-     * </p>
-     *
-     * @param options The command line {@link Options}
-     * @param arguments The command line arguments to be parsed
-     * @param stopAtNonOption Specifies whether to stop flattening
-     * when an non option is found.
-     * @return The flattened <code>arguments</code> String array.
+     * Redirect r process output to interpreter output.
+     * @param interpreterOutput
      */
-    protected String[] flatten(Options options, String[] arguments, boolean stopAtNonOption)
-    {
-        init();
-        this.options = options;
-
-        // an iterator for the command line tokens
-        Iterator iter = Arrays.asList(arguments).iterator();
-
-        // process each command line token
-        while (iter.hasNext())
-        {
-            // get the next command line token
-            String token = (String) iter.next();
-
-            // handle SPECIAL TOKEN
-            if (token.startsWith("--"))
-            {
-                if (token.indexOf('=') != -1)
-                {
-                    tokens.add(token.substring(0, token.indexOf('=')));
-                    tokens.add(token.substring(token.indexOf('=') + 1, token.length()));
-                }
-                else
-                {
-                    tokens.add(token);
-                }
-            }
-
-            // single hyphen
-            else if ("-".equals(token))
-            {
-                processSingleHyphen(token);
-            }
-            else if (token.startsWith("-"))
-            {
-                int tokenLength = token.length();
-
-                if (tokenLength == 2)
-                {
-                    processOptionToken(token, stopAtNonOption);
-                }
-                else if (options.hasOption(token))
-                {
-                    tokens.add(token);
-                }
-                // requires bursting
-                else
-                {
-                    burstToken(token, stopAtNonOption);
-                }
-            }
-            else
-            {
-                if (stopAtNonOption)
-                {
-                    process(token);
-                }
-                else
-                {
-                    tokens.add(token);
-                }
-            }
-
-            gobble(iter);
-        }
-
-        return (String[]) tokens.toArray(new String[tokens.size()]);
+    public void setInterpreterOutput(InterpreterOutput interpreterOutput) {
+      this.interpreterOutput = interpreterOutput;
     }
 
-    /**
-     * Adds the remaining tokens to the processed tokens list.
-     *
-     * @param iter An iterator over the remaining tokens
-     */
-    private void gobble(Iterator iter)
-    {
-        if (eatTheRest)
-        {
-            while (iter.hasNext())
-            {
-                tokens.add(iter.next());
-            }
+    @Override
+    protected void processLine(String s, int i) {
+      super.processLine(s, i);
+      if (s.contains("Java SparkR backend might have failed") // spark 2.x
+          || s.contains("Execution halted")) { // spark 1.x
+        sparkRInterpreter.getRbackendDead().set(true);
+      }
+      if (interpreterOutput != null) {
+        try {
+          interpreterOutput.write(s);
+        } catch (IOException e) {
+          throw new RuntimeException(e);
         }
+      }
     }
 
-    /**
-     * <p>If there is a current option and it can have an argument
-     * value then add the token to the processed tokens list and 
-     * set the current option to null.</p>
-     *
-     * <p>If there is a current option and it can have argument
-     * values then add the token to the processed tokens list.</p>
-     *
-     * <p>If there is not a current option add the special token
-     * "<b>--</b>" and the current <code>value</code> to the processed
-     * tokens list.  The add all the remaining <code>argument</code>
-     * values to the processed tokens list.</p>
-     *
-     * @param value The current token
-     */
-    private void process(String value)
-    {
-        if (currentOption != null && currentOption.hasArg())
-        {
-            if (currentOption.hasArg())
-            {
-                tokens.add(value);
-                currentOption = null;
-            }
-            else if (currentOption.hasArgs())
-            {
-                tokens.add(value);
-            }
-        }
-        else
-        {
-            eatTheRest = true;
-            tokens.add("--");
-            tokens.add(value);
-        }
+    @Override
+    public void close() throws IOException {
+      super.close();
+      if (interpreterOutput != null) {
+        interpreterOutput.close();
+      }
     }
-
-    /**
-     * If it is a hyphen then add the hyphen directly to
-     * the processed tokens list.
-     *
-     * @param hyphen The hyphen token
-     */
-    private void processSingleHyphen(String hyphen)
-    {
-        tokens.add(hyphen);
-    }
-
-    /**
-     * <p>If an {@link Option} exists for <code>token</code> then
-     * set the current option and add the token to the processed 
-     * list.</p>
-     *
-     * <p>If an {@link Option} does not exist and <code>stopAtNonOption</code>
-     * is set then ignore the current token and add the remaining tokens
-     * to the processed tokens list directly.</p>
-     *
-     * @param token The current option token
-     * @param stopAtNonOption Specifies whether flattening should halt
-     * at the first non option.
-     */
-    private void processOptionToken(String token, boolean stopAtNonOption)
-    {
-        if (this.options.hasOption(token))
-        {
-            currentOption = this.options.getOption(token);
-            tokens.add(token);
-        }
-        else if (stopAtNonOption)
-        {
-            eatTheRest = true;
-        }
-    }
-
-    /**
-     * <p>Breaks <code>token</code> into its constituent parts
-     * using the following algorithm.
-     * <ul>
-     *  <li>ignore the first character ("<b>-</b>")</li>
-     *  <li>foreach remaining character check if an {@link Option}
-     *  exists with that id.</li>
-     *  <li>if an {@link Option} does exist then add that character
-     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
-     *  <li>if the {@link Option} can have an argument value and there 
-     *  are remaining characters in the token then add the remaining 
-     *  characters as a token to the list of processed tokens.</li>
-     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b> 
-     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
-     *  "<b>--</b>" followed by the remaining characters and also 
-     *  the remaining tokens directly to the processed tokens list.</li>
-     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
-     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
-     *  character prepended with "<b>-</b>".</li>
-     * </ul>
-     * </p>
-     *
-     * @param token The current token to be <b>burst</b>
-     * @param stopAtNonOption Specifies whether to stop processing
-     * at the first non-Option encountered.
-     */
-    protected void burstToken(String token, boolean stopAtNonOption)
-    {
-        for (int i = 1; i < token.length(); i++)
-        {
-            String ch = String.valueOf(token.charAt(i));
-
-            if (options.hasOption(ch))
-            {
-                tokens.add("-" + ch);
-                currentOption = options.getOption(ch);
-
-                if (currentOption.hasArg() && (token.length() != (i + 1)))
-                {
-                    tokens.add(token.substring(i + 1));
-
-                    break;
-                }
-            }
-            else if (stopAtNonOption)
-            {
-                process(token.substring(i));
-                break;
-            }
-            else
-            {
-                tokens.add(token);
-                break;
-            }
-        }
-    }
+  }
 }

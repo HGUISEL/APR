@@ -108,27 +108,27 @@ def write_result(trainY, testY, out_file, testX, classifier):
                 #yhat_project = trainY[pred_idx][9]
                 yhat_project = trainY[pred_idx][10] ## Modified by TE, to match the csv format of new_buggy data
 
-                yhat_bic_sha = str(trainY[pred_idx][3])
+                yhat_bic_sha = str(trainY[pred_idx][4])
                 yhat_bic_path = str(trainY[pred_idx][1])
-                yhat_bfc_sha = str(trainY[pred_idx][7])
+                yhat_bfc_sha = str(trainY[pred_idx][8])
                 yhat_bfc_path = str(trainY[pred_idx][5])
 
                 # getting hunks by command line
                 # path is where all the data is
-                yhat_bic_stream = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
-                                    #    +  'git stash ; '
-                                        +  'git checkout -f ' + yhat_bic_sha + ' ; '
-                                        +  'git diff ' + yhat_bic_sha + '~ ' + yhat_bic_path)
-                yhat_bic_hunk = str(yhat_bic_stream.read())
+                # yhat_bic_stream = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
+                #                     #    +  'git stash ; '
+                #                         +  'git checkout -f ' + yhat_bic_sha + ' ; '
+                #                         +  'git diff ' + yhat_bic_sha + '~ ' + yhat_bic_path)
+                # yhat_bic_hunk = str(yhat_bic_stream.read())
 
-                yhat_bfc_stream = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
-                                    #    +  'git stash ; '
-                                        +  'git checkout -f ' + yhat_bfc_sha + ' ; '
-                                        +  'git diff ' + yhat_bfc_sha + '~ ' + yhat_bfc_path)
-                yhat_bfc_hunk = str(yhat_bfc_stream.read())
+                # yhat_bfc_stream = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
+                #                     #    +  'git stash ; '
+                #                         +  'git checkout -f ' + yhat_bfc_sha + ' ; '
+                #                         +  'git diff ' + yhat_bfc_sha + '~ ' + yhat_bfc_path)
+                # yhat_bfc_hunk = str(yhat_bfc_stream.read())
 
-                if len(yhat_bic_hunk) > 30000 or len(yhat_bfc_hunk) > 30000:
-                    is_too_long = True
+                # if len(yhat_bic_hunk) > 30000 or len(yhat_bfc_hunk) > 30000:
+                #     is_too_long = True
 
                 instance = [y_bic_sha, y_bic_path, y_project, y_bugId,
                             j + 1, kneibors[0][i][j], yhat_project,

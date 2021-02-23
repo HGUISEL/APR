@@ -1,553 +1,151 @@
-package org.jsoup.nodes;
+package org.jsoup.parser;
 
-import org.jsoup.helper.StringUtil;
 import org.jsoup.helper.Validate;
-import org.jsoup.parser.Parser;
-import org.jsoup.select.NodeTraversor;
-import org.jsoup.select.NodeVisitor;
+import org.jsoup.nodes.CDataNode;
+import org.jsoup.nodes.Comment;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.DocumentType;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Node;
+import org.jsoup.nodes.TextNode;
+import org.jsoup.nodes.XmlDeclaration;
 
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.ArrayList;
-import java.util.Collections;
+import java.io.Reader;
+import java.io.StringReader;
 import java.util.List;
 
 /**
- The base, abstract Node model. Elements, Documents, Comments etc are all Node instances.
-
- @author Jonathan Hedley, jonathan@hedley.net */
-public abstract class Node implements Cloneable {
-    Node parentNode;
-    List<Node> childNodes;
-    Attributes attributes;
-    String baseUri;
-    int siblingIndex;
-
-    /**
-     Create a new Node.
-     @param baseUri base URI
-     @param attributes attributes (not null, but may be empty)
-     */
-    protected Node(String baseUri, Attributes attributes) {
-        Validate.notNull(baseUri);
-        Validate.notNull(attributes);
-        
-        childNodes = new ArrayList<Node>(4);
-        this.baseUri = baseUri.trim();
-        this.attributes = attributes;
+ * Use the {@code XmlTreeBuilder} when you want to parse XML without any of the HTML DOM rules being applied to the
+ * document.
+ * <p>Usage example: {@code Document xmlDoc = Jsoup.parse(html, baseUrl, Parser.xmlParser());}</p>
+ *
+ * @author Jonathan Hedley
+ */
+public class XmlTreeBuilder extends TreeBuilder {
+    ParseSettings defaultSettings() {
+        return ParseSettings.preserveCase;
     }
 
-    protected Node(String baseUri) {
-        this(baseUri, new Attributes());
+    @Override
+    protected void initialiseParse(Reader input, String baseUri, Parser parser) {
+        super.initialiseParse(input, baseUri, parser);
+        stack.add(doc); // place the document onto the stack. differs from HtmlTreeBuilder (not on stack)
+        doc.outputSettings().syntax(Document.OutputSettings.Syntax.xml);
     }
 
-    /**
-     * Default constructor. Doesn't setup base uri, children, or attributes; use with caution.
-     */
-    protected Node() {
-        childNodes = Collections.emptyList();
-        attributes = null;
+    Document parse(Reader input, String baseUri) {
+        return parse(input, baseUri, new Parser(this));
     }
 
-    /**
-     Get the node name of this node. Use for debugging purposes and not logic switching (for that, use instanceof).
-     @return node name
-     */
-    public abstract String nodeName();
-
-    /**
-     * Get an attribute's value by its key.
-     * <p/>
-     * To get an absolute URL from an attribute that may be a relative URL, prefix the key with <code><b>abs</b></code>,
-     * which is a shortcut to the {@link #absUrl} method.
-     * E.g.: <blockquote><code>String url = a.attr("abs:href");</code></blockquote>
-     * @param attributeKey The attribute key.
-     * @return The attribute, or empty string if not present (to avoid nulls).
-     * @see #attributes()
-     * @see #hasAttr(String)
-     * @see #absUrl(String)
-     */
-    public String attr(String attributeKey) {
-        Validate.notNull(attributeKey);
-
-        if (hasAttr(attributeKey))
-            return attributes.get(attributeKey);
-        else if (attributeKey.toLowerCase().startsWith("abs:"))
-            return absUrl(attributeKey.substring("abs:".length()));
-        else return "";
+    Document parse(String input, String baseUri) {
+        return parse(new StringReader(input), baseUri, new Parser(this));
     }
 
-    /**
-     * Get all of the element's attributes.
-     * @return attributes (which implements iterable, in same order as presented in original HTML).
-     */
-    public Attributes attributes() {
-        return attributes;
+    @Override
+    protected boolean process(Token token) {
+        // start tag, end tag, doctype, comment, character, eof
+        switch (token.type) {
+            case StartTag:
+                insert(token.asStartTag());
+                break;
+            case EndTag:
+                popStackToClose(token.asEndTag());
+                break;
+            case Comment:
+                insert(token.asComment());
+                break;
+            case Character:
+                insert(token.asCharacter());
+                break;
+            case Doctype:
+                insert(token.asDoctype());
+                break;
+            case EOF: // could put some normalisation here if desired
+                break;
+            default:
+                Validate.fail("Unexpected token type: " + token.type);
+        }
+        return true;
     }
 
-    /**
-     * Set an attribute (key=value). If the attribute already exists, it is replaced.
-     * @param attributeKey The attribute key.
-     * @param attributeValue The attribute value.
-     * @return this (for chaining)
-     */
-    public Node attr(String attributeKey, String attributeValue) {
-        attributes.put(attributeKey, attributeValue);
-        return this;
+    private void insertNode(Node node) {
+        currentElement().appendChild(node);
     }
 
-    /**
-     * Test if this element has an attribute.
-     * @param attributeKey The attribute key to check.
-     * @return true if the attribute exists, false if not.
-     */
-    public boolean hasAttr(String attributeKey) {
-        Validate.notNull(attributeKey);
-        return attributes.hasKey(attributeKey);
-    }
-
-    /**
-     * Remove an attribute from this element.
-     * @param attributeKey The attribute to remove.
-     * @return this (for chaining)
-     */
-    public Node removeAttr(String attributeKey) {
-        Validate.notNull(attributeKey);
-        attributes.remove(attributeKey);
-        return this;
-    }
-
-    /**
-     Get the base URI of this node.
-     @return base URI
-     */
-    public String baseUri() {
-        return baseUri;
-    }
-
-    /**
-     Update the base URI of this node.
-     @param baseUri base URI to set
-     */
-    public void setBaseUri(String baseUri) {
-        Validate.notNull(baseUri);
-        this.baseUri = baseUri;
-    }
-
-    /**
-     * Get an absolute URL from a URL attribute that may be relative (i.e. an <code>&lt;a href></code> or
-     * <code>&lt;img src></code>).
-     * <p/>
-     * E.g.: <code>String absUrl = linkEl.absUrl("href");</code>
-     * <p/>
-     * If the attribute value is already absolute (i.e. it starts with a protocol, like
-     * <code>http://</code> or <code>https://</code> etc), and it successfully parses as a URL, the attribute is
-     * returned directly. Otherwise, it is treated as a URL relative to the element's {@link #baseUri}, and made
-     * absolute using that.
-     * <p/>
-     * As an alternate, you can use the {@link #attr} method with the <code>abs:</code> prefix, e.g.:
-     * <code>String absUrl = linkEl.attr("abs:href");</code>
-     *
-     * @param attributeKey The attribute key
-     * @return An absolute URL if one could be made, or an empty string (not null) if the attribute was missing or
-     * could not be made successfully into a URL.
-     * @see #attr
-     * @see java.net.URL#URL(java.net.URL, String)
-     */
-    public String absUrl(String attributeKey) {
-        Validate.notEmpty(attributeKey);
-
-        String relUrl = attr(attributeKey);
-        if (!hasAttr(attributeKey)) {
-            return ""; // nothing to make absolute with
+    Element insert(Token.StartTag startTag) {
+        Tag tag = Tag.valueOf(startTag.name(), settings);
+        // todo: wonder if for xml parsing, should treat all tags as unknown? because it's not html.
+        Element el = new Element(tag, baseUri, settings.normalizeAttributes(startTag.attributes));
+        insertNode(el);
+        if (startTag.isSelfClosing()) {
+            if (!tag.isKnownTag()) // unknown tag, remember this is self closing for output. see above.
+                tag.setSelfClosing();
         } else {
-            URL base;
-            try {
-                try {
-                    base = new URL(baseUri);
-                } catch (MalformedURLException e) {
-                    // the base is unsuitable, but the attribute may be abs on its own, so try that
-                    URL abs = new URL(relUrl);
-                    return abs.toExternalForm();
-                }
-                // workaround: java resolves '//path/file + ?foo' to '//path/?foo', not '//path/file?foo' as desired
-                if (relUrl.startsWith("?"))
-                    relUrl = base.getPath() + relUrl;
-                URL abs = new URL(base, relUrl);
-                return abs.toExternalForm();
-            } catch (MalformedURLException e) {
-                return "";
+            stack.add(el);
+        }
+        return el;
+    }
+
+    void insert(Token.Comment commentToken) {
+        Comment comment = new Comment(commentToken.getData());
+        Node insert = comment;
+        if (commentToken.bogus && comment.isXmlDeclaration()) {
+            // xml declarations are emitted as bogus comments (which is right for html, but not xml)
+            // so we do a bit of a hack and parse the data as an element to pull the attributes out
+            XmlDeclaration decl = comment.asXmlDeclaration(); // else, we couldn't parse it as a decl, so leave as a comment
+            if (decl != null)
+                insert = decl;
+        }
+        insertNode(insert);
+    }
+
+    void insert(Token.Character token) {
+        final String data = token.getData();
+        insertNode(token.isCData() ? new CDataNode(data) : new TextNode(data));
+    }
+
+    void insert(Token.Doctype d) {
+        DocumentType doctypeNode = new DocumentType(settings.normalizeTag(d.getName()), d.getPublicIdentifier(), d.getSystemIdentifier());
+        doctypeNode.setPubSysKey(d.getPubSysKey());
+        insertNode(doctypeNode);
+    }
+
+    /**
+     * If the stack contains an element with this tag's name, pop up the stack to remove the first occurrence. If not
+     * found, skips.
+     *
+     * @param endTag tag to close
+     */
+    private void popStackToClose(Token.EndTag endTag) {
+        String elName = settings.normalizeTag(endTag.tagName);
+        Element firstFound = null;
+
+        for (int pos = stack.size() -1; pos >= 0; pos--) {
+            Element next = stack.get(pos);
+            if (next.nodeName().equals(elName)) {
+                firstFound = next;
+                break;
             }
         }
-    }
+        if (firstFound == null)
+            return; // not found, skip
 
-    /**
-     Get a child node by index
-     @param index index of child node
-     @return the child node at this index.
-     */
-    public Node childNode(int index) {
-        return childNodes.get(index);
-    }
-
-    /**
-     Get this node's children. Presented as an unmodifiable list: new children can not be added, but the child nodes
-     themselves can be manipulated.
-     @return list of children. If no children, returns an empty list.
-     */
-    public List<Node> childNodes() {
-        return Collections.unmodifiableList(childNodes);
-    }
-    
-    protected Node[] childNodesAsArray() {
-        return childNodes.toArray(new Node[childNodes().size()]);
-    }
-
-    /**
-     Gets this node's parent node.
-     @return parent node; or null if no parent.
-     */
-    public Node parent() {
-        return parentNode;
-    }
-    
-    /**
-     * Gets the Document associated with this Node. 
-     * @return the Document associated with this Node, or null if there is no such Document.
-     */
-    public Document ownerDocument() {
-        if (this instanceof Document)
-            return (Document) this;
-        else if (parentNode == null)
-            return null;
-        else
-            return parentNode.ownerDocument();
-    }
-    
-    /**
-     * Remove (delete) this node from the DOM tree. If this node has children, they are also removed.
-     */
-    public void remove() {
-        Validate.notNull(parentNode);
-        parentNode.removeChild(this);
-    }
-
-    /**
-     * Insert the specified HTML into the DOM before this node (i.e. as a preceeding sibling).
-     * @param html HTML to add before this node
-     * @return this node, for chaining
-     * @see #after(String)
-     */
-    public Node before(String html) {
-        addSiblingHtml(siblingIndex(), html);
-        return this;
-    }
-
-    /**
-     * Insert the specified node into the DOM before this node (i.e. as a preceeding sibling).
-     * @param node to add before this node
-     * @return this node, for chaining
-     * @see #after(Node)
-     */
-    public Node before(Node node) {
-        Validate.notNull(node);
-        Validate.notNull(parentNode);
-
-        parentNode.addChildren(siblingIndex(), node);
-        return this;
-    }
-
-    /**
-     * Insert the specified HTML into the DOM after this node (i.e. as a following sibling).
-     * @param html HTML to add after this node
-     * @return this node, for chaining
-     * @see #before(String)
-     */
-    public Node after(String html) {
-        addSiblingHtml(siblingIndex()+1, html);
-        return this;
-    }
-
-    /**
-     * Insert the specified node into the DOM after this node (i.e. as a following sibling).
-     * @param node to add after this node
-     * @return this node, for chaining
-     * @see #before(Node)
-     */
-    public Node after(Node node) {
-        Validate.notNull(node);
-        Validate.notNull(parentNode);
-
-        parentNode.addChildren(siblingIndex()+1, node);
-        return this;
-    }
-
-    private void addSiblingHtml(int index, String html) {
-        Validate.notNull(html);
-        Validate.notNull(parentNode);
-
-        Element context = parent() instanceof Element ? (Element) parent() : null;        
-        List<Node> nodes = Parser.parseFragment(html, context, baseUri());
-        parentNode.addChildren(index, nodes.toArray(new Node[nodes.size()]));
-    }
-
-    /**
-     Wrap the supplied HTML around this node.
-     @param html HTML to wrap around this element, e.g. {@code <div class="head"></div>}. Can be arbitrarily deep.
-     @return this node, for chaining.
-     */
-    public Node wrap(String html) {
-        Validate.notEmpty(html);
-
-        Element context = parent() instanceof Element ? (Element) parent() : null;
-        List<Node> wrapChildren = Parser.parseFragment(html, context, baseUri());
-        Node wrapNode = wrapChildren.get(0);
-        if (wrapNode == null || !(wrapNode instanceof Element)) // nothing to wrap with; noop
-            return null;
-
-        Element wrap = (Element) wrapNode;
-        Element deepest = getDeepChild(wrap);
-        parentNode.replaceChild(this, wrap);
-        deepest.addChildren(this);
-
-        // remainder (unbalanced wrap, like <div></div><p></p> -- The <p> is remainder
-        if (wrapChildren.size() > 0) {
-            for (int i = 0; i < wrapChildren.size(); i++) {
-                Node remainder = wrapChildren.get(i);
-                remainder.parentNode.removeChild(remainder);
-                wrap.appendChild(remainder);
-            }
-        }
-        return this;
-    }
-
-    private Element getDeepChild(Element el) {
-        List<Element> children = el.children();
-        if (children.size() > 0)
-            return getDeepChild(children.get(0));
-        else
-            return el;
-    }
-    
-    /**
-     * Replace this node in the DOM with the supplied node.
-     * @param in the node that will will replace the existing node.
-     */
-    public void replaceWith(Node in) {
-        Validate.notNull(in);
-        Validate.notNull(parentNode);
-        parentNode.replaceChild(this, in);
-    }
-
-    protected void setParentNode(Node parentNode) {
-        if (this.parentNode != null)
-            this.parentNode.removeChild(this);
-        this.parentNode = parentNode;
-    }
-
-    protected void replaceChild(Node out, Node in) {
-        Validate.isTrue(out.parentNode == this);
-        Validate.notNull(in);
-        if (in.parentNode != null)
-            in.parentNode.removeChild(in);
-        
-        Integer index = out.siblingIndex();
-        childNodes.set(index, in);
-        in.parentNode = this;
-        in.setSiblingIndex(index);
-        out.parentNode = null;
-    }
-
-    protected void removeChild(Node out) {
-        Validate.isTrue(out.parentNode == this);
-        int index = out.siblingIndex();
-        childNodes.remove(index);
-        reindexChildren();
-        out.parentNode = null;
-    }
-
-    protected void addChildren(Node... children) {
-        //most used. short circuit addChildren(int), which hits reindex children and array copy
-        for (Node child: children) {
-            reparentChild(child);
-            childNodes.add(child);
-            child.setSiblingIndex(childNodes.size()-1);
+        for (int pos = stack.size() -1; pos >= 0; pos--) {
+            Element next = stack.get(pos);
+            stack.remove(pos);
+            if (next == firstFound)
+                break;
         }
     }
 
-    protected void addChildren(int index, Node... children) {
-        Validate.noNullElements(children);
-        for (int i = children.length - 1; i >= 0; i--) {
-            Node in = children[i];
-            reparentChild(in);
-            childNodes.add(index, in);
-        }
-        reindexChildren();
+
+    List<Node> parseFragment(String inputFragment, String baseUri, Parser parser) {
+        initialiseParse(new StringReader(inputFragment), baseUri, parser);
+        runParser();
+        return doc.childNodes();
     }
 
-    private void reparentChild(Node child) {
-        if (child.parentNode != null)
-            child.parentNode.removeChild(child);
-        child.setParentNode(this);
-    }
-    
-    private void reindexChildren() {
-        for (int i = 0; i < childNodes.size(); i++) {
-            childNodes.get(i).setSiblingIndex(i);
-        }
-    }
-    
-    /**
-     Retrieves this node's sibling nodes. Effectively, {@link #childNodes()  node.parent.childNodes()}.
-     @return node siblings, including this node
-     */
-    public List<Node> siblingNodes() {
-        return parent().childNodes(); // TODO: should this strip out this node? i.e. not a sibling of self?
-    }
-
-    /**
-     Get this node's next sibling.
-     @return next sibling, or null if this is the last sibling
-     */
-    public Node nextSibling() {
-        if (parentNode == null)
-            return null; // root
-        
-        List<Node> siblings = parentNode.childNodes;
-        Integer index = siblingIndex();
-        Validate.notNull(index);
-        if (siblings.size() > index+1)
-            return siblings.get(index+1);
-        else
-            return null;
-    }
-
-    /**
-     Get this node's previous sibling.
-     @return the previous sibling, or null if this is the first sibling
-     */
-    public Node previousSibling() {
-        List<Node> siblings = parentNode.childNodes;
-        Integer index = siblingIndex();
-        Validate.notNull(index);
-        if (index > 0)
-            return siblings.get(index-1);
-        else
-            return null;
-    }
-
-    /**
-     * Get the list index of this node in its node sibling list. I.e. if this is the first node
-     * sibling, returns 0.
-     * @return position in node sibling list
-     * @see org.jsoup.nodes.Element#elementSiblingIndex()
-     */
-    public int siblingIndex() {
-        return siblingIndex;
-    }
-    
-    protected void setSiblingIndex(int siblingIndex) {
-        this.siblingIndex = siblingIndex;
-    }
-
-    /**
-     Get the outer HTML of this node.
-     @return HTML
-     */
-    public String outerHtml() {
-        StringBuilder accum = new StringBuilder(32*1024);
-        outerHtml(accum);
-        return accum.toString();
-    }
-
-    protected void outerHtml(StringBuilder accum) {
-        new NodeTraversor(new OuterHtmlVisitor(accum, getOutputSettings())).traverse(this);
-    }
-
-    // if this node has no document (or parent), retrieve the default output settings
-    private Document.OutputSettings getOutputSettings() {
-        return ownerDocument() != null ? ownerDocument().outputSettings() : (new Document("")).outputSettings();
-    }
-
-    /**
-     Get the outer HTML of this node.
-     @param accum accumulator to place HTML into
-     */
-    abstract void outerHtmlHead(StringBuilder accum, int depth, Document.OutputSettings out);
-
-    abstract void outerHtmlTail(StringBuilder accum, int depth, Document.OutputSettings out);
-
-    public String toString() {
-        return outerHtml();
-    }
-
-    protected void indent(StringBuilder accum, int depth, Document.OutputSettings out) {
-        accum.append("\n").append(StringUtil.padding(depth * out.indentAmount()));
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        // todo: have nodes hold a child index, compare against that and parent (not children)
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        int result = parentNode != null ? parentNode.hashCode() : 0;
-        // not children, or will block stack as they go back up to parent)
-        result = 31 * result + (attributes != null ? attributes.hashCode() : 0);
-        return result;
-    }
-
-    /**
-     * Create a stand-alone, deep copy of this node, and all of its children. The cloned node will have no siblings or
-     * parent node. As a stand-alone object, any changes made to the clone or any of its children will not impact the
-     * original node.
-     * <p>
-     * The cloned node may be adopted into another Document or node structure using {@link Element#appendChild(Node)}.
-     * @return stand-alone cloned node
-     */
-    @Override
-    public Node clone() {
-        return doClone(null); // splits for orphan
-    }
-
-    protected Node doClone(Node parent) {
-        Node clone;
-        try {
-            clone = (Node) super.clone();
-        } catch (CloneNotSupportedException e) {
-            throw new RuntimeException(e);
-        }
-
-        clone.parentNode = parent; // can be null, to create an orphan split
-        clone.siblingIndex = parent == null ? 0 : siblingIndex;
-        clone.attributes = attributes != null ? attributes.clone() : null;
-        clone.baseUri = baseUri;
-        clone.childNodes = new ArrayList<Node>(childNodes.size());
-        for (Node child: childNodes)
-            clone.childNodes.add(child.doClone(clone)); // clone() creates orphans, doClone() keeps parent
-
-        return clone;
-    }
-
-    private static class OuterHtmlVisitor implements NodeVisitor {
-        private StringBuilder accum;
-        private Document.OutputSettings out;
-
-        OuterHtmlVisitor(StringBuilder accum, Document.OutputSettings out) {
-            this.accum = accum;
-            this.out = out;
-        }
-
-        public void head(Node node, int depth) {
-            node.outerHtmlHead(accum, depth, out);
-        }
-
-        public void tail(Node node, int depth) {
-            if (!node.nodeName().equals("#text")) // saves a void hit.
-                node.outerHtmlTail(accum, depth, out);
-        }
+    List<Node> parseFragment(String inputFragment, Element context, String baseUri, Parser parser) {
+        return parseFragment(inputFragment, baseUri, parser);
     }
 }

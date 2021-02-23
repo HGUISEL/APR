@@ -1,361 +1,543 @@
-package org.jsoup.nodes;
+package com.fasterxml.jackson.databind.deser.std;
 
-import org.jsoup.helper.Validate;
-import org.jsoup.parser.Tag;
-import org.jsoup.select.Elements;
+import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 
-import java.nio.charset.Charset;
-import java.nio.charset.CharsetEncoder;
-import java.util.ArrayList;
-import java.util.List;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.annotation.JacksonStdImpl;
+import com.fasterxml.jackson.databind.deser.*;
+import com.fasterxml.jackson.databind.introspect.AnnotatedParameter;
+import com.fasterxml.jackson.databind.introspect.AnnotatedWithParams;
+import com.fasterxml.jackson.databind.util.ClassUtil;
 
 /**
- A HTML Document.
-
- @author Jonathan Hedley, jonathan@hedley.net */
-public class Document extends Element {
-    private OutputSettings outputSettings = new OutputSettings();
-    private QuirksMode quirksMode = QuirksMode.noQuirks;
+ * Default {@link ValueInstantiator} implementation, which supports
+ * Creator methods that can be indicated by standard Jackson
+ * annotations.
+ */
+@JacksonStdImpl
+public class StdValueInstantiator
+    extends ValueInstantiator
+    implements java.io.Serializable
+{
+    private static final long serialVersionUID = 1L;
 
     /**
-     Create a new, empty Document.
-     @param baseUri base URI of document
-     @see org.jsoup.Jsoup#parse
-     @see #createShell
+     * Type of values that are instantiated; used
+     * for error reporting purposes.
      */
-    public Document(String baseUri) {
-        super(Tag.valueOf("#root"), baseUri);
+    protected final String _valueTypeDesc;
+
+    /**
+     * @since 2.8
+     */
+    protected final Class<?> _valueClass;
+
+    // // // Default (no-args) construction
+
+    /**
+     * Default (no-argument) constructor to use for instantiation
+     * (with {@link #createUsingDefault})
+     */
+    protected AnnotatedWithParams _defaultCreator;
+
+    // // // With-args (property-based) construction
+
+    protected AnnotatedWithParams _withArgsCreator;
+    protected SettableBeanProperty[] _constructorArguments;
+
+    // // // Delegate construction
+    
+    protected JavaType _delegateType;
+    protected AnnotatedWithParams _delegateCreator;
+    protected SettableBeanProperty[] _delegateArguments;
+
+    // // // Array delegate construction
+
+    protected JavaType _arrayDelegateType;
+    protected AnnotatedWithParams _arrayDelegateCreator;
+    protected SettableBeanProperty[] _arrayDelegateArguments;
+    
+    // // // Scalar construction
+
+    protected AnnotatedWithParams _fromStringCreator;
+    protected AnnotatedWithParams _fromIntCreator;
+    protected AnnotatedWithParams _fromLongCreator;
+    protected AnnotatedWithParams _fromDoubleCreator;
+    protected AnnotatedWithParams _fromBooleanCreator;
+
+    // // // Incomplete creator
+    protected AnnotatedParameter  _incompleteParameter;
+    
+    /*
+    /**********************************************************
+    /* Life-cycle
+    /**********************************************************
+     */
+
+    /**
+     * @deprecated Since 2.7 use constructor that takes {@link JavaType} instead
+     */
+    @Deprecated
+    public StdValueInstantiator(DeserializationConfig config, Class<?> valueType) {
+        _valueTypeDesc = ClassUtil.nameOf(valueType);
+        _valueClass = (valueType == null) ? Object.class : valueType;
+    }
+
+    public StdValueInstantiator(DeserializationConfig config, JavaType valueType) {
+        _valueTypeDesc = (valueType == null) ? "UNKNOWN TYPE" : valueType.toString();
+        _valueClass = (valueType == null) ? Object.class : valueType.getRawClass();
     }
 
     /**
-     Create a valid, empty shell of a document, suitable for adding more elements to.
-     @param baseUri baseUri of document
-     @return document with html, head, and body elements.
+     * Copy-constructor that sub-classes can use when creating new instances
+     * by fluent-style construction
      */
-    static public Document createShell(String baseUri) {
-        Validate.notNull(baseUri);
+    protected StdValueInstantiator(StdValueInstantiator src)
+    {
+        _valueTypeDesc = src._valueTypeDesc;
+        _valueClass = src._valueClass;
 
-        Document doc = new Document(baseUri);
-        Element html = doc.appendElement("html");
-        html.appendElement("head");
-        html.appendElement("body");
+        _defaultCreator = src._defaultCreator;
 
-        return doc;
-    }
+        _constructorArguments = src._constructorArguments;
+        _withArgsCreator = src._withArgsCreator;
 
-    /**
-     Accessor to the document's {@code head} element.
-     @return {@code head}
-     */
-    public Element head() {
-        return findFirstElementByTagName("head", this);
-    }
+        _delegateType = src._delegateType;
+        _delegateCreator = src._delegateCreator;
+        _delegateArguments = src._delegateArguments;
 
-    /**
-     Accessor to the document's {@code body} element.
-     @return {@code body}
-     */
-    public Element body() {
-        return findFirstElementByTagName("body", this);
-    }
-
-    /**
-     Get the string contents of the document's {@code title} element.
-     @return Trimmed title, or empty string if none set.
-     */
-    public String title() {
-        Element titleEl = getElementsByTag("title").first();
-        return titleEl != null ? titleEl.text().trim() : "";
-    }
-
-    /**
-     Set the document's {@code title} element. Updates the existing element, or adds {@code title} to {@code head} if
-     not present
-     @param title string to set as title
-     */
-    public void title(String title) {
-        Validate.notNull(title);
-        Element titleEl = getElementsByTag("title").first();
-        if (titleEl == null) { // add to head
-            head().appendElement("title").text(title);
-        } else {
-            titleEl.text(title);
-        }
-    }
-
-    /**
-     Create a new Element, with this document's base uri. Does not make the new element a child of this document.
-     @param tagName element tag name (e.g. {@code a})
-     @return new element
-     */
-    public Element createElement(String tagName) {
-        return new Element(Tag.valueOf(tagName), this.baseUri());
-    }
-
-    /**
-     Normalise the document. This happens after the parse phase so generally does not need to be called.
-     Moves any text content that is not in the body element into the body.
-     @return this document after normalisation
-     */
-    public Document normalise() {
-        Element htmlEl = findFirstElementByTagName("html", this);
-        if (htmlEl == null)
-            htmlEl = appendElement("html");
-        if (head() == null)
-            htmlEl.prependElement("head");
-        if (body() == null)
-            htmlEl.appendElement("body");
-
-        // pull text nodes out of root, html, and head els, and push into body. non-text nodes are already taken care
-        // of. do in inverse order to maintain text order.
-        normaliseTextNodes(head());
-        normaliseTextNodes(htmlEl);
-        normaliseTextNodes(this);
-
-        normaliseStructure("head", htmlEl);
-        normaliseStructure("body", htmlEl);
+        _arrayDelegateType = src._arrayDelegateType;
+        _arrayDelegateCreator = src._arrayDelegateCreator;
+        _arrayDelegateArguments = src._arrayDelegateArguments;
         
-        return this;
-    }
-
-    // does not recurse.
-    private void normaliseTextNodes(Element element) {
-        List<Node> toMove = new ArrayList<Node>();
-        for (Node node: element.childNodes) {
-            if (node instanceof TextNode) {
-                TextNode tn = (TextNode) node;
-                if (!tn.isBlank())
-                    toMove.add(tn);
-            }
-        }
-
-        for (int i = toMove.size()-1; i >= 0; i--) {
-            Node node = toMove.get(i);
-            element.removeChild(node);
-            body().prependChild(new TextNode(" ", ""));
-            body().prependChild(node);
-        }
-    }
-
-    // merge multiple <head> or <body> contents into one, delete the remainder, and ensure they are owned by <html>
-    private void normaliseStructure(String tag, Element htmlEl) {
-        Elements elements = this.getElementsByTag(tag);
-        Element master = elements.first(); // will always be available as created above if not existent
-        if (elements.size() > 1) { // dupes, move contents to master
-            List<Node> toMove = new ArrayList<Node>();
-            for (int i = 1; i < elements.size(); i++) {
-                Node dupe = elements.get(i);
-                for (Node node : dupe.childNodes)
-                    toMove.add(node);
-                dupe.remove();
-            }
-
-            for (Node dupe : toMove)
-                master.appendChild(dupe);
-        }
-        // ensure parented by <html>
-        if (!master.parent().equals(htmlEl)) {
-            htmlEl.appendChild(master); // includes remove()            
-        }
-    }
-
-    // fast method to get first by tag name, used for html, head, body finders
-    private Element findFirstElementByTagName(String tag, Node node) {
-        if (node.nodeName().equals(tag))
-            return (Element) node;
-        else {
-            for (Node child: node.childNodes) {
-                Element found = findFirstElementByTagName(tag, child);
-                if (found != null)
-                    return found;
-            }
-        }
-        return null;
-    }
-
-    @Override
-    public String outerHtml() {
-        return super.html(); // no outer wrapper tag
+        _fromStringCreator = src._fromStringCreator;
+        _fromIntCreator = src._fromIntCreator;
+        _fromLongCreator = src._fromLongCreator;
+        _fromDoubleCreator = src._fromDoubleCreator;
+        _fromBooleanCreator = src._fromBooleanCreator;
     }
 
     /**
-     Set the text of the {@code body} of this document. Any existing nodes within the body will be cleared.
-     @param text unencoded text
-     @return this document
+     * Method for setting properties related to instantiating values
+     * from JSON Object. We will choose basically only one approach (out of possible
+     * three), and clear other properties
      */
-    @Override
-    public Element text(String text) {
-        body().text(text); // overridden to not nuke doc structure
-        return this;
+    public void configureFromObjectSettings(AnnotatedWithParams defaultCreator,
+            AnnotatedWithParams delegateCreator, JavaType delegateType, SettableBeanProperty[] delegateArgs,
+            AnnotatedWithParams withArgsCreator, SettableBeanProperty[] constructorArgs)
+    {
+        _defaultCreator = defaultCreator;
+        _delegateCreator = delegateCreator;
+        _delegateType = delegateType;
+        _delegateArguments = delegateArgs;
+        _withArgsCreator = withArgsCreator;
+        _constructorArguments = constructorArgs;
     }
 
-    @Override
-    public String nodeName() {
-        return "#document";
+    public void configureFromArraySettings(
+            AnnotatedWithParams arrayDelegateCreator,
+            JavaType arrayDelegateType,
+            SettableBeanProperty[] arrayDelegateArgs)
+    {
+        _arrayDelegateCreator = arrayDelegateCreator;
+        _arrayDelegateType = arrayDelegateType;
+        _arrayDelegateArguments = arrayDelegateArgs;
     }
 
-    @Override
-    public Document clone() {
-        Document clone = (Document) super.clone();
-        clone.outputSettings = this.outputSettings.clone();
-        return clone;
+    public void configureFromStringCreator(AnnotatedWithParams creator) {
+        _fromStringCreator = creator;
     }
 
-    /**
-     * A Document's output settings control the form of the text() and html() methods.
+    public void configureFromIntCreator(AnnotatedWithParams creator) {
+        _fromIntCreator = creator;
+    }
+
+    public void configureFromLongCreator(AnnotatedWithParams creator) {
+        _fromLongCreator = creator;
+    }
+
+    public void configureFromDoubleCreator(AnnotatedWithParams creator) {
+        _fromDoubleCreator = creator;
+    }
+
+    public void configureFromBooleanCreator(AnnotatedWithParams creator) {
+        _fromBooleanCreator = creator;
+    }
+
+    public void configureIncompleteParameter(AnnotatedParameter parameter) {
+        _incompleteParameter = parameter;
+    }
+    
+    /*
+    /**********************************************************
+    /* Public API implementation; metadata
+    /**********************************************************
      */
-    public static class OutputSettings implements Cloneable {
-        private Entities.EscapeMode escapeMode = Entities.EscapeMode.base;
-        private Charset charset = Charset.forName("UTF-8");
-        private CharsetEncoder charsetEncoder = charset.newEncoder();
-        private boolean prettyPrint = true;
-        private int indentAmount = 1;
 
-        public OutputSettings() {}
+    @Override
+    public String getValueTypeDesc() {
+        return _valueTypeDesc;
+    }
 
-        /**
-         * Get the document's current HTML escape mode: <code>base</code>, which provides a limited set of named HTML
-         * entities and escapes other characters as numbered entities for maximum compatibility; or <code>extended</code>,
-         * which uses the complete set of HTML named entities.
-         * <p>
-         * The default escape mode is <code>base</code>.
-         * @return the document's current escape mode
-         */
-        public Entities.EscapeMode escapeMode() {
-            return escapeMode;
+    @Override
+    public Class<?> getValueClass() {
+        return _valueClass;
+    }
+
+    @Override
+    public boolean canCreateFromString() {
+        return (_fromStringCreator != null);
+    }
+
+    @Override
+    public boolean canCreateFromInt() {
+        return (_fromIntCreator != null);
+    }
+
+    @Override
+    public boolean canCreateFromLong() {
+        return (_fromLongCreator != null);
+    }
+
+    @Override
+    public boolean canCreateFromDouble() {
+        return (_fromDoubleCreator != null);
+    }
+
+    @Override
+    public boolean canCreateFromBoolean() {
+        return (_fromBooleanCreator != null);
+    }
+
+    @Override
+    public boolean canCreateUsingDefault() {
+        return (_defaultCreator != null);
+    }
+
+    @Override
+    public boolean canCreateUsingDelegate() {
+        return (_delegateType != null);
+    }
+
+    @Override
+    public boolean canCreateUsingArrayDelegate() {
+        return (_arrayDelegateType != null);
+    }
+
+    @Override
+    public boolean canCreateFromObjectWith() {
+        return (_withArgsCreator != null);
+    }
+
+    @Override
+    public boolean canInstantiate() {
+        return canCreateUsingDefault()
+                || canCreateUsingDelegate() || canCreateUsingArrayDelegate()
+                || canCreateFromObjectWith() || canCreateFromString()
+                || canCreateFromInt() || canCreateFromLong()
+                || canCreateFromDouble() || canCreateFromBoolean();
+    }
+
+    @Override
+    public JavaType getDelegateType(DeserializationConfig config) {
+        return _delegateType;
+    }
+
+    @Override
+    public JavaType getArrayDelegateType(DeserializationConfig config) {
+        return _arrayDelegateType;
+    }
+
+    @Override
+    public SettableBeanProperty[] getFromObjectArguments(DeserializationConfig config) {
+        return _constructorArguments;
+    }
+    
+    /*
+    /**********************************************************
+    /* Public API implementation; instantiation from JSON Object
+    /**********************************************************
+     */
+    
+    @Override
+    public Object createUsingDefault(DeserializationContext ctxt) throws IOException
+    {
+        if (_defaultCreator == null) { // sanity-check; caller should check
+            return super.createUsingDefault(ctxt);
         }
-
-        /**
-         * Set the document's escape mode
-         * @param escapeMode the new escape mode to use
-         * @return the document's output settings, for chaining
-         */
-        public OutputSettings escapeMode(Entities.EscapeMode escapeMode) {
-            this.escapeMode = escapeMode;
-            return this;
+        try {
+            return _defaultCreator.call();
+        } catch (Exception e) { // 19-Apr-2017, tatu: Let's not catch Errors, just Exceptions
+            return ctxt.handleInstantiationProblem(_valueClass, null, rewrapCtorProblem(ctxt, e));
         }
+    }
 
-        /**
-         * Get the document's current output charset, which is used to control which characters are escaped when
-         * generating HTML (via the <code>html()</code> methods), and which are kept intact.
-         * <p>
-         * Where possible (when parsing from a URL or File), the document's output charset is automatically set to the
-         * input charset. Otherwise, it defaults to UTF-8.
-         * @return the document's current charset.
-         */
-        public Charset charset() {
-            return charset;
+    @Override
+    public Object createFromObjectWith(DeserializationContext ctxt, Object[] args) throws IOException
+    {
+        if (_withArgsCreator == null) { // sanity-check; caller should check
+            return super.createFromObjectWith(ctxt, args);
         }
-
-        /**
-         * Update the document's output charset.
-         * @param charset the new charset to use.
-         * @return the document's output settings, for chaining
-         */
-        public OutputSettings charset(Charset charset) {
-            // todo: this should probably update the doc's meta charset
-            this.charset = charset;
-            charsetEncoder = charset.newEncoder();
-            return this;
+        try {
+            return _withArgsCreator.call(args);
+        } catch (Exception e) { // 19-Apr-2017, tatu: Let's not catch Errors, just Exceptions
+            return ctxt.handleInstantiationProblem(_valueClass, args, rewrapCtorProblem(ctxt, e));
         }
+    }
 
-        /**
-         * Update the document's output charset.
-         * @param charset the new charset (by name) to use.
-         * @return the document's output settings, for chaining
-         */
-        public OutputSettings charset(String charset) {
-            charset(Charset.forName(charset));
-            return this;
+    @Override
+    public Object createUsingDelegate(DeserializationContext ctxt, Object delegate) throws IOException
+    {
+        // 04-Oct-2016, tatu: Need delegation to work around [databind#1392]...
+        if (_delegateCreator == null) {
+            if (_arrayDelegateCreator != null) {
+                return _createUsingDelegate(_arrayDelegateCreator, _arrayDelegateArguments, ctxt, delegate);
+            }
         }
+        return _createUsingDelegate(_delegateCreator, _delegateArguments, ctxt, delegate);
+    }
 
-        CharsetEncoder encoder() {
-            return charsetEncoder;
+    @Override
+    public Object createUsingArrayDelegate(DeserializationContext ctxt, Object delegate) throws IOException
+    {
+        if (_arrayDelegateCreator == null) {
+            if (_delegateCreator != null) { // sanity-check; caller should check
+                // fallback to the classic delegate creator
+                return createUsingDelegate(ctxt, delegate);
+            }
         }
+        return _createUsingDelegate(_arrayDelegateCreator, _arrayDelegateArguments, ctxt, delegate);
+    }
 
-        /**
-         * Get if pretty printing is enabled. Default is true. If disabled, the HTML output methods will not re-format
-         * the output, and the output will generally look like the input.
-         * @return if pretty printing is enabled.
-         */
-        public boolean prettyPrint() {
-            return prettyPrint;
+    /*
+    /**********************************************************
+    /* Public API implementation; instantiation from JSON scalars
+    /**********************************************************
+     */
+
+    @Override
+    public Object createFromString(DeserializationContext ctxt, String value) throws IOException
+    {
+        if (_fromStringCreator == null) {
+            return _createFromStringFallbacks(ctxt, value);
         }
-
-        /**
-         * Enable or disable pretty printing.
-         * @param pretty new pretty print setting
-         * @return this, for chaining
-         */
-        public OutputSettings prettyPrint(boolean pretty) {
-            prettyPrint = pretty;
-            return this;
+        try {
+            return _fromStringCreator.call1(value);
+        } catch (Throwable t) {
+            return ctxt.handleInstantiationProblem(_fromStringCreator.getDeclaringClass(),
+                    value, rewrapCtorProblem(ctxt, t));
         }
-
-        /**
-         * Get the current tag indent amount, used when pretty printing.
-         * @return the current indent amount
-         */
-        public int indentAmount() {
-            return indentAmount;
-        }
-
-        /**
-         * Set the indent amount for pretty printing
-         * @param indentAmount number of spaces to use for indenting each level. Must be >= 0.
-         * @return this, for chaining
-         */
-        public OutputSettings indentAmount(int indentAmount) {
-            Validate.isTrue(indentAmount >= 0);
-            this.indentAmount = indentAmount;
-            return this;
-        }
-
-        @Override
-        public OutputSettings clone() {
-            OutputSettings clone;
+    }
+    
+    @Override
+    public Object createFromInt(DeserializationContext ctxt, int value) throws IOException
+    {
+        // First: "native" int methods work best:
+        if (_fromIntCreator != null) {
+            Object arg = Integer.valueOf(value);
             try {
-                clone = (OutputSettings) super.clone();
-            } catch (CloneNotSupportedException e) {
-                throw new RuntimeException(e);
+                return _fromIntCreator.call1(arg);
+            } catch (Throwable t0) {
+                return ctxt.handleInstantiationProblem(_fromIntCreator.getDeclaringClass(),
+                        arg, rewrapCtorProblem(ctxt, t0));
             }
-            clone.charset(charset.name()); // new charset and charset encoder
-            clone.escapeMode = Entities.EscapeMode.valueOf(escapeMode.name());
-            // indentAmount, prettyPrint are primitives so object.clone() will handle
-            return clone;
+        }
+        // but if not, can do widening conversion
+        if (_fromLongCreator != null) {
+            Object arg = Long.valueOf(value);
+            try {
+                return _fromLongCreator.call1(arg);
+            } catch (Throwable t0) {
+                return ctxt.handleInstantiationProblem(_fromLongCreator.getDeclaringClass(),
+                        arg, rewrapCtorProblem(ctxt, t0));
+            }
+        }
+        return super.createFromInt(ctxt, value);
+    }
+
+    @Override
+    public Object createFromLong(DeserializationContext ctxt, long value) throws IOException
+    {
+        if (_fromLongCreator == null) {
+            return super.createFromLong(ctxt, value);
+        }
+        Object arg = Long.valueOf(value);
+        try {
+            return _fromLongCreator.call1(arg);
+        } catch (Throwable t0) {
+            return ctxt.handleInstantiationProblem(_fromLongCreator.getDeclaringClass(),
+                    arg, rewrapCtorProblem(ctxt, t0));
         }
     }
 
-    /**
-     * Get the document's current output settings.
-     * @return the document's current output settings.
+    @Override
+    public Object createFromDouble(DeserializationContext ctxt, double value) throws IOException
+    {
+        if (_fromDoubleCreator == null) {
+            return super.createFromDouble(ctxt, value);
+        }
+        Object arg = Double.valueOf(value);
+        try {
+            return _fromDoubleCreator.call1(arg);
+        } catch (Throwable t0) {
+            return ctxt.handleInstantiationProblem(_fromDoubleCreator.getDeclaringClass(),
+                    arg, rewrapCtorProblem(ctxt, t0));
+        }
+    }
+
+    @Override
+    public Object createFromBoolean(DeserializationContext ctxt, boolean value) throws IOException
+    {
+        if (_fromBooleanCreator == null) {
+            return super.createFromBoolean(ctxt, value);
+        }
+        final Boolean arg = Boolean.valueOf(value);
+        try {
+            return _fromBooleanCreator.call1(arg);
+        } catch (Throwable t0) {
+            return ctxt.handleInstantiationProblem(_fromBooleanCreator.getDeclaringClass(),
+                    arg, rewrapCtorProblem(ctxt, t0));
+        }
+    }
+    
+    /*
+    /**********************************************************
+    /* Extended API: configuration mutators, accessors
+    /**********************************************************
      */
-    public OutputSettings outputSettings() {
-        return outputSettings;
+
+    @Override
+    public AnnotatedWithParams getDelegateCreator() {
+        return _delegateCreator;
+    }
+
+    @Override
+    public AnnotatedWithParams getArrayDelegateCreator() {
+        return _arrayDelegateCreator;
+    }
+
+    @Override
+    public AnnotatedWithParams getDefaultCreator() {
+        return _defaultCreator;
+    }
+
+    @Override
+    public AnnotatedWithParams getWithArgsCreator() {
+        return _withArgsCreator;
+    }
+
+    @Override
+    public AnnotatedParameter getIncompleteParameter() {
+        return _incompleteParameter;
+    }
+
+    /*
+    /**********************************************************
+    /* Internal methods
+    /**********************************************************
+     */
+
+    /**
+     * @deprecated Since 2.7 call either {@link #unwrapAndWrapException} or
+     *  {@link #wrapAsJsonMappingException}
+     */
+    @Deprecated // since 2.7
+    protected JsonMappingException wrapException(Throwable t)
+    {
+        // 05-Nov-2015, tatu: This used to always unwrap the whole exception, but now only
+        //   does so if and until `JsonMappingException` is found.
+        for (Throwable curr = t; curr != null; curr = curr.getCause()) {
+            if (curr instanceof JsonMappingException) {
+                return (JsonMappingException) curr;
+            }
+        }
+        return new JsonMappingException(null,
+                "Instantiation of "+getValueTypeDesc()+" value failed: "+ClassUtil.exceptionMessage(t), t);
     }
 
     /**
-     * Set the document's output settings.
-     * @param outputSettings new output settings.
-     * @return this document, for chaining.
+     * @since 2.7
      */
-    public Document outputSettings(OutputSettings outputSettings) {
-        Validate.notNull(outputSettings);
-        this.outputSettings = outputSettings;
-        return this;
+    protected JsonMappingException unwrapAndWrapException(DeserializationContext ctxt, Throwable t)
+    {
+        // 05-Nov-2015, tatu: This used to always unwrap the whole exception, but now only
+        //   does so if and until `JsonMappingException` is found.
+        for (Throwable curr = t; curr != null; curr = curr.getCause()) {
+            if (curr instanceof JsonMappingException) {
+                return (JsonMappingException) curr;
+            }
+        }
+        return ctxt.instantiationException(getValueClass(), t);
     }
 
-    public enum QuirksMode {
-        noQuirks, quirks, limitedQuirks;
+    /**
+     * @since 2.7
+     */
+    protected JsonMappingException wrapAsJsonMappingException(DeserializationContext ctxt,
+            Throwable t)
+    {
+        // 05-Nov-2015, tatu: Only avoid wrapping if already a JsonMappingException
+        if (t instanceof JsonMappingException) {
+            return (JsonMappingException) t;
+        }
+        return ctxt.instantiationException(getValueClass(), t);
     }
 
-    public QuirksMode quirksMode() {
-        return quirksMode;
+    /**
+     * @since 2.7
+     */
+    protected JsonMappingException rewrapCtorProblem(DeserializationContext ctxt,
+            Throwable t)
+    {
+        // 05-Nov-2015, tatu: Seems like there are really only 2 useless wrapper errors/exceptions,
+        //    so just peel those, and nothing else
+        if ((t instanceof ExceptionInInitializerError) // from static initialization block
+                || (t instanceof InvocationTargetException) // from constructor/method
+                ) {
+            Throwable cause = t.getCause();
+            if (cause != null) {
+                t = cause;
+            }
+        }
+        return wrapAsJsonMappingException(ctxt, t);
     }
 
-    public Document quirksMode(QuirksMode quirksMode) {
-        this.quirksMode = quirksMode;
-        return this;
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+
+    private Object _createUsingDelegate(AnnotatedWithParams delegateCreator,
+            SettableBeanProperty[] delegateArguments,
+            DeserializationContext ctxt,
+            Object delegate)
+            throws IOException
+    {
+        if (delegateCreator == null) { // sanity-check; caller should check
+            throw new IllegalStateException("No delegate constructor for "+getValueTypeDesc());
+        }
+        try {
+            // First simple case: just delegate, no injectables
+            if (delegateArguments == null) {
+                return delegateCreator.call1(delegate);
+            }
+            // And then the case with at least one injectable...
+            final int len = delegateArguments.length;
+            Object[] args = new Object[len];
+            for (int i = 0; i < len; ++i) {
+                SettableBeanProperty prop = delegateArguments[i];
+                if (prop == null) { // delegate
+                    args[i] = delegate;
+                } else { // nope, injectable:
+                    args[i] = ctxt.findInjectableValue(prop.getInjectableValueId(), prop, null);
+                }
+            }
+            // and then try calling with full set of arguments
+            return delegateCreator.call(args);
+        } catch (Throwable t) {
+            throw rewrapCtorProblem(ctxt, t);
+        }
     }
 }
-

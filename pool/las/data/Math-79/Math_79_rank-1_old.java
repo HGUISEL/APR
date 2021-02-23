@@ -1,3503 +1,1780 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements. See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
+ *  Licensed to the Apache Software Foundation (ASF) under one
+ *  or more contributor license agreements.  See the NOTICE file
+ *  distributed with this work for additional information
+ *  regarding copyright ownership.  The ASF licenses this file
+ *  to you under the Apache License, Version 2.0 (the
+ *  "License"); you may not use this file except in compliance
+ *  with the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *  Unless required by applicable law or agreed to in writing,
+ *  software distributed under the License is distributed on an
+ *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ *  KIND, either express or implied.  See the License for the
+ *  specific language governing permissions and limitations
+ *  under the License.
  */
-package org.apache.activemq.artemis.core.server.impl;
+package org.codehaus.groovy.vmplugin.v9;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-import javax.management.MBeanServer;
-import java.io.File;
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.lang.management.ManagementFactory;
+import groovy.lang.GroovyRuntimeException;
+import groovy.lang.GroovySystem;
+import groovy.lang.MetaClass;
+import groovy.lang.MetaMethod;
+import groovy.lang.Tuple;
+import groovy.lang.Tuple2;
+import org.codehaus.groovy.GroovyBugError;
+import org.codehaus.groovy.reflection.CachedClass;
+import org.codehaus.groovy.reflection.CachedMethod;
+import org.codehaus.groovy.reflection.ReflectionUtils;
+import org.codehaus.groovy.runtime.DefaultGroovyMethods;
+import org.codehaus.groovy.vmplugin.v8.Java8;
+
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleFinder;
+import java.lang.module.ModuleReference;
+import java.lang.reflect.AccessibleObject;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Member;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.math.BigInteger;
 import java.net.URI;
-import java.net.URL;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Date;
-import java.util.EnumSet;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-import org.apache.activemq.artemis.api.config.ActiveMQDefaultConfiguration;
-import org.apache.activemq.artemis.api.core.ActiveMQDeleteAddressException;
-import org.apache.activemq.artemis.api.core.ActiveMQException;
-import org.apache.activemq.artemis.api.core.ActiveMQQueueExistsException;
-import org.apache.activemq.artemis.api.core.Pair;
-import org.apache.activemq.artemis.api.core.RoutingType;
-import org.apache.activemq.artemis.api.core.SimpleString;
-import org.apache.activemq.artemis.core.client.impl.ClientSessionFactoryImpl;
-import org.apache.activemq.artemis.core.config.BridgeConfiguration;
-import org.apache.activemq.artemis.core.config.Configuration;
-import org.apache.activemq.artemis.core.config.ConfigurationUtils;
-import org.apache.activemq.artemis.core.config.CoreAddressConfiguration;
-import org.apache.activemq.artemis.core.config.CoreQueueConfiguration;
-import org.apache.activemq.artemis.core.config.DivertConfiguration;
-import org.apache.activemq.artemis.core.config.HAPolicyConfiguration;
-import org.apache.activemq.artemis.core.config.StoreConfiguration;
-import org.apache.activemq.artemis.core.config.impl.ConfigurationImpl;
-import org.apache.activemq.artemis.core.config.impl.LegacyJMSConfiguration;
-import org.apache.activemq.artemis.core.config.storage.DatabaseStorageConfiguration;
-import org.apache.activemq.artemis.core.deployers.impl.FileConfigurationParser;
-import org.apache.activemq.artemis.core.filter.Filter;
-import org.apache.activemq.artemis.core.filter.impl.FilterImpl;
-import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
-import org.apache.activemq.artemis.core.io.SequentialFile;
-import org.apache.activemq.artemis.core.io.aio.AIOSequentialFileFactory;
-import org.apache.activemq.artemis.core.journal.JournalLoadInformation;
-import org.apache.activemq.artemis.core.management.impl.ActiveMQServerControlImpl;
-import org.apache.activemq.artemis.core.paging.PagingManager;
-import org.apache.activemq.artemis.core.paging.PagingStoreFactory;
-import org.apache.activemq.artemis.core.paging.cursor.PageSubscription;
-import org.apache.activemq.artemis.core.paging.impl.PagingManagerImpl;
-import org.apache.activemq.artemis.core.paging.impl.PagingStoreFactoryDatabase;
-import org.apache.activemq.artemis.core.paging.impl.PagingStoreFactoryNIO;
-import org.apache.activemq.artemis.core.persistence.AddressBindingInfo;
-import org.apache.activemq.artemis.core.persistence.GroupingInfo;
-import org.apache.activemq.artemis.core.persistence.OperationContext;
-import org.apache.activemq.artemis.core.persistence.QueueBindingInfo;
-import org.apache.activemq.artemis.core.persistence.StorageManager;
-import org.apache.activemq.artemis.core.persistence.config.PersistedAddressSetting;
-import org.apache.activemq.artemis.core.persistence.config.PersistedRoles;
-import org.apache.activemq.artemis.core.persistence.impl.PageCountPending;
-import org.apache.activemq.artemis.core.persistence.impl.journal.JDBCJournalStorageManager;
-import org.apache.activemq.artemis.core.persistence.impl.journal.JournalStorageManager;
-import org.apache.activemq.artemis.core.persistence.impl.journal.OperationContextImpl;
-import org.apache.activemq.artemis.core.persistence.impl.nullpm.NullStorageManager;
-import org.apache.activemq.artemis.core.postoffice.Binding;
-import org.apache.activemq.artemis.core.postoffice.BindingType;
-import org.apache.activemq.artemis.core.postoffice.Bindings;
-import org.apache.activemq.artemis.core.postoffice.PostOffice;
-import org.apache.activemq.artemis.core.postoffice.QueueBinding;
-import org.apache.activemq.artemis.core.postoffice.impl.DivertBinding;
-import org.apache.activemq.artemis.core.postoffice.impl.LocalQueueBinding;
-import org.apache.activemq.artemis.core.postoffice.impl.PostOfficeImpl;
-import org.apache.activemq.artemis.core.remoting.server.RemotingService;
-import org.apache.activemq.artemis.core.remoting.server.impl.RemotingServiceImpl;
-import org.apache.activemq.artemis.core.replication.ReplicationEndpoint;
-import org.apache.activemq.artemis.core.replication.ReplicationManager;
-import org.apache.activemq.artemis.core.security.CheckType;
-import org.apache.activemq.artemis.core.security.Role;
-import org.apache.activemq.artemis.core.security.SecurityAuth;
-import org.apache.activemq.artemis.core.security.SecurityStore;
-import org.apache.activemq.artemis.core.security.impl.SecurityStoreImpl;
-import org.apache.activemq.artemis.core.server.ActivateCallback;
-import org.apache.activemq.artemis.core.server.ActivationFailureListener;
-import org.apache.activemq.artemis.core.server.ActiveMQComponent;
-import org.apache.activemq.artemis.core.server.ActiveMQMessageBundle;
-import org.apache.activemq.artemis.core.server.ActiveMQServer;
-import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
-import org.apache.activemq.artemis.core.server.AddressQueryResult;
-import org.apache.activemq.artemis.core.server.Bindable;
-import org.apache.activemq.artemis.core.server.BindingQueryResult;
-import org.apache.activemq.artemis.core.server.Divert;
-import org.apache.activemq.artemis.core.server.JournalType;
-import org.apache.activemq.artemis.core.server.LargeServerMessage;
-import org.apache.activemq.artemis.core.server.LoggingConfigurationFileReloader;
-import org.apache.activemq.artemis.core.server.MemoryManager;
-import org.apache.activemq.artemis.core.server.NetworkHealthCheck;
-import org.apache.activemq.artemis.core.server.NodeManager;
-import org.apache.activemq.artemis.core.server.PostQueueCreationCallback;
-import org.apache.activemq.artemis.core.server.PostQueueDeletionCallback;
-import org.apache.activemq.artemis.core.server.Queue;
-import org.apache.activemq.artemis.core.server.QueueConfig;
-import org.apache.activemq.artemis.core.server.QueueFactory;
-import org.apache.activemq.artemis.core.server.QueueQueryResult;
-import org.apache.activemq.artemis.core.server.SecuritySettingPlugin;
-import org.apache.activemq.artemis.core.server.ServerSession;
-import org.apache.activemq.artemis.core.server.ServiceComponent;
-import org.apache.activemq.artemis.core.server.ServiceRegistry;
-import org.apache.activemq.artemis.core.server.cluster.BackupManager;
-import org.apache.activemq.artemis.core.server.cluster.ClusterManager;
-import org.apache.activemq.artemis.core.server.cluster.ha.HAPolicy;
-import org.apache.activemq.artemis.core.server.files.FileMoveManager;
-import org.apache.activemq.artemis.core.server.files.FileStoreMonitor;
-import org.apache.activemq.artemis.core.server.group.GroupingHandler;
-import org.apache.activemq.artemis.core.server.group.impl.GroupingHandlerConfiguration;
-import org.apache.activemq.artemis.core.server.group.impl.LocalGroupingHandler;
-import org.apache.activemq.artemis.core.server.group.impl.RemoteGroupingHandler;
-import org.apache.activemq.artemis.core.server.impl.jdbc.JdbcNodeManager;
-import org.apache.activemq.artemis.core.server.management.ManagementService;
-import org.apache.activemq.artemis.core.server.management.impl.ManagementServiceImpl;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQPluginRunnable;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerAddressPlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerBasePlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerBindingPlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerBridgePlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerConnectionPlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerConsumerPlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerCriticalPlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerMessagePlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerQueuePlugin;
-import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerSessionPlugin;
-import org.apache.activemq.artemis.core.server.reload.ReloadCallback;
-import org.apache.activemq.artemis.core.server.reload.ReloadManager;
-import org.apache.activemq.artemis.core.server.reload.ReloadManagerImpl;
-import org.apache.activemq.artemis.core.server.transformer.Transformer;
-import org.apache.activemq.artemis.core.settings.HierarchicalRepository;
-import org.apache.activemq.artemis.core.settings.impl.AddressFullMessagePolicy;
-import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
-import org.apache.activemq.artemis.core.settings.impl.DeletionPolicy;
-import org.apache.activemq.artemis.core.settings.impl.HierarchicalObjectRepository;
-import org.apache.activemq.artemis.core.settings.impl.ResourceLimitSettings;
-import org.apache.activemq.artemis.core.transaction.ResourceManager;
-import org.apache.activemq.artemis.core.transaction.impl.ResourceManagerImpl;
-import org.apache.activemq.artemis.core.version.Version;
-import org.apache.activemq.artemis.spi.core.protocol.ProtocolManagerFactory;
-import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
-import org.apache.activemq.artemis.spi.core.protocol.SessionCallback;
-import org.apache.activemq.artemis.spi.core.security.ActiveMQSecurityManager;
-import org.apache.activemq.artemis.utils.ActiveMQThreadFactory;
-import org.apache.activemq.artemis.utils.ActiveMQThreadPoolExecutor;
-import org.apache.activemq.artemis.utils.CompositeAddress;
-import org.apache.activemq.artemis.utils.ExecutorFactory;
-import org.apache.activemq.artemis.utils.ReusableLatch;
-import org.apache.activemq.artemis.utils.SecurityFormatter;
-import org.apache.activemq.artemis.utils.ThreadDumpUtil;
-import org.apache.activemq.artemis.utils.TimeUtils;
-import org.apache.activemq.artemis.utils.VersionLoader;
-import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
-import org.apache.activemq.artemis.utils.collections.ConcurrentHashSet;
-import org.apache.activemq.artemis.utils.critical.CriticalAction;
-import org.apache.activemq.artemis.utils.critical.CriticalAnalyzer;
-import org.apache.activemq.artemis.utils.critical.CriticalAnalyzerImpl;
-import org.apache.activemq.artemis.utils.critical.CriticalAnalyzerPolicy;
-import org.apache.activemq.artemis.utils.critical.CriticalComponent;
-import org.apache.activemq.artemis.utils.critical.EmptyCriticalAnalyzer;
-import org.jboss.logging.Logger;
-
 /**
- * The ActiveMQ Artemis server implementation
+ * Additional Java 9 based functions will be added here as needed.
  */
-public class ActiveMQServerImpl implements ActiveMQServer {
-
-   private static final Logger logger = Logger.getLogger(ActiveMQServerImpl.class);
-
-   public static final String INTERNAL_NAMING_PREFIX = "$.artemis.internal";
-
-   /**
-    * JMS Topics (which are outside of the scope of the core API) will require a dumb subscription
-    * with a dummy-filter at this current version as a way to keep its existence valid and TCK
-    * tests. That subscription needs an invalid filter, however paging needs to ignore any
-    * subscription with this filter. For that reason, this filter needs to be rejected on paging or
-    * any other component on the system, and just be ignored for any purpose It's declared here as
-    * this filter is considered a global ignore
-    *
-    * @deprecated Replaced by {@link org.apache.activemq.artemis.core.filter.Filter#GENERIC_IGNORED_FILTER}
-    */
-   @Deprecated
-   public static final String GENERIC_IGNORED_FILTER = Filter.GENERIC_IGNORED_FILTER;
-
-   private HAPolicy haPolicy;
-
-   private volatile SERVER_STATE state = SERVER_STATE.STOPPED;
-
-   private final Version version;
-
-   private final ActiveMQSecurityManager securityManager;
-
-   private final Configuration configuration;
-
-   private final AtomicBoolean configurationReloadDeployed;
-
-   private MBeanServer mbeanServer;
-
-   private volatile SecurityStore securityStore;
-
-   private final HierarchicalRepository<AddressSettings> addressSettingsRepository;
-
-   private volatile QueueFactory queueFactory;
-
-   private volatile PagingManager pagingManager;
-
-   private volatile PostOffice postOffice;
-
-   private volatile ExecutorService threadPool;
-
-   protected volatile ScheduledExecutorService scheduledPool;
-
-   protected volatile ExecutorFactory executorFactory;
-
-   private volatile ExecutorService ioExecutorPool;
-
-   /**
-    * This is a thread pool for io tasks only.
-    * We can't use the same global executor to avoid starvations.
-    */
-   protected volatile ExecutorFactory ioExecutorFactory;
-
-   private final NetworkHealthCheck networkHealthCheck = new NetworkHealthCheck(ActiveMQDefaultConfiguration.getDefaultNetworkCheckNic(), ActiveMQDefaultConfiguration.getDefaultNetworkCheckPeriod(), ActiveMQDefaultConfiguration.getDefaultNetworkCheckTimeout());
-
-   private final HierarchicalRepository<Set<Role>> securityRepository;
-
-   private volatile ResourceManager resourceManager;
-
-   private volatile ActiveMQServerControlImpl messagingServerControl;
-
-   private volatile ClusterManager clusterManager;
-
-   private volatile BackupManager backupManager;
-
-   private volatile StorageManager storageManager;
-
-   private volatile RemotingService remotingService;
-
-   private final List<ProtocolManagerFactory> protocolManagerFactories = new ArrayList<>();
-
-   private volatile ManagementService managementService;
-
-   private volatile ConnectorsService connectorsService;
-
-   private MemoryManager memoryManager;
-
-   private ReloadManager reloadManager;
-
-   private FileStoreMonitor fileStoreMonitor;
-
-   private final Map<String, ServerSession> sessions = new ConcurrentHashMap<>();
-
-   private final Semaphore activationLock = new Semaphore(1);
-   /**
-    * This class here has the same principle of CountDownLatch but you can reuse the counters.
-    * It's based on the same super classes of {@code CountDownLatch}
-    */
-   private final ReusableLatch activationLatch = new ReusableLatch(0);
-
-   private final Set<ActivateCallback> activateCallbacks = new ConcurrentHashSet<>();
-
-   private final Set<ActivationFailureListener> activationFailureListeners = new ConcurrentHashSet<>();
-
-   private final Set<PostQueueCreationCallback> postQueueCreationCallbacks = new ConcurrentHashSet<>();
-
-   private final Set<PostQueueDeletionCallback> postQueueDeletionCallbacks = new ConcurrentHashSet<>();
-
-   private volatile GroupingHandler groupingHandler;
-
-   private NodeManager nodeManager;
-
-   // Used to identify the server on tests... useful on debugging testcases
-   private String identity;
-
-   private Thread activationThread;
-
-   private Activation activation;
-
-   private final Map<String, Object> activationParams = new HashMap<>();
-
-   protected final ShutdownOnCriticalErrorListener shutdownOnCriticalIO = new ShutdownOnCriticalErrorListener();
-
-   private final ActiveMQServer parentServer;
-
-   private CriticalAnalyzer analyzer;
-
-   //todo think about moving this to the activation
-   private final List<SimpleString> scaledDownNodeIDs = new ArrayList<>();
-
-   private boolean threadPoolSupplied = false;
-
-   private boolean scheduledPoolSupplied = false;
-
-   private final ServiceRegistry serviceRegistry;
-
-   private Date startDate;
-
-   private final List<ActiveMQComponent> externalComponents = new ArrayList<>();
-
-   private final ConcurrentMap<String, AtomicInteger> connectedClientIds = new ConcurrentHashMap();
-
-   private final ActiveMQComponent networkCheckMonitor = new ActiveMQComponent() {
-      @Override
-      public void start() throws Exception {
-         internalStart();
-      }
-
-      @Override
-      public void stop() throws Exception {
-         ActiveMQServerImpl.this.stop(false);
-      }
-
-      @Override
-      public String toString() {
-         return ActiveMQServerImpl.this.toString();
-      }
-
-      @Override
-      public boolean isStarted() {
-         return ActiveMQServerImpl.this.isStarted();
-      }
-   };
-
-   // Constructors
-   // ---------------------------------------------------------------------------------
-
-   public ActiveMQServerImpl() {
-      this(null, null, null);
-   }
-
-   public ActiveMQServerImpl(final Configuration configuration) {
-      this(configuration, null, null);
-   }
-
-   public ActiveMQServerImpl(final Configuration configuration, ActiveMQServer parentServer) {
-      this(configuration, null, null, parentServer);
-   }
-
-   public ActiveMQServerImpl(final Configuration configuration, final MBeanServer mbeanServer) {
-      this(configuration, mbeanServer, null);
-   }
-
-   public ActiveMQServerImpl(final Configuration configuration, final ActiveMQSecurityManager securityManager) {
-      this(configuration, null, securityManager);
-   }
-
-   public ActiveMQServerImpl(Configuration configuration,
-                             MBeanServer mbeanServer,
-                             final ActiveMQSecurityManager securityManager) {
-      this(configuration, mbeanServer, securityManager, null);
-   }
-
-   public ActiveMQServerImpl(Configuration configuration,
-                             MBeanServer mbeanServer,
-                             final ActiveMQSecurityManager securityManager,
-                             final ActiveMQServer parentServer) {
-      this(configuration, mbeanServer, securityManager, parentServer, null);
-   }
-
-   public ActiveMQServerImpl(Configuration configuration,
-                             MBeanServer mbeanServer,
-                             final ActiveMQSecurityManager securityManager,
-                             final ActiveMQServer parentServer,
-                             final ServiceRegistry serviceRegistry) {
-      if (configuration == null) {
-         configuration = new ConfigurationImpl();
-      } else {
-         ConfigurationUtils.validateConfiguration(configuration);
-      }
-
-      if (mbeanServer == null) {
-         // Just use JVM mbean server
-         mbeanServer = ManagementFactory.getPlatformMBeanServer();
-      }
-
-      // We need to hard code the version information into a source file
-
-      version = VersionLoader.getVersion();
-
-      this.configuration = configuration;
-
-      this.configurationReloadDeployed = new AtomicBoolean(true);
-
-      this.mbeanServer = mbeanServer;
-
-      this.securityManager = securityManager;
-
-      addressSettingsRepository = new HierarchicalObjectRepository<>(configuration.getWildcardConfiguration(), new HierarchicalObjectRepository.MatchModifier() {
-         @Override
-         public String modify(String input) {
-            return CompositeAddress.extractAddressName(input);
-         }
-      });
-
-      addressSettingsRepository.setDefault(new AddressSettings());
-
-      securityRepository = new HierarchicalObjectRepository<>(configuration.getWildcardConfiguration());
-
-      securityRepository.setDefault(new HashSet<Role>());
-
-      this.parentServer = parentServer;
-
-      this.serviceRegistry = serviceRegistry == null ? new ServiceRegistryImpl() : serviceRegistry;
-   }
-
-   @Override
-   public ReloadManager getReloadManager() {
-      return reloadManager;
-   }
-
-   @Override
-   public NetworkHealthCheck getNetworkHealthCheck() {
-      return networkHealthCheck;
-   }
-
-   // life-cycle methods
-   // ----------------------------------------------------------------
-
-   /*
-    * Can be overridden for tests
-    */
-   protected NodeManager createNodeManager(final File directory, boolean replicatingBackup) {
-      NodeManager manager;
-      if (!configuration.isPersistenceEnabled()) {
-         manager = new InVMNodeManager(replicatingBackup);
-      } else if (configuration.getStoreConfiguration() != null && configuration.getStoreConfiguration().getStoreType() == StoreConfiguration.StoreType.DATABASE) {
-         final HAPolicyConfiguration.TYPE haType = configuration.getHAPolicyConfiguration() == null ? null : configuration.getHAPolicyConfiguration().getType();
-         if (haType == HAPolicyConfiguration.TYPE.SHARED_STORE_MASTER || haType == HAPolicyConfiguration.TYPE.SHARED_STORE_SLAVE) {
-            if (replicatingBackup) {
-               throw new IllegalArgumentException("replicatingBackup is not supported yet while using JDBC persistence");
-            }
-            final DatabaseStorageConfiguration dbConf = (DatabaseStorageConfiguration) configuration.getStoreConfiguration();
-            manager = JdbcNodeManager.with(dbConf, scheduledPool, executorFactory, shutdownOnCriticalIO);
-         } else if (haType == null || haType == HAPolicyConfiguration.TYPE.LIVE_ONLY) {
-            if (logger.isDebugEnabled()) {
-               logger.debug("Detected no Shared Store HA options on JDBC store");
-            }
-            //LIVE_ONLY should be the default HA option when HA isn't configured
-            manager = new FileLockNodeManager(directory, replicatingBackup, configuration.getJournalLockAcquisitionTimeout());
-         } else {
-            throw new IllegalArgumentException("JDBC persistence allows only Shared Store HA options");
-         }
-      } else {
-         manager = new FileLockNodeManager(directory, replicatingBackup, configuration.getJournalLockAcquisitionTimeout());
-      }
-      return manager;
-   }
-
-   @Override
-   public OperationContext newOperationContext() {
-      return getStorageManager().newContext(getExecutorFactory().getExecutor());
-   }
-
-   @Override
-   public final synchronized void start() throws Exception {
-      SERVER_STATE originalState = state;
-      try {
-         internalStart();
-      } catch (Throwable t) {
-         ActiveMQServerLogger.LOGGER.failedToStartServer(t);
-      } finally {
-         if (originalState == SERVER_STATE.STOPPED) {
-            networkHealthCheck.setTimeUnit(TimeUnit.MILLISECONDS).setPeriod(configuration.getNetworkCheckPeriod()).
-               setNetworkTimeout(configuration.getNetworkCheckTimeout()).
-               parseAddressList(configuration.getNetworkCheckList()).
-               parseURIList(configuration.getNetworkCheckURLList()).
-               setNICName(configuration.getNetworkCheckNIC()).
-               setIpv4Command(configuration.getNetworkCheckPingCommand()).
-               setIpv6Command(configuration.getNetworkCheckPing6Command());
-
-            networkHealthCheck.addComponent(networkCheckMonitor);
-         }
-      }
-   }
-
-   @Override
-   public CriticalAnalyzer getCriticalAnalyzer() {
-      return this.analyzer;
-   }
-
-   private void internalStart() throws Exception {
-      if (state != SERVER_STATE.STOPPED) {
-         logger.debug("Server already started!");
-         return;
-      }
-
-      configuration.parseSystemProperties();
-
-      initializeExecutorServices();
-
-      initializeCriticalAnalyzer();
-
-      startDate = new Date();
-
-      state = SERVER_STATE.STARTING;
-
-      if (haPolicy == null) {
-         haPolicy = ConfigurationUtils.getHAPolicy(configuration.getHAPolicyConfiguration(), this);
-      }
-
-      activationLatch.setCount(1);
-
-      logger.debug("Starting server " + this);
-
-      OperationContextImpl.clearContext();
-
-      try {
-         checkJournalDirectory();
-
-         nodeManager = createNodeManager(configuration.getJournalLocation(), false);
-
-         nodeManager.start();
-
-         ActiveMQServerLogger.LOGGER.serverStarting((haPolicy.isBackup() ? "backup" : "live"), configuration);
-
-         final boolean wasLive = !haPolicy.isBackup();
-         if (!haPolicy.isBackup()) {
-            activation = haPolicy.createActivation(this, false, activationParams, shutdownOnCriticalIO);
-
-            if (haPolicy.isWaitForActivation()) {
-               activation.run();
+public class Java9 extends Java8 {
+    @Override
+    public Map<String, Set<String>> getDefaultImportClasses(String[] packageNames) {
+        Map<String, Set<String>> result = new LinkedHashMap<>();
+
+        List<String> javaPns = new ArrayList<>(4);
+        List<String> groovyPns = new ArrayList<>(4);
+        for (String prefix : packageNames) {
+            String pn = prefix.substring(0, prefix.length() - 1).replace('.', '/');
+
+            if (pn.startsWith("java/")) {
+                javaPns.add(pn);
+            } else if (pn.startsWith("groovy/")) {
+                groovyPns.add(pn);
             } else {
-               if (logger.isTraceEnabled()) {
-                  logger.trace("starting activation");
-               }
-               activationThread = new ActivationThread(activation, ActiveMQMessageBundle.BUNDLE.activationForServer(this));
-               activationThread.start();
+                throw new GroovyBugError("unexpected package: " + pn);
             }
-         }
-         // The activation on fail-back may change the value of isBackup, for that reason we are
-         // checking again here
-         if (haPolicy.isBackup()) {
-            if (haPolicy.isSharedStore()) {
-               activation = haPolicy.createActivation(this, false, activationParams, shutdownOnCriticalIO);
-            } else {
-               activation = haPolicy.createActivation(this, wasLive, activationParams, shutdownOnCriticalIO);
+        }
+
+        result.putAll(doFindClasses(URI.create("jrt:/modules/java.base/"), "java", javaPns));
+
+        try {
+            URI gsLocation = DefaultGroovyMethods.getLocation(GroovySystem.class).toURI();
+            result.putAll(doFindClasses(gsLocation, "groovy", groovyPns));
+        } catch (Exception e) {
+            System.err.println("[WARNING] Failed to get default imported groovy classes: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    private static Map<String, Set<String>> doFindClasses(URI uri, String packageName, List<String> defaultPackageNames) {
+        Map<String, Set<String>> result = ClassFinder.find(uri, packageName, true)
+                .entrySet().stream()
+                .filter(e -> e.getValue().stream().anyMatch(defaultPackageNames::contains))
+                .collect(
+                        Collectors.toMap(
+                                Map.Entry::getKey,
+                                entry -> entry.getValue().stream()
+                                        .filter(e -> defaultPackageNames.contains(e))
+                                        .map(e -> e.replace('/', '.') + ".")
+                                        .collect(Collectors.toSet())
+                        )
+                );
+        return result;
+    }
+
+    private static class LookupHolder {
+        private static final Method PRIVATE_LOOKUP;
+        private static final Constructor<MethodHandles.Lookup> LOOKUP_Constructor;
+
+        static {
+            Constructor<MethodHandles.Lookup> lookup = null;
+            Method privateLookup = null;
+            try { // java 9
+                privateLookup = MethodHandles.class.getMethod("privateLookupIn", Class.class, MethodHandles.Lookup.class);
+            } catch (final NoSuchMethodException | RuntimeException e) { // java 8 or fallback if anything else goes wrong
+                try {
+                    lookup = MethodHandles.Lookup.class.getDeclaredConstructor(Class.class, Integer.TYPE);
+                    if (!lookup.isAccessible()) {
+                        ReflectionUtils.trySetAccessible(lookup);
+                    }
+                } catch (final NoSuchMethodException ex) {
+                    throw new IllegalStateException("Incompatible JVM", e);
+                }
+            }
+            PRIVATE_LOOKUP = privateLookup;
+            LOOKUP_Constructor = lookup;
+        }
+    }
+
+    private static Constructor<MethodHandles.Lookup> getLookupConstructor() {
+        return LookupHolder.LOOKUP_Constructor;
+    }
+
+    private static Method getPrivateLookup() {
+        return LookupHolder.PRIVATE_LOOKUP;
+    }
+
+    public static MethodHandles.Lookup of(final Class<?> declaringClass) {
+        try {
+            final Method privateLookup = getPrivateLookup();
+            if (privateLookup != null) {
+                return (MethodHandles.Lookup) privateLookup.invoke(null, declaringClass, MethodHandles.lookup());
+            }
+            return getLookupConstructor().newInstance(declaringClass, MethodHandles.Lookup.PRIVATE).in(declaringClass);
+        } catch (final IllegalAccessException | InstantiationException e) {
+            throw new IllegalArgumentException(e);
+        } catch (final InvocationTargetException e) {
+            throw new GroovyRuntimeException(e);
+        }
+    }
+
+    @Override
+    public int getVersion() {
+        return 9;
+    }
+
+    @Override
+    public Object getInvokeSpecialHandle(Method method, Object receiver) {
+        final Class<?> receiverType = receiver.getClass();
+        try {
+            return of(receiverType).unreflectSpecial(method, receiverType).bindTo(receiver);
+        } catch (ReflectiveOperationException e) {
+            return super.getInvokeSpecialHandle(method, receiver);
+        }
+    }
+
+    /**
+     * This method may be used by a caller in class C to check whether to enable access to a member of declaring class D successfully
+     * if {@link Java8#checkCanSetAccessible(java.lang.reflect.AccessibleObject, java.lang.Class)} returns true and any of the following hold:
+     * <p>
+     * 1) C and D are in the same module.
+     * 2) The member is public and D is public in a package that the module containing D exports to at least the module containing C.
+     * 3) The member is protected static, D is public in a package that the module containing D exports to at least the module containing C, and C is a subclass of D.
+     * 4) D is in a package that the module containing D opens to at least the module containing C. All packages in unnamed and open modules are open to all modules and so this method always succeeds when D is in an unnamed or open module.
+     *
+     * @param accessibleObject the accessible object to check
+     * @param callerClass           the callerClass to invoke {@code setAccessible}
+     * @return the check result
+     */
+    public boolean checkCanSetAccessible(AccessibleObject accessibleObject, Class<?> callerClass) {
+
+        if (!super.checkCanSetAccessible(accessibleObject, callerClass)) return false;
+
+        if (callerClass == MethodHandle.class) {
+            throw new IllegalCallerException();   // should not happen
+        }
+
+        if (!(accessibleObject instanceof Member)) {
+            throw new IllegalArgumentException("accessibleObject should be a member of type: " + accessibleObject);   // should not happen
+        }
+
+        Member member = (Member) accessibleObject;
+        Class<?> declaringClass = member.getDeclaringClass();
+
+        Module callerModule = callerClass.getModule();
+        Module declaringModule = declaringClass.getModule();
+
+        if (callerModule == declaringModule) return true;
+        if (callerModule == Object.class.getModule()) return true;
+        if (!declaringModule.isNamed()) return true;
+
+        int modifiers = member.getModifiers();
+
+        return checkAccessible(callerClass, declaringClass, modifiers, true);
+    }
+
+    @Override
+    public boolean trySetAccessible(AccessibleObject ao) {
+        return ao.trySetAccessible();
+    }
+
+    @Override
+    public MetaMethod transformMetaMethod(MetaClass metaClass, MetaMethod metaMethod, Class<?> caller) {
+        if (!(metaMethod instanceof CachedMethod)) {
+            return metaMethod;
+        }
+
+        CachedMethod cachedMethod = (CachedMethod) metaMethod;
+        CachedClass methodDeclaringClass = cachedMethod.getDeclaringClass();
+
+        if (null == methodDeclaringClass) {
+            return metaMethod;
+        }
+
+        if (null == caller) {
+            caller = ReflectionUtils.class; // "set accessible" are done via `org.codehaus.groovy.reflection.ReflectionUtils` as shown in warnings
+        }
+
+        return getOrTransformMetaMethod(metaClass, caller, cachedMethod);
+    }
+
+    private CachedMethod getOrTransformMetaMethod(MetaClass metaClass, Class<?> caller, CachedMethod cachedMethod) {
+        CachedMethod transformedMethod = cachedMethod.getTransformedMethod();
+        if (null != transformedMethod) {
+            return transformedMethod;
+        }
+
+        transformedMethod = doTransformMetaMethod(metaClass, cachedMethod, caller);
+        cachedMethod.setTransformedMethod(transformedMethod);
+
+        return transformedMethod;
+    }
+
+    private CachedMethod doTransformMetaMethod(MetaClass metaClass, CachedMethod metaMethod, Class<?> caller) {
+        CachedClass methodDeclaringClass = metaMethod.getDeclaringClass();
+        Class<?> declaringClass = methodDeclaringClass.getTheClass();
+        int methodModifiers = metaMethod.getModifiers();
+
+        // if caller can access the method,
+        // no need to transform the meta method
+        if (checkAccessible(caller, declaringClass, methodModifiers, false)) {
+            return metaMethod;
+        }
+
+        Class<?>[] params = metaMethod.getPT();
+        Class<?> theClass = metaClass.getTheClass();
+        if (declaringClass == theClass) {
+            if (BigInteger.class == theClass) {
+                CachedMethod bigIntegerMetaMethod = transformBigIntegerMetaMethod(metaMethod, params);
+                if (bigIntegerMetaMethod != metaMethod) {
+                    return bigIntegerMetaMethod;
+                }
             }
 
-            if (logger.isTraceEnabled()) {
-               logger.trace("starting backupActivation");
+            // GROOVY-9081 "3) Access public members of private class", e.g. Collections.unmodifiableMap([:]).toString()
+            // try to find the visible method from its superclasses
+            List<Class<?>> classList = findSuperclasses(theClass);
+            classList.add(0, theClass);
+
+            for (Class<?> sc : classList) {
+                Optional<CachedMethod> optionalMetaMethod = getAccessibleMetaMethod(metaMethod, params, caller, sc, true);
+                if (optionalMetaMethod.isPresent()) {
+                    return optionalMetaMethod.get();
+                }
             }
-            activationThread = new ActivationThread(activation, ActiveMQMessageBundle.BUNDLE.activationForServer(this));
-            activationThread.start();
-         } else {
-            ActiveMQServerLogger.LOGGER.serverStarted(getVersion().getFullVersion(), configuration.getName(), nodeManager.getNodeId(), identity != null ? identity : "");
-         }
-         // start connector service
-         connectorsService = new ConnectorsService(configuration, storageManager, scheduledPool, postOffice, serviceRegistry);
-         connectorsService.start();
-      } finally {
-         // this avoids embedded applications using dirty contexts from startup
-         OperationContextImpl.clearContext();
-      }
-   }
 
-   private void initializeCriticalAnalyzer() throws Exception {
+            return metaMethod;
+        } else if (declaringClass.isAssignableFrom(theClass)) {
+            // if caller can not access the method,
+            // try to find the corresponding method in its derived class
+            // GROOVY-9081 Sub-class derives the protected members from public class, "Invoke the members on the sub class instances"
+            // e.g. StringBuilder sb = new StringBuilder(); sb.setLength(0);
+            // `setLength` is the method of `AbstractStringBuilder`, which is `package-private`
+            Optional<CachedMethod> optionalMetaMethod = getAccessibleMetaMethod(metaMethod, params, caller, theClass, false);
+            if (optionalMetaMethod.isPresent()) {
+                return optionalMetaMethod.get();
+            }
+        }
 
-      // Some tests will play crazy frequenceistop/start
-      CriticalAnalyzer analyzer = this.getCriticalAnalyzer();
-      if (analyzer == null) {
-         if (configuration.isCriticalAnalyzer()) {
-            // this will have its own ScheduledPool
-            analyzer = new CriticalAnalyzerImpl();
-         } else {
-            analyzer = EmptyCriticalAnalyzer.getInstance();
-         }
+        return metaMethod;
+    }
 
-         this.analyzer = analyzer;
-      }
+    private static CachedMethod transformBigIntegerMetaMethod(CachedMethod metaMethod, Class<?>[] params) {
+        if (1 == params.length && MULTIPLY.equals(metaMethod.getName())) {
+            Class<?> param = params[0];
+            if (Long.class == param || long.class == param
+                    || Integer.class == param || int.class == param
+                    || Short.class == param || short.class == param) {
+                return new CachedMethod(BigIntegerMultiplyMethodHolder.MULTIPLY_METHOD);
+            }
+        }
 
-      /* Calling this for cases where the server was stopped and now is being restarted... failback, etc...*/
-      analyzer.clear();
+        return metaMethod;
+    }
 
-      analyzer.setCheckTime(configuration.getCriticalAnalyzerCheckPeriod(), TimeUnit.MILLISECONDS).setTimeout(configuration.getCriticalAnalyzerTimeout(), TimeUnit.MILLISECONDS);
+    private Optional<CachedMethod> getAccessibleMetaMethod(CachedMethod metaMethod, Class<?>[] params, Class<?> caller, Class<?> sc, boolean declared) {
+        List<CachedMethod> metaMethodList = getMetaMethods(metaMethod, params, sc, declared);
+        for (CachedMethod mm : metaMethodList) {
+            if (checkAccessible(caller, mm.getDeclaringClass().getTheClass(), mm.getModifiers(), false)) {
+                return Optional.of(mm);
+            }
+        }
+        return Optional.empty();
+    }
 
-      if (configuration.isCriticalAnalyzer()) {
-         analyzer.start();
-      }
+    private static List<CachedMethod> getMetaMethods(CachedMethod metaMethod, Class<?>[] params, Class<?> sc, boolean declared) {
+        String metaMethodName = metaMethod.getName();
+        List<Method> optionalMethodList = declared
+                                            ? ReflectionUtils.getDeclaredMethods(sc, metaMethodName, params)
+                                            : ReflectionUtils.getMethods(sc, metaMethodName, params);
+        return optionalMethodList.stream().map(CachedMethod::new).collect(Collectors.toList());
+    }
 
-      CriticalAction criticalAction = null;
-      final CriticalAnalyzerPolicy criticalAnalyzerPolicy = configuration.getCriticalAnalyzerPolicy();
-      switch (criticalAnalyzerPolicy) {
+    @Override
+    public boolean checkAccessible(Class<?> callerClass, Class<?> declaringClass, int memberModifiers, boolean allowIllegalAccess) {
+        Module callerModule = callerClass.getModule();
+        Module declaringModule = declaringClass.getModule();
+        String pn = declaringClass.getPackageName();
 
-         case HALT:
-            criticalAction = criticalComponent -> {
+        boolean unnamedModuleAccessNamedModule = !callerModule.isNamed() && declaringModule.isNamed();
+        boolean toCheckIllegalAccess = !allowIllegalAccess && unnamedModuleAccessNamedModule;
 
-               ActiveMQServerLogger.LOGGER.criticalSystemHalt(criticalComponent);
+        // class is public and package is exported to callerClass
+        boolean isClassPublic = Modifier.isPublic(declaringClass.getModifiers());
+        if (isClassPublic && declaringModule.isExported(pn, callerModule)) {
+            // member is public
+            if (Modifier.isPublic(memberModifiers)) {
+                return !(toCheckIllegalAccess && isExportedForIllegalAccess(declaringModule, pn));
+            }
 
-               threadDump();
-               sendCriticalNotification(criticalComponent);
+            // member is protected-static
+            if (Modifier.isProtected(memberModifiers)
+                    && Modifier.isStatic(memberModifiers)
+                    && isSubclassOf(callerClass, declaringClass)) {
+                return !(toCheckIllegalAccess && isExportedForIllegalAccess(declaringModule, pn));
+            }
+        }
 
-               Runtime.getRuntime().halt(70); // Linux systems will have /usr/include/sysexits.h showing 70 as internal software error
+        // package is open to callerClass
+        if (declaringModule.isOpen(pn, callerModule)) {
+            return !(toCheckIllegalAccess && isOpenedForIllegalAccess(declaringModule, pn));
+        }
 
-            };
-            break;
-         case SHUTDOWN:
-            criticalAction = criticalComponent -> {
+        return false;
+    }
 
-               ActiveMQServerLogger.LOGGER.criticalSystemShutdown(criticalComponent);
+    private static boolean isExportedForIllegalAccess(Module declaringModule, String pn) {
+        return concealedPackageList(declaringModule).contains(pn);
+    }
 
-               threadDump();
+    private static boolean isOpenedForIllegalAccess(Module declaringModule, String pn) {
+        if (isExportedForIllegalAccess(declaringModule, pn)) return true;
+        return exportedPackageList(declaringModule).contains(pn);
+    }
 
-               // on the case of a critical failure, -1 cannot simply means forever.
-               // in case graceful is -1, we will set it to 30 seconds
-               sendCriticalNotification(criticalComponent);
+    private static boolean isSubclassOf(Class<?> queryClass, Class<?> ofClass) {
+        while (queryClass != null) {
+            if (queryClass == ofClass) {
+                return true;
+            }
+            queryClass = queryClass.getSuperclass();
+        }
+        return false;
+    }
 
-               // you can't stop from the check thread,
-               // nor can use an executor
-               Thread stopThread = new Thread() {
-                  @Override
-                  public void run() {
-                     try {
-                        ActiveMQServerImpl.this.stop();
-                     } catch (Throwable e) {
-                        logger.warn(e.getMessage(), e);
-                     }
-                  }
-               };
-               stopThread.start();
-            };
-            break;
-         case LOG:
-            criticalAction = criticalComponent -> {
-               ActiveMQServerLogger.LOGGER.criticalSystemLog(criticalComponent);
-               threadDump();
-               sendCriticalNotification(criticalComponent);
-            };
-            break;
-      }
+    private static List<Class<?>> findSuperclasses(Class<?> clazz) {
+        List<Class<?>> result = new LinkedList<>();
 
-      analyzer.addAction(criticalAction);
-   }
+        for (Class<?> c = clazz.getSuperclass(); null != c; c = c.getSuperclass()) {
+            result.add(c);
+        }
 
-   private void sendCriticalNotification(final CriticalComponent criticalComponent) {
-      // on the case of a critical failure, -1 cannot simply means forever.
-      // in case graceful is -1, we will set it to 30 seconds
-      long timeout = configuration.getGracefulShutdownTimeout() < 0 ? 30000 : configuration.getGracefulShutdownTimeout();
+        return result;
+    }
 
-      Thread notificationSender = new Thread() {
-         @Override
-         public void run() {
+    private static Set<String> concealedPackageList(Module module) {
+        return CONCEALED_PACKAGES_TO_OPEN.computeIfAbsent(module.getName(), m -> new HashSet<>());
+    }
+
+    private static Set<String> exportedPackageList(Module module) {
+        return EXPORTED_PACKAGES_TO_OPEN.computeIfAbsent(module.getName(), m -> new HashSet<>());
+    }
+
+    private static final Map<String, Set<String>> CONCEALED_PACKAGES_TO_OPEN;
+    private static final Map<String, Set<String>> EXPORTED_PACKAGES_TO_OPEN;
+
+    static {
+        Tuple2<Map<String, Set<String>>, Map<String, Set<String>>> tuple2 = findConcealedAndExportedPackagesToOpen();
+        CONCEALED_PACKAGES_TO_OPEN = tuple2.getV1();
+        EXPORTED_PACKAGES_TO_OPEN = tuple2.getV2();
+    }
+
+    private static Tuple2<Map<String, Set<String>>, Map<String, Set<String>>> findConcealedAndExportedPackagesToOpen() {
+        ModuleFinder finder = ModuleFinder.ofSystem();
+
+        Map<String, ModuleDescriptor> map = new HashMap<>();
+        finder.findAll().stream()
+                .map(ModuleReference::descriptor)
+                .forEach(md -> md.packages().forEach(pn -> map.putIfAbsent(pn, md)));
+
+        final Map<String, Set<String>> concealedPackagesToOpen = new HashMap<>();
+        final Map<String, Set<String>> exportedPackagesToOpen = new HashMap<>();
+
+        Arrays.stream(JAVA8_PACKAGES())
+                .forEach(pn -> {
+                    ModuleDescriptor descriptor = map.get(pn);
+                    if (descriptor != null && !isOpen(descriptor, pn)) {
+                        String name = descriptor.name();
+                        if (isExported(descriptor, pn)) {
+                            exportedPackagesToOpen.computeIfAbsent(name,
+                                    k -> new HashSet<>()).add(pn);
+                        } else {
+                            concealedPackagesToOpen.computeIfAbsent(name,
+                                    k -> new HashSet<>()).add(pn);
+                        }
+                    }
+                });
+
+        return Tuple.tuple(concealedPackagesToOpen, exportedPackagesToOpen);
+    }
+
+    private static boolean isExported(ModuleDescriptor descriptor, String pn) {
+        return descriptor.exports()
+                .stream()
+                .anyMatch(e -> e.source().equals(pn) && !e.isQualified());
+    }
+
+    private static boolean isOpen(ModuleDescriptor descriptor, String pn) {
+        return descriptor.opens()
+                .stream()
+                .anyMatch(e -> e.source().equals(pn) && !e.isQualified());
+    }
+
+    private static final String MULTIPLY = "multiply";
+    private static class BigIntegerMultiplyMethodHolder {
+        private static final Method MULTIPLY_METHOD;
+        static {
             try {
-               if (hasBrokerCriticalPlugins()) {
-                  callBrokerCriticalPlugins(plugin -> plugin.criticalFailure(criticalComponent));
-               }
-            } catch (Throwable e) {
-               logger.warn(e.getMessage(), e);
+                MULTIPLY_METHOD = BigInteger.class.getDeclaredMethod(MULTIPLY, BigInteger.class);
+            } catch (NoSuchMethodException | SecurityException e) {
+                throw new GroovyBugError("Failed to find " + MULTIPLY + " method of BigInteger", e);
             }
-         }
-      };
-
-      // I'm using a different thread here as we need to manage timeouts
-      notificationSender.start();
-
-      try {
-         notificationSender.join(timeout);
-      } catch (InterruptedException ignored) {
-      }
-   }
-
-   @Override
-   public ReplicationEndpoint getReplicationEndpoint() {
-      if (activation instanceof SharedNothingBackupActivation) {
-         return ((SharedNothingBackupActivation) activation).getReplicationEndpoint();
-      }
-      return null;
-   }
-
-   @Override
-   public void unlockActivation() {
-      activationLock.release();
-   }
-
-   @Override
-   public void lockActivation() {
-      try {
-         activationLock.acquire();
-      } catch (Exception e) {
-         ActiveMQServerLogger.LOGGER.unableToAcquireLock(e);
-      }
-   }
-
-   @Override
-   public void setState(SERVER_STATE state) {
-      this.state = state;
-   }
-
-   @Override
-   public SERVER_STATE getState() {
-      return state;
-   }
-
-   public void interruptActivationThread(NodeManager nodeManagerInUse) throws InterruptedException {
-      long timeout = 30000;
-
-      long start = System.currentTimeMillis();
-
-      while (activationThread.isAlive() && System.currentTimeMillis() - start < timeout) {
-         if (nodeManagerInUse != null) {
-            nodeManagerInUse.interrupt();
-         }
-
-         activationThread.interrupt();
-
-         activationThread.join(1000);
-
-      }
-
-      if (System.currentTimeMillis() - start >= timeout) {
-         ActiveMQServerLogger.LOGGER.activationTimeout();
-         threadDump();
-      }
-   }
-
-   public void resetNodeManager() throws Exception {
-      if (nodeManager != null) {
-         nodeManager.stop();
-      }
-      nodeManager = createNodeManager(configuration.getJournalLocation(), true);
-   }
-
-   @Override
-   public Activation getActivation() {
-      return activation;
-   }
-
-   @Override
-   public HAPolicy getHAPolicy() {
-      return haPolicy;
-   }
-
-   @Override
-   public void setHAPolicy(HAPolicy haPolicy) {
-      if (logger.isTraceEnabled()) {
-         logger.tracef("XXX @@@ Setting %s, isBackup=%s at %s", haPolicy, haPolicy.isBackup(), this);
-      }
-      this.haPolicy = haPolicy;
-   }
-
-   @Override
-   public void setMBeanServer(MBeanServer mbeanServer) {
-      if (state == SERVER_STATE.STARTING || state == SERVER_STATE.STARTED) {
-         throw ActiveMQMessageBundle.BUNDLE.cannotSetMBeanserver();
-      }
-      this.mbeanServer = mbeanServer;
-   }
-
-   @Override
-   public void addExternalComponent(ActiveMQComponent externalComponent) {
-      externalComponents.add(externalComponent);
-   }
-
-   @Override
-   public ExecutorService getThreadPool() {
-      return threadPool;
-   }
-
-   public void setActivation(SharedNothingLiveActivation activation) {
-      this.activation = activation;
-   }
-
-   /**
-    * Stops the server in a different thread.
-    */
-   public final void stopTheServer(final boolean criticalIOError) {
-      Thread thread = new Thread() {
-         @Override
-         public void run() {
-            try {
-               ActiveMQServerImpl.this.stop(false, criticalIOError, false);
-            } catch (Exception e) {
-               ActiveMQServerLogger.LOGGER.errorStoppingServer(e);
-            }
-         }
-      };
-
-      thread.start();
-   }
-
-   @Override
-   public void stop() throws Exception {
-      stop(true);
-   }
-
-   @Override
-   public void stop(boolean isShutdown)  throws Exception {
-      try {
-         stop(false, isShutdown);
-      } finally {
-         if (isShutdown) networkHealthCheck.stop();
-      }
-   }
-
-   @Override
-   public void addActivationParam(String key, Object val) {
-      activationParams.put(key, val);
-   }
-
-   @Override
-   public boolean isAddressBound(String address) throws Exception {
-      return postOffice.isAddressBound(SimpleString.toSimpleString(address));
-   }
-
-   @Override
-   public BindingQueryResult bindingQuery(SimpleString address) throws Exception {
-      if (address == null) {
-         throw ActiveMQMessageBundle.BUNDLE.addressIsNull();
-      }
-
-      SimpleString realAddress = CompositeAddress.extractAddressName(address);
-      AddressSettings addressSettings = getAddressSettingsRepository().getMatch(realAddress.toString());
-
-      boolean autoCreateQeueus = addressSettings.isAutoCreateQueues();
-      boolean autoCreateAddresses = addressSettings.isAutoCreateAddresses();
-      boolean defaultPurgeOnNoConsumers = addressSettings.isDefaultPurgeOnNoConsumers();
-      int defaultMaxConsumers = addressSettings.getDefaultMaxConsumers();
-      boolean defaultExclusive = addressSettings.isDefaultExclusiveQueue();
-      boolean defaultLastValue = addressSettings.isDefaultLastValueQueue();
-      SimpleString defaultLastValueKey = addressSettings.getDefaultLastValueKey();
-      boolean defaultNonDestructive = addressSettings.isDefaultNonDestructive();
-      int defaultConsumersBeforeDispatch = addressSettings.getDefaultConsumersBeforeDispatch();
-      long defaultDelayBeforeDispatch = addressSettings.getDefaultDelayBeforeDispatch();
-
-      List<SimpleString> names = new ArrayList<>();
-
-      // make an exception for the management address (see HORNETQ-29)
-      ManagementService managementService = getManagementService();
-      if (managementService != null) {
-         if (realAddress.equals(managementService.getManagementAddress())) {
-            return new BindingQueryResult(true, null, names, autoCreateQeueus, autoCreateAddresses, defaultPurgeOnNoConsumers, defaultMaxConsumers, defaultExclusive, defaultLastValue, defaultLastValueKey, defaultNonDestructive, defaultConsumersBeforeDispatch, defaultDelayBeforeDispatch);
-         }
-      }
-
-      Bindings bindings = getPostOffice().getMatchingBindings(realAddress);
-
-      for (Binding binding : bindings.getBindings()) {
-         if (binding.getType() == BindingType.LOCAL_QUEUE || binding.getType() == BindingType.REMOTE_QUEUE) {
-            names.add(binding.getUniqueName());
-         }
-      }
-
-      AddressInfo info = getAddressInfo(realAddress);
-
-      return new BindingQueryResult(info != null, info, names, autoCreateQeueus, autoCreateAddresses, defaultPurgeOnNoConsumers, defaultMaxConsumers, defaultExclusive, defaultLastValue, defaultLastValueKey, defaultNonDestructive, defaultConsumersBeforeDispatch, defaultDelayBeforeDispatch);
-   }
-
-   @Override
-   public QueueQueryResult queueQuery(SimpleString name) {
-      if (name == null) {
-         throw ActiveMQMessageBundle.BUNDLE.queueNameIsNull();
-      }
-
-      SimpleString realName = CompositeAddress.extractQueueName(name);
-
-      final QueueQueryResult response;
-
-      Binding binding = getPostOffice().getBinding(realName);
-
-      final SimpleString addressName = binding != null && binding.getType() == BindingType.LOCAL_QUEUE
-            ? binding.getAddress() : CompositeAddress.extractAddressName(name);
-
-      final AddressSettings addressSettings = getAddressSettingsRepository().getMatch(addressName.toString());
-
-      boolean autoCreateQueues = addressSettings.isAutoCreateQueues();
-      boolean defaultPurgeOnNoConsumers = addressSettings.isDefaultPurgeOnNoConsumers();
-      int defaultMaxConsumers = addressSettings.getDefaultMaxConsumers();
-      boolean defaultExclusiveQueue = addressSettings.isDefaultExclusiveQueue();
-      boolean defaultLastValueQueue = addressSettings.isDefaultLastValueQueue();
-      SimpleString defaultLastValueKey = addressSettings.getDefaultLastValueKey();
-      boolean defaultNonDestructive = addressSettings.isDefaultNonDestructive();
-      int defaultConsumersBeforeDispatch = addressSettings.getDefaultConsumersBeforeDispatch();
-      long defaultDelayBeforeDispatch = addressSettings.getDefaultDelayBeforeDispatch();
-      int defaultConsumerWindowSize = addressSettings.getDefaultConsumerWindowSize();
-      boolean defaultGroupRebalance = addressSettings.isDefaultGroupRebalance();
-      int defaultGroupBuckets = addressSettings.getDefaultGroupBuckets();
-
-      SimpleString managementAddress = getManagementService() != null ? getManagementService().getManagementAddress() : null;
-
-      if (binding != null && binding.getType() == BindingType.LOCAL_QUEUE) {
-         Queue queue = (Queue) binding.getBindable();
-
-         Filter filter = queue.getFilter();
-
-         SimpleString filterString = filter == null ? null : filter.getFilterString();
-
-         response = new QueueQueryResult(realName, binding.getAddress(), queue.isDurable(), queue.isTemporary(), filterString, queue.getConsumerCount(), queue.getMessageCount(), autoCreateQueues, true, queue.isAutoCreated(), queue.isPurgeOnNoConsumers(), queue.getRoutingType(), queue.getMaxConsumers(), queue.isExclusive(), queue.isGroupRebalance(), queue.getGroupBuckets(), queue.isLastValue(), queue.getLastValueKey(), queue.isNonDestructive(), queue.getConsumersBeforeDispatch(), queue.getDelayBeforeDispatch(), defaultConsumerWindowSize);
-      } else if (realName.equals(managementAddress)) {
-         // make an exception for the management address (see HORNETQ-29)
-         response = new QueueQueryResult(realName, managementAddress, true, false, null, -1, -1, autoCreateQueues, true, false, false, RoutingType.MULTICAST, -1, false, false, null, null, null, null, null, null, defaultConsumerWindowSize);
-      } else {
-         response = new QueueQueryResult(realName, addressName, true, false, null, 0, 0, autoCreateQueues, false, false, defaultPurgeOnNoConsumers, RoutingType.MULTICAST, defaultMaxConsumers, defaultExclusiveQueue, defaultGroupRebalance, defaultGroupBuckets, defaultLastValueQueue, defaultLastValueKey, defaultNonDestructive, defaultConsumersBeforeDispatch, defaultDelayBeforeDispatch, defaultConsumerWindowSize);
-      }
-
-      return response;
-   }
-
-   @Override
-   public AddressQueryResult addressQuery(SimpleString name) throws Exception {
-      if (name == null) {
-         throw ActiveMQMessageBundle.BUNDLE.queueNameIsNull();
-      }
-
-      SimpleString realName = CompositeAddress.extractAddressName(name);
-
-      AddressSettings addressSettings = getAddressSettingsRepository().getMatch(realName.toString());
-
-      boolean autoCreateAddresses = addressSettings.isAutoCreateAddresses();
-      boolean defaultPurgeOnNoConsumers = addressSettings.isDefaultPurgeOnNoConsumers();
-      int defaultMaxConsumers = addressSettings.getDefaultMaxConsumers();
-
-      AddressInfo addressInfo = postOffice.getAddressInfo(realName);
-      AddressQueryResult response;
-      if (addressInfo != null) {
-         response = new AddressQueryResult(addressInfo.getName(), addressInfo.getRoutingTypes(), addressInfo.getId(), addressInfo.isAutoCreated(), true, autoCreateAddresses, defaultPurgeOnNoConsumers, defaultMaxConsumers);
-      } else {
-         response = new AddressQueryResult(realName, null, -1, false, false, autoCreateAddresses, defaultPurgeOnNoConsumers, defaultMaxConsumers);
-      }
-      return response;
-   }
-
-   @Override
-   public void threadDump() {
-      ActiveMQServerLogger.LOGGER.threadDump(ThreadDumpUtil.threadDump(""));
-   }
-
-   @Override
-   public final void fail(boolean failoverOnServerShutdown) throws Exception {
-      stop(failoverOnServerShutdown, false, false, false);
-   }
-
-   @Override
-   public final void stop(boolean failoverOnServerShutdown, boolean isExit) throws Exception {
-      stop(failoverOnServerShutdown, false, false, isExit);
-   }
-
-   @Override
-   public boolean isReplicaSync() {
-      if (activation instanceof SharedNothingLiveActivation) {
-         ReplicationManager replicationManager = getReplicationManager();
-
-         if (replicationManager == null) {
-            return false;
-         } else {
-            return !replicationManager.isSynchronizing();
-         }
-      } else if (activation instanceof SharedNothingBackupActivation) {
-         return ((SharedNothingBackupActivation) activation).isRemoteBackupUpToDate();
-      } else {
-         return false;
-      }
-   }
-
-   public void stop(boolean failoverOnServerShutdown, final boolean criticalIOError, boolean restarting) {
-      this.stop(failoverOnServerShutdown, criticalIOError, restarting, false);
-   }
-
-   /**
-    * Stops the server
-    *
-    * @param criticalIOError whether we have encountered an IO error with the journal etc
-    */
-   void stop(boolean failoverOnServerShutdown, final boolean criticalIOError, boolean restarting, boolean isShutdown) {
-
-      logger.debug("Stopping server");
-
-      synchronized (this) {
-         if (state == SERVER_STATE.STOPPED || state == SERVER_STATE.STOPPING) {
-            return;
-         }
-         state = SERVER_STATE.STOPPING;
-
-         if (fileStoreMonitor != null) {
-            fileStoreMonitor.stop();
-            fileStoreMonitor = null;
-         }
-
-         if (failoverOnServerShutdown) {
-            activation.sendLiveIsStopping();
-         }
-
-         stopComponent(connectorsService);
-
-         // we stop the groupingHandler before we stop the cluster manager so binding mappings
-         // aren't removed in case of failover
-         if (groupingHandler != null) {
-            managementService.removeNotificationListener(groupingHandler);
-            stopComponent(groupingHandler);
-         }
-         stopComponent(clusterManager);
-
-         if (remotingService != null) {
-            remotingService.pauseAcceptors();
-         }
-
-         // allows for graceful shutdown
-         if (remotingService != null && configuration.isGracefulShutdownEnabled()) {
-            long timeout = configuration.getGracefulShutdownTimeout();
-            try {
-               if (timeout == -1) {
-                  remotingService.getConnectionCountLatch().await();
-               } else {
-                  remotingService.getConnectionCountLatch().await(timeout);
-               }
-            } catch (InterruptedException e) {
-               ActiveMQServerLogger.LOGGER.interruptWhilstStoppingComponent(remotingService.getClass().getName());
-            }
-         }
-
-         freezeConnections();
-      }
-
-      activation.postConnectionFreeze();
-
-      closeAllServerSessions(criticalIOError);
-
-      // *************************************************************************************************************
-      // There's no need to sync this part of the method, since the state stopped | stopping is checked within the sync
-      //
-      // we can't synchronized the whole method here as that would cause a deadlock
-      // so stop is checking for stopped || stopping inside the lock
-      // which will be already enough to guarantee that no other thread will be accessing this method here.
-      //
-      // *************************************************************************************************************
-
-      if (storageManager != null)
-         storageManager.clearContext();
-
-      //before we stop any components deactivate any callbacks
-      callDeActiveCallbacks();
-
-      stopComponent(backupManager);
-
-      try {
-         activation.preStorageClose();
-      } catch (Throwable t) {
-         ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, activation.getClass().getName());
-      }
-
-      stopComponent(pagingManager);
-
-      if (storageManager != null)
-         try {
-            storageManager.stop(criticalIOError, failoverOnServerShutdown);
-         } catch (Throwable t) {
-            ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, storageManager.getClass().getName());
-         }
-
-      // We stop remotingService before otherwise we may lock the system in case of a critical IO
-      // error shutdown
-      if (remotingService != null)
-         try {
-            remotingService.stop(criticalIOError);
-         } catch (Throwable t) {
-            ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, remotingService.getClass().getName());
-         }
-
-      // Stop the management service after the remoting service to ensure all acceptors are deregistered with JMX
-      if (managementService != null)
-         try {
-            managementService.unregisterServer();
-         } catch (Throwable t) {
-            ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, managementService.getClass().getName());
-         }
-
-      stopComponent(managementService);
-      stopComponent(resourceManager);
-      stopComponent(postOffice);
-
-      if (scheduledPool != null && !scheduledPoolSupplied) {
-         // we just interrupt all running tasks, these are supposed to be pings and the like.
-         scheduledPool.shutdownNow();
-      }
-
-      stopComponent(memoryManager);
-
-      for (SecuritySettingPlugin securitySettingPlugin : configuration.getSecuritySettingPlugins()) {
-         securitySettingPlugin.stop();
-      }
-
-      if (threadPool != null && !threadPoolSupplied) {
-         shutdownPool(threadPool);
-      }
-
-      if (ioExecutorPool != null) {
-         shutdownPool(ioExecutorPool);
-      }
-
-      if (!threadPoolSupplied)
-         threadPool = null;
-      if (!scheduledPoolSupplied)
-         scheduledPool = null;
-
-      if (securityStore != null) {
-         try {
-            securityStore.stop();
-         } catch (Throwable t) {
-            ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, managementService.getClass().getName());
-         }
-      }
-
-      pagingManager = null;
-      securityStore = null;
-      resourceManager = null;
-      postOffice = null;
-      queueFactory = null;
-      resourceManager = null;
-      messagingServerControl = null;
-      memoryManager = null;
-      backupManager = null;
-      storageManager = null;
-
-      sessions.clear();
-
-      state = SERVER_STATE.STOPPED;
-
-      activationLatch.setCount(1);
-
-      // to display in the log message
-      SimpleString tempNodeID = getNodeID();
-      if (activation != null) {
-         try {
-            activation.close(failoverOnServerShutdown, restarting);
-         } catch (Throwable t) {
-            ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, activation.getClass().getName());
-         }
-      }
-
-      if (activationThread != null) {
-         try {
-            activationThread.join(30000);
-         } catch (InterruptedException e) {
-            ActiveMQServerLogger.LOGGER.interruptWhilstStoppingComponent(activationThread.getClass().getName());
-         }
-
-         if (activationThread.isAlive()) {
-            ActiveMQServerLogger.LOGGER.activationDidntFinish(this);
-            activationThread.interrupt();
-         }
-      }
-
-      stopComponent(nodeManager);
-
-      nodeManager = null;
-
-      addressSettingsRepository.clearListeners();
-
-      addressSettingsRepository.clearCache();
-
-      scaledDownNodeIDs.clear();
-
-      for (ActiveMQComponent externalComponent : externalComponents) {
-         try {
-            if (externalComponent instanceof ServiceComponent) {
-               ((ServiceComponent)externalComponent).stop(isShutdown || criticalIOError);
-            } else {
-               externalComponent.stop();
-            }
-         } catch (Exception e) {
-            ActiveMQServerLogger.LOGGER.errorStoppingComponent(e, externalComponent.getClass().getName());
-         }
-      }
-
-      try {
-         this.analyzer.stop();
-      } catch (Exception e) {
-         logger.warn(e.getMessage(), e);
-      } finally {
-         this.analyzer = null;
-      }
-
-      if (identity != null) {
-         ActiveMQServerLogger.LOGGER.serverStopped("identity=" + identity + ",version=" + getVersion().getFullVersion(), tempNodeID, getUptime());
-      } else {
-         ActiveMQServerLogger.LOGGER.serverStopped(getVersion().getFullVersion(), tempNodeID, getUptime());
-      }
-   }
-
-   private void shutdownPool(ExecutorService executorService) {
-      executorService.shutdown();
-      try {
-         if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
-            ActiveMQServerLogger.LOGGER.timedOutStoppingThreadpool(threadPool);
-            for (Runnable r : executorService.shutdownNow()) {
-               logger.debug("Cancelled the execution of " + r);
-            }
-         }
-      } catch (InterruptedException e) {
-         ActiveMQServerLogger.LOGGER.interruptWhilstStoppingComponent(threadPool.getClass().getName());
-      }
-   }
-
-   public boolean checkLiveIsNotColocated(String nodeId) {
-      if (parentServer == null) {
-         return true;
-      } else {
-         return !parentServer.getNodeID().toString().equals(nodeId);
-      }
-   }
-
-   /**
-    * Freeze all connections.
-    * <p>
-    * If replicating, avoid freezing the replication connection. Helper method for
-    * {@link #stop(boolean, boolean, boolean)}.
-    */
-   private void freezeConnections() {
-      activation.freezeConnections(remotingService);
-
-      // after disconnecting all the clients close all the server sessions so any messages in delivery will be cancelled back to the queue
-      for (ServerSession serverSession : sessions.values()) {
-         try {
-            serverSession.close(true);
-         } catch (Exception e) {
-            ActiveMQServerLogger.LOGGER.errorClosingSession(e);
-         }
-      }
-   }
-
-   /**
-    * We close all the exception in an attempt to let any pending IO to finish to avoid scenarios
-    * where the send or ACK got to disk but the response didn't get to the client It may still be
-    * possible to have this scenario on a real failure (without the use of XA) But at least we will
-    * do our best to avoid it on regular shutdowns
-    */
-   private void closeAllServerSessions(final boolean criticalIOError) {
-      if (state != SERVER_STATE.STOPPING) {
-         return;
-      }
-      for (ServerSession session : sessions.values()) {
-         try {
-            session.close(true);
-         } catch (Exception e) {
-            // If anything went wrong with closing sessions.. we should ignore it
-            // such as transactions.. etc.
-            ActiveMQServerLogger.LOGGER.errorClosingSessionsWhileStoppingServer(e);
-         }
-      }
-   }
-
-   static void stopComponent(ActiveMQComponent component) {
-      try {
-         if (component != null) {
-            component.stop();
-         }
-      } catch (Throwable t) {
-         ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, component.getClass().getName());
-      }
-   }
-
-   // ActiveMQServer implementation
-   // -----------------------------------------------------------
-
-   @Override
-   public String describe() {
-      StringWriter str = new StringWriter();
-      PrintWriter out = new PrintWriter(str);
-
-      out.println(ActiveMQMessageBundle.BUNDLE.serverDescribe(identity, getClusterManager().describe()));
-
-      return str.toString();
-   }
-
-   @Override
-   public String destroyConnectionWithSessionMetadata(String metaKey, String parameterValue) throws Exception {
-      StringBuffer operationsExecuted = new StringBuffer();
-
-      try {
-         operationsExecuted.append("**************************************************************************************************\n");
-         operationsExecuted.append(ActiveMQMessageBundle.BUNDLE.destroyConnectionWithSessionMetadataHeader(metaKey, parameterValue) + "\n");
-
-         Set<ServerSession> allSessions = getSessions();
-
-         ServerSession sessionFound = null;
-         for (ServerSession session : allSessions) {
-            try {
-               String value = session.getMetaData(metaKey);
-               if (value != null && value.equals(parameterValue)) {
-                  sessionFound = session;
-                  operationsExecuted.append(ActiveMQMessageBundle.BUNDLE.destroyConnectionWithSessionMetadataClosingConnection(sessionFound.toString()) + "\n");
-                  RemotingConnection conn = session.getRemotingConnection();
-                  if (conn != null) {
-                     conn.fail(ActiveMQMessageBundle.BUNDLE.destroyConnectionWithSessionMetadataSendException(metaKey, parameterValue));
-                  }
-                  session.close(true);
-                  sessions.remove(session.getName());
-               }
-            } catch (Throwable e) {
-               ActiveMQServerLogger.LOGGER.unableDestroyConnectionWithSessionMetadata(e);
-            }
-         }
-
-         if (sessionFound == null) {
-            operationsExecuted.append(ActiveMQMessageBundle.BUNDLE.destroyConnectionWithSessionMetadataNoSessionFound(metaKey, parameterValue) + "\n");
-         }
-
-         operationsExecuted.append("**************************************************************************************************");
-
-         return operationsExecuted.toString();
-      } finally {
-         // This operation is critical for the knowledge of the admin, so we need to add info logs for later knowledge
-         ActiveMQServerLogger.LOGGER.onDestroyConnectionWithSessionMetadata(operationsExecuted.toString());
-      }
-
-   }
-
-   @Override
-   public void setIdentity(String identity) {
-      this.identity = identity;
-   }
-
-   @Override
-   public String getIdentity() {
-      return identity;
-   }
-
-   @Override
-   public ScheduledExecutorService getScheduledPool() {
-      return scheduledPool;
-   }
-
-   @Override
-   public Configuration getConfiguration() {
-      return configuration;
-   }
-
-   @Override
-   public PagingManager getPagingManager() {
-      return pagingManager;
-   }
-
-   @Override
-   public RemotingService getRemotingService() {
-      return remotingService;
-   }
-
-   @Override
-   public StorageManager getStorageManager() {
-      return storageManager;
-   }
-
-   @Override
-   public ActiveMQSecurityManager getSecurityManager() {
-      return securityManager;
-   }
-
-   @Override
-   public ManagementService getManagementService() {
-      return managementService;
-   }
-
-   @Override
-   public HierarchicalRepository<Set<Role>> getSecurityRepository() {
-      return securityRepository;
-   }
-
-   @Override
-   public NodeManager getNodeManager() {
-      return nodeManager;
-   }
-
-   @Override
-   public HierarchicalRepository<AddressSettings> getAddressSettingsRepository() {
-      return addressSettingsRepository;
-   }
-
-   @Override
-   public ResourceManager getResourceManager() {
-      return resourceManager;
-   }
-
-   @Override
-   public Version getVersion() {
-      return version;
-   }
-
-   @Override
-   public boolean isStarted() {
-      return state == SERVER_STATE.STARTED;
-   }
-
-   @Override
-   public ClusterManager getClusterManager() {
-      return clusterManager;
-   }
-
-   public BackupManager getBackupManager() {
-      return backupManager;
-   }
-
-   @Override
-   public ServerSession createSession(final String name,
-                                      final String username,
-                                      final String password,
-                                      final int minLargeMessageSize,
-                                      final RemotingConnection connection,
-                                      final boolean autoCommitSends,
-                                      final boolean autoCommitAcks,
-                                      final boolean preAcknowledge,
-                                      final boolean xa,
-                                      final String defaultAddress,
-                                      final SessionCallback callback,
-                                      final boolean autoCreateQueues,
-                                      final OperationContext context,
-                                      final Map<SimpleString, RoutingType> prefixes) throws Exception {
-      String validatedUser = "";
-
-      if (securityStore != null) {
-         validatedUser = securityStore.authenticate(username, password, connection);
-      }
-
-      checkSessionLimit(validatedUser);
-
-      if (hasBrokerSessionPlugins()) {
-         callBrokerSessionPlugins(plugin -> plugin.beforeCreateSession(name, username, minLargeMessageSize, connection,
-                 autoCommitSends, autoCommitAcks, preAcknowledge, xa, defaultAddress, callback, autoCreateQueues, context, prefixes));
-      }
-      final ServerSessionImpl session = internalCreateSession(name, username, password, validatedUser, minLargeMessageSize, connection, autoCommitSends, autoCommitAcks, preAcknowledge, xa, defaultAddress, callback, context, autoCreateQueues, prefixes);
-
-      sessions.put(name, session);
-
-      if (hasBrokerSessionPlugins()) {
-         callBrokerSessionPlugins(plugin -> plugin.afterCreateSession(session));
-      }
-
-      return session;
-   }
-
-   private void checkSessionLimit(String username) throws Exception {
-      if (configuration.getResourceLimitSettings() != null && configuration.getResourceLimitSettings().containsKey(username)) {
-         ResourceLimitSettings limits = configuration.getResourceLimitSettings().get(username);
-
-         if (limits.getMaxConnections() == -1) {
-            return;
-         } else if (limits.getMaxConnections() == 0 || getSessionCountForUser(username) >= limits.getMaxConnections()) {
-            throw ActiveMQMessageBundle.BUNDLE.sessionLimitReached(username, limits.getMaxConnections());
-         }
-      }
-   }
-
-   private int getSessionCountForUser(String username) {
-      int sessionCount = 0;
-
-      for (Entry<String, ServerSession> sessionEntry : sessions.entrySet()) {
-         if (sessionEntry.getValue().getUsername().equals(username)) {
-            sessionCount++;
-         }
-      }
-
-      return sessionCount;
-   }
-
-   @Override
-   public void checkQueueCreationLimit(String username) throws Exception {
-      if (configuration.getResourceLimitSettings() != null && configuration.getResourceLimitSettings().containsKey(username)) {
-         ResourceLimitSettings limits = configuration.getResourceLimitSettings().get(username);
-
-         if (limits.getMaxQueues() == -1) {
-            return;
-         } else if (limits.getMaxQueues() == 0 || getQueueCountForUser(username) >= limits.getMaxQueues()) {
-            throw ActiveMQMessageBundle.BUNDLE.queueLimitReached(username, limits.getMaxQueues());
-         }
-      }
-   }
-
-   public int getQueueCountForUser(String username) throws Exception {
-      Map<SimpleString, Binding> bindings = postOffice.getAllBindings();
-
-      int queuesForUser = 0;
-
-      for (Binding binding : bindings.values()) {
-         if (binding instanceof LocalQueueBinding && ((LocalQueueBinding) binding).getQueue().getUser().equals(SimpleString.toSimpleString(username))) {
-            queuesForUser++;
-         }
-      }
-
-      return queuesForUser;
-
-   }
-
-   protected ServerSessionImpl internalCreateSession(String name,
-                                                     String username,
-                                                     String password,
-                                                     String validatedUser,
-                                                     int minLargeMessageSize,
-                                                     RemotingConnection connection,
-                                                     boolean autoCommitSends,
-                                                     boolean autoCommitAcks,
-                                                     boolean preAcknowledge,
-                                                     boolean xa,
-                                                     String defaultAddress,
-                                                     SessionCallback callback,
-                                                     OperationContext context,
-                                                     boolean autoCreateJMSQueues,
-                                                     Map<SimpleString, RoutingType> prefixes) throws Exception {
-      return new ServerSessionImpl(name, username, password, validatedUser, minLargeMessageSize, autoCommitSends, autoCommitAcks, preAcknowledge, configuration.isPersistDeliveryCountBeforeDelivery(), xa, connection, storageManager, postOffice, resourceManager, securityStore, managementService, this, configuration.getManagementAddress(), defaultAddress == null ? null : new SimpleString(defaultAddress), callback, context, pagingManager, prefixes);
-   }
-
-   @Override
-   public SecurityStore getSecurityStore() {
-      return securityStore;
-   }
-
-   @Override
-   public void removeSession(final String name) throws Exception {
-      sessions.remove(name);
-   }
-
-   @Override
-   public ServerSession lookupSession(String key, String value) {
-      // getSessions is called here in a try to minimize locking the Server while this check is being done
-      Set<ServerSession> allSessions = getSessions();
-
-      for (ServerSession session : allSessions) {
-         String metaValue = session.getMetaData(key);
-         if (metaValue != null && metaValue.equals(value)) {
-            return session;
-         }
-      }
-
-      return null;
-   }
-
-   @Override
-   public synchronized List<ServerSession> getSessions(final String connectionID) {
-      Set<Entry<String, ServerSession>> sessionEntries = sessions.entrySet();
-      List<ServerSession> matchingSessions = new ArrayList<>();
-      for (Entry<String, ServerSession> sessionEntry : sessionEntries) {
-         ServerSession serverSession = sessionEntry.getValue();
-         if (serverSession.getConnectionID().toString().equals(connectionID)) {
-            matchingSessions.add(serverSession);
-         }
-      }
-      return matchingSessions;
-   }
-
-   @Override
-   public synchronized Set<ServerSession> getSessions() {
-      return new HashSet<>(sessions.values());
-   }
-
-   @Override
-   public boolean isActive() {
-      return activationLatch.getCount() < 1;
-   }
-
-   @Override
-   public boolean waitForActivation(long timeout, TimeUnit unit) throws InterruptedException {
-      return activationLatch.await(timeout, unit);
-   }
-
-   @Override
-   public ActiveMQServerControlImpl getActiveMQServerControl() {
-      return messagingServerControl;
-   }
-
-   @Override
-   public int getConnectionCount() {
-      return remotingService.getConnections().size();
-   }
-
-   @Override
-   public long getTotalConnectionCount() {
-      return remotingService.getTotalConnectionCount();
-   }
-
-   @Override
-   public long getTotalMessageCount() {
-      long total = 0;
-
-      for (Binding binding : postOffice.getAllBindings().values()) {
-         if (binding.getType() == BindingType.LOCAL_QUEUE) {
-            total += ((LocalQueueBinding) binding).getQueue().getMessageCount();
-         }
-      }
-
-      return total;
-   }
-
-   @Override
-   public long getTotalMessagesAdded() {
-      long total = 0;
-
-      for (Binding binding : postOffice.getAllBindings().values()) {
-         if (binding.getType() == BindingType.LOCAL_QUEUE) {
-            total += ((LocalQueueBinding) binding).getQueue().getMessagesAdded();
-         }
-      }
-
-      return total;
-   }
-
-   @Override
-   public long getTotalMessagesAcknowledged() {
-      long total = 0;
-
-      for (Binding binding : postOffice.getAllBindings().values()) {
-         if (binding.getType() == BindingType.LOCAL_QUEUE) {
-            total += ((LocalQueueBinding) binding).getQueue().getMessagesAcknowledged();
-         }
-      }
-
-      return total;
-   }
-
-   @Override
-   public long getTotalConsumerCount() {
-      long total = 0;
-
-      for (Binding binding : postOffice.getAllBindings().values()) {
-         if (binding.getType() == BindingType.LOCAL_QUEUE) {
-            total += ((LocalQueueBinding) binding).getQueue().getConsumerCount();
-         }
-      }
-
-      return total;
-   }
-
-   @Override
-   public PostOffice getPostOffice() {
-      return postOffice;
-   }
-
-   @Override
-   public QueueFactory getQueueFactory() {
-      return queueFactory;
-   }
-
-   @Override
-   public SimpleString getNodeID() {
-      return nodeManager == null ? null : nodeManager.getNodeId();
-   }
-
-   @Override
-   public Queue createQueue(final SimpleString address,
-                            final RoutingType routingType,
-                            final SimpleString queueName,
-                            final SimpleString filterString,
-                            final boolean durable,
-                            final boolean temporary) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(address == null ? queueName.toString() : address.toString());
-      return createQueue(address, routingType, queueName, filterString, durable, temporary, as.getDefaultMaxConsumers(), as.isDefaultPurgeOnNoConsumers(), as.isAutoCreateAddresses());
-   }
-
-   @Override
-   public Queue createQueue(final SimpleString address,
-                            final RoutingType routingType,
-                            final SimpleString queueName,
-                            final SimpleString user,
-                            final SimpleString filterString,
-                            final boolean durable,
-                            final boolean temporary) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(address == null ? queueName.toString() : address.toString());
-      return createQueue(address, routingType, queueName, filterString, user, durable, temporary, false, as.getDefaultMaxConsumers(), as.isDefaultPurgeOnNoConsumers(), as.isAutoCreateAddresses());
-   }
-
-   @Override
-   public Queue createQueue(final SimpleString address,
-                            final RoutingType routingType,
-                            final SimpleString queueName,
-                            final SimpleString filter,
-                            final boolean durable,
-                            final boolean temporary,
-                            final int maxConsumers,
-                            final boolean purgeOnNoConsumers,
-                            final boolean autoCreateAddress) throws Exception {
-      return createQueue(address, routingType, queueName, filter, null, durable, temporary, false, maxConsumers, purgeOnNoConsumers, autoCreateAddress);
-   }
-
-   @Override
-   public Queue createQueue(final SimpleString address,
-                            final RoutingType routingType,
-                            final SimpleString queueName,
-                            final SimpleString filter,
-                            final boolean durable,
-                            final boolean temporary,
-                            final int maxConsumers,
-                            final boolean purgeOnNoConsumers,
-                            final boolean exclusive,
-                            final boolean groupRebalance,
-                            final int groupBuckets,
-                            final boolean lastValue,
-                            final SimpleString lastValueKey,
-                            final boolean nonDestructive,
-                            final int consumersBeforeDispatch,
-                            final long delayBeforeDispatch,
-                            final boolean autoCreateAddress) throws Exception {
-      return createQueue(address, routingType, queueName, filter, null, durable, temporary, false, false, false, maxConsumers, purgeOnNoConsumers, exclusive, groupRebalance, groupBuckets, lastValue, lastValueKey, nonDestructive, consumersBeforeDispatch, delayBeforeDispatch, autoCreateAddress);
-   }
-
-   @Override
-   @Deprecated
-   public Queue createQueue(SimpleString address,
-                            RoutingType routingType,
-                            SimpleString queueName,
-                            SimpleString filter,
-                            SimpleString user,
-                            boolean durable,
-                            boolean temporary,
-                            boolean autoCreated,
-                            Integer maxConsumers,
-                            Boolean purgeOnNoConsumers,
-                            boolean autoCreateAddress) throws Exception {
-      return createQueue(address, routingType, queueName, filter, user, durable, temporary, false, false, autoCreated, maxConsumers, purgeOnNoConsumers, autoCreateAddress);
-   }
-
-   @Override
-   public Queue createQueue(AddressInfo addressInfo, SimpleString queueName, SimpleString filter, SimpleString user, boolean durable, boolean temporary, boolean autoCreated, Integer maxConsumers, Boolean purgeOnNoConsumers, boolean autoCreateAddress) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(addressInfo == null ? queueName.toString() : addressInfo.getName().toString());
-      return createQueue(addressInfo, queueName, filter, user, durable, temporary, false, false, autoCreated, maxConsumers, purgeOnNoConsumers, as.isDefaultExclusiveQueue(),  as.isDefaultGroupRebalance(), as.getDefaultGroupBuckets(), as.isDefaultLastValueQueue(), as.getDefaultLastValueKey(), as.isDefaultNonDestructive(), as.getDefaultConsumersBeforeDispatch(), as.getDefaultDelayBeforeDispatch(), autoCreateAddress, false);
-   }
-
-   @Override
-   public Queue createQueue(AddressInfo addressInfo, SimpleString queueName, SimpleString filter, SimpleString user, boolean durable, boolean temporary, boolean autoCreated, Integer maxConsumers, Boolean purgeOnNoConsumers, Boolean exclusive, Boolean lastValue, boolean autoCreateAddress) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(addressInfo == null ? queueName.toString() : addressInfo.getName().toString());
-      return createQueue(addressInfo, queueName, filter, user, durable, temporary, false, false, autoCreated, maxConsumers, purgeOnNoConsumers, exclusive,  as.isDefaultGroupRebalance(), as.getDefaultGroupBuckets(), lastValue, as.getDefaultLastValueKey(), as.isDefaultNonDestructive(), as.getDefaultConsumersBeforeDispatch(), as.getDefaultDelayBeforeDispatch(), autoCreateAddress, false);
-   }
-
-   @Override
-   public Queue createQueue(AddressInfo addressInfo, SimpleString queueName, SimpleString filter, SimpleString user, boolean durable, boolean temporary, boolean autoCreated, Integer maxConsumers, Boolean purgeOnNoConsumers, Boolean exclusive, Boolean groupRebalance, Integer groupBuckets, Boolean lastValue, SimpleString lastValueKey, Boolean nonDestructive, Integer consumersBeforeDispatch, Long delayBeforeDispatch, boolean autoCreateAddress) throws Exception {
-      return createQueue(addressInfo, queueName, filter, user, durable, temporary, false, false, autoCreated, maxConsumers, purgeOnNoConsumers, exclusive, groupRebalance, groupBuckets, lastValue, lastValueKey, nonDestructive, consumersBeforeDispatch, delayBeforeDispatch, autoCreateAddress, false);
-   }
-
-
-   @Override
-   public Queue createQueue(SimpleString address, RoutingType routingType, SimpleString queueName, SimpleString filter,
-                     SimpleString user, boolean durable, boolean temporary, boolean ignoreIfExists, boolean transientQueue,
-                     boolean autoCreated, int maxConsumers, boolean purgeOnNoConsumers, boolean autoCreateAddress) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(address == null ? queueName.toString() : address.toString());
-      return createQueue(address, routingType, queueName, filter, user, durable, temporary, ignoreIfExists, transientQueue, autoCreated, maxConsumers, purgeOnNoConsumers, as.isDefaultExclusiveQueue(), as.isDefaultGroupRebalance(), as.getDefaultGroupBuckets(), as.isDefaultLastValueQueue(), as.getDefaultLastValueKey(), as.isDefaultNonDestructive(), as.getDefaultConsumersBeforeDispatch(), as.getDefaultDelayBeforeDispatch(), autoCreateAddress);
-   }
-
-   @Override
-   public Queue createQueue(SimpleString address, RoutingType routingType, SimpleString queueName, SimpleString filter,
-                            SimpleString user, boolean durable, boolean temporary, boolean ignoreIfExists, boolean transientQueue,
-                            boolean autoCreated, int maxConsumers, boolean purgeOnNoConsumers, boolean exclusive, boolean lastValue, boolean autoCreateAddress) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(address == null ? queueName.toString() : address.toString());
-      return createQueue(address, routingType, queueName, filter, user, durable, temporary, ignoreIfExists, transientQueue, autoCreated, maxConsumers, purgeOnNoConsumers, exclusive,  as.isDefaultGroupRebalance(), as.getDefaultGroupBuckets(), lastValue, as.getDefaultLastValueKey(), as.isDefaultNonDestructive(), as.getDefaultConsumersBeforeDispatch(), as.getDefaultDelayBeforeDispatch(), autoCreateAddress);
-   }
-
-
-   @Deprecated
-   @Override
-   public Queue createQueue(final SimpleString address,
-                            final SimpleString queueName,
-                            final SimpleString filterString,
-                            final boolean durable,
-                            final boolean temporary) throws Exception {
-      return createQueue(address, getAddressSettingsRepository().getMatch(address == null ? queueName.toString() : address.toString()).getDefaultQueueRoutingType(), queueName, filterString, durable, temporary);
-   }
-
-   @Override
-   public void createSharedQueue(final SimpleString address,
-                                 RoutingType routingType,
-                                 final SimpleString name,
-                                 final SimpleString filterString,
-                                 final SimpleString user,
-                                 boolean durable) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(address == null ? name.toString() : address.toString());
-      createSharedQueue(address, routingType, name, filterString, user, durable, as.getDefaultMaxConsumers(), as.isDefaultPurgeOnNoConsumers(), as.isDefaultExclusiveQueue(), as.isDefaultLastValueQueue());
-   }
-
-   @Override
-   public void createSharedQueue(final SimpleString address,
-                                 RoutingType routingType,
-                                 final SimpleString name,
-                                 final SimpleString filterString,
-                                 final SimpleString user,
-                                 boolean durable,
-                                 int maxConsumers,
-                                 boolean purgeOnNoConsumers,
-                                 boolean exclusive,
-                                 boolean lastValue) throws Exception {
-      AddressSettings as = getAddressSettingsRepository().getMatch(address == null ? name.toString() : address.toString());
-      createSharedQueue(address, routingType, name, filterString, user, durable, maxConsumers, purgeOnNoConsumers, exclusive, as.isDefaultGroupRebalance(), as.getDefaultGroupBuckets(), lastValue, as.getDefaultLastValueKey(), as.isDefaultNonDestructive(), as.getDefaultConsumersBeforeDispatch(), as.getDefaultDelayBeforeDispatch());
-   }
-
-   @Override
-   public void createSharedQueue(final SimpleString address,
-                                 RoutingType routingType,
-                                 final SimpleString name,
-                                 final SimpleString filterString,
-                                 final SimpleString user,
-                                 boolean durable,
-                                 int maxConsumers,
-                                 boolean purgeOnNoConsumers,
-                                 boolean exclusive,
-                                 boolean groupRebalance,
-                                 int groupBuckets,
-                                 boolean lastValue,
-                                 SimpleString lastValueKey,
-                                 boolean nonDestructive,
-                                 int consumersBeforeDispatch,
-                                 long delayBeforeDispatch) throws Exception {
-      //force the old contract about address
-      if (address == null) {
-         throw new NullPointerException("address can't be null!");
-      }
-
-      if (routingType == null) {
-         AddressInfo addressInfo = getAddressInfo(address);
-         routingType = addressInfo.getRoutingTypes().size() == 1 ? addressInfo.getRoutingType() : getAddressSettingsRepository().getMatch(address.toString()).getDefaultQueueRoutingType();
-         if (routingType == null) {
-            // TODO (mtaylor) throw exception Can not determine routing type info from address
-         }
-      }
-
-      final Queue queue = createQueue(address, routingType, name, filterString, user, durable, !durable, true, !durable, false, maxConsumers, purgeOnNoConsumers, exclusive, groupRebalance, groupBuckets, lastValue, lastValueKey, nonDestructive, consumersBeforeDispatch, delayBeforeDispatch, true);
-
-      if (!queue.getAddress().equals(address)) {
-         throw ActiveMQMessageBundle.BUNDLE.queueSubscriptionBelongsToDifferentAddress(name);
-      }
-
-      if (filterString != null && (queue.getFilter() == null || !queue.getFilter().getFilterString().equals(filterString)) || filterString == null && queue.getFilter() != null) {
-         throw ActiveMQMessageBundle.BUNDLE.queueSubscriptionBelongsToDifferentFilter(name);
-      }
-
-      if (logger.isDebugEnabled()) {
-         logger.debug("Transient Queue " + name + " created on address " + name + " with filter=" + filterString);
-      }
-
-   }
-
-   @Override
-   public Queue locateQueue(SimpleString queueName) {
-      Binding binding = postOffice.getBinding(queueName);
-
-      if (binding == null) {
-         return null;
-      }
-
-      Bindable queue = binding.getBindable();
-
-      if (!(queue instanceof Queue)) {
-         throw new IllegalStateException("locateQueue should only be used to locate queues");
-      }
-
-      return (Queue) binding.getBindable();
-   }
-
-   @Deprecated
-   @Override
-   public Queue deployQueue(final SimpleString address,
-                            final SimpleString resourceName,
-                            final SimpleString filterString,
-                            final boolean durable,
-                            final boolean temporary) throws Exception {
-      return createQueue(address, getAddressSettingsRepository().getMatch(address == null ? resourceName.toString() : address.toString()).getDefaultQueueRoutingType(), resourceName, filterString, durable, temporary);
-   }
-
-   @Deprecated
-   @Override
-   public Queue deployQueue(final String address,
-                            final String resourceName,
-                            final String filterString,
-                            final boolean durable,
-                            final boolean temporary) throws Exception {
-      return deployQueue(SimpleString.toSimpleString(address), SimpleString.toSimpleString(resourceName), SimpleString.toSimpleString(filterString), durable, temporary);
-   }
-
-   @Override
-   public void destroyQueue(final SimpleString queueName) throws Exception {
-      // The session is passed as an argument to verify if the user has authorization to delete the queue
-      // in some cases (such as temporary queues) this should happen regardless of the authorization
-      // since that will only happen during a session close, which will be used to cleanup on temporary queues
-      destroyQueue(queueName, null, true);
-   }
-
-   @Override
-   public void destroyQueue(final SimpleString queueName, final SecurityAuth session) throws Exception {
-      destroyQueue(queueName, session, true);
-   }
-
-   @Override
-   public void destroyQueue(final SimpleString queueName,
-                            final SecurityAuth session,
-                            final boolean checkConsumerCount) throws Exception {
-      destroyQueue(queueName, session, checkConsumerCount, false);
-   }
-
-   @Override
-   public void destroyQueue(final SimpleString queueName,
-                            final SecurityAuth session,
-                            final boolean checkConsumerCount,
-                            final boolean removeConsumers) throws Exception {
-      if (postOffice == null) {
-         return;
-      }
-
-      Binding binding = postOffice.getBinding(queueName);
-
-      if (binding == null) {
-         throw ActiveMQMessageBundle.BUNDLE.noSuchQueue(queueName);
-      }
-
-      String address = binding.getAddress().toString();
-
-      destroyQueue(queueName, session, checkConsumerCount, removeConsumers, addressSettingsRepository.getMatch(address).isAutoDeleteAddresses());
-   }
-
-   @Override
-   public void destroyQueue(final SimpleString queueName,
-                            final SecurityAuth session,
-                            final boolean checkConsumerCount,
-                            final boolean removeConsumers,
-                            final boolean autoDeleteAddress) throws Exception {
-      destroyQueue(queueName, session, checkConsumerCount, removeConsumers, autoDeleteAddress, false);
-   }
-
-   @Override
-   public void destroyQueue(final SimpleString queueName,
-                            final SecurityAuth session,
-                            final boolean checkConsumerCount,
-                            final boolean removeConsumers,
-                            final boolean autoDeleteAddress,
-                            final boolean checkMessageCount) throws Exception {
-      if (postOffice == null) {
-         return;
-      }
-
-      if (hasBrokerQueuePlugins()) {
-         callBrokerQueuePlugins(plugin -> plugin.beforeDestroyQueue(queueName, session, checkConsumerCount,
-                 removeConsumers, autoDeleteAddress));
-      }
-
-      addressSettingsRepository.clearCache();
-
-      Binding binding = postOffice.getBinding(queueName);
-
-      if (binding == null) {
-         throw ActiveMQMessageBundle.BUNDLE.noSuchQueue(queueName);
-      }
-
-      SimpleString address = binding.getAddress();
-
-      Queue queue = (Queue) binding.getBindable();
-
-      if (session != null) {
-
-         if (queue.isDurable()) {
-            // make sure the user has privileges to delete this queue
-            securityStore.check(address, queueName, CheckType.DELETE_DURABLE_QUEUE, session);
-         } else {
-            securityStore.check(address, queueName, CheckType.DELETE_NON_DURABLE_QUEUE, session);
-         }
-      }
-
-      // This check is only valid if checkConsumerCount == true
-      if (checkConsumerCount && queue.getConsumerCount() != 0) {
-         throw ActiveMQMessageBundle.BUNDLE.cannotDeleteQueueWithConsumers(queue.getName(), queueName, binding.getClass().getName());
-      }
-
-      // This check is only valid if checkMessageCount == true
-      long messageCount = queue.getMessageCount();
-      if (checkMessageCount && messageCount != 0) {
-         throw ActiveMQMessageBundle.BUNDLE.cannotDeleteQueueWithMessages(queue.getName(), queueName, messageCount);
-      }
-
-      queue.deleteQueue(removeConsumers);
-
-      if (hasBrokerQueuePlugins()) {
-         callBrokerQueuePlugins(plugin -> plugin.afterDestroyQueue(queue, address, session, checkConsumerCount,
-                 removeConsumers, autoDeleteAddress));
-      }
-      AddressInfo addressInfo = getAddressInfo(address);
-
-      if (autoDeleteAddress && postOffice != null && addressInfo != null && addressInfo.isAutoCreated() && !isAddressBound(address.toString()) && addressSettingsRepository.getMatch(address.toString()).getAutoDeleteAddressesDelay() == 0) {
-         try {
-            removeAddressInfo(address, session);
-         } catch (ActiveMQDeleteAddressException e) {
-            // Could be thrown if the address has bindings or is not deletable.
-         }
-      }
-
-      callPostQueueDeletionCallbacks(address, queueName);
-   }
-
-   @Override
-   public void registerActivateCallback(final ActivateCallback callback) {
-      activateCallbacks.add(callback);
-   }
-
-   @Override
-   public void unregisterActivateCallback(final ActivateCallback callback) {
-      activateCallbacks.remove(callback);
-   }
-
-   @Override
-   public void registerActivationFailureListener(final ActivationFailureListener listener) {
-      activationFailureListeners.add(listener);
-   }
-
-   @Override
-   public void unregisterActivationFailureListener(final ActivationFailureListener listener) {
-      activationFailureListeners.remove(listener);
-   }
-
-   @Override
-   public void callActivationFailureListeners(final Exception e) {
-      for (ActivationFailureListener listener : activationFailureListeners) {
-         listener.activationFailed(e);
-      }
-   }
-
-   @Override
-   public void registerPostQueueCreationCallback(final PostQueueCreationCallback callback) {
-      postQueueCreationCallbacks.add(callback);
-   }
-
-   @Override
-   public void unregisterPostQueueCreationCallback(final PostQueueCreationCallback callback) {
-      postQueueCreationCallbacks.remove(callback);
-   }
-
-   @Override
-   public void callPostQueueCreationCallbacks(final SimpleString queueName) throws Exception {
-      for (PostQueueCreationCallback callback : postQueueCreationCallbacks) {
-         callback.callback(queueName);
-      }
-   }
-
-   @Override
-   public void registerPostQueueDeletionCallback(final PostQueueDeletionCallback callback) {
-      postQueueDeletionCallbacks.add(callback);
-   }
-
-   @Override
-   public void unregisterPostQueueDeletionCallback(final PostQueueDeletionCallback callback) {
-      postQueueDeletionCallbacks.remove(callback);
-   }
-
-   @Override
-   public void callPostQueueDeletionCallbacks(final SimpleString address,
-                                              final SimpleString queueName) throws Exception {
-      for (PostQueueDeletionCallback callback : postQueueDeletionCallbacks) {
-         callback.callback(address, queueName);
-      }
-   }
-
-   @Override
-   public void registerBrokerPlugins(final List<ActiveMQServerBasePlugin> plugins) {
-      configuration.registerBrokerPlugins(plugins);
-      plugins.forEach(plugin -> plugin.registered(this));
-   }
-
-   @Override
-   public void registerBrokerPlugin(final ActiveMQServerBasePlugin plugin) {
-      configuration.registerBrokerPlugin(plugin);
-      plugin.registered(this);
-   }
-
-   @Override
-   public void unRegisterBrokerPlugin(final ActiveMQServerBasePlugin plugin) {
-      configuration.unRegisterBrokerPlugin(plugin);
-      plugin.unregistered(this);
-   }
-
-   @Override
-   public List<ActiveMQServerBasePlugin> getBrokerPlugins() {
-      return configuration.getBrokerPlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerConnectionPlugin> getBrokerConnectionPlugins() {
-      return configuration.getBrokerConnectionPlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerSessionPlugin> getBrokerSessionPlugins() {
-      return configuration.getBrokerSessionPlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerConsumerPlugin> getBrokerConsumerPlugins() {
-      return configuration.getBrokerConsumerPlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerAddressPlugin> getBrokerAddressPlugins() {
-      return configuration.getBrokerAddressPlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerQueuePlugin> getBrokerQueuePlugins() {
-      return configuration.getBrokerQueuePlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerBindingPlugin> getBrokerBindingPlugins() {
-      return configuration.getBrokerBindingPlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerMessagePlugin> getBrokerMessagePlugins() {
-      return configuration.getBrokerMessagePlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerBridgePlugin> getBrokerBridgePlugins() {
-      return configuration.getBrokerBridgePlugins();
-   }
-
-   @Override
-   public List<ActiveMQServerCriticalPlugin> getBrokerCriticalPlugins() {
-      return configuration.getBrokerCriticalPlugins();
-   }
-
-   @Override
-   public void callBrokerPlugins(final ActiveMQPluginRunnable pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerPlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerConnectionPlugins(final ActiveMQPluginRunnable<ActiveMQServerConnectionPlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerConnectionPlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerSessionPlugins(final ActiveMQPluginRunnable<ActiveMQServerSessionPlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerSessionPlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerConsumerPlugins(final ActiveMQPluginRunnable<ActiveMQServerConsumerPlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerConsumerPlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerAddressPlugins(final ActiveMQPluginRunnable<ActiveMQServerAddressPlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerAddressPlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerQueuePlugins(final ActiveMQPluginRunnable<ActiveMQServerQueuePlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerQueuePlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerBindingPlugins(final ActiveMQPluginRunnable<ActiveMQServerBindingPlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerBindingPlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerMessagePlugins(final ActiveMQPluginRunnable<ActiveMQServerMessagePlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerMessagePlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerBridgePlugins(final ActiveMQPluginRunnable<ActiveMQServerBridgePlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerBridgePlugins(), pluginRun);
-   }
-
-   @Override
-   public void callBrokerCriticalPlugins(final ActiveMQPluginRunnable<ActiveMQServerCriticalPlugin> pluginRun) throws ActiveMQException {
-      callBrokerPlugins(getBrokerCriticalPlugins(), pluginRun);
-   }
-
-   private <P extends ActiveMQServerBasePlugin> void callBrokerPlugins(final List<P> plugins, final ActiveMQPluginRunnable<P> pluginRun) throws ActiveMQException {
-      if (pluginRun != null) {
-         for (P plugin : plugins) {
-            try {
-               pluginRun.run(plugin);
-            } catch (Throwable e) {
-               if (e instanceof ActiveMQException) {
-                  logger.debug("plugin " + plugin + " is throwing ActiveMQException");
-                  throw (ActiveMQException) e;
-               } else {
-                  logger.warn("Internal error on plugin " + pluginRun, e.getMessage(), e);
-               }
-            }
-         }
-      }
-   }
-
-   @Override
-   public boolean hasBrokerPlugins() {
-      return !getBrokerPlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerConnectionPlugins() {
-      return !getBrokerConnectionPlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerSessionPlugins() {
-      return !getBrokerSessionPlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerConsumerPlugins() {
-      return !getBrokerConsumerPlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerAddressPlugins() {
-      return !getBrokerAddressPlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerQueuePlugins() {
-      return !getBrokerQueuePlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerBindingPlugins() {
-      return !getBrokerBindingPlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerMessagePlugins() {
-      return !getBrokerMessagePlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerBridgePlugins() {
-      return !getBrokerBridgePlugins().isEmpty();
-   }
-
-   @Override
-   public boolean hasBrokerCriticalPlugins() {
-      return !getBrokerCriticalPlugins().isEmpty();
-   }
-
-   @Override
-   public ExecutorFactory getExecutorFactory() {
-      return executorFactory;
-   }
-
-   @Override
-   public ExecutorFactory getIOExecutorFactory() {
-      return ioExecutorFactory;
-   }
-
-   @Override
-   public void setGroupingHandler(final GroupingHandler groupingHandler) {
-      if (this.groupingHandler != null && managementService != null) {
-         // Removing old groupNotification
-         managementService.removeNotificationListener(this.groupingHandler);
-      }
-      this.groupingHandler = groupingHandler;
-      if (managementService != null) {
-         managementService.addNotificationListener(this.groupingHandler);
-      }
-
-   }
-
-   @Override
-   public GroupingHandler getGroupingHandler() {
-      return groupingHandler;
-   }
-
-   @Override
-   public ReplicationManager getReplicationManager() {
-      return activation.getReplicationManager();
-   }
-
-   @Override
-   public ConnectorsService getConnectorsService() {
-      return connectorsService;
-   }
-
-   @Override
-   public void deployDivert(DivertConfiguration config) throws Exception {
-      if (config.getName() == null) {
-         throw ActiveMQMessageBundle.BUNDLE.divertWithNoName();
-      }
-
-      if (config.getAddress() == null) {
-         ActiveMQServerLogger.LOGGER.divertWithNoAddress();
-
-         return;
-      }
-
-      if (config.getForwardingAddress() == null) {
-         ActiveMQServerLogger.LOGGER.divertWithNoForwardingAddress();
-
-         return;
-      }
-
-      SimpleString sName = new SimpleString(config.getName());
-
-      if (postOffice.getBinding(sName) != null) {
-         ActiveMQServerLogger.LOGGER.divertBindingAlreadyExists(sName);
-
-         return;
-      }
-
-      SimpleString sAddress = new SimpleString(config.getAddress());
-
-      Transformer transformer = getServiceRegistry().getDivertTransformer(config.getName(), config.getTransformerConfiguration());
-
-      Filter filter = FilterImpl.createFilter(config.getFilterString());
-
-      Divert divert = new DivertImpl(new SimpleString(config.getForwardingAddress()), sName, new SimpleString(config.getRoutingName()), config.isExclusive(), filter, transformer, postOffice, storageManager, config.getRoutingType());
-
-      Binding binding = new DivertBinding(storageManager.generateID(), sAddress, divert);
-
-      postOffice.addBinding(binding);
-
-      managementService.registerDivert(divert, config);
-   }
-
-   @Override
-   public void destroyDivert(SimpleString name) throws Exception {
-      Binding binding = postOffice.getBinding(name);
-      if (binding == null) {
-         throw ActiveMQMessageBundle.BUNDLE.noBindingForDivert(name);
-      }
-      if (!(binding instanceof DivertBinding)) {
-         throw ActiveMQMessageBundle.BUNDLE.bindingNotDivert(name);
-      }
-
-      postOffice.removeBinding(name, null, true);
-   }
-
-   @Override
-   public void deployBridge(BridgeConfiguration config) throws Exception {
-      if (clusterManager != null) {
-         clusterManager.deployBridge(config);
-      }
-   }
-
-   @Override
-   public void destroyBridge(String name) throws Exception {
-      if (clusterManager != null) {
-         clusterManager.destroyBridge(name);
-      }
-   }
-
-   @Override
-   public ServerSession getSessionByID(String sessionName) {
-      return sessions.get(sessionName);
-   }
-
-   // PUBLIC -------
-
-   @Override
-   public String toString() {
-      if (identity != null) {
-         return "ActiveMQServerImpl::" + identity;
-      }
-      return "ActiveMQServerImpl::" + (nodeManager != null ? "serverUUID=" + nodeManager.getUUID() : "");
-   }
-
-   /**
-    * For tests only, don't use this method as it's not part of the API
-    *
-    * @param factory
-    */
-   public void replaceQueueFactory(QueueFactory factory) {
-      this.queueFactory = factory;
-   }
-
-   @Override
-   public PagingManager createPagingManager() throws Exception {
-      return new PagingManagerImpl(getPagingStoreFactory(), addressSettingsRepository, configuration.getGlobalMaxSize(), configuration.getManagementAddress());
-   }
-
-   protected PagingStoreFactory getPagingStoreFactory() throws Exception {
-      if (configuration.getStoreConfiguration() != null && configuration.getStoreConfiguration().getStoreType() == StoreConfiguration.StoreType.DATABASE) {
-         DatabaseStorageConfiguration dbConf = (DatabaseStorageConfiguration) configuration.getStoreConfiguration();
-         return new PagingStoreFactoryDatabase(dbConf, storageManager, configuration.getJournalBufferTimeout_NIO(), scheduledPool, ioExecutorFactory, false, shutdownOnCriticalIO);
-      }
-      return new PagingStoreFactoryNIO(storageManager, configuration.getPagingLocation(), configuration.getJournalBufferTimeout_NIO(), scheduledPool, ioExecutorFactory, configuration.isJournalSyncNonTransactional(), shutdownOnCriticalIO);
-   }
-
-   /**
-    * This method is protected as it may be used as a hook for creating a custom storage manager (on tests for instance)
-    */
-   protected StorageManager createStorageManager() {
-      if (configuration.isPersistenceEnabled()) {
-         if (configuration.getStoreConfiguration() != null && configuration.getStoreConfiguration().getStoreType() == StoreConfiguration.StoreType.DATABASE) {
-            JDBCJournalStorageManager journal = new JDBCJournalStorageManager(configuration, getCriticalAnalyzer(), getScheduledPool(), executorFactory, ioExecutorFactory, shutdownOnCriticalIO);
-            this.getCriticalAnalyzer().add(journal);
-            return journal;
-         } else {
-            // Default to File Based Storage Manager, (Legacy default configuration).
-            JournalStorageManager journal = new JournalStorageManager(configuration, getCriticalAnalyzer(), executorFactory, scheduledPool, ioExecutorFactory, shutdownOnCriticalIO);
-            this.getCriticalAnalyzer().add(journal);
-            return journal;
-         }
-      }
-      return new NullStorageManager();
-   }
-
-   private void callActivateCallbacks() {
-      for (ActivateCallback callback : activateCallbacks) {
-         callback.activated();
-      }
-   }
-
-   private void callPreActiveCallbacks() {
-      for (ActivateCallback callback : activateCallbacks) {
-         callback.preActivate();
-      }
-   }
-
-   private void callDeActiveCallbacks() {
-      for (ActivateCallback callback : activateCallbacks) {
-         try {
-            callback.deActivate();
-         } catch (Throwable e) {
-            // https://bugzilla.redhat.com/show_bug.cgi?id=1009530:
-            // we won't interrupt the shutdown sequence because of a failed callback here
-            ActiveMQServerLogger.LOGGER.unableToDeactiveCallback(e);
-         }
-      }
-   }
-
-   private void callActivationCompleteCallbacks() {
-      for (ActivateCallback callback : activateCallbacks) {
-         callback.activationComplete();
-      }
-   }
-
-   /**
-    * Sets up ActiveMQ Artemis Executor Services.
-    */
-   private void initializeExecutorServices() {
-      /* We check to see if a Thread Pool is supplied in the InjectedObjectRegistry.  If so we created a new Ordered
-       * Executor based on the provided Thread pool.  Otherwise we create a new ThreadPool.
-       */
-      if (serviceRegistry.getExecutorService() == null) {
-         ThreadFactory tFactory = AccessController.doPrivileged(new PrivilegedAction<ThreadFactory>() {
-            @Override
-            public ThreadFactory run() {
-               return new ActiveMQThreadFactory("ActiveMQ-server-" + this.toString(), false, ClientSessionFactoryImpl.class.getClassLoader());
-            }
-         });
-
-         if (configuration.getThreadPoolMaxSize() == -1) {
-            threadPool = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tFactory);
-         } else {
-            threadPool = new ActiveMQThreadPoolExecutor(0, configuration.getThreadPoolMaxSize(), 60L, TimeUnit.SECONDS, tFactory);
-         }
-      } else {
-         threadPool = serviceRegistry.getExecutorService();
-         this.threadPoolSupplied = true;
-      }
-      this.executorFactory = new OrderedExecutorFactory(threadPool);
-
-      if (serviceRegistry.getIOExecutorService() != null) {
-         this.ioExecutorFactory = new OrderedExecutorFactory(serviceRegistry.getIOExecutorService());
-      } else {
-         ThreadFactory tFactory = AccessController.doPrivileged(new PrivilegedAction<ThreadFactory>() {
-            @Override
-            public ThreadFactory run() {
-               return new ActiveMQThreadFactory("ActiveMQ-IO-server-" + this.toString(), false, ClientSessionFactoryImpl.class.getClassLoader());
-            }
-         });
-
-         this.ioExecutorPool = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tFactory);
-         this.ioExecutorFactory = new OrderedExecutorFactory(ioExecutorPool);
-      }
-
-       /* We check to see if a Scheduled Executor Service is provided in the InjectedObjectRegistry.  If so we use this
-       * Scheduled ExecutorService otherwise we create a new one.
-       */
-      if (serviceRegistry.getScheduledExecutorService() == null) {
-         ThreadFactory tFactory = AccessController.doPrivileged(new PrivilegedAction<ThreadFactory>() {
-            @Override
-            public ThreadFactory run() {
-               return new ActiveMQThreadFactory("ActiveMQ-scheduled-threads", false, ClientSessionFactoryImpl.class.getClassLoader());
-            }
-         });
-         scheduledPool = new ScheduledThreadPoolExecutor(configuration.getScheduledThreadPoolMaxSize(), tFactory);
-      } else {
-         this.scheduledPoolSupplied = true;
-         this.scheduledPool = serviceRegistry.getScheduledExecutorService();
-      }
-   }
-
-   @Override
-   public ServiceRegistry getServiceRegistry() {
-      return serviceRegistry;
-   }
-
-   /**
-    * Starts everything apart from RemotingService and loading the data.
-    * <p>
-    * After optional intermediary steps, Part 1 is meant to be followed by part 2
-    * {@link #initialisePart2(boolean)}.
-    *
-    * @param scalingDown
-    */
-   synchronized boolean initialisePart1(boolean scalingDown) throws Exception {
-      if (state == SERVER_STATE.STOPPED)
-         return false;
-
-      if (configuration.getJournalType() == JournalType.ASYNCIO) {
-         if (!AIOSequentialFileFactory.isSupported()) {
-            ActiveMQServerLogger.LOGGER.switchingNIO();
-            configuration.setJournalType(JournalType.NIO);
-         } else if (!AIOSequentialFileFactory.isSupported(configuration.getJournalLocation())) {
-            ActiveMQServerLogger.LOGGER.switchingNIOonPath(configuration.getJournalLocation().getAbsolutePath());
-            configuration.setJournalType(JournalType.NIO);
-         }
-      }
-
-      managementService = new ManagementServiceImpl(mbeanServer, configuration);
-
-      if (configuration.getMemoryMeasureInterval() != -1) {
-         memoryManager = new MemoryManager(configuration.getMemoryWarningThreshold(), configuration.getMemoryMeasureInterval());
-
-         memoryManager.start();
-      }
-
-      // Create the hard-wired components
-
-      callPreActiveCallbacks();
-
-      // startReplication();
-
-      storageManager = createStorageManager();
-
-      if (configuration.getClusterConfigurations().size() > 0 && ActiveMQDefaultConfiguration.getDefaultClusterUser().equals(configuration.getClusterUser()) && ActiveMQDefaultConfiguration.getDefaultClusterPassword().equals(configuration.getClusterPassword())) {
-         ActiveMQServerLogger.LOGGER.clusterSecurityRisk();
-      }
-
-      securityStore = new SecurityStoreImpl(securityRepository, securityManager, configuration.getSecurityInvalidationInterval(), configuration.isSecurityEnabled(), configuration.getClusterUser(), configuration.getClusterPassword(), managementService);
-
-      queueFactory = new QueueFactoryImpl(executorFactory, scheduledPool, addressSettingsRepository, storageManager, this);
-
-      pagingManager = createPagingManager();
-
-      resourceManager = new ResourceManagerImpl((int) (configuration.getTransactionTimeout() / 1000), configuration.getTransactionTimeoutScanPeriod(), scheduledPool);
-      postOffice = new PostOfficeImpl(this, storageManager, pagingManager, queueFactory, managementService, configuration.getMessageExpiryScanPeriod(), configuration.getAddressQueueScanPeriod(), configuration.getWildcardConfiguration(), configuration.getIDCacheSize(), configuration.isPersistIDCache(), addressSettingsRepository);
-
-      // This can't be created until node id is set
-      clusterManager = new ClusterManager(executorFactory, this, postOffice, scheduledPool, managementService, configuration, nodeManager, haPolicy.isBackup());
-
-      backupManager = new BackupManager(this, executorFactory, scheduledPool, nodeManager, configuration, clusterManager);
-
-      clusterManager.deploy();
-
-      remotingService = new RemotingServiceImpl(clusterManager, configuration, this, managementService, scheduledPool, protocolManagerFactories, executorFactory.getExecutor(), serviceRegistry);
-
-      messagingServerControl = managementService.registerServer(postOffice, securityStore, storageManager, configuration, addressSettingsRepository, securityRepository, resourceManager, remotingService, this, queueFactory, scheduledPool, pagingManager, haPolicy.isBackup());
-
-      // Address settings need to deployed initially, since they're require on paging manager.start()
-
-      if (!scalingDown) {
-         deployAddressSettingsFromConfiguration();
-      }
-
-      //fix of ARTEMIS-1823
-      if (!configuration.isPersistenceEnabled()) {
-         for (AddressSettings addressSettings : addressSettingsRepository.values()) {
-            if (addressSettings.getAddressFullMessagePolicy() == AddressFullMessagePolicy.PAGE) {
-               ActiveMQServerLogger.LOGGER.pageWillBePersisted();
-               break;
-            }
-         }
-      }
-
-      storageManager.start();
-
-      postOffice.start();
-
-      pagingManager.start();
-
-      managementService.start();
-
-      resourceManager.start();
-
-      deploySecurityFromConfiguration();
-
-      deployGroupingHandlerConfiguration(configuration.getGroupingHandlerConfiguration());
-
-      this.reloadManager = new ReloadManagerImpl(getScheduledPool(), executorFactory.getExecutor(), configuration.getConfigurationFileRefreshPeriod());
-
-      if (configuration.getConfigurationUrl() != null && getScheduledPool() != null) {
-         reloadManager.addCallback(configuration.getConfigurationUrl(), new ConfigurationFileReloader());
-      }
-
-      if (System.getProperty("logging.configuration") != null) {
-         try {
-            reloadManager.addCallback(new URI(System.getProperty("logging.configuration")).toURL(), new LoggingConfigurationFileReloader());
-         } catch (Exception e) {
-            // a syntax error with the logging system property shouldn't prevent the server from starting
-            ActiveMQServerLogger.LOGGER.problemAddingConfigReloadCallback(System.getProperty("logging.configuration"), e);
-         }
-      }
-
-      if (hasBrokerPlugins()) {
-         callBrokerPlugins(plugin -> plugin.registered(this));
-      }
-
-      return true;
-   }
-
-   /*
-    * Load the data, and start remoting service so clients can connect
-    */
-   synchronized void initialisePart2(boolean scalingDown) throws Exception {
-      // Load the journal and populate queues, transactions and caches in memory
-
-      if (state == SERVER_STATE.STOPPED || state == SERVER_STATE.STOPPING) {
-         return;
-      }
-
-      pagingManager.reloadStores();
-
-      JournalLoadInformation[] journalInfo = loadJournals();
-
-      removeExtraAddressStores();
-
-      final ServerInfo dumper = new ServerInfo(this, pagingManager);
-
-      long dumpInfoInterval = configuration.getServerDumpInterval();
-
-      if (dumpInfoInterval > 0) {
-         scheduledPool.scheduleWithFixedDelay(new Runnable() {
-            @Override
-            public void run() {
-               ActiveMQServerLogger.LOGGER.dumpServerInfo(dumper.dump());
-            }
-         }, 0, dumpInfoInterval, TimeUnit.MILLISECONDS);
-      }
-
-      // Deploy the rest of the stuff
-
-      // Deploy predefined addresses
-      deployAddressesFromConfiguration();
-      // Deploy any predefined queues
-      deployQueuesFromConfiguration();
-      // Undeploy any addresses and queues not in config
-      undeployAddressesAndQueueNotInConfiguration();
-
-      //deploy any reloaded config
-      deployReloadableConfigFromConfiguration();
-
-      // We need to call this here, this gives any dependent server a chance to deploy its own addresses
-      // this needs to be done before clustering is fully activated
-      callActivateCallbacks();
-
-      checkForPotentialOOMEInAddressConfiguration();
-
-      if (!scalingDown) {
-         // Deploy any pre-defined diverts
-         deployDiverts();
-
-         if (groupingHandler != null) {
-            groupingHandler.start();
-         }
-
-         // We do this at the end - we don't want things like MDBs or other connections connecting to a backup server until
-         // it is activated
-
-         if (groupingHandler != null && groupingHandler instanceof LocalGroupingHandler) {
-            clusterManager.start();
-
-            groupingHandler.awaitBindings();
-
-            remotingService.start();
-         } else {
-            remotingService.start();
-
-            clusterManager.start();
-         }
-
-         if (nodeManager.getNodeId() == null) {
-            throw ActiveMQMessageBundle.BUNDLE.nodeIdNull();
-         }
-
-         // We can only do this after everything is started otherwise we may get nasty races with expired messages
-         postOffice.startExpiryScanner();
-
-         postOffice.startAddressQueueScanner();
-      }
-
-      if (configuration.getMaxDiskUsage() != -1) {
-         try {
-            injectMonitor(new FileStoreMonitor(getScheduledPool(), executorFactory.getExecutor(), configuration.getDiskScanPeriod(), TimeUnit.MILLISECONDS, configuration.getMaxDiskUsage() / 100f, shutdownOnCriticalIO));
-         } catch (Exception e) {
-            ActiveMQServerLogger.LOGGER.unableToInjectMonitor(e);
-         }
-      }
-   }
-
-   /**
-    * This method exists for a possibility of test cases replacing the FileStoreMonitor for an extension that would for instance pretend a disk full on certain tests.
-    */
-   public void injectMonitor(FileStoreMonitor storeMonitor) throws Exception {
-      this.fileStoreMonitor = storeMonitor;
-      pagingManager.injectMonitor(storeMonitor);
-      storageManager.injectMonitor(storeMonitor);
-      fileStoreMonitor.start();
-   }
-
-   public FileStoreMonitor getMonitor() {
-      return fileStoreMonitor;
-   }
-
-   public void completeActivation() throws Exception {
-      setState(ActiveMQServerImpl.SERVER_STATE.STARTED);
-      getRemotingService().startAcceptors();
-      activationLatch.countDown();
-      callActivationCompleteCallbacks();
-   }
-
-   private void deploySecurityFromConfiguration() {
-      for (Map.Entry<String, Set<Role>> entry : configuration.getSecurityRoles().entrySet()) {
-         securityRepository.addMatch(entry.getKey(), entry.getValue(), true);
-      }
-
-      for (SecuritySettingPlugin securitySettingPlugin : configuration.getSecuritySettingPlugins()) {
-         securitySettingPlugin.setSecurityRepository(securityRepository);
-      }
-   }
-
-   private void undeployAddressesAndQueueNotInConfiguration() throws Exception {
-      undeployAddressesAndQueueNotInConfiguration(configuration);
-   }
-
-   private void undeployAddressesAndQueueNotInConfiguration(Configuration configuration) throws Exception {
-      Set<String> addressesInConfig = configuration.getAddressConfigurations().stream()
-              .map(CoreAddressConfiguration::getName)
-              .collect(Collectors.toSet());
-
-      Set<String> queuesInConfig = configuration.getAddressConfigurations().stream()
-              .map(CoreAddressConfiguration::getQueueConfigurations)
-              .flatMap(List::stream).map(CoreQueueConfiguration::getName)
-              .collect(Collectors.toSet());
-
-      for (SimpleString addressName : listAddressNames()) {
-         AddressSettings addressSettings = getAddressSettingsRepository().getMatch(addressName.toString());
-
-         if (!addressesInConfig.contains(addressName.toString()) && addressSettings.getConfigDeleteAddresses() == DeletionPolicy.FORCE) {
-            for (Queue queue : listQueues(addressName)) {
-               ActiveMQServerLogger.LOGGER.undeployQueue(queue.getName());
-               queue.deleteQueue(true);
-            }
-            ActiveMQServerLogger.LOGGER.undeployAddress(addressName);
-            removeAddressInfo(addressName, null);
-         } else if (addressSettings.getConfigDeleteQueues() == DeletionPolicy.FORCE) {
-            for (Queue queue : listConfiguredQueues(addressName)) {
-               if (!queuesInConfig.contains(queue.getName().toString())) {
-                  ActiveMQServerLogger.LOGGER.undeployQueue(queue.getName());
-                  queue.deleteQueue(true);
-               }
-            }
-         }
-      }
-   }
-
-   private Set<SimpleString> listAddressNames() {
-      return postOffice.getAddresses();
-   }
-
-   private List<Queue> listConfiguredQueues(SimpleString address) throws Exception {
-      return listQueues(address).stream().filter(queue -> queue.isConfigurationManaged()).collect(Collectors.toList());
-   }
-
-   private List<Queue> listQueues(SimpleString address) throws Exception {
-      return postOffice.listQueuesForAddress(address);
-   }
-
-   private void deployAddressesFromConfiguration() throws Exception {
-      deployAddressesFromConfiguration(configuration);
-   }
-
-   private void deployAddressesFromConfiguration(Configuration configuration) throws Exception {
-      for (CoreAddressConfiguration config : configuration.getAddressConfigurations()) {
-         try {
-            ActiveMQServerLogger.LOGGER.deployAddress(config.getName(), config.getRoutingTypes().toString());
-            SimpleString address = SimpleString.toSimpleString(config.getName());
-
-            AddressInfo tobe = new AddressInfo(address, config.getRoutingTypes());
-
-            //During this stage until all queues re-configured we combine the current (if exists) with to-be routing types to allow changes in queues
-            AddressInfo current = getAddressInfo(address);
-            AddressInfo merged = new AddressInfo(address, tobe.getRoutingType());
-            if (current != null) {
-               merged.getRoutingTypes().addAll(current.getRoutingTypes());
-            }
-            addOrUpdateAddressInfo(merged);
-
-            deployQueuesFromListCoreQueueConfiguration(config.getQueueConfigurations());
-
-            //Now all queues updated we apply the actual address info expected tobe.
-            addOrUpdateAddressInfo(tobe);
-         } catch (Exception e) {
-            ActiveMQServerLogger.LOGGER.problemDeployingAddress(config.getName(), e.getMessage());
-         }
-      }
-   }
-
-   private AddressInfo mergedRoutingTypes(SimpleString address, AddressInfo... addressInfos) {
-      EnumSet<RoutingType> mergedRoutingTypes = EnumSet.noneOf(RoutingType.class);
-      for (AddressInfo addressInfo : addressInfos) {
-         if (addressInfo != null) {
-            mergedRoutingTypes.addAll(addressInfo.getRoutingTypes());
-         }
-      }
-      return new AddressInfo(address, mergedRoutingTypes);
-   }
-
-   private void deployQueuesFromListCoreQueueConfiguration(List<CoreQueueConfiguration> queues) throws Exception {
-      for (CoreQueueConfiguration config : queues) {
-         try {
-            SimpleString queueName = SimpleString.toSimpleString(config.getName());
-            ActiveMQServerLogger.LOGGER.deployQueue(config.getName(), config.getAddress(), config.getRoutingType().toString());
-            AddressSettings as = addressSettingsRepository.getMatch(config.getAddress());
-            // determine if there is an address::queue match; update it if so
-            int maxConsumers = config.getMaxConsumers() == null ? as.getDefaultMaxConsumers() : config.getMaxConsumers();
-            boolean isExclusive = config.isExclusive() == null ? as.isDefaultExclusiveQueue() : config.isExclusive();
-            boolean groupRebalance = config.isGroupRebalance() == null ? as.isDefaultGroupRebalance() : config.isGroupRebalance();
-            int groupBuckets = config.getGroupBuckets() == null ? as.getDefaultGroupBuckets() : config.getGroupBuckets();
-            boolean isLastValue = config.isLastValue() == null ? as.isDefaultLastValueQueue() : config.isLastValue();
-            SimpleString lastValueKey = config.getLastValueKey() == null ? as.getDefaultLastValueKey() : SimpleString.toSimpleString(config.getLastValueKey());
-            boolean isNonDestructive = config.isNonDestructive() == null ? as.isDefaultNonDestructive() : config.isNonDestructive();
-            int consumersBeforeDispatch = config.getConsumersBeforeDispatch() == null ? as.getDefaultConsumersBeforeDispatch() : config.getConsumersBeforeDispatch();
-            long delayBeforeDispatch = config.getDelayBeforeDispatch() == null ? as.getDefaultDelayBeforeDispatch() : config.getDelayBeforeDispatch();
-
-            if (locateQueue(queueName) != null && locateQueue(queueName).getAddress().toString().equals(config.getAddress())) {
-               updateQueue(config.getName(), config.getRoutingType(), config.getFilterString(), maxConsumers, config.getPurgeOnNoConsumers(), isExclusive, groupRebalance, groupBuckets, isNonDestructive, consumersBeforeDispatch, delayBeforeDispatch, config.getUser(), true);
-            } else {
-               // if the address::queue doesn't exist then create it
-               try {
-                  createQueue(new AddressInfo(SimpleString.toSimpleString(config.getAddress())).addRoutingType(config.getRoutingType()), queueName, SimpleString.toSimpleString(config.getFilterString()), SimpleString.toSimpleString(config.getUser()), config.isDurable(), false, false, false, false, maxConsumers, config.getPurgeOnNoConsumers(), isExclusive, groupRebalance, groupBuckets, isLastValue, lastValueKey, isNonDestructive, consumersBeforeDispatch, delayBeforeDispatch, true, true);
-               } catch (ActiveMQQueueExistsException e) {
-                  // the queue may exist on a *different* address
-                  ActiveMQServerLogger.LOGGER.warn(e.getMessage());
-               }
-            }
-         } catch (Exception e) {
-            ActiveMQServerLogger.LOGGER.problemDeployingQueue(config.getName(), e.getMessage());
-         }
-      }
-   }
-
-   private void deployQueuesFromConfiguration() throws Exception {
-      deployQueuesFromListCoreQueueConfiguration(configuration.getQueueConfigurations());
-   }
-
-   private void checkForPotentialOOMEInAddressConfiguration() {
-      long totalMaxSizeBytes = 0;
-      long addressCount = 0;
-      for (SimpleString address : postOffice.getAddresses()) {
-         totalMaxSizeBytes += addressSettingsRepository.getMatch(address.toString()).getMaxSizeBytes();
-         addressCount++;
-      }
-
-      long maxMemory = Runtime.getRuntime().maxMemory();
-      if (totalMaxSizeBytes >= maxMemory && configuration.getGlobalMaxSize() < 0) {
-         ActiveMQServerLogger.LOGGER.potentialOOME(addressCount, totalMaxSizeBytes, maxMemory);
-      }
-   }
-
-   private void deployAddressSettingsFromConfiguration() {
-      for (Map.Entry<String, AddressSettings> entry : configuration.getAddressesSettings().entrySet()) {
-         addressSettingsRepository.addMatch(entry.getKey(), entry.getValue(), true);
-      }
-   }
-
-
-
-   private JournalLoadInformation[] loadJournals() throws Exception {
-      JournalLoader journalLoader = activation.createJournalLoader(postOffice, pagingManager, storageManager, queueFactory, nodeManager, managementService, groupingHandler, configuration, parentServer);
-
-      JournalLoadInformation[] journalInfo = new JournalLoadInformation[2];
-
-      List<QueueBindingInfo> queueBindingInfos = new ArrayList<>();
-
-      List<GroupingInfo> groupingInfos = new ArrayList<>();
-
-      List<AddressBindingInfo> addressBindingInfos = new ArrayList<>();
-
-      journalInfo[0] = storageManager.loadBindingJournal(queueBindingInfos, groupingInfos, addressBindingInfos);
-
-      recoverStoredConfigs();
-
-      Map<Long, AddressBindingInfo> addressBindingInfosMap = new HashMap<>();
-
-      journalLoader.initAddresses(addressBindingInfosMap, addressBindingInfos);
-
-      Map<Long, QueueBindingInfo> queueBindingInfosMap = new HashMap<>();
-
-      journalLoader.initQueues(queueBindingInfosMap, queueBindingInfos);
-
-      journalLoader.handleGroupingBindings(groupingInfos);
-
-      Map<SimpleString, List<Pair<byte[], Long>>> duplicateIDMap = new HashMap<>();
-
-      HashSet<Pair<Long, Long>> pendingLargeMessages = new HashSet<>();
-
-      List<PageCountPending> pendingNonTXPageCounter = new LinkedList<>();
-
-      journalInfo[1] = storageManager.loadMessageJournal(postOffice, pagingManager, resourceManager, queueBindingInfosMap, duplicateIDMap, pendingLargeMessages, pendingNonTXPageCounter, journalLoader);
-
-      journalLoader.handleDuplicateIds(duplicateIDMap);
-
-      for (Pair<Long, Long> msgToDelete : pendingLargeMessages) {
-         ActiveMQServerLogger.LOGGER.deletingPendingMessage(msgToDelete);
-         LargeServerMessage msg = storageManager.createLargeMessage();
-         msg.setMessageID(msgToDelete.getB());
-         msg.setPendingRecordID(msgToDelete.getA());
-         msg.setDurable(true);
-         msg.deleteFile();
-      }
-
-      if (pendingNonTXPageCounter.size() != 0) {
-         try {
-            journalLoader.recoverPendingPageCounters(pendingNonTXPageCounter);
-         } catch (Throwable e) {
-            ActiveMQServerLogger.LOGGER.errorRecoveringPageCounter(e);
-         }
-      }
-
-      journalLoader.cleanUp();
-
-      return journalInfo;
-   }
-
-   /**
-    * @throws Exception
-    */
-   private void recoverStoredConfigs() throws Exception {
-      List<PersistedAddressSetting> adsettings = storageManager.recoverAddressSettings();
-      for (PersistedAddressSetting set : adsettings) {
-         addressSettingsRepository.addMatch(set.getAddressMatch().toString(), set.getSetting());
-      }
-
-      List<PersistedRoles> roles = storageManager.recoverPersistedRoles();
-
-      for (PersistedRoles roleItem : roles) {
-         Set<Role> setRoles = SecurityFormatter.createSecurity(roleItem.getSendRoles(), roleItem.getConsumeRoles(), roleItem.getCreateDurableQueueRoles(), roleItem.getDeleteDurableQueueRoles(), roleItem.getCreateNonDurableQueueRoles(), roleItem.getDeleteNonDurableQueueRoles(), roleItem.getManageRoles(), roleItem.getBrowseRoles(), roleItem.getCreateAddressRoles(), roleItem.getDeleteAddressRoles());
-
-         securityRepository.addMatch(roleItem.getAddressMatch().toString(), setRoles);
-      }
-   }
-
-   @Override
-   public boolean updateAddressInfo(SimpleString address, EnumSet<RoutingType> routingTypes) throws Exception {
-      if (getAddressInfo(address) == null) {
-         return false;
-      }
-
-      //after the postOffice call, updatedAddressInfo could change further (concurrently)!
-      postOffice.updateAddressInfo(address, routingTypes);
-      return true;
-   }
-
-   @Override
-   public boolean updateAddressInfo(SimpleString address, Collection<RoutingType> routingTypes) throws Exception {
-      return updateAddressInfo(address, EnumSet.copyOf(routingTypes));
-   }
-
-   @Override
-   public boolean addAddressInfo(AddressInfo addressInfo) throws Exception {
-      boolean result = postOffice.addAddressInfo(addressInfo);
-
-
-      return result;
-   }
-
-   @Override
-   public AddressInfo addOrUpdateAddressInfo(AddressInfo addressInfo) throws Exception {
-      if (!addAddressInfo(addressInfo)) {
-         updateAddressInfo(addressInfo.getName(), addressInfo.getRoutingTypes());
-      }
-
-      return getAddressInfo(addressInfo.getName());
-   }
-
-
-   @Override
-   public void removeAddressInfo(final SimpleString address, final SecurityAuth auth) throws Exception {
-      removeAddressInfo(address, auth, false);
-   }
-
-   @Override
-   public void removeAddressInfo(final SimpleString address, final SecurityAuth auth, boolean force) throws Exception {
-      if (auth != null) {
-         securityStore.check(address, CheckType.DELETE_ADDRESS, auth);
-      }
-
-      AddressInfo addressInfo = getAddressInfo(address);
-      if (postOffice.removeAddressInfo(address, force) == null) {
-         throw ActiveMQMessageBundle.BUNDLE.addressDoesNotExist(address);
-      }
-
-      long txID = storageManager.generateID();
-      storageManager.deleteAddressBinding(txID, addressInfo.getId());
-      storageManager.commitBindings(txID);
-      pagingManager.deletePageStore(address);
-   }
-
-   @Override
-   public String getInternalNamingPrefix() {
-      return configuration.getInternalNamingPrefix();
-   }
-
-   @Override
-   public AddressInfo getAddressInfo(SimpleString address) {
-      return postOffice.getAddressInfo(address);
-   }
-
-   public Queue createQueue(final AddressInfo addrInfo,
-                            final SimpleString queueName,
-                            final SimpleString filterString,
-                            final SimpleString user,
-                            final boolean durable,
-                            final boolean temporary,
-                            final boolean ignoreIfExists,
-                            final boolean transientQueue,
-                            final boolean autoCreated,
-                            final int maxConsumers,
-                            final boolean purgeOnNoConsumers,
-                            final boolean exclusive,
-                            final boolean groupRebalance,
-                            final int groupBuckets,
-                            final boolean lastValue,
-                            final SimpleString lastValueKey,
-                            final boolean nonDestructive,
-                            final int consumersBeforeDispatch,
-                            final long delayBeforeDispatch,
-                            final boolean autoCreateAddress,
-                            final boolean configurationManaged) throws Exception {
-      SimpleString realQueueName = CompositeAddress.extractQueueName(queueName);
-
-      if (realQueueName == null || realQueueName.length() == 0) {
-         throw ActiveMQMessageBundle.BUNDLE.invalidQueueName(queueName);
-      }
-
-      final QueueBinding binding = (QueueBinding) postOffice.getBinding(realQueueName);
-      if (binding != null) {
-         if (ignoreIfExists) {
-            return binding.getQueue();
-         } else {
-            throw ActiveMQMessageBundle.BUNDLE.queueAlreadyExists(realQueueName, binding.getAddress());
-         }
-      }
-
-      final Filter filter = FilterImpl.createFilter(filterString);
-
-      final long txID = storageManager.generateID();
-      final long queueID = storageManager.generateID();
-
-      final QueueConfig.Builder queueConfigBuilder;
-
-      final SimpleString addressToUse = (addrInfo == null || addrInfo.getName() == null) ? realQueueName : addrInfo.getName();
-
-      queueConfigBuilder = QueueConfig.builderWith(queueID, realQueueName, addressToUse);
-
-      AddressInfo info = postOffice.getAddressInfo(addressToUse);
-
-      RoutingType routingType = addrInfo == null ? null : addrInfo.getRoutingType();
-      RoutingType rt = (routingType == null ? ActiveMQDefaultConfiguration.getDefaultRoutingType() : routingType);
-      if (autoCreateAddress || temporary) {
-         if (info == null) {
-            final AddressInfo addressInfo = new AddressInfo(addressToUse, rt);
-            addressInfo.setAutoCreated(true);
-            addressInfo.setInternal(addrInfo == null ? false : addrInfo.isInternal());
-            addAddressInfo(addressInfo);
-         } else if (!info.getRoutingTypes().contains(rt)) {
-            EnumSet<RoutingType> routingTypes = EnumSet.copyOf(info.getRoutingTypes());
-            routingTypes.add(rt);
-            updateAddressInfo(info.getName(), routingTypes);
-         }
-      } else if (info == null) {
-         throw ActiveMQMessageBundle.BUNDLE.addressDoesNotExist(addressToUse);
-      } else if (!info.getRoutingTypes().contains(rt)) {
-         throw ActiveMQMessageBundle.BUNDLE.invalidRoutingTypeForAddress(rt, info.getName().toString(), info.getRoutingTypes());
-      }
-
-      final QueueConfig queueConfig = queueConfigBuilder
-              .filter(filter)
-              .pagingManager(pagingManager)
-              .user(user)
-              .durable(durable)
-              .temporary(temporary)
-              .autoCreated(autoCreated)
-              .routingType(rt)
-              .maxConsumers(maxConsumers)
-              .purgeOnNoConsumers(purgeOnNoConsumers)
-              .exclusive(exclusive)
-              .groupRebalance(groupRebalance)
-              .groupBuckets(groupBuckets)
-              .lastValue(lastValue)
-              .lastValueKey(lastValueKey)
-              .nonDestructive(nonDestructive)
-              .consumersBeforeDispatch(consumersBeforeDispatch)
-              .delayBeforeDispatch(delayBeforeDispatch)
-              .configurationManaged(configurationManaged)
-              .build();
-
-      if (hasBrokerQueuePlugins()) {
-         callBrokerQueuePlugins(plugin -> plugin.beforeCreateQueue(queueConfig));
-      }
-
-      final Queue queue = queueFactory.createQueueWith(queueConfig);
-
-      if (transientQueue) {
-         queue.setConsumersRefCount(new TransientQueueManagerImpl(this, queue.getName()));
-      } else {
-         queue.setConsumersRefCount(new QueueManagerImpl(this, queue.getName()));
-      }
-
-      final QueueBinding localQueueBinding = new LocalQueueBinding(queue.getAddress(), queue, nodeManager.getNodeId());
-
-      if (queue.isDurable()) {
-         storageManager.addQueueBinding(txID, localQueueBinding);
-      }
-
-      try {
-         postOffice.addBinding(localQueueBinding);
-         if (queue.isDurable()) {
-            storageManager.commitBindings(txID);
-         }
-      } catch (Exception e) {
-         try {
-            if (durable) {
-               storageManager.rollbackBindings(txID);
-            }
-            final PageSubscription pageSubscription = queue.getPageSubscription();
-            try {
-               queue.close();
-            } finally {
-               if (pageSubscription != null) {
-                  pageSubscription.destroy();
-               }
-            }
-         } catch (Throwable ignored) {
-            logger.debug(ignored.getMessage(), ignored);
-         }
-         throw e;
-      }
-
-      if (addrInfo == null || !addrInfo.isInternal()) {
-         managementService.registerQueue(queue, queue.getAddress(), storageManager);
-      }
-
-      if (hasBrokerQueuePlugins()) {
-         callBrokerQueuePlugins(plugin -> plugin.afterCreateQueue(queue));
-      }
-
-      callPostQueueCreationCallbacks(queue.getName());
-
-      return queue;
-   }
-
-   @Override
-   public Queue createQueue(final SimpleString address,
-                            final RoutingType routingType,
-                            final SimpleString queueName,
-                            final SimpleString filterString,
-                            final SimpleString user,
-                            final boolean durable,
-                            final boolean temporary,
-                            final boolean ignoreIfExists,
-                            final boolean transientQueue,
-                            final boolean autoCreated,
-                            final int maxConsumers,
-                            final boolean purgeOnNoConsumers,
-                            final boolean exclusive,
-                            final boolean groupRebalance,
-                            final int groupBuckets,
-                            final boolean lastValue,
-                            final SimpleString lastValueKey,
-                            final boolean nonDestructive,
-                            final int consumersBeforeDispatch,
-                            final long delayBeforeDispatch,
-                            final boolean autoCreateAddress) throws Exception {
-      return createQueue(new AddressInfo(address).addRoutingType(routingType), queueName, filterString, user, durable, temporary, ignoreIfExists, transientQueue, autoCreated, maxConsumers, purgeOnNoConsumers, exclusive, groupRebalance, groupBuckets, lastValue, lastValueKey, nonDestructive, consumersBeforeDispatch, delayBeforeDispatch, autoCreateAddress, false);
-   }
-
-   @Deprecated
-   @Override
-   public Queue updateQueue(String name,
-                            RoutingType routingType,
-                            Integer maxConsumers,
-                            Boolean purgeOnNoConsumers) throws Exception {
-      return updateQueue(name, routingType, maxConsumers, purgeOnNoConsumers, null);
-   }
-
-   @Deprecated
-   @Override
-   public Queue updateQueue(String name,
-                            RoutingType routingType,
-                            Integer maxConsumers,
-                            Boolean purgeOnNoConsumers,
-                            Boolean exclusive) throws Exception {
-      return updateQueue(name, routingType, maxConsumers, purgeOnNoConsumers, null, null);
-   }
-
-   @Deprecated
-   @Override
-   public Queue updateQueue(String name,
-                            RoutingType routingType,
-                            Integer maxConsumers,
-                            Boolean purgeOnNoConsumers,
-                            Boolean exclusive,
-                            String user) throws Exception {
-      return updateQueue(name, routingType, null, maxConsumers, purgeOnNoConsumers, exclusive, null, null, null, null, null, user);
-   }
-
-   @Override
-   public Queue updateQueue(String name,
-                            RoutingType routingType,
-                            String filterString,
-                            Integer maxConsumers,
-                            Boolean purgeOnNoConsumers,
-                            Boolean exclusive,
-                            Boolean groupRebalance,
-                            Integer groupBuckets,
-                            Boolean nonDestructive,
-                            Integer consumersBeforeDispatch,
-                            Long delayBeforeDispatch,
-                            String user) throws Exception {
-      return updateQueue(name, routingType, filterString, maxConsumers, purgeOnNoConsumers, exclusive, groupRebalance, groupBuckets, nonDestructive, consumersBeforeDispatch, delayBeforeDispatch, user, null);
-   }
-
-   private Queue updateQueue(String name,
-                            RoutingType routingType,
-                            String filterString,
-                            Integer maxConsumers,
-                            Boolean purgeOnNoConsumers,
-                            Boolean exclusive,
-                            Boolean groupRebalance,
-                            Integer groupBuckets,
-                            Boolean nonDestructive,
-                            Integer consumersBeforeDispatch,
-                            Long delayBeforeDispatch,
-                            String user,
-                            Boolean configurationManaged) throws Exception {
-      final Filter filter = FilterImpl.createFilter(filterString);
-      final QueueBinding queueBinding = this.postOffice.updateQueue(new SimpleString(name), routingType, filter, maxConsumers, purgeOnNoConsumers, exclusive, groupRebalance, groupBuckets, nonDestructive, consumersBeforeDispatch, delayBeforeDispatch, SimpleString.toSimpleString(user), configurationManaged);
-      if (queueBinding != null) {
-         final Queue queue = queueBinding.getQueue();
-         return queue;
-      } else {
-         return null;
-      }
-   }
-
-   private void deployDiverts() throws Exception {
-      for (DivertConfiguration config : configuration.getDivertConfigurations()) {
-         deployDivert(config);
-      }
-   }
-
-   private void deployGroupingHandlerConfiguration(final GroupingHandlerConfiguration config) throws Exception {
-      if (config != null) {
-         GroupingHandler groupingHandler1;
-         if (config.getType() == GroupingHandlerConfiguration.TYPE.LOCAL) {
-            groupingHandler1 = new LocalGroupingHandler(executorFactory, scheduledPool, managementService, config.getName(), config.getAddress(), getStorageManager(), config.getTimeout(), config.getGroupTimeout(), config.getReaperPeriod());
-         } else {
-            groupingHandler1 = new RemoteGroupingHandler(executorFactory, managementService, config.getName(), config.getAddress(), config.getTimeout(), config.getGroupTimeout());
-         }
-
-         this.groupingHandler = groupingHandler1;
-
-         managementService.addNotificationListener(groupingHandler1);
-      }
-   }
-
-   /**
-    * Check if journal directory exists or create it (if configured to do so)
-    */
-   public void checkJournalDirectory() {
-      File journalDir = configuration.getJournalLocation();
-
-      if (!journalDir.exists() && configuration.isPersistenceEnabled()) {
-         if (configuration.isCreateJournalDir()) {
-            journalDir.mkdirs();
-         } else {
-            throw ActiveMQMessageBundle.BUNDLE.cannotCreateDir(journalDir.getAbsolutePath());
-         }
-      }
-   }
-
-   // Inner classes
-   // --------------------------------------------------------------------------------
-
-   public final class ShutdownOnCriticalErrorListener implements IOCriticalErrorListener {
-
-      boolean failedAlready = false;
-
-      @Override
-      public synchronized void onIOException(Throwable cause, String message, SequentialFile file) {
-         if (!failedAlready) {
-            failedAlready = true;
-
-            if (file == null) {
-               ActiveMQServerLogger.LOGGER.ioCriticalIOError(message, "NULL", cause);
-            } else {
-               ActiveMQServerLogger.LOGGER.ioCriticalIOError(message, file.toString(), cause);
-            }
-
-            stopTheServer(true);
-         }
-      }
-   }
-
-   @Override
-   public void addProtocolManagerFactory(ProtocolManagerFactory factory) {
-      protocolManagerFactories.add(factory);
-   }
-
-   @Override
-   public void removeProtocolManagerFactory(ProtocolManagerFactory factory) {
-      protocolManagerFactories.remove(factory);
-   }
-
-   @Override
-   public ActiveMQServer createBackupServer(Configuration configuration) {
-      return new ActiveMQServerImpl(configuration, null, securityManager, this);
-   }
-
-   @Override
-   public void addScaledDownNode(SimpleString scaledDownNodeId) {
-      synchronized (scaledDownNodeIDs) {
-         scaledDownNodeIDs.add(scaledDownNodeId);
-         if (scaledDownNodeIDs.size() > 10) {
-            scaledDownNodeIDs.remove(10);
-         }
-      }
-   }
-
-   @Override
-   public boolean hasScaledDown(SimpleString scaledDownNodeId) {
-      return scaledDownNodeIDs.contains(scaledDownNodeId);
-   }
-
-   /**
-    * Move data away before starting data synchronization for fail-back.
-    * <p>
-    * Use case is a server, upon restarting, finding a former backup running in its place. It will
-    * move any older data away and log a warning about it.
-    */
-   void moveServerData(int maxSavedReplicated) throws IOException {
-      File[] dataDirs = new File[]{configuration.getBindingsLocation(), configuration.getJournalLocation(), configuration.getPagingLocation(), configuration.getLargeMessagesLocation()};
-
-      for (File data : dataDirs) {
-         FileMoveManager moveManager = new FileMoveManager(data, maxSavedReplicated);
-         moveManager.doMove();
-      }
-   }
-
-   @Override
-   public String getUptime() {
-      long delta = getUptimeMillis();
-
-      if (delta == 0) {
-         return "not started";
-      }
-
-      return TimeUtils.printDuration(delta);
-   }
-
-   @Override
-   public long getUptimeMillis() {
-      if (startDate == null) {
-         return 0;
-      }
-
-      return new Date().getTime() - startDate.getTime();
-   }
-
-   @Override
-   public boolean addClientConnection(String clientId, boolean unique) {
-      final AtomicInteger i = connectedClientIds.putIfAbsent(clientId, new AtomicInteger(1));
-      if (i != null) {
-         if (unique && i.get() != 0) {
-            return false;
-         } else if (i.incrementAndGet() > 0) {
-            connectedClientIds.put(clientId, i);
-         }
-      }
-      return true;
-   }
-
-   @Override
-   public void removeClientConnection(String clientId) {
-      AtomicInteger i = connectedClientIds.get(clientId);
-      if (i != null && i.decrementAndGet() == 0) {
-         connectedClientIds.remove(clientId);
-      }
-   }
-
-   private void removeExtraAddressStores() throws Exception {
-      SimpleString[] storeNames = pagingManager.getStoreNames();
-      if (storeNames != null && storeNames.length > 0) {
-         for (SimpleString storeName : storeNames) {
-            if (getAddressInfo(storeName) == null) {
-               pagingManager.deletePageStore(storeName);
-            }
-         }
-      }
-   }
-
-   private final class ActivationThread extends Thread {
-
-      final Runnable runnable;
-
-      ActivationThread(Runnable runnable, String name) {
-         super(name);
-         this.runnable = runnable;
-      }
-
-      @Override
-      public void run() {
-         lockActivation();
-         try {
-            runnable.run();
-         } finally {
-            unlockActivation();
-         }
-      }
-
-   }
-
-   private final class ConfigurationFileReloader implements ReloadCallback {
-
-      @Override
-      public void reload(URL uri) throws Exception {
-         Configuration config = new FileConfigurationParser().parseMainConfig(uri.openStream());
-         LegacyJMSConfiguration legacyJMSConfiguration = new LegacyJMSConfiguration(config);
-         legacyJMSConfiguration.parseConfiguration(uri.openStream());
-         configuration.setSecurityRoles(config.getSecurityRoles());
-         configuration.setAddressesSettings(config.getAddressesSettings());
-         configuration.setDivertConfigurations(config.getDivertConfigurations());
-         configuration.setAddressConfigurations(config.getAddressConfigurations());
-         configuration.setQueueConfigurations(config.getQueueConfigurations());
-         configurationReloadDeployed.set(false);
-         if (isActive()) {
-            deployReloadableConfigFromConfiguration();
-         }
-      }
-   }
-
-   private void deployReloadableConfigFromConfiguration() throws Exception {
-      if (configurationReloadDeployed.compareAndSet(false, true)) {
-         ActiveMQServerLogger.LOGGER.reloadingConfiguration("security");
-         securityRepository.swap(configuration.getSecurityRoles().entrySet());
-
-         ActiveMQServerLogger.LOGGER.reloadingConfiguration("address settings");
-         addressSettingsRepository.swap(configuration.getAddressesSettings().entrySet());
-
-         ActiveMQServerLogger.LOGGER.reloadingConfiguration("diverts");
-         for (DivertConfiguration divertConfig : configuration.getDivertConfigurations()) {
-            if (postOffice.getBinding(new SimpleString(divertConfig.getName())) == null) {
-               deployDivert(divertConfig);
-            }
-         }
-
-         ActiveMQServerLogger.LOGGER.reloadingConfiguration("addresses");
-         undeployAddressesAndQueueNotInConfiguration(configuration);
-         deployAddressesFromConfiguration(configuration);
-         deployQueuesFromListCoreQueueConfiguration(configuration.getQueueConfigurations());
-      }
-   }
-
-   public Set<ActivateCallback> getActivateCallbacks() {
-      return activateCallbacks;
-   }
-
-   @Override
-   public List<ActiveMQComponent> getExternalComponents() {
-      return externalComponents;
-   }
-
+        }
+    }
+
+    private static String[] JAVA8_PACKAGES() {
+        return new String[] {
+                "apple.applescript",
+                "apple.laf",
+                "apple.launcher",
+                "apple.security",
+                "com.apple.concurrent",
+                "com.apple.eawt",
+                "com.apple.eawt.event",
+                "com.apple.eio",
+                "com.apple.laf",
+                "com.apple.laf.resources",
+                "com.oracle.jrockit.jfr",
+                "com.oracle.jrockit.jfr.client",
+                "com.oracle.jrockit.jfr.management",
+                "com.oracle.security.ucrypto",
+                "com.oracle.util",
+                "com.oracle.webservices.internal.api",
+                "com.oracle.webservices.internal.api.databinding",
+                "com.oracle.webservices.internal.api.message",
+                "com.oracle.webservices.internal.impl.encoding",
+                "com.oracle.webservices.internal.impl.internalspi.encoding",
+                "com.oracle.xmlns.internal.webservices.jaxws_databinding",
+                "com.sun.accessibility.internal.resources",
+                "com.sun.activation.registries",
+                "com.sun.awt",
+                "com.sun.beans",
+                "com.sun.beans.decoder",
+                "com.sun.beans.editors",
+                "com.sun.beans.finder",
+                "com.sun.beans.infos",
+                "com.sun.beans.util",
+                "com.sun.codemodel.internal",
+                "com.sun.codemodel.internal.fmt",
+                "com.sun.codemodel.internal.util",
+                "com.sun.codemodel.internal.writer",
+                "com.sun.corba.se.impl.activation",
+                "com.sun.corba.se.impl.copyobject",
+                "com.sun.corba.se.impl.corba",
+                "com.sun.corba.se.impl.dynamicany",
+                "com.sun.corba.se.impl.encoding",
+                "com.sun.corba.se.impl.interceptors",
+                "com.sun.corba.se.impl.io",
+                "com.sun.corba.se.impl.ior",
+                "com.sun.corba.se.impl.ior.iiop",
+                "com.sun.corba.se.impl.javax.rmi",
+                "com.sun.corba.se.impl.javax.rmi.CORBA",
+                "com.sun.corba.se.impl.legacy.connection",
+                "com.sun.corba.se.impl.logging",
+                "com.sun.corba.se.impl.monitoring",
+                "com.sun.corba.se.impl.naming.cosnaming",
+                "com.sun.corba.se.impl.naming.namingutil",
+                "com.sun.corba.se.impl.naming.pcosnaming",
+                "com.sun.corba.se.impl.oa",
+                "com.sun.corba.se.impl.oa.poa",
+                "com.sun.corba.se.impl.oa.toa",
+                "com.sun.corba.se.impl.orb",
+                "com.sun.corba.se.impl.orbutil",
+                "com.sun.corba.se.impl.orbutil.closure",
+                "com.sun.corba.se.impl.orbutil.concurrent",
+                "com.sun.corba.se.impl.orbutil.fsm",
+                "com.sun.corba.se.impl.orbutil.graph",
+                "com.sun.corba.se.impl.orbutil.threadpool",
+                "com.sun.corba.se.impl.presentation.rmi",
+                "com.sun.corba.se.impl.protocol",
+                "com.sun.corba.se.impl.protocol.giopmsgheaders",
+                "com.sun.corba.se.impl.resolver",
+                "com.sun.corba.se.impl.transport",
+                "com.sun.corba.se.impl.util",
+                "com.sun.corba.se.internal.CosNaming",
+                "com.sun.corba.se.internal.Interceptors",
+                "com.sun.corba.se.internal.POA",
+                "com.sun.corba.se.internal.corba",
+                "com.sun.corba.se.internal.iiop",
+                "com.sun.corba.se.org.omg.CORBA",
+                "com.sun.corba.se.pept.broker",
+                "com.sun.corba.se.pept.encoding",
+                "com.sun.corba.se.pept.protocol",
+                "com.sun.corba.se.pept.transport",
+                "com.sun.corba.se.spi.activation",
+                "com.sun.corba.se.spi.activation.InitialNameServicePackage",
+                "com.sun.corba.se.spi.activation.LocatorPackage",
+                "com.sun.corba.se.spi.activation.RepositoryPackage",
+                "com.sun.corba.se.spi.copyobject",
+                "com.sun.corba.se.spi.encoding",
+                "com.sun.corba.se.spi.extension",
+                "com.sun.corba.se.spi.ior",
+                "com.sun.corba.se.spi.ior.iiop",
+                "com.sun.corba.se.spi.legacy.connection",
+                "com.sun.corba.se.spi.legacy.interceptor",
+                "com.sun.corba.se.spi.logging",
+                "com.sun.corba.se.spi.monitoring",
+                "com.sun.corba.se.spi.oa",
+                "com.sun.corba.se.spi.orb",
+                "com.sun.corba.se.spi.orbutil.closure",
+                "com.sun.corba.se.spi.orbutil.fsm",
+                "com.sun.corba.se.spi.orbutil.proxy",
+                "com.sun.corba.se.spi.orbutil.threadpool",
+                "com.sun.corba.se.spi.presentation.rmi",
+                "com.sun.corba.se.spi.protocol",
+                "com.sun.corba.se.spi.resolver",
+                "com.sun.corba.se.spi.servicecontext",
+                "com.sun.corba.se.spi.transport",
+                "com.sun.crypto.provider",
+                "com.sun.demo.jvmti.hprof",
+                "com.sun.deploy.uitoolkit.impl.fx",
+                "com.sun.deploy.uitoolkit.impl.fx.ui",
+                "com.sun.deploy.uitoolkit.impl.fx.ui.resources",
+                "com.sun.glass.events",
+                "com.sun.glass.events.mac",
+                "com.sun.glass.ui",
+                "com.sun.glass.ui.delegate",
+                "com.sun.glass.ui.gtk",
+                "com.sun.glass.ui.mac",
+                "com.sun.glass.ui.win",
+                "com.sun.glass.utils",
+                "com.sun.image.codec.jpeg",
+                "com.sun.imageio.plugins.bmp",
+                "com.sun.imageio.plugins.common",
+                "com.sun.imageio.plugins.gif",
+                "com.sun.imageio.plugins.jpeg",
+                "com.sun.imageio.plugins.png",
+                "com.sun.imageio.plugins.wbmp",
+                "com.sun.imageio.spi",
+                "com.sun.imageio.stream",
+                "com.sun.istack.internal",
+                "com.sun.istack.internal.localization",
+                "com.sun.istack.internal.logging",
+                "com.sun.istack.internal.tools",
+                "com.sun.jarsigner",
+                "com.sun.java.accessibility",
+                "com.sun.java.accessibility.util",
+                "com.sun.java.accessibility.util.java.awt",
+                "com.sun.java.browser.dom",
+                "com.sun.java.browser.net",
+                "com.sun.java.swing",
+                "com.sun.java.swing.plaf.gtk",
+                "com.sun.java.swing.plaf.gtk.resources",
+                "com.sun.java.swing.plaf.motif",
+                "com.sun.java.swing.plaf.motif.resources",
+                "com.sun.java.swing.plaf.nimbus",
+                "com.sun.java.swing.plaf.windows",
+                "com.sun.java.swing.plaf.windows.resources",
+                "com.sun.java.util.jar.pack",
+                "com.sun.java_cup.internal.runtime",
+                "com.sun.javadoc",
+                "com.sun.javafx",
+                "com.sun.javafx.animation",
+                "com.sun.javafx.applet",
+                "com.sun.javafx.application",
+                "com.sun.javafx.beans",
+                "com.sun.javafx.beans.event",
+                "com.sun.javafx.binding",
+                "com.sun.javafx.charts",
+                "com.sun.javafx.collections",
+                "com.sun.javafx.css",
+                "com.sun.javafx.css.converters",
+                "com.sun.javafx.css.parser",
+                "com.sun.javafx.cursor",
+                "com.sun.javafx.effect",
+                "com.sun.javafx.embed",
+                "com.sun.javafx.event",
+                "com.sun.javafx.font",
+                "com.sun.javafx.font.coretext",
+                "com.sun.javafx.font.directwrite",
+                "com.sun.javafx.font.freetype",
+                "com.sun.javafx.font.t2k",
+                "com.sun.javafx.fxml",
+                "com.sun.javafx.fxml.builder",
+                "com.sun.javafx.fxml.expression",
+                "com.sun.javafx.geom",
+                "com.sun.javafx.geom.transform",
+                "com.sun.javafx.geometry",
+                "com.sun.javafx.iio",
+                "com.sun.javafx.iio.bmp",
+                "com.sun.javafx.iio.common",
+                "com.sun.javafx.iio.gif",
+                "com.sun.javafx.iio.ios",
+                "com.sun.javafx.iio.jpeg",
+                "com.sun.javafx.iio.png",
+                "com.sun.javafx.image",
+                "com.sun.javafx.image.impl",
+                "com.sun.javafx.jmx",
+                "com.sun.javafx.logging",
+                "com.sun.javafx.media",
+                "com.sun.javafx.menu",
+                "com.sun.javafx.perf",
+                "com.sun.javafx.print",
+                "com.sun.javafx.property",
+                "com.sun.javafx.property.adapter",
+                "com.sun.javafx.robot",
+                "com.sun.javafx.robot.impl",
+                "com.sun.javafx.runtime",
+                "com.sun.javafx.runtime.async",
+                "com.sun.javafx.runtime.eula",
+                "com.sun.javafx.scene",
+                "com.sun.javafx.scene.control",
+                "com.sun.javafx.scene.control.behavior",
+                "com.sun.javafx.scene.control.skin",
+                "com.sun.javafx.scene.control.skin.resources",
+                "com.sun.javafx.scene.input",
+                "com.sun.javafx.scene.layout.region",
+                "com.sun.javafx.scene.paint",
+                "com.sun.javafx.scene.shape",
+                "com.sun.javafx.scene.text",
+                "com.sun.javafx.scene.transform",
+                "com.sun.javafx.scene.traversal",
+                "com.sun.javafx.scene.web",
+                "com.sun.javafx.scene.web.behavior",
+                "com.sun.javafx.scene.web.skin",
+                "com.sun.javafx.sg.prism",
+                "com.sun.javafx.sg.prism.web",
+                "com.sun.javafx.stage",
+                "com.sun.javafx.text",
+                "com.sun.javafx.tk",
+                "com.sun.javafx.tk.quantum",
+                "com.sun.javafx.util",
+                "com.sun.javafx.webkit",
+                "com.sun.javafx.webkit.drt",
+                "com.sun.javafx.webkit.prism",
+                "com.sun.javafx.webkit.prism.theme",
+                "com.sun.javafx.webkit.theme",
+                "com.sun.jdi",
+                "com.sun.jdi.connect",
+                "com.sun.jdi.connect.spi",
+                "com.sun.jdi.event",
+                "com.sun.jdi.request",
+                "com.sun.jmx.defaults",
+                "com.sun.jmx.interceptor",
+                "com.sun.jmx.mbeanserver",
+                "com.sun.jmx.remote.internal",
+                "com.sun.jmx.remote.protocol.iiop",
+                "com.sun.jmx.remote.protocol.rmi",
+                "com.sun.jmx.remote.security",
+                "com.sun.jmx.remote.util",
+                "com.sun.jmx.snmp",
+                "com.sun.jmx.snmp.IPAcl",
+                "com.sun.jmx.snmp.agent",
+                "com.sun.jmx.snmp.daemon",
+                "com.sun.jmx.snmp.defaults",
+                "com.sun.jmx.snmp.internal",
+                "com.sun.jmx.snmp.mpm",
+                "com.sun.jmx.snmp.tasks",
+                "com.sun.jndi.cosnaming",
+                "com.sun.jndi.dns",
+                "com.sun.jndi.ldap",
+                "com.sun.jndi.ldap.ext",
+                "com.sun.jndi.ldap.pool",
+                "com.sun.jndi.ldap.sasl",
+                "com.sun.jndi.rmi.registry",
+                "com.sun.jndi.toolkit.corba",
+                "com.sun.jndi.toolkit.ctx",
+                "com.sun.jndi.toolkit.dir",
+                "com.sun.jndi.toolkit.url",
+                "com.sun.jndi.url.corbaname",
+                "com.sun.jndi.url.dns",
+                "com.sun.jndi.url.iiop",
+                "com.sun.jndi.url.iiopname",
+                "com.sun.jndi.url.ldap",
+                "com.sun.jndi.url.ldaps",
+                "com.sun.jndi.url.rmi",
+                "com.sun.management",
+                "com.sun.management.jmx",
+                "com.sun.media.jfxmedia",
+                "com.sun.media.jfxmedia.control",
+                "com.sun.media.jfxmedia.effects",
+                "com.sun.media.jfxmedia.events",
+                "com.sun.media.jfxmedia.locator",
+                "com.sun.media.jfxmedia.logging",
+                "com.sun.media.jfxmedia.track",
+                "com.sun.media.jfxmediaimpl",
+                "com.sun.media.jfxmediaimpl.platform",
+                "com.sun.media.jfxmediaimpl.platform.gstreamer",
+                "com.sun.media.jfxmediaimpl.platform.ios",
+                "com.sun.media.jfxmediaimpl.platform.java",
+                "com.sun.media.jfxmediaimpl.platform.osx",
+                "com.sun.media.sound",
+                "com.sun.naming.internal",
+                "com.sun.net.httpserver",
+                "com.sun.net.httpserver.spi",
+                "com.sun.net.ssl",
+                "com.sun.net.ssl.internal.ssl",
+                "com.sun.net.ssl.internal.www.protocol.https",
+                "com.sun.nio.file",
+                "com.sun.nio.sctp",
+                "com.sun.nio.zipfs",
+                "com.sun.openpisces",
+                "com.sun.org.apache.bcel.internal",
+                "com.sun.org.apache.bcel.internal.classfile",
+                "com.sun.org.apache.bcel.internal.generic",
+                "com.sun.org.apache.bcel.internal.util",
+                "com.sun.org.apache.regexp.internal",
+                "com.sun.org.apache.xalan.internal",
+                "com.sun.org.apache.xalan.internal.extensions",
+                "com.sun.org.apache.xalan.internal.lib",
+                "com.sun.org.apache.xalan.internal.res",
+                "com.sun.org.apache.xalan.internal.templates",
+                "com.sun.org.apache.xalan.internal.utils",
+                "com.sun.org.apache.xalan.internal.xslt",
+                "com.sun.org.apache.xalan.internal.xsltc",
+                "com.sun.org.apache.xalan.internal.xsltc.cmdline",
+                "com.sun.org.apache.xalan.internal.xsltc.cmdline.getopt",
+                "com.sun.org.apache.xalan.internal.xsltc.compiler",
+                "com.sun.org.apache.xalan.internal.xsltc.compiler.util",
+                "com.sun.org.apache.xalan.internal.xsltc.dom",
+                "com.sun.org.apache.xalan.internal.xsltc.runtime",
+                "com.sun.org.apache.xalan.internal.xsltc.runtime.output",
+                "com.sun.org.apache.xalan.internal.xsltc.trax",
+                "com.sun.org.apache.xalan.internal.xsltc.util",
+                "com.sun.org.apache.xerces.internal.dom",
+                "com.sun.org.apache.xerces.internal.dom.events",
+                "com.sun.org.apache.xerces.internal.impl",
+                "com.sun.org.apache.xerces.internal.impl.dtd",
+                "com.sun.org.apache.xerces.internal.impl.dtd.models",
+                "com.sun.org.apache.xerces.internal.impl.dv",
+                "com.sun.org.apache.xerces.internal.impl.dv.dtd",
+                "com.sun.org.apache.xerces.internal.impl.dv.util",
+                "com.sun.org.apache.xerces.internal.impl.dv.xs",
+                "com.sun.org.apache.xerces.internal.impl.io",
+                "com.sun.org.apache.xerces.internal.impl.msg",
+                "com.sun.org.apache.xerces.internal.impl.validation",
+                "com.sun.org.apache.xerces.internal.impl.xpath",
+                "com.sun.org.apache.xerces.internal.impl.xpath.regex",
+                "com.sun.org.apache.xerces.internal.impl.xs",
+                "com.sun.org.apache.xerces.internal.impl.xs.identity",
+                "com.sun.org.apache.xerces.internal.impl.xs.models",
+                "com.sun.org.apache.xerces.internal.impl.xs.opti",
+                "com.sun.org.apache.xerces.internal.impl.xs.traversers",
+                "com.sun.org.apache.xerces.internal.impl.xs.util",
+                "com.sun.org.apache.xerces.internal.jaxp",
+                "com.sun.org.apache.xerces.internal.jaxp.datatype",
+                "com.sun.org.apache.xerces.internal.jaxp.validation",
+                "com.sun.org.apache.xerces.internal.parsers",
+                "com.sun.org.apache.xerces.internal.util",
+                "com.sun.org.apache.xerces.internal.utils",
+                "com.sun.org.apache.xerces.internal.xinclude",
+                "com.sun.org.apache.xerces.internal.xni",
+                "com.sun.org.apache.xerces.internal.xni.grammars",
+                "com.sun.org.apache.xerces.internal.xni.parser",
+                "com.sun.org.apache.xerces.internal.xpointer",
+                "com.sun.org.apache.xerces.internal.xs",
+                "com.sun.org.apache.xerces.internal.xs.datatypes",
+                "com.sun.org.apache.xml.internal.dtm",
+                "com.sun.org.apache.xml.internal.dtm.ref",
+                "com.sun.org.apache.xml.internal.dtm.ref.dom2dtm",
+                "com.sun.org.apache.xml.internal.dtm.ref.sax2dtm",
+                "com.sun.org.apache.xml.internal.res",
+                "com.sun.org.apache.xml.internal.resolver",
+                "com.sun.org.apache.xml.internal.resolver.helpers",
+                "com.sun.org.apache.xml.internal.resolver.readers",
+                "com.sun.org.apache.xml.internal.resolver.tools",
+                "com.sun.org.apache.xml.internal.security",
+                "com.sun.org.apache.xml.internal.security.algorithms",
+                "com.sun.org.apache.xml.internal.security.algorithms.implementations",
+                "com.sun.org.apache.xml.internal.security.c14n",
+                "com.sun.org.apache.xml.internal.security.c14n.helper",
+                "com.sun.org.apache.xml.internal.security.c14n.implementations",
+                "com.sun.org.apache.xml.internal.security.encryption",
+                "com.sun.org.apache.xml.internal.security.exceptions",
+                "com.sun.org.apache.xml.internal.security.keys",
+                "com.sun.org.apache.xml.internal.security.keys.content",
+                "com.sun.org.apache.xml.internal.security.keys.content.keyvalues",
+                "com.sun.org.apache.xml.internal.security.keys.content.x509",
+                "com.sun.org.apache.xml.internal.security.keys.keyresolver",
+                "com.sun.org.apache.xml.internal.security.keys.keyresolver.implementations",
+                "com.sun.org.apache.xml.internal.security.keys.storage",
+                "com.sun.org.apache.xml.internal.security.keys.storage.implementations",
+                "com.sun.org.apache.xml.internal.security.signature",
+                "com.sun.org.apache.xml.internal.security.signature.reference",
+                "com.sun.org.apache.xml.internal.security.transforms",
+                "com.sun.org.apache.xml.internal.security.transforms.implementations",
+                "com.sun.org.apache.xml.internal.security.transforms.params",
+                "com.sun.org.apache.xml.internal.security.utils",
+                "com.sun.org.apache.xml.internal.security.utils.resolver",
+                "com.sun.org.apache.xml.internal.security.utils.resolver.implementations",
+                "com.sun.org.apache.xml.internal.serialize",
+                "com.sun.org.apache.xml.internal.serializer",
+                "com.sun.org.apache.xml.internal.serializer.utils",
+                "com.sun.org.apache.xml.internal.utils",
+                "com.sun.org.apache.xml.internal.utils.res",
+                "com.sun.org.apache.xpath.internal",
+                "com.sun.org.apache.xpath.internal.axes",
+                "com.sun.org.apache.xpath.internal.compiler",
+                "com.sun.org.apache.xpath.internal.domapi",
+                "com.sun.org.apache.xpath.internal.functions",
+                "com.sun.org.apache.xpath.internal.jaxp",
+                "com.sun.org.apache.xpath.internal.objects",
+                "com.sun.org.apache.xpath.internal.operations",
+                "com.sun.org.apache.xpath.internal.patterns",
+                "com.sun.org.apache.xpath.internal.res",
+                "com.sun.org.glassfish.external.amx",
+                "com.sun.org.glassfish.external.arc",
+                "com.sun.org.glassfish.external.probe.provider",
+                "com.sun.org.glassfish.external.probe.provider.annotations",
+                "com.sun.org.glassfish.external.statistics",
+                "com.sun.org.glassfish.external.statistics.annotations",
+                "com.sun.org.glassfish.external.statistics.impl",
+                "com.sun.org.glassfish.gmbal",
+                "com.sun.org.glassfish.gmbal.util",
+                "com.sun.org.omg.CORBA",
+                "com.sun.org.omg.CORBA.ValueDefPackage",
+                "com.sun.org.omg.CORBA.portable",
+                "com.sun.org.omg.SendingContext",
+                "com.sun.org.omg.SendingContext.CodeBasePackage",
+                "com.sun.pisces",
+                "com.sun.prism",
+                "com.sun.prism.d3d",
+                "com.sun.prism.es2",
+                "com.sun.prism.image",
+                "com.sun.prism.impl",
+                "com.sun.prism.impl.packrect",
+                "com.sun.prism.impl.paint",
+                "com.sun.prism.impl.ps",
+                "com.sun.prism.impl.shape",
+                "com.sun.prism.j2d",
+                "com.sun.prism.j2d.paint",
+                "com.sun.prism.j2d.print",
+                "com.sun.prism.paint",
+                "com.sun.prism.ps",
+                "com.sun.prism.shader",
+                "com.sun.prism.shape",
+                "com.sun.prism.sw",
+                "com.sun.rmi.rmid",
+                "com.sun.rowset",
+                "com.sun.rowset.internal",
+                "com.sun.rowset.providers",
+                "com.sun.scenario",
+                "com.sun.scenario.animation",
+                "com.sun.scenario.animation.shared",
+                "com.sun.scenario.effect",
+                "com.sun.scenario.effect.impl",
+                "com.sun.scenario.effect.impl.es2",
+                "com.sun.scenario.effect.impl.hw",
+                "com.sun.scenario.effect.impl.hw.d3d",
+                "com.sun.scenario.effect.impl.prism",
+                "com.sun.scenario.effect.impl.prism.ps",
+                "com.sun.scenario.effect.impl.prism.sw",
+                "com.sun.scenario.effect.impl.state",
+                "com.sun.scenario.effect.impl.sw",
+                "com.sun.scenario.effect.impl.sw.java",
+                "com.sun.scenario.effect.impl.sw.sse",
+                "com.sun.scenario.effect.light",
+                "com.sun.security.auth",
+                "com.sun.security.auth.callback",
+                "com.sun.security.auth.login",
+                "com.sun.security.auth.module",
+                "com.sun.security.cert.internal.x509",
+                "com.sun.security.jgss",
+                "com.sun.security.ntlm",
+                "com.sun.security.sasl",
+                "com.sun.security.sasl.digest",
+                "com.sun.security.sasl.gsskerb",
+                "com.sun.security.sasl.ntlm",
+                "com.sun.security.sasl.util",
+                "com.sun.source.doctree",
+                "com.sun.source.tree",
+                "com.sun.source.util",
+                "com.sun.swing.internal.plaf.basic.resources",
+                "com.sun.swing.internal.plaf.metal.resources",
+                "com.sun.swing.internal.plaf.synth.resources",
+                "com.sun.tools.attach",
+                "com.sun.tools.attach.spi",
+                "com.sun.tools.classfile",
+                "com.sun.tools.corba.se.idl",
+                "com.sun.tools.corba.se.idl.constExpr",
+                "com.sun.tools.corba.se.idl.som.cff",
+                "com.sun.tools.corba.se.idl.som.idlemit",
+                "com.sun.tools.corba.se.idl.toJavaPortable",
+                "com.sun.tools.doclets",
+                "com.sun.tools.doclets.formats.html",
+                "com.sun.tools.doclets.formats.html.markup",
+                "com.sun.tools.doclets.formats.html.resources",
+                "com.sun.tools.doclets.internal.toolkit",
+                "com.sun.tools.doclets.internal.toolkit.builders",
+                "com.sun.tools.doclets.internal.toolkit.resources",
+                "com.sun.tools.doclets.internal.toolkit.taglets",
+                "com.sun.tools.doclets.internal.toolkit.util",
+                "com.sun.tools.doclets.internal.toolkit.util.links",
+                "com.sun.tools.doclets.standard",
+                "com.sun.tools.doclint",
+                "com.sun.tools.doclint.resources",
+                "com.sun.tools.example.debug.expr",
+                "com.sun.tools.example.debug.tty",
+                "com.sun.tools.extcheck",
+                "com.sun.tools.hat",
+                "com.sun.tools.hat.internal.model",
+                "com.sun.tools.hat.internal.oql",
+                "com.sun.tools.hat.internal.parser",
+                "com.sun.tools.hat.internal.server",
+                "com.sun.tools.hat.internal.util",
+                "com.sun.tools.internal.jxc",
+                "com.sun.tools.internal.jxc.ap",
+                "com.sun.tools.internal.jxc.api",
+                "com.sun.tools.internal.jxc.api.impl.j2s",
+                "com.sun.tools.internal.jxc.gen.config",
+                "com.sun.tools.internal.jxc.model.nav",
+                "com.sun.tools.internal.ws",
+                "com.sun.tools.internal.ws.api",
+                "com.sun.tools.internal.ws.api.wsdl",
+                "com.sun.tools.internal.ws.processor",
+                "com.sun.tools.internal.ws.processor.generator",
+                "com.sun.tools.internal.ws.processor.model",
+                "com.sun.tools.internal.ws.processor.model.exporter",
+                "com.sun.tools.internal.ws.processor.model.java",
+                "com.sun.tools.internal.ws.processor.model.jaxb",
+                "com.sun.tools.internal.ws.processor.modeler",
+                "com.sun.tools.internal.ws.processor.modeler.annotation",
+                "com.sun.tools.internal.ws.processor.modeler.wsdl",
+                "com.sun.tools.internal.ws.processor.util",
+                "com.sun.tools.internal.ws.resources",
+                "com.sun.tools.internal.ws.spi",
+                "com.sun.tools.internal.ws.util",
+                "com.sun.tools.internal.ws.util.xml",
+                "com.sun.tools.internal.ws.wscompile",
+                "com.sun.tools.internal.ws.wscompile.plugin.at_generated",
+                "com.sun.tools.internal.ws.wsdl.document",
+                "com.sun.tools.internal.ws.wsdl.document.http",
+                "com.sun.tools.internal.ws.wsdl.document.jaxws",
+                "com.sun.tools.internal.ws.wsdl.document.mime",
+                "com.sun.tools.internal.ws.wsdl.document.schema",
+                "com.sun.tools.internal.ws.wsdl.document.soap",
+                "com.sun.tools.internal.ws.wsdl.framework",
+                "com.sun.tools.internal.ws.wsdl.parser",
+                "com.sun.tools.internal.xjc",
+                "com.sun.tools.internal.xjc.addon.accessors",
+                "com.sun.tools.internal.xjc.addon.at_generated",
+                "com.sun.tools.internal.xjc.addon.code_injector",
+                "com.sun.tools.internal.xjc.addon.episode",
+                "com.sun.tools.internal.xjc.addon.locator",
+                "com.sun.tools.internal.xjc.addon.sync",
+                "com.sun.tools.internal.xjc.api",
+                "com.sun.tools.internal.xjc.api.impl.s2j",
+                "com.sun.tools.internal.xjc.api.util",
+                "com.sun.tools.internal.xjc.generator.annotation.spec",
+                "com.sun.tools.internal.xjc.generator.bean",
+                "com.sun.tools.internal.xjc.generator.bean.field",
+                "com.sun.tools.internal.xjc.generator.util",
+                "com.sun.tools.internal.xjc.model",
+                "com.sun.tools.internal.xjc.model.nav",
+                "com.sun.tools.internal.xjc.outline",
+                "com.sun.tools.internal.xjc.reader",
+                "com.sun.tools.internal.xjc.reader.dtd",
+                "com.sun.tools.internal.xjc.reader.dtd.bindinfo",
+                "com.sun.tools.internal.xjc.reader.gbind",
+                "com.sun.tools.internal.xjc.reader.internalizer",
+                "com.sun.tools.internal.xjc.reader.relaxng",
+                "com.sun.tools.internal.xjc.reader.xmlschema",
+                "com.sun.tools.internal.xjc.reader.xmlschema.bindinfo",
+                "com.sun.tools.internal.xjc.reader.xmlschema.ct",
+                "com.sun.tools.internal.xjc.reader.xmlschema.parser",
+                "com.sun.tools.internal.xjc.runtime",
+                "com.sun.tools.internal.xjc.util",
+                "com.sun.tools.internal.xjc.writer",
+                "com.sun.tools.javac",
+                "com.sun.tools.javac.api",
+                "com.sun.tools.javac.code",
+                "com.sun.tools.javac.comp",
+                "com.sun.tools.javac.file",
+                "com.sun.tools.javac.jvm",
+                "com.sun.tools.javac.main",
+                "com.sun.tools.javac.model",
+                "com.sun.tools.javac.nio",
+                "com.sun.tools.javac.parser",
+                "com.sun.tools.javac.processing",
+                "com.sun.tools.javac.resources",
+                "com.sun.tools.javac.sym",
+                "com.sun.tools.javac.tree",
+                "com.sun.tools.javac.util",
+                "com.sun.tools.javadoc",
+                "com.sun.tools.javadoc.api",
+                "com.sun.tools.javadoc.resources",
+                "com.sun.tools.javah",
+                "com.sun.tools.javah.resources",
+                "com.sun.tools.javap",
+                "com.sun.tools.javap.resources",
+                "com.sun.tools.jconsole",
+                "com.sun.tools.jdeps",
+                "com.sun.tools.jdeps.resources",
+                "com.sun.tools.jdi",
+                "com.sun.tools.jdi.resources",
+                "com.sun.tools.script.shell",
+                "com.sun.tracing",
+                "com.sun.tracing.dtrace",
+                "com.sun.webkit",
+                "com.sun.webkit.dom",
+                "com.sun.webkit.event",
+                "com.sun.webkit.graphics",
+                "com.sun.webkit.network",
+                "com.sun.webkit.network.about",
+                "com.sun.webkit.network.data",
+                "com.sun.webkit.perf",
+                "com.sun.webkit.plugin",
+                "com.sun.webkit.text",
+                "com.sun.xml.internal.bind",
+                "com.sun.xml.internal.bind.annotation",
+                "com.sun.xml.internal.bind.api",
+                "com.sun.xml.internal.bind.api.impl",
+                "com.sun.xml.internal.bind.marshaller",
+                "com.sun.xml.internal.bind.unmarshaller",
+                "com.sun.xml.internal.bind.util",
+                "com.sun.xml.internal.bind.v2",
+                "com.sun.xml.internal.bind.v2.bytecode",
+                "com.sun.xml.internal.bind.v2.model.annotation",
+                "com.sun.xml.internal.bind.v2.model.core",
+                "com.sun.xml.internal.bind.v2.model.impl",
+                "com.sun.xml.internal.bind.v2.model.nav",
+                "com.sun.xml.internal.bind.v2.model.runtime",
+                "com.sun.xml.internal.bind.v2.model.util",
+                "com.sun.xml.internal.bind.v2.runtime",
+                "com.sun.xml.internal.bind.v2.runtime.output",
+                "com.sun.xml.internal.bind.v2.runtime.property",
+                "com.sun.xml.internal.bind.v2.runtime.reflect",
+                "com.sun.xml.internal.bind.v2.runtime.reflect.opt",
+                "com.sun.xml.internal.bind.v2.runtime.unmarshaller",
+                "com.sun.xml.internal.bind.v2.schemagen",
+                "com.sun.xml.internal.bind.v2.schemagen.episode",
+                "com.sun.xml.internal.bind.v2.schemagen.xmlschema",
+                "com.sun.xml.internal.bind.v2.util",
+                "com.sun.xml.internal.dtdparser",
+                "com.sun.xml.internal.fastinfoset",
+                "com.sun.xml.internal.fastinfoset.algorithm",
+                "com.sun.xml.internal.fastinfoset.alphabet",
+                "com.sun.xml.internal.fastinfoset.dom",
+                "com.sun.xml.internal.fastinfoset.org.apache.xerces.util",
+                "com.sun.xml.internal.fastinfoset.sax",
+                "com.sun.xml.internal.fastinfoset.stax",
+                "com.sun.xml.internal.fastinfoset.stax.events",
+                "com.sun.xml.internal.fastinfoset.stax.factory",
+                "com.sun.xml.internal.fastinfoset.stax.util",
+                "com.sun.xml.internal.fastinfoset.tools",
+                "com.sun.xml.internal.fastinfoset.util",
+                "com.sun.xml.internal.fastinfoset.vocab",
+                "com.sun.xml.internal.messaging.saaj",
+                "com.sun.xml.internal.messaging.saaj.client.p2p",
+                "com.sun.xml.internal.messaging.saaj.packaging.mime",
+                "com.sun.xml.internal.messaging.saaj.packaging.mime.internet",
+                "com.sun.xml.internal.messaging.saaj.packaging.mime.util",
+                "com.sun.xml.internal.messaging.saaj.soap",
+                "com.sun.xml.internal.messaging.saaj.soap.dynamic",
+                "com.sun.xml.internal.messaging.saaj.soap.impl",
+                "com.sun.xml.internal.messaging.saaj.soap.name",
+                "com.sun.xml.internal.messaging.saaj.soap.ver1_1",
+                "com.sun.xml.internal.messaging.saaj.soap.ver1_2",
+                "com.sun.xml.internal.messaging.saaj.util",
+                "com.sun.xml.internal.messaging.saaj.util.transform",
+                "com.sun.xml.internal.org.jvnet.fastinfoset",
+                "com.sun.xml.internal.org.jvnet.fastinfoset.sax",
+                "com.sun.xml.internal.org.jvnet.fastinfoset.sax.helpers",
+                "com.sun.xml.internal.org.jvnet.fastinfoset.stax",
+                "com.sun.xml.internal.org.jvnet.mimepull",
+                "com.sun.xml.internal.org.jvnet.staxex",
+                "com.sun.xml.internal.rngom.ast.builder",
+                "com.sun.xml.internal.rngom.ast.om",
+                "com.sun.xml.internal.rngom.ast.util",
+                "com.sun.xml.internal.rngom.binary",
+                "com.sun.xml.internal.rngom.binary.visitor",
+                "com.sun.xml.internal.rngom.digested",
+                "com.sun.xml.internal.rngom.dt",
+                "com.sun.xml.internal.rngom.dt.builtin",
+                "com.sun.xml.internal.rngom.nc",
+                "com.sun.xml.internal.rngom.parse",
+                "com.sun.xml.internal.rngom.parse.compact",
+                "com.sun.xml.internal.rngom.parse.host",
+                "com.sun.xml.internal.rngom.parse.xml",
+                "com.sun.xml.internal.rngom.util",
+                "com.sun.xml.internal.rngom.xml.sax",
+                "com.sun.xml.internal.rngom.xml.util",
+                "com.sun.xml.internal.stream",
+                "com.sun.xml.internal.stream.buffer",
+                "com.sun.xml.internal.stream.buffer.sax",
+                "com.sun.xml.internal.stream.buffer.stax",
+                "com.sun.xml.internal.stream.dtd",
+                "com.sun.xml.internal.stream.dtd.nonvalidating",
+                "com.sun.xml.internal.stream.events",
+                "com.sun.xml.internal.stream.util",
+                "com.sun.xml.internal.stream.writers",
+                "com.sun.xml.internal.txw2",
+                "com.sun.xml.internal.txw2.annotation",
+                "com.sun.xml.internal.txw2.output",
+                "com.sun.xml.internal.ws",
+                "com.sun.xml.internal.ws.addressing",
+                "com.sun.xml.internal.ws.addressing.model",
+                "com.sun.xml.internal.ws.addressing.policy",
+                "com.sun.xml.internal.ws.addressing.v200408",
+                "com.sun.xml.internal.ws.api",
+                "com.sun.xml.internal.ws.api.addressing",
+                "com.sun.xml.internal.ws.api.client",
+                "com.sun.xml.internal.ws.api.config.management",
+                "com.sun.xml.internal.ws.api.config.management.policy",
+                "com.sun.xml.internal.ws.api.databinding",
+                "com.sun.xml.internal.ws.api.fastinfoset",
+                "com.sun.xml.internal.ws.api.ha",
+                "com.sun.xml.internal.ws.api.handler",
+                "com.sun.xml.internal.ws.api.message",
+                "com.sun.xml.internal.ws.api.message.saaj",
+                "com.sun.xml.internal.ws.api.message.stream",
+                "com.sun.xml.internal.ws.api.model",
+                "com.sun.xml.internal.ws.api.model.soap",
+                "com.sun.xml.internal.ws.api.model.wsdl",
+                "com.sun.xml.internal.ws.api.model.wsdl.editable",
+                "com.sun.xml.internal.ws.api.pipe",
+                "com.sun.xml.internal.ws.api.pipe.helper",
+                "com.sun.xml.internal.ws.api.policy",
+                "com.sun.xml.internal.ws.api.policy.subject",
+                "com.sun.xml.internal.ws.api.server",
+                "com.sun.xml.internal.ws.api.streaming",
+                "com.sun.xml.internal.ws.api.wsdl.parser",
+                "com.sun.xml.internal.ws.api.wsdl.writer",
+                "com.sun.xml.internal.ws.assembler",
+                "com.sun.xml.internal.ws.assembler.dev",
+                "com.sun.xml.internal.ws.assembler.jaxws",
+                "com.sun.xml.internal.ws.binding",
+                "com.sun.xml.internal.ws.client",
+                "com.sun.xml.internal.ws.client.dispatch",
+                "com.sun.xml.internal.ws.client.sei",
+                "com.sun.xml.internal.ws.commons.xmlutil",
+                "com.sun.xml.internal.ws.config.management.policy",
+                "com.sun.xml.internal.ws.config.metro.dev",
+                "com.sun.xml.internal.ws.config.metro.util",
+                "com.sun.xml.internal.ws.db",
+                "com.sun.xml.internal.ws.db.glassfish",
+                "com.sun.xml.internal.ws.developer",
+                "com.sun.xml.internal.ws.dump",
+                "com.sun.xml.internal.ws.encoding",
+                "com.sun.xml.internal.ws.encoding.fastinfoset",
+                "com.sun.xml.internal.ws.encoding.policy",
+                "com.sun.xml.internal.ws.encoding.soap",
+                "com.sun.xml.internal.ws.encoding.soap.streaming",
+                "com.sun.xml.internal.ws.encoding.xml",
+                "com.sun.xml.internal.ws.fault",
+                "com.sun.xml.internal.ws.handler",
+                "com.sun.xml.internal.ws.message",
+                "com.sun.xml.internal.ws.message.jaxb",
+                "com.sun.xml.internal.ws.message.saaj",
+                "com.sun.xml.internal.ws.message.source",
+                "com.sun.xml.internal.ws.message.stream",
+                "com.sun.xml.internal.ws.model",
+                "com.sun.xml.internal.ws.model.soap",
+                "com.sun.xml.internal.ws.model.wsdl",
+                "com.sun.xml.internal.ws.org.objectweb.asm",
+                "com.sun.xml.internal.ws.policy",
+                "com.sun.xml.internal.ws.policy.jaxws",
+                "com.sun.xml.internal.ws.policy.jaxws.spi",
+                "com.sun.xml.internal.ws.policy.privateutil",
+                "com.sun.xml.internal.ws.policy.sourcemodel",
+                "com.sun.xml.internal.ws.policy.sourcemodel.attach",
+                "com.sun.xml.internal.ws.policy.sourcemodel.wspolicy",
+                "com.sun.xml.internal.ws.policy.spi",
+                "com.sun.xml.internal.ws.policy.subject",
+                "com.sun.xml.internal.ws.protocol.soap",
+                "com.sun.xml.internal.ws.protocol.xml",
+                "com.sun.xml.internal.ws.resources",
+                "com.sun.xml.internal.ws.runtime.config",
+                "com.sun.xml.internal.ws.server",
+                "com.sun.xml.internal.ws.server.provider",
+                "com.sun.xml.internal.ws.server.sei",
+                "com.sun.xml.internal.ws.spi",
+                "com.sun.xml.internal.ws.spi.db",
+                "com.sun.xml.internal.ws.streaming",
+                "com.sun.xml.internal.ws.transport",
+                "com.sun.xml.internal.ws.transport.http",
+                "com.sun.xml.internal.ws.transport.http.client",
+                "com.sun.xml.internal.ws.transport.http.server",
+                "com.sun.xml.internal.ws.util",
+                "com.sun.xml.internal.ws.util.exception",
+                "com.sun.xml.internal.ws.util.pipe",
+                "com.sun.xml.internal.ws.util.xml",
+                "com.sun.xml.internal.ws.wsdl",
+                "com.sun.xml.internal.ws.wsdl.parser",
+                "com.sun.xml.internal.ws.wsdl.writer",
+                "com.sun.xml.internal.ws.wsdl.writer.document",
+                "com.sun.xml.internal.ws.wsdl.writer.document.http",
+                "com.sun.xml.internal.ws.wsdl.writer.document.soap",
+                "com.sun.xml.internal.ws.wsdl.writer.document.soap12",
+                "com.sun.xml.internal.ws.wsdl.writer.document.xsd",
+                "com.sun.xml.internal.xsom",
+                "com.sun.xml.internal.xsom.impl",
+                "com.sun.xml.internal.xsom.impl.parser",
+                "com.sun.xml.internal.xsom.impl.parser.state",
+                "com.sun.xml.internal.xsom.impl.scd",
+                "com.sun.xml.internal.xsom.impl.util",
+                "com.sun.xml.internal.xsom.parser",
+                "com.sun.xml.internal.xsom.util",
+                "com.sun.xml.internal.xsom.visitor",
+                "java.applet",
+                "java.awt",
+                "java.awt.color",
+                "java.awt.datatransfer",
+                "java.awt.dnd",
+                "java.awt.dnd.peer",
+                "java.awt.event",
+                "java.awt.font",
+                "java.awt.geom",
+                "java.awt.im",
+                "java.awt.im.spi",
+                "java.awt.image",
+                "java.awt.image.renderable",
+                "java.awt.peer",
+                "java.awt.print",
+                "java.beans",
+                "java.beans.beancontext",
+                "java.io",
+                "java.lang",
+                "java.lang.annotation",
+                "java.lang.instrument",
+                "java.lang.invoke",
+                "java.lang.management",
+                "java.lang.ref",
+                "java.lang.reflect",
+                "java.math",
+                "java.net",
+                "java.nio",
+                "java.nio.channels",
+                "java.nio.channels.spi",
+                "java.nio.charset",
+                "java.nio.charset.spi",
+                "java.nio.file",
+                "java.nio.file.attribute",
+                "java.nio.file.spi",
+                "java.rmi",
+                "java.rmi.activation",
+                "java.rmi.dgc",
+                "java.rmi.registry",
+                "java.rmi.server",
+                "java.security",
+                "java.security.acl",
+                "java.security.cert",
+                "java.security.interfaces",
+                "java.security.spec",
+                "java.sql",
+                "java.text",
+                "java.text.spi",
+                "java.time",
+                "java.time.chrono",
+                "java.time.format",
+                "java.time.temporal",
+                "java.time.zone",
+                "java.util",
+                "java.util.concurrent",
+                "java.util.concurrent.atomic",
+                "java.util.concurrent.locks",
+                "java.util.function",
+                "java.util.jar",
+                "java.util.logging",
+                "java.util.prefs",
+                "java.util.regex",
+                "java.util.spi",
+                "java.util.stream",
+                "java.util.zip",
+                "javafx.animation",
+                "javafx.application",
+                "javafx.beans",
+                "javafx.beans.binding",
+                "javafx.beans.property",
+                "javafx.beans.property.adapter",
+                "javafx.beans.value",
+                "javafx.collections",
+                "javafx.collections.transformation",
+                "javafx.concurrent",
+                "javafx.css",
+                "javafx.embed.swing",
+                "javafx.embed.swt",
+                "javafx.event",
+                "javafx.fxml",
+                "javafx.geometry",
+                "javafx.print",
+                "javafx.scene",
+                "javafx.scene.canvas",
+                "javafx.scene.chart",
+                "javafx.scene.control",
+                "javafx.scene.control.cell",
+                "javafx.scene.effect",
+                "javafx.scene.image",
+                "javafx.scene.input",
+                "javafx.scene.layout",
+                "javafx.scene.media",
+                "javafx.scene.paint",
+                "javafx.scene.shape",
+                "javafx.scene.text",
+                "javafx.scene.transform",
+                "javafx.scene.web",
+                "javafx.stage",
+                "javafx.util",
+                "javafx.util.converter",
+                "javax.accessibility",
+                "javax.activation",
+                "javax.activity",
+                "javax.annotation",
+                "javax.annotation.processing",
+                "javax.crypto",
+                "javax.crypto.interfaces",
+                "javax.crypto.spec",
+                "javax.imageio",
+                "javax.imageio.event",
+                "javax.imageio.metadata",
+                "javax.imageio.plugins.bmp",
+                "javax.imageio.plugins.jpeg",
+                "javax.imageio.spi",
+                "javax.imageio.stream",
+                "javax.jws",
+                "javax.jws.soap",
+                "javax.lang.model",
+                "javax.lang.model.element",
+                "javax.lang.model.type",
+                "javax.lang.model.util",
+                "javax.management",
+                "javax.management.loading",
+                "javax.management.modelmbean",
+                "javax.management.monitor",
+                "javax.management.openmbean",
+                "javax.management.relation",
+                "javax.management.remote",
+                "javax.management.remote.rmi",
+                "javax.management.timer",
+                "javax.naming",
+                "javax.naming.directory",
+                "javax.naming.event",
+                "javax.naming.ldap",
+                "javax.naming.spi",
+                "javax.net",
+                "javax.net.ssl",
+                "javax.print",
+                "javax.print.attribute",
+                "javax.print.attribute.standard",
+                "javax.print.event",
+                "javax.rmi",
+                "javax.rmi.CORBA",
+                "javax.rmi.ssl",
+                "javax.script",
+                "javax.security.auth",
+                "javax.security.auth.callback",
+                "javax.security.auth.kerberos",
+                "javax.security.auth.login",
+                "javax.security.auth.spi",
+                "javax.security.auth.x500",
+                "javax.security.cert",
+                "javax.security.sasl",
+                "javax.smartcardio",
+                "javax.sound.midi",
+                "javax.sound.midi.spi",
+                "javax.sound.sampled",
+                "javax.sound.sampled.spi",
+                "javax.sql",
+                "javax.sql.rowset",
+                "javax.sql.rowset.serial",
+                "javax.sql.rowset.spi",
+                "javax.swing",
+                "javax.swing.border",
+                "javax.swing.colorchooser",
+                "javax.swing.event",
+                "javax.swing.filechooser",
+                "javax.swing.plaf",
+                "javax.swing.plaf.basic",
+                "javax.swing.plaf.metal",
+                "javax.swing.plaf.multi",
+                "javax.swing.plaf.nimbus",
+                "javax.swing.plaf.synth",
+                "javax.swing.table",
+                "javax.swing.text",
+                "javax.swing.text.html",
+                "javax.swing.text.html.parser",
+                "javax.swing.text.rtf",
+                "javax.swing.tree",
+                "javax.swing.undo",
+                "javax.tools",
+                "javax.transaction",
+                "javax.transaction.xa",
+                "javax.xml",
+                "javax.xml.bind",
+                "javax.xml.bind.annotation",
+                "javax.xml.bind.annotation.adapters",
+                "javax.xml.bind.attachment",
+                "javax.xml.bind.helpers",
+                "javax.xml.bind.util",
+                "javax.xml.crypto",
+                "javax.xml.crypto.dom",
+                "javax.xml.crypto.dsig",
+                "javax.xml.crypto.dsig.dom",
+                "javax.xml.crypto.dsig.keyinfo",
+                "javax.xml.crypto.dsig.spec",
+                "javax.xml.datatype",
+                "javax.xml.namespace",
+                "javax.xml.parsers",
+                "javax.xml.soap",
+                "javax.xml.stream",
+                "javax.xml.stream.events",
+                "javax.xml.stream.util",
+                "javax.xml.transform",
+                "javax.xml.transform.dom",
+                "javax.xml.transform.sax",
+                "javax.xml.transform.stax",
+                "javax.xml.transform.stream",
+                "javax.xml.validation",
+                "javax.xml.ws",
+                "javax.xml.ws.handler",
+                "javax.xml.ws.handler.soap",
+                "javax.xml.ws.http",
+                "javax.xml.ws.soap",
+                "javax.xml.ws.spi",
+                "javax.xml.ws.spi.http",
+                "javax.xml.ws.wsaddressing",
+                "javax.xml.xpath",
+                "jdk",
+                "jdk.internal.cmm",
+                "jdk.internal.dynalink",
+                "jdk.internal.dynalink.beans",
+                "jdk.internal.dynalink.linker",
+                "jdk.internal.dynalink.support",
+                "jdk.internal.instrumentation",
+                "jdk.internal.org.objectweb.asm",
+                "jdk.internal.org.objectweb.asm.commons",
+                "jdk.internal.org.objectweb.asm.signature",
+                "jdk.internal.org.objectweb.asm.tree",
+                "jdk.internal.org.objectweb.asm.tree.analysis",
+                "jdk.internal.org.objectweb.asm.util",
+                "jdk.internal.org.xml.sax",
+                "jdk.internal.org.xml.sax.helpers",
+                "jdk.internal.util.xml",
+                "jdk.internal.util.xml.impl",
+                "jdk.jfr.events",
+                "jdk.management.cmm",
+                "jdk.management.resource",
+                "jdk.management.resource.internal",
+                "jdk.management.resource.internal.inst",
+                "jdk.nashorn.api.scripting",
+                "jdk.nashorn.internal",
+                "jdk.nashorn.internal.codegen",
+                "jdk.nashorn.internal.codegen.types",
+                "jdk.nashorn.internal.ir",
+                "jdk.nashorn.internal.ir.annotations",
+                "jdk.nashorn.internal.ir.debug",
+                "jdk.nashorn.internal.ir.visitor",
+                "jdk.nashorn.internal.lookup",
+                "jdk.nashorn.internal.objects",
+                "jdk.nashorn.internal.objects.annotations",
+                "jdk.nashorn.internal.parser",
+                "jdk.nashorn.internal.runtime",
+                "jdk.nashorn.internal.runtime.arrays",
+                "jdk.nashorn.internal.runtime.events",
+                "jdk.nashorn.internal.runtime.linker",
+                "jdk.nashorn.internal.runtime.logging",
+                "jdk.nashorn.internal.runtime.options",
+                "jdk.nashorn.internal.runtime.regexp",
+                "jdk.nashorn.internal.runtime.regexp.joni",
+                "jdk.nashorn.internal.runtime.regexp.joni.ast",
+                "jdk.nashorn.internal.runtime.regexp.joni.constants",
+                "jdk.nashorn.internal.runtime.regexp.joni.encoding",
+                "jdk.nashorn.internal.runtime.regexp.joni.exception",
+                "jdk.nashorn.internal.scripts",
+                "jdk.nashorn.tools",
+                "jdk.net",
+                "netscape.javascript",
+                "oracle.jrockit.jfr",
+                "oracle.jrockit.jfr.events",
+                "oracle.jrockit.jfr.jdkevents",
+                "oracle.jrockit.jfr.jdkevents.throwabletransform",
+                "oracle.jrockit.jfr.openmbean",
+                "oracle.jrockit.jfr.parser",
+                "oracle.jrockit.jfr.settings",
+                "oracle.jrockit.jfr.tools",
+                "org.ietf.jgss",
+                "org.jcp.xml.dsig.internal",
+                "org.jcp.xml.dsig.internal.dom",
+                "org.omg.CORBA",
+                "org.omg.CORBA.DynAnyPackage",
+                "org.omg.CORBA.ORBPackage",
+                "org.omg.CORBA.TypeCodePackage",
+                "org.omg.CORBA.portable",
+                "org.omg.CORBA_2_3",
+                "org.omg.CORBA_2_3.portable",
+                "org.omg.CosNaming",
+                "org.omg.CosNaming.NamingContextExtPackage",
+                "org.omg.CosNaming.NamingContextPackage",
+                "org.omg.Dynamic",
+                "org.omg.DynamicAny",
+                "org.omg.DynamicAny.DynAnyFactoryPackage",
+                "org.omg.DynamicAny.DynAnyPackage",
+                "org.omg.IOP",
+                "org.omg.IOP.CodecFactoryPackage",
+                "org.omg.IOP.CodecPackage",
+                "org.omg.Messaging",
+                "org.omg.PortableInterceptor",
+                "org.omg.PortableInterceptor.ORBInitInfoPackage",
+                "org.omg.PortableServer",
+                "org.omg.PortableServer.CurrentPackage",
+                "org.omg.PortableServer.POAManagerPackage",
+                "org.omg.PortableServer.POAPackage",
+                "org.omg.PortableServer.ServantLocatorPackage",
+                "org.omg.PortableServer.portable",
+                "org.omg.SendingContext",
+                "org.omg.stub.java.rmi",
+                "org.omg.stub.javax.management.remote.rmi",
+                "org.relaxng.datatype",
+                "org.relaxng.datatype.helpers",
+                "org.w3c.dom",
+                "org.w3c.dom.bootstrap",
+                "org.w3c.dom.css",
+                "org.w3c.dom.events",
+                "org.w3c.dom.html",
+                "org.w3c.dom.ls",
+                "org.w3c.dom.ranges",
+                "org.w3c.dom.stylesheets",
+                "org.w3c.dom.traversal",
+                "org.w3c.dom.views",
+                "org.w3c.dom.xpath",
+                "org.xml.sax",
+                "org.xml.sax.ext",
+                "org.xml.sax.helpers",
+                "sun.applet",
+                "sun.applet.resources",
+                "sun.audio",
+                "sun.awt",
+                "sun.awt.X11",
+                "sun.awt.datatransfer",
+                "sun.awt.dnd",
+                "sun.awt.event",
+                "sun.awt.geom",
+                "sun.awt.im",
+                "sun.awt.image",
+                "sun.awt.image.codec",
+                "sun.awt.motif",
+                "sun.awt.resources",
+                "sun.awt.shell",
+                "sun.awt.util",
+                "sun.awt.windows",
+                "sun.corba",
+                "sun.dc",
+                "sun.dc.path",
+                "sun.dc.pr",
+                "sun.font",
+                "sun.instrument",
+                "sun.invoke",
+                "sun.invoke.empty",
+                "sun.invoke.util",
+                "sun.io",
+                "sun.java2d",
+                "sun.java2d.cmm",
+                "sun.java2d.cmm.kcms",
+                "sun.java2d.cmm.lcms",
+                "sun.java2d.d3d",
+                "sun.java2d.jules",
+                "sun.java2d.loops",
+                "sun.java2d.opengl",
+                "sun.java2d.pipe",
+                "sun.java2d.pipe.hw",
+                "sun.java2d.pisces",
+                "sun.java2d.windows",
+                "sun.java2d.x11",
+                "sun.java2d.xr",
+                "sun.jvmstat.monitor",
+                "sun.jvmstat.monitor.event",
+                "sun.jvmstat.monitor.remote",
+                "sun.jvmstat.perfdata.monitor",
+                "sun.jvmstat.perfdata.monitor.protocol.file",
+                "sun.jvmstat.perfdata.monitor.protocol.local",
+                "sun.jvmstat.perfdata.monitor.protocol.rmi",
+                "sun.jvmstat.perfdata.monitor.v1_0",
+                "sun.jvmstat.perfdata.monitor.v2_0",
+                "sun.launcher",
+                "sun.launcher.resources",
+                "sun.lwawt",
+                "sun.lwawt.macosx",
+                "sun.management",
+                "sun.management.counter",
+                "sun.management.counter.perf",
+                "sun.management.jdp",
+                "sun.management.jmxremote",
+                "sun.management.resources",
+                "sun.management.snmp",
+                "sun.management.snmp.jvminstr",
+                "sun.management.snmp.jvmmib",
+                "sun.management.snmp.util",
+                "sun.misc",
+                "sun.misc.resources",
+                "sun.net",
+                "sun.net.dns",
+                "sun.net.ftp",
+                "sun.net.ftp.impl",
+                "sun.net.httpserver",
+                "sun.net.idn",
+                "sun.net.sdp",
+                "sun.net.smtp",
+                "sun.net.spi",
+                "sun.net.spi.nameservice",
+                "sun.net.spi.nameservice.dns",
+                "sun.net.util",
+                "sun.net.www",
+                "sun.net.www.content.audio",
+                "sun.net.www.content.image",
+                "sun.net.www.content.text",
+                "sun.net.www.http",
+                "sun.net.www.protocol.file",
+                "sun.net.www.protocol.ftp",
+                "sun.net.www.protocol.http",
+                "sun.net.www.protocol.http.logging",
+                "sun.net.www.protocol.http.ntlm",
+                "sun.net.www.protocol.http.spnego",
+                "sun.net.www.protocol.https",
+                "sun.net.www.protocol.jar",
+                "sun.net.www.protocol.mailto",
+                "sun.net.www.protocol.netdoc",
+                "sun.nio",
+                "sun.nio.ch",
+                "sun.nio.ch.sctp",
+                "sun.nio.cs",
+                "sun.nio.cs.ext",
+                "sun.nio.fs",
+                "sun.print",
+                "sun.print.resources",
+                "sun.reflect",
+                "sun.reflect.annotation",
+                "sun.reflect.generics.factory",
+                "sun.reflect.generics.parser",
+                "sun.reflect.generics.reflectiveObjects",
+                "sun.reflect.generics.repository",
+                "sun.reflect.generics.scope",
+                "sun.reflect.generics.tree",
+                "sun.reflect.generics.visitor",
+                "sun.reflect.misc",
+                "sun.rmi.log",
+                "sun.rmi.registry",
+                "sun.rmi.rmic",
+                "sun.rmi.rmic.iiop",
+                "sun.rmi.rmic.newrmic",
+                "sun.rmi.rmic.newrmic.jrmp",
+                "sun.rmi.runtime",
+                "sun.rmi.server",
+                "sun.rmi.transport",
+                "sun.rmi.transport.proxy",
+                "sun.rmi.transport.tcp",
+                "sun.security.acl",
+                "sun.security.action",
+                "sun.security.ec",
+                "sun.security.internal.interfaces",
+                "sun.security.internal.spec",
+                "sun.security.jca",
+                "sun.security.jgss",
+                "sun.security.jgss.krb5",
+                "sun.security.jgss.spi",
+                "sun.security.jgss.spnego",
+                "sun.security.jgss.wrapper",
+                "sun.security.krb5",
+                "sun.security.krb5.internal",
+                "sun.security.krb5.internal.ccache",
+                "sun.security.krb5.internal.crypto",
+                "sun.security.krb5.internal.crypto.dk",
+                "sun.security.krb5.internal.ktab",
+                "sun.security.krb5.internal.rcache",
+                "sun.security.krb5.internal.tools",
+                "sun.security.krb5.internal.util",
+                "sun.security.mscapi",
+                "sun.security.pkcs",
+                "sun.security.pkcs10",
+                "sun.security.pkcs11",
+                "sun.security.pkcs11.wrapper",
+                "sun.security.pkcs12",
+                "sun.security.provider",
+                "sun.security.provider.certpath",
+                "sun.security.provider.certpath.ldap",
+                "sun.security.provider.certpath.ssl",
+                "sun.security.rsa",
+                "sun.security.smartcardio",
+                "sun.security.ssl",
+                "sun.security.ssl.krb5",
+                "sun.security.timestamp",
+                "sun.security.tools",
+                "sun.security.tools.jarsigner",
+                "sun.security.tools.keytool",
+                "sun.security.tools.policytool",
+                "sun.security.util",
+                "sun.security.validator",
+                "sun.security.x509",
+                "sun.swing",
+                "sun.swing.icon",
+                "sun.swing.plaf",
+                "sun.swing.plaf.synth",
+                "sun.swing.plaf.windows",
+                "sun.swing.table",
+                "sun.swing.text",
+                "sun.swing.text.html",
+                "sun.text",
+                "sun.text.bidi",
+                "sun.text.normalizer",
+                "sun.text.resources",
+                "sun.text.resources.en",
+                "sun.tools.asm",
+                "sun.tools.attach",
+                "sun.tools.jar",
+                "sun.tools.jar.resources",
+                "sun.tools.java",
+                "sun.tools.javac",
+                "sun.tools.jcmd",
+                "sun.tools.jconsole",
+                "sun.tools.jconsole.inspector",
+                "sun.tools.jinfo",
+                "sun.tools.jmap",
+                "sun.tools.jps",
+                "sun.tools.jstack",
+                "sun.tools.jstat",
+                "sun.tools.jstatd",
+                "sun.tools.native2ascii",
+                "sun.tools.native2ascii.resources",
+                "sun.tools.serialver",
+                "sun.tools.tree",
+                "sun.tools.util",
+                "sun.tracing",
+                "sun.tracing.dtrace",
+                "sun.usagetracker",
+                "sun.util",
+                "sun.util.calendar",
+                "sun.util.cldr",
+                "sun.util.locale",
+                "sun.util.locale.provider",
+                "sun.util.logging",
+                "sun.util.logging.resources",
+                "sun.util.resources",
+                "sun.util.resources.en",
+                "sun.util.spi",
+                "sun.util.xml"
+        };
+    }
 }

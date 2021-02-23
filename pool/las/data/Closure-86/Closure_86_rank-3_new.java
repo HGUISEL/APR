@@ -1,123 +1,123 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package com.fasterxml.jackson.databind.jsontype.impl;
 
-package org.apache.commons.codec.language;
+import java.io.IOException;
 
-import org.apache.commons.codec.EncoderException;
-import org.apache.commons.codec.StringEncoder;
+import com.fasterxml.jackson.annotation.JsonTypeInfo.As;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.util.JsonParserSequence;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
+import com.fasterxml.jackson.databind.jsontype.TypeIdResolver;
+import com.fasterxml.jackson.databind.util.TokenBuffer;
 
 /**
- * Utility methods for {@link Soundex} and {@link RefinedSoundex} classes.
- * 
- * @author Apache Software Foundation
- * @version $Id$
- * @since 1.3
+ * Type deserializer used with {@link As#WRAPPER_OBJECT}
+ * inclusion mechanism. Simple since JSON structure used is always
+ * the same, regardless of structure used for actual value: wrapping
+ * is done using a single-element JSON Object where type id is the key,
+ * and actual object data as the value.
  */
-final class SoundexUtils {
+public class AsWrapperTypeDeserializer
+    extends TypeDeserializerBase
+    implements java.io.Serializable
+{
+    private static final long serialVersionUID = 5345570420394408290L;
+
+    public AsWrapperTypeDeserializer(JavaType bt, TypeIdResolver idRes,
+            String typePropertyName, boolean typeIdVisible, Class<?> defaultImpl)
+    {
+        super(bt, idRes, typePropertyName, typeIdVisible, defaultImpl);
+    }
+
+    protected AsWrapperTypeDeserializer(AsWrapperTypeDeserializer src, BeanProperty property) {
+        super(src, property);
+    }
+    
+    @Override
+    public TypeDeserializer forProperty(BeanProperty prop) {
+        return (prop == _property) ? this : new AsWrapperTypeDeserializer(this, prop);
+    }
+    
+    @Override
+    public As getTypeInclusion() { return As.WRAPPER_OBJECT; }
 
     /**
-	 * Cleans up the input string before Soundex processing by only returning
-	 * upper case letters.
-	 * 
-	 * @param str
-	 *                  The String to clean.
-	 * @return A clean String.
-	 */
-    static String clean(String str) {
-        if (str == null || str.length() == 0) {
-            return str;
-        }
-        int len = str.length();
-        char[] chars = new char[len];
-        int count = 0;
-        for (int i = 0; i < len; i++) {
-            if (Character.isLetter(str.charAt(i))) {
-                chars[count++] = str.charAt(i);
+     * Deserializing type id enclosed using WRAPPER_OBJECT style is straightforward
+     */
+    @Override
+    public Object deserializeTypedFromObject(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }    
+
+    @Override
+    public Object deserializeTypedFromArray(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }
+
+    @Override
+    public Object deserializeTypedFromScalar(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }
+
+    @Override
+    public Object deserializeTypedFromAny(JsonParser jp, DeserializationContext ctxt) throws IOException {
+        return _deserialize(jp, ctxt);
+    }
+    
+    /*
+    /***************************************************************
+    /* Internal methods
+    /***************************************************************
+     */
+
+    /**
+     * Method that handles type information wrapper, locates actual
+     * subtype deserializer to use, and calls it to do actual
+     * deserialization.
+     */
+    @SuppressWarnings("resource")
+    private final Object _deserialize(JsonParser p, DeserializationContext ctxt) throws IOException
+    {
+        // 02-Aug-2013, tatu: May need to use native type ids
+        if (p.canReadTypeId()) {
+            Object typeId = p.getTypeId();
+            if (typeId != null) {
+                return _deserializeWithNativeTypeId(p, ctxt, typeId);
             }
         }
-        if (count == len) {
-            return str.toUpperCase();
-        }
-        return new String(chars, 0, count).toUpperCase();
-    }
-
-    /**
-	 * Encodes the Strings and returns the number of characters in the two
-	 * encoded Strings that are the same.
-	 * <ul>
-	 * <li>For Soundex, this return value ranges from 0 through 4: 0 indicates
-	 * little or no similarity, and 4 indicates strong similarity or identical
-	 * values.</li>
-	 * <li>For refined Soundex, the return value can be greater than 4.</li>
-	 * </ul>
-	 * 
-	 * @param encoder
-	 *                  The encoder to use to encode the Strings.
-	 * @param s1
-	 *                  A String that will be encoded and compared.
-	 * @param s2
-	 *                  A String that will be encoded and compared.
-	 * @return The number of characters in the two Soundex encoded Strings that
-	 *             are the same.
-	 * 
-	 * @see #differenceEncoded(String,String)
-	 * @see <a href="http://msdn.microsoft.com/library/default.asp?url=/library/en-us/tsqlref/ts_de-dz_8co5.asp">
-	 *          MS T-SQL DIFFERENCE</a>
-	 * 
-	 * @throws EncoderException
-	 *                  if an error occurs encoding one of the strings
-	 */
-    static int difference(StringEncoder encoder, String s1, String s2) throws EncoderException {
-        return differenceEncoded(encoder.encode(s1), encoder.encode(s2));
-    }
-
-    /**
-	 * Returns the number of characters in the two Soundex encoded Strings that
-	 * are the same.
-	 * <ul>
-	 * <li>For Soundex, this return value ranges from 0 through 4: 0 indicates
-	 * little or no similarity, and 4 indicates strong similarity or identical
-	 * values.</li>
-	 * <li>For refined Soundex, the return value can be greater than 4.</li>
-	 * </ul>
-	 * 
-	 * @param es1
-	 *                  An encoded String.
-	 * @param es2
-	 *                  An encoded String.
-	 * @return The number of characters in the two Soundex encoded Strings that
-	 *             are the same.
-	 * 
-	 * @see <a href="http://msdn.microsoft.com/library/default.asp?url=/library/en-us/tsqlref/ts_de-dz_8co5.asp">
-	 *          MS T-SQL DIFFERENCE</a>
-	 */
-    static int differenceEncoded(String es1, String es2) {
-
-        if (es1 == null || es2 == null) {
-            return 0;
-        }
-        int lengthToMatch = Math.min(es1.length(), es2.length());
-        int diff = 0;
-        for (int i = 0; i < lengthToMatch; i++) {
-            if (es1.charAt(i) == es2.charAt(i)) {
-                diff++;
+        // first, sanity checks
+        JsonToken t = p.getCurrentToken();
+        if (t == JsonToken.START_OBJECT) {
+            // should always get field name, but just in case...
+            if (p.nextToken() != JsonToken.FIELD_NAME) {
+                throw ctxt.wrongTokenException(p, JsonToken.FIELD_NAME,
+                        "need JSON String that contains type id (for subtype of "+baseTypeName()+")");
             }
+        } else if (t != JsonToken.FIELD_NAME) {
+            throw ctxt.wrongTokenException(p, JsonToken.START_OBJECT,
+                    "need JSON Object to contain As.WRAPPER_OBJECT type information for class "+baseTypeName());
         }
-        return diff;
-    }
+        final String typeId = p.getText();
+        JsonDeserializer<Object> deser = _findDeserializer(ctxt, typeId);
+        p.nextToken();
 
+        // Minor complication: we may need to merge type id in?
+        if (_typeIdVisible && p.getCurrentToken() == JsonToken.START_OBJECT) {
+            // but what if there's nowhere to add it in? Error? Or skip? For now, skip.
+            TokenBuffer tb = new TokenBuffer(null, false);
+            tb.writeStartObject(); // recreate START_OBJECT
+            tb.writeFieldName(_typePropertyName);
+            tb.writeString(typeId);
+            p = JsonParserSequence.createFlattened(tb.asParser(p), p);
+            p.nextToken();
+        }
+        
+        Object value = deser.deserialize(p, ctxt);
+        // And then need the closing END_OBJECT
+        if (p.nextToken() != JsonToken.END_OBJECT) {
+            throw ctxt.wrongTokenException(p, JsonToken.END_OBJECT,
+                    "expected closing END_OBJECT after type information and deserialized value");
+        }
+        return value;
+    }
 }

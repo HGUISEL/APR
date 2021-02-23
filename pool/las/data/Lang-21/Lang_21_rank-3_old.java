@@ -1,77 +1,74 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.jclouds.openstack.nova.v2_0.features;
+package org.apache.commons.cli;
 
-import org.jclouds.collect.PagedIterable;
-import org.jclouds.openstack.v2_0.domain.PaginatedCollection;
-import org.jclouds.openstack.nova.v2_0.domain.Flavor;
-import org.jclouds.openstack.v2_0.domain.Resource;
-import org.jclouds.openstack.v2_0.options.PaginationOptions;
+public class OptionBuilder {
 
-/**
- * Provides asynchronous access to Flavors via their REST API.
- * <p/>
- * 
- * @see FlavorAsyncApi
- * @see <a href=
- *      "http://docs.openstack.org/api/openstack-compute/2/content/List_Flavors-d1e4188.html"
- *      />
- */
-public interface FlavorApi {
+    private static String longopt;
+    private static String description;
+    private static boolean arg;
+    private static boolean required;
+    private static boolean multipleArgs;
+    private static Object type;
 
-   /**
-    * List all flavors (IDs, names, links)
-    * 
-    * @return all flavors (IDs, names, links)
-    */
-   PagedIterable<? extends Resource> list();
+    private static OptionBuilder instance = new OptionBuilder();
 
-   PaginatedCollection<? extends Resource> list(PaginationOptions options);
+    // private constructor
+    private OptionBuilder() {
+    }
 
-   /**
-    * List all flavors (all details)
-    * 
-    * @return all flavors (all details)
-    */
-   PagedIterable<? extends Flavor> listInDetail();
+    private static void reset() {
+        description = null;
+        longopt = null;
+        type = null;
+        arg = false;
+        required = false;
+        multipleArgs = false;
+    }
 
-   PaginatedCollection<? extends Flavor> listInDetail(PaginationOptions options);
+    public static OptionBuilder withLongOpt( String longopt ) {
+        instance.longopt = longopt;
+        return instance;
+    }
 
-   /**
-    * List details of the specified flavor
-    * 
-    * @param id
-    *           id of the flavor
-    * @return flavor or null if not found
-    */
-   Flavor get(String id);
+    public static OptionBuilder hasArg( ) {
+        instance.arg = true;
+        return instance;
+    }
 
-	/**
-	 * Create flavor according to the provided object
-	 * 
-	 * @param flavor - flavor object
-	 * @return newly created flavor
-	 */
-	Flavor create(Flavor flavor);
+    public static OptionBuilder isRequired( ) {
+        instance.required = true;
+        return instance;
+    }
 
-	/**
-	 * Delete flavor with a given id
-	 * 
-	 * @param id - flavor id
-	 */
-	void delete(String id);
+    public static OptionBuilder hasMultipleArgs( ) {
+        instance.multipleArgs = true;
+        return instance;
+    }
+
+    public static OptionBuilder withType( Object type ) {
+        instance.type = type;
+        return instance;
+    }
+
+    public static OptionBuilder withDescription( String description ) {
+        instance.description = description;
+        return instance;
+    }
+
+    public static Option create( char opt )
+    throws IllegalArgumentException
+    {
+        return create( String.valueOf( opt ) );
+    }
+
+    public static Option create( String opt ) 
+    throws IllegalArgumentException
+    {
+        Option option = new Option( opt, arg, description );
+        option.setLongOpt( longopt );
+        option.setRequired( required );
+        option.setMultipleArgs( multipleArgs );
+        option.setType( type );
+        instance.reset();
+        return option;
+    }
 }

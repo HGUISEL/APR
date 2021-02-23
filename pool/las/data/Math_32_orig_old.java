@@ -132,7 +132,9 @@ public class PolygonsSet extends AbstractRegion<Euclidean2D, Euclidean1D> {
         final Vector2D[][] v = getVertices();
 
         if (v.length == 0) {
-            if ((Boolean) getTree(false).getAttribute()) {
+            final BSPTree<Euclidean2D> tree = getTree(false);
+            if ((Boolean) tree.getAttribute()) {
+                // the instance covers the whole space
                 setSize(Double.POSITIVE_INFINITY);
                 setBarycenter(Vector2D.NaN);
             } else {

@@ -43,7 +43,6 @@ import static com.google.javascript.rhino.jstype.TernaryValue.UNKNOWN;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.javascript.rhino.ErrorReporter;
-import com.google.javascript.rhino.jstype.JSType.TypePair;
 
 import java.util.Set;
 import java.util.SortedSet;

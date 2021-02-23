@@ -1,605 +1,370 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package org.apache.openejb.core.ivm;
+// Copyright 2006, 2007, 2008, 2009, 2010 The Apache Software Foundation
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-import static org.apache.openejb.core.ivm.IntraVmCopyMonitor.State.COPY;
-import static org.apache.openejb.core.ivm.IntraVmCopyMonitor.State.CLASSLOADER_COPY;
-import static org.apache.openejb.core.ivm.IntraVmCopyMonitor.State.NONE;
+package org.apache.tapestry5.internal.services;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.ObjectStreamException;
-import java.io.Serializable;
-import java.io.NotSerializableException;
-import java.lang.ref.WeakReference;
-import java.lang.reflect.Method;
-import java.math.BigDecimal;
-import java.rmi.NoSuchObjectException;
-import java.rmi.RemoteException;
-import java.rmi.AccessException;
-import java.util.HashSet;
-import java.util.Hashtable;
+import javassist.CtClass;
+import org.apache.tapestry5.internal.structure.ComponentPageElement;
+import org.apache.tapestry5.internal.structure.InternalComponentResourcesImpl;
+import org.apache.tapestry5.internal.structure.Page;
+import org.apache.tapestry5.ioc.Location;
+import org.apache.tapestry5.ioc.Messages;
+import org.apache.tapestry5.ioc.Resource;
+import org.apache.tapestry5.ioc.internal.util.CollectionFactory;
+import org.apache.tapestry5.ioc.internal.util.InternalUtils;
+import org.apache.tapestry5.ioc.internal.util.MessagesImpl;
+import org.apache.tapestry5.ioc.services.ClassFabUtils;
+import org.apache.tapestry5.runtime.Component;
+import org.apache.tapestry5.runtime.RenderCommand;
+import org.apache.tapestry5.services.TransformMethodSignature;
+
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
-import java.util.ArrayList;
-import java.util.WeakHashMap;
-import java.util.Set;
+import java.util.Locale;
 
-import javax.ejb.EJBException;
-import javax.ejb.NoSuchObjectLocalException;
-import javax.ejb.TransactionRequiredLocalException;
-import javax.ejb.TransactionRolledbackLocalException;
-import javax.ejb.EJBTransactionRequiredException;
-import javax.ejb.EJBTransactionRolledbackException;
-import javax.ejb.NoSuchEJBException;
-import javax.ejb.AccessLocalException;
-import javax.transaction.TransactionRequiredException;
-import javax.transaction.TransactionRolledbackException;
+public class ServicesMessages
+{
+    private static final Messages MESSAGES = MessagesImpl.forClass(ServicesMessages.class);
 
-import org.apache.openejb.BeanContext;
-import org.apache.openejb.BeanType;
-import org.apache.openejb.InterfaceType;
-import org.apache.openejb.RpcContainer;
-import org.apache.openejb.core.ThreadContext;
-import org.apache.openejb.loader.SystemInstance;
-import org.apache.openejb.spi.ContainerSystem;
-import org.apache.openejb.spi.SecurityService;
-import java.lang.reflect.InvocationHandler;
-import org.apache.openejb.util.proxy.ProxyManager;
-
-public abstract class BaseEjbProxyHandler implements InvocationHandler, Serializable {
-    private static final String OPENEJB_LOCALCOPY = "openejb.localcopy";
-    private IntraVmCopyMonitor.State strategy = NONE;
-
-    private static class ProxyRegistry {
-
-        protected final Hashtable liveHandleRegistry = new Hashtable();
+    public static String duplicateContribution(Object conflict, Class contributionType, Object existing)
+    {
+        return MESSAGES.format("duplicate-contribution", conflict, contributionType.getName(), existing);
     }
 
-    public final Object deploymentID;
-
-    public final Object primaryKey;
-
-    public boolean inProxyMap = false;
-
-    private transient WeakReference<BeanContext> beanContextRef;
-
-    public transient RpcContainer container;
-
-    protected boolean isInvalidReference = false;
-
-    protected Object clientIdentity;
-
-    /*
-    * The EJB 1.1 specification requires that arguments and return values between beans adhere to the
-    * Java RMI copy semantics which requires that the all arguments be passed by value (copied) and 
-    * never passed as references.  However, it is possible for the system administrator to turn off the
-    * copy operation so that arguments and return values are passed by reference as performance optimization.
-    * Simply setting the org.apache.openejb.core.EnvProps.INTRA_VM_COPY property to FALSE will cause this variable to
-    * set to false, and therefor bypass the copy operations in the invoke( ) method of this class; arguments
-    * and return values will be passed by reference not value. 
-    *
-    * This property is, by default, always TRUE but it can be changed to FALSE by setting it as a System property
-    * or a property of the Property argument when invoking OpenEJB.init(props).  This variable is set to that
-    * property in the static block for this class.
-    */
-    private boolean doIntraVmCopy;
-    private boolean doCrossClassLoaderCopy;
-    private static final boolean REMOTE_COPY_ENABLED = parseRemoteCopySetting();
-    protected final InterfaceType interfaceType;
-    private transient WeakHashMap<Class,Object> interfaces;
-    private transient WeakReference<Class> mainInterface;
-
-    public BaseEjbProxyHandler(BeanContext beanContext, Object pk, InterfaceType interfaceType, List<Class> interfaces, Class mainInterface) {
-        this.container = (RpcContainer) beanContext.getContainer();
-        this.deploymentID = beanContext.getDeploymentID();
-        this.interfaceType = interfaceType;
-        this.primaryKey = pk;
-        this.setBeanContext(beanContext);
-
-        if (interfaces == null || interfaces.size() == 0) {
-            InterfaceType objectInterfaceType = (interfaceType.isHome()) ? interfaceType.getCounterpart() : interfaceType;
-            interfaces = new ArrayList<Class>(beanContext.getInterfaces(objectInterfaceType));
-        }
-        
-        if (mainInterface == null && interfaces.size() == 1) {
-            mainInterface = interfaces.get(0);
-        }
-        
-        setInterfaces(interfaces);
-        setMainInterface(mainInterface);
-        if (mainInterface == null) {
-            throw new IllegalArgumentException("No mainInterface: otherwise di: " + beanContext + " InterfaceType: " + interfaceType + " interfaces: " + interfaces );
-        }
-        this.setDoIntraVmCopy(REMOTE_COPY_ENABLED && !interfaceType.isLocal() && !interfaceType.isLocalBean());
+    public static String markupWriterNoCurrentElement()
+    {
+        return MESSAGES.get("markup-writer-no-current-element");
     }
 
-    protected void setDoIntraVmCopy(boolean doIntraVmCopy) {
-        this.doIntraVmCopy = doIntraVmCopy;
-        setStrategy();
+    public static String errorAddingMethod(CtClass ctClass, String methodName, Throwable cause)
+    {
+        return MESSAGES.format("error-adding-method", ctClass.getName(), methodName, cause);
     }
 
-    protected void setDoCrossClassLoaderCopy(boolean doCrossClassLoaderCopy) {
-        this.doCrossClassLoaderCopy = doCrossClassLoaderCopy;
-        setStrategy();
+    public static String classNotTransformed(String className)
+    {
+        return MESSAGES.format("class-not-transformed", className);
     }
 
-    private void setStrategy() {
-        if (!doIntraVmCopy) strategy = NONE;
-        else if (doCrossClassLoaderCopy) strategy = CLASSLOADER_COPY;
-        else strategy = COPY;
+    public static String missingTemplateResource(Resource resource)
+    {
+        return MESSAGES.format("missing-template-resource", resource);
     }
 
-    /**
-     * This method should be called to determine the corresponding
-     * business interface class to name as the invoking interface.
-     * This method should NOT be called on non-business-interface
-     * methods the proxy has such as java.lang.Object or IntraVmProxy.
-     * @param method
-     * @return the business (or component) interface matching this method
-     */
-    protected Class<?> getInvokedInterface(Method method) {
-        // Home's only have one interface ever.  We don't
-        // need to verify that the method invoked is in
-        // it's interface.
-        Class mainInterface = getMainInterface();
-        if (interfaceType.isHome()) return mainInterface;
-        if (interfaceType.isLocalBean()) return mainInterface;
-
-        Class declaringClass = method.getDeclaringClass();
-
-        // If our "main" interface is or extends the method's declaring class
-        // then we're good.  We know the main interface has the method being
-        // invoked and it's safe to return it as the invoked interface.
-        if (mainInterface != null && declaringClass.isAssignableFrom(mainInterface)){
-            return mainInterface;
-        }
-
-        // If the method being invoked isn't in the "main" interface
-        // we need to find a suitable interface or throw an exception.
-        for (Class secondaryInterface : interfaces.keySet()) {
-            if (declaringClass.isAssignableFrom(secondaryInterface)){
-                return secondaryInterface;
-            }
-        }
-
-        // We couldn't find an implementing interface.  Where did this
-        // method come from???  Freak occurence.  Throw an exception.
-        throw new IllegalStateException("Received method invocation and cannot determine corresponding business interface: method=" + method);
+    public static String contentInsideBodyNotAllowed(Location location)
+    {
+        return MESSAGES.format("content-inside-body-not-allowed", location);
     }
 
-    public Class getMainInterface() {
-        return mainInterface.get();
+    public static String methodCompileError(TransformMethodSignature signature, String methodBody, Throwable cause)
+    {
+        return MESSAGES.format("method-compile-error", signature, methodBody, cause);
     }
 
-    private void setMainInterface(Class referent) {
-        mainInterface = new WeakReference<Class>(referent);
+    public static String renderQueueError(RenderCommand command, Throwable cause)
+    {
+        return MESSAGES.format("render-queue-error", command, cause);
     }
 
-    private void setInterfaces(List<Class> interfaces) {
-        this.interfaces = new WeakHashMap<Class,Object>(interfaces.size());
-        for (Class clazz : interfaces) {
-            this.interfaces.put(clazz, null);
-        }
+    public static String readOnlyField(String className, String fieldName)
+    {
+        return MESSAGES.format("read-only-field", className, fieldName);
     }
 
-    public List<Class> getInterfaces() {
-        Set<Class> classes = interfaces.keySet();
-        return new ArrayList(classes);
+    public static String nonPrivateFields(String className, List<String> names)
+    {
+        return MESSAGES.format("non-private-fields", className, InternalUtils.joinSorted(names));
     }
 
-    private static boolean parseRemoteCopySetting() {
-        return SystemInstance.get().getOptions().get(OPENEJB_LOCALCOPY, true);
+    public static String bindingSourceFailure(String expression, Throwable cause)
+    {
+        return MESSAGES.format("binding-source-failure", expression, cause);
     }
 
-    protected void checkAuthorization(Method method) throws org.apache.openejb.OpenEJBException {
+    public static String contextIndexOutOfRange(String methodDescription)
+    {
+        return MESSAGES.format("context-index-out-of-range", methodDescription);
     }
 
-    public void setIntraVmCopyMode(boolean on) {
-        setDoIntraVmCopy(on);
+    public static String pageNameUnresolved(String pageClassName)
+    {
+        return MESSAGES.format("page-name-unresolved", pageClassName);
     }
 
-    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        isValidReference(method);
-
-        if (args == null) args = new Object[]{};
-        
-        if (method.getDeclaringClass() == Object.class) {
-            final String methodName = method.getName();
-
-            if (methodName.equals("toString")) return toString();
-            else if (methodName.equals("equals")) return equals(args[0]) ? Boolean.TRUE : Boolean.FALSE;
-            else if (methodName.equals("hashCode")) return new Integer(hashCode());
-            else throw new UnsupportedOperationException("Unknown method: " + method);
-        } else if (method.getDeclaringClass() == IntraVmProxy.class) {
-            final String methodName = method.getName();
-
-            if (methodName.equals("writeReplace")) return _writeReplace(proxy);
-            else throw new UnsupportedOperationException("Unknown method: " + method);
-        } else if (method.getDeclaringClass() == BeanContext.Removable.class) {
-            return _invoke(proxy, BeanContext.Removable.class, method, args);
-        }
-
-        Class interfce = getInvokedInterface(method);
-
-
-        ThreadContext callContext = ThreadContext.getThreadContext();
-        Object localClientIdentity = ClientSecurity.getIdentity();
-        try {
-            if (callContext == null && localClientIdentity != null) {
-                SecurityService securityService = SystemInstance.get().getComponent(SecurityService.class);
-                securityService.associate(localClientIdentity);
-            }
-            if (strategy == CLASSLOADER_COPY) {
-
-                IntraVmCopyMonitor.pre(strategy);
-                ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
-                Thread.currentThread().setContextClassLoader(getBeanContext().getClassLoader());
-                try {
-                    args = copyArgs(args);
-                    method = copyMethod(method);
-                    interfce = copyObj(interfce);
-                } finally {
-                    Thread.currentThread().setContextClassLoader(oldClassLoader);
-                    IntraVmCopyMonitor.post();
-                }
-
-            } else if (strategy == COPY && args != null && args.length > 0) {
-
-                IntraVmCopyMonitor.pre(strategy);
-                try {
-                    args = copyArgs(args);
-                } finally {
-                    IntraVmCopyMonitor.post();
-                }
-            }
-            IntraVmCopyMonitor.State oldStrategy =  strategy;
-            if (getBeanContext().isAsynchronous(method) || getBeanContext().getComponentType().equals(BeanType.MANAGED)){
-                strategy = IntraVmCopyMonitor.State.NONE;
-            }
-   
-            try {
-
-                Object returnValue = _invoke(proxy, interfce, method, args);
-                return copy(strategy, returnValue);
-            } catch (Throwable throwable) {
-                throwable = copy(strategy, throwable);
-                throw convertException(throwable, method, interfce);
-            } finally {
-                strategy = oldStrategy;
-            }
-        } finally {
-            
-            if (callContext == null && localClientIdentity != null) {
-                SecurityService securityService = SystemInstance.get().getComponent(SecurityService.class);
-                securityService.disassociate();
-            }
-        }
+    public static String exceptionInMethodParameter(String methodDescription, int index, Throwable cause)
+    {
+        return MESSAGES.format("exception-in-method-parameter", methodDescription, index + 1, cause);
     }
 
-    private <T> T copy(IntraVmCopyMonitor.State strategy, T object) throws IOException, ClassNotFoundException {
-        if (object == null || !strategy.isCopy()) return object;
-
-        IntraVmCopyMonitor.pre(strategy);
-        try {
-            return (T) copyObj(object);
-        } finally {
-            IntraVmCopyMonitor.post();
-        }
+    public static String componentEventIsAborted(String methodDescription)
+    {
+        return MESSAGES.format("component-event-is-aborted", methodDescription);
     }
 
-    private void isValidReference(Method method) throws NoSuchObjectException {
-        if (isInvalidReference) {
-            if (interfaceType.isComponent() && interfaceType.isLocal()){
-                throw new NoSuchObjectLocalException("reference is invalid");
-            } else if (interfaceType.isComponent() || java.rmi.Remote.class.isAssignableFrom(method.getDeclaringClass())) {
-                throw new NoSuchObjectException("reference is invalid");
-            } else {
-                throw new NoSuchEJBException("reference is invalid for " + deploymentID);
-            }
-        }
-        if (!(Object.class.equals(method.getDeclaringClass())
-                && method.getName().equals("finalize")
-                && method.getExceptionTypes().length == 1
-                && Throwable.class.equals(method.getExceptionTypes()[0]))) {
-            getBeanContext(); // will throw an exception if app has been undeployed.
-        }
+    public static String parameterNameMustBeUnique(String parameterName, String parameterValue)
+    {
+        return MESSAGES.format("parameter-name-must-be-unique", parameterName, parameterValue);
     }
 
-    /**
-     * Renamed method so it shows up with a much more understandable purpose as it
-     * will be the top element in the stacktrace
-     * @param e
-     * @param method
-     * @param interfce
-     */
-    protected Throwable convertException(Throwable e, Method method, Class interfce) {
-        boolean rmiRemote = java.rmi.Remote.class.isAssignableFrom(interfce);
-        if (e instanceof TransactionRequiredException) {
-            if (!rmiRemote && interfaceType.isBusiness()) {
-                return new EJBTransactionRequiredException(e.getMessage()).initCause(getCause(e));
-            } else if (interfaceType.isLocal()) {
-                return new TransactionRequiredLocalException(e.getMessage()).initCause(getCause(e));
-            } else {
-                return e;
-            }
-        }
-        if (e instanceof TransactionRolledbackException) {
-            if (!rmiRemote && interfaceType.isBusiness()) {
-                return new EJBTransactionRolledbackException(e.getMessage()).initCause(getCause(e));
-            } else if (interfaceType.isLocal()) {
-                return new TransactionRolledbackLocalException(e.getMessage()).initCause(getCause(e));
-            } else {
-                return e;
-            }
-        }
-        if (e instanceof NoSuchObjectException) {
-            if (!rmiRemote && interfaceType.isBusiness()) {
-                return new NoSuchEJBException(e.getMessage()).initCause(getCause(e));
-            } else if (interfaceType.isLocal()) {
-                return new NoSuchObjectLocalException(e.getMessage()).initCause(getCause(e));
-            } else {
-                return e;
-            }
-        }
-        if (e instanceof RemoteException) {
-            if (!rmiRemote && interfaceType.isBusiness()) {
-                return new EJBException(e.getMessage()).initCause(getCause(e));
-            } else if (interfaceType.isLocal()) {
-                return new EJBException(e.getMessage()).initCause(getCause(e));
-            } else {
-                return e;
-            }
-        }
-        if (e instanceof AccessException) {
-            if (!rmiRemote && interfaceType.isBusiness()) {
-                return new AccessLocalException(e.getMessage()).initCause(getCause(e));
-            } else if (interfaceType.isLocal()) {
-                return new AccessLocalException(e.getMessage()).initCause(getCause(e));
-            } else {
-                return e;
-            }
-        }
-
-        for (Class<?> type : method.getExceptionTypes()) {
-            if (type.isAssignableFrom(e.getClass())) {
-                return e;
-            }
-        }
-
-        // Exception is undeclared
-        // Try and find a runtime exception in there
-        while (e.getCause() != null && !(e instanceof RuntimeException)) {
-            e = e.getCause();
-        }
-        return e;
+    public static String pageIsDirty(Object page)
+    {
+        return MESSAGES.format("page-is-dirty", page);
     }
 
-    /**
-     * Method instance on proxies that come from a classloader outside
-     * the bean's classloader need to be swapped out for the identical
-     * method in the bean's classloader.
-     *
-     * @param method
-     * @return return's the same method but loaded from the beans classloader
-     */
-
-    private Method copyMethod(Method method) throws Exception {
-        int parameterCount = method.getParameterTypes().length;
-        Object[] types = new Object[1 + parameterCount];
-        types[0] = method.getDeclaringClass();
-        System.arraycopy(method.getParameterTypes(), 0, types, 1, parameterCount);
-
-        types = copyArgs(types);
-
-        Class targetClass = (Class) types[0];
-        Class[] targetParameters = new Class[parameterCount];
-        System.arraycopy(types, 1, targetParameters, 0, parameterCount);
-        Method targetMethod = targetClass.getMethod(method.getName(), targetParameters);
-        return targetMethod;
+    public static String componentInstanceIsNotAPage(Component result)
+    {
+        return MESSAGES.format("component-instance-is-not-a-page", result.getComponentResources().getCompleteId());
     }
 
-    protected Throwable getCause(Throwable e) {
-        if (e != null && e.getCause() != null) {
-            return e.getCause();
-        }
-        return e;
+    public static String failureReadingMessages(Resource url, Throwable cause)
+    {
+        return MESSAGES.format("failure-reading-messages", url, cause);
     }
 
-    public String toString() {
-        String name = null;
-        try {
-            name = getProxyInfo().getInterface().getName();
-        } catch (Exception e) {
-        }
-        return "proxy=" + name + ";deployment=" + this.deploymentID + ";pk=" + this.primaryKey;
+    public static String unknownAssetPrefix(String path)
+    {
+        return MESSAGES.format("unknown-asset-prefix", path);
     }
 
-    public int hashCode() {
-        if (primaryKey == null) {
-
-            return deploymentID.hashCode();
-        } else {
-            return primaryKey.hashCode();
-        }
+    public static String assetDoesNotExist(Resource resource)
+    {
+        return MESSAGES.format("asset-does-not-exist", resource);
     }
 
-    public boolean equals(Object obj) {
-        if (obj == null) {
-            return false;
-        }
-        try {
-            obj = ProxyManager.getInvocationHandler(obj);
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
-        if (this == obj) {
-            return true;
-        }
-        BaseEjbProxyHandler other = (BaseEjbProxyHandler) obj;
-        return equalHandler(other);
+    public static String wrongAssetDigest(Resource resource)
+    {
+        return MESSAGES.format("wrong-asset-digest", resource.getPath());
     }
 
-    protected boolean equalHandler(BaseEjbProxyHandler other) {
-        return (primaryKey == null? other.primaryKey == null: primaryKey.equals(other.primaryKey))
-                && deploymentID.equals(other.deploymentID)
-                && getMainInterface().equals(other.getMainInterface());
+    public static String unknownValidatorType(String validatorType, List<String> knownValidatorTypes)
+    {
+        return MESSAGES.format("unknown-validator-type", validatorType, InternalUtils.join(knownValidatorTypes));
     }
 
-    protected abstract Object _invoke(Object proxy, Class interfce, Method method, Object[] args) throws Throwable;
-
-    protected Object[] copyArgs(Object[] objects) throws IOException, ClassNotFoundException {
-        if (objects == null) return objects;
-        /* 
-            while copying the arguments is necessary. Its not necessary to copy the array itself,
-            because they array is created by the Proxy implementation for the sole purpose of 
-            packaging the arguments for the InvocationHandler.invoke( ) method. Its ephemeral
-            and their for doesn't need to be copied.
-        */
-
-        for (int i = 0; i < objects.length; i++) {
-            objects[i] = copyObj(objects[i]);
-        }
-
-        return objects;
+    public static String unknownTranslatorType(String translatorType, List<String> knownTranslatorTypes)
+    {
+        return MESSAGES.format("unknown-translator-type", translatorType, InternalUtils.join(knownTranslatorTypes));
     }
 
-    /* change dereference to copy */
-    protected <T> T copyObj(T object) throws IOException, ClassNotFoundException {
-    	// Check for primitive and other known class types that are immutable.  If detected
-    	// we can safely return them.
-    	if (object == null) return null;
-    	Class ooc = object.getClass();
-        if ((ooc == int.class         ) ||
-            (ooc == String.class      ) ||
-            (ooc == long.class        ) ||
-            (ooc == boolean.class     ) ||
-            (ooc == byte.class        ) ||
-            (ooc == float.class       ) ||
-            (ooc == double.class      ) ||
-            (ooc == short.class       ) ||
-            (ooc == Long.class        ) ||
-            (ooc == Boolean.class     ) ||
-            (ooc == Byte.class        ) ||
-            (ooc == Character.class   ) ||
-            (ooc == Float.class       ) ||
-            (ooc == Double.class      ) ||
-            (ooc == Short.class       ) ||
-            (ooc == BigDecimal.class  ))
-        {
-            return object;
-        }
-
-
-        ByteArrayOutputStream baos = null;
-        try {
-            baos = new ByteArrayOutputStream(128);
-            ObjectOutputStream out = new ObjectOutputStream(baos);
-            out.writeObject(object);
-            out.close();
-        } catch (NotSerializableException e) {
-            throw (IOException) new NotSerializableException(e.getMessage()+" : The EJB specification restricts remote interfaces to only serializable data types.  This can be disabled for in-vm use with the "+OPENEJB_LOCALCOPY+"=false system property.").initCause(e);
-        }
-
-        ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
-        ObjectInputStream in = new EjbObjectInputStream(bais);
-        Object obj = in.readObject();
-        return (T) obj;
+    public static String validatorSpecificationParseError(int cursor, String specification)
+    {
+        return MESSAGES.format("validator-specification-parse-error", specification.charAt(cursor), cursor + 1,
+                specification);
     }
 
-    public void invalidateReference() {
-        this.container = null;
-        this.setBeanContext(null);
-        this.isInvalidReference = true;
+    public static String mixinsInvalidWithoutIdOrType(String elementName)
+    {
+        return MESSAGES.format("mixins-invalid-without-id-or-type", elementName);
     }
 
-    protected void invalidateAllHandlers(Object key) {
-        HashSet<BaseEjbProxyHandler> set = (HashSet) getLiveHandleRegistry().remove(key);
-        if (set == null) return;
-        synchronized (set) {
-            for (BaseEjbProxyHandler handler : set) {
-                handler.invalidateReference();
-            }
-        }
+    public static String missingFromEnvironment(Class type, Collection<Class> availableTypes)
+    {
+        List<String> types = CollectionFactory.newList();
+
+        for (Class c : availableTypes)
+            types.add(c.getName());
+
+        return MESSAGES.format("missing-from-environment", type.getName(), InternalUtils.joinSorted(types));
     }
 
-    protected abstract Object _writeReplace(Object proxy) throws ObjectStreamException;
+    public static String invalidComponentEventResult(Object result, Collection<Class> configuredResultTypes)
+    {
+        List<String> classNames = CollectionFactory.newList();
 
-    protected void registerHandler(Object key, BaseEjbProxyHandler handler) {
-        HashSet set = (HashSet) getLiveHandleRegistry().get(key);
-        if (set != null) {
-            synchronized (set) {
-                set.add(handler);
-            }
-        } else {
-            set = new HashSet();
-            set.add(handler);
-            getLiveHandleRegistry().put(key, set);
-        }
+        for (Class c : configuredResultTypes)
+            classNames.add(c.getName());
+
+        return MESSAGES.format("invalid-component-event-result", result, ClassFabUtils.toJavaClassName(result
+                .getClass()), InternalUtils.joinSorted(classNames));
     }
 
-    public abstract org.apache.openejb.ProxyInfo getProxyInfo();
-
-    public BeanContext getBeanContext() {
-        BeanContext beanContext = beanContextRef.get();
-        if (beanContext == null|| beanContext.isDestroyed()){
-            invalidateReference();
-            throw new IllegalStateException("Bean '"+deploymentID+"' has been undeployed.");
-        }
-        return beanContext;
+    public static String undefinedTapestryAttribute(String elementName, String attributeName,
+            String allowedAttributeName)
+    {
+        return MESSAGES.format("undefined-tapestry-attribute", elementName, attributeName, allowedAttributeName);
     }
 
-    public void setBeanContext(BeanContext beanContext) {
-        this.beanContextRef = new WeakReference<BeanContext>(beanContext);
+    public static String parameterElementNameRequired()
+    {
+        return MESSAGES.get("parameter-element-name-required");
     }
 
-    public Hashtable getLiveHandleRegistry() {
-        BeanContext beanContext = getBeanContext();
-        ProxyRegistry proxyRegistry = beanContext.get(ProxyRegistry.class);
-        if (proxyRegistry == null){
-            proxyRegistry = new ProxyRegistry();
-            beanContext.set(ProxyRegistry.class, proxyRegistry);
-        }
-        return proxyRegistry.liveHandleRegistry;
+    public static String missingApplicationStatePersistenceStrategy(String name, Collection<String> availableNames)
+    {
+        return MESSAGES.format("missing-application-state-persistence-strategy", name, InternalUtils
+                .joinSorted(availableNames));
     }
 
-    private void writeObject(java.io.ObjectOutputStream out) throws IOException {
-        out.defaultWriteObject();
-
-        out.writeObject(getInterfaces());
-        out.writeObject(getMainInterface());
+    public static String methodIsVoid(String methodName, Class inClass, String propertyExpression)
+    {
+        return MESSAGES.format("method-is-void", methodName, inClass.getName(), propertyExpression);
     }
 
-    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
-
-        in.defaultReadObject();
-
-        ContainerSystem containerSystem = SystemInstance.get().getComponent(ContainerSystem.class);
-        setBeanContext(containerSystem.getBeanContext(deploymentID));
-        container = (RpcContainer) getBeanContext().getContainer();
-
-        if (IntraVmCopyMonitor.isCrossClassLoaderOperation()) {
-            setDoCrossClassLoaderCopy(true);
-        }
-
-        setInterfaces((List<Class>) in.readObject());
-        setMainInterface((Class) in.readObject());
+    public static String methodNotFound(String methodName, Class inClass, String propertyExpression)
+    {
+        return MESSAGES.format("method-not-found", methodName, inClass.getName(), propertyExpression);
     }
 
+    public static String noSuchProperty(Class targetClass, String propertyName, String propertyExpression,
+            Collection<String> propertyNames)
+    {
+        return MESSAGES.format("no-such-property", targetClass.getName(), propertyName, propertyExpression,
+                InternalUtils.joinSorted(propertyNames));
+    }
+
+    public static String writeOnlyProperty(String propertyName, Class clazz, String propertyExpression)
+    {
+        return MESSAGES.format("write-only-property", propertyName, clazz.getName(), propertyExpression);
+    }
+
+    public static String requestException(Throwable cause)
+    {
+        return MESSAGES.format("request-exception", cause);
+    }
+
+    public static String componentRecursion(String componentClassName)
+    {
+        return MESSAGES.format("component-recursion", componentClassName);
+    }
+
+    public static String clientStateMustBeSerializable(Object newValue)
+    {
+        return MESSAGES.format("client-state-must-be-serializable", newValue);
+    }
+
+    public static String corruptClientState()
+    {
+        return MESSAGES.get("corrupt-client-state");
+    }
+
+    public static String unclosedAttributeExpression(String expression)
+    {
+        return MESSAGES.format("unclosed-attribute-expression", expression);
+    }
+
+    public static String noDisplayForDataType(String datatype)
+    {
+        return MESSAGES.format("no-display-for-data-type", datatype);
+    }
+
+    public static String noEditForDataType(String datatype)
+    {
+        return MESSAGES.format("no-edit-for-data-type", datatype);
+    }
+
+    public static String missingValidatorConstraint(String validatorType, Class type, String perFormMessageKey,
+            String generalMessageKey)
+    {
+        return MESSAGES.format("missing-validator-constraint", validatorType, type.getName(), perFormMessageKey,
+                generalMessageKey);
+    }
+
+    public static String resourcesAccessForbidden(String URI)
+    {
+        return MESSAGES.format("resource-access-forbidden", URI);
+    }
+
+    public static String noMarkupFromPageRender(Page page)
+    {
+        return MESSAGES.format("no-markup-from-page-render", page.getName());
+    }
+
+    public static String baseClassInWrongPackage(String parentClassName, String className, String suggestedPackage)
+    {
+        return MESSAGES.format("base-class-in-wrong-package", parentClassName, className, suggestedPackage);
+    }
+
+    public static String invalidId(String messageKey, String idValue)
+    {
+        return MESSAGES.format(messageKey, idValue);
+    }
+
+    public static String attributeNotAllowed(String elementName)
+    {
+        return MESSAGES.format("attribute-not-allowed", elementName);
+    }
+
+    public static String pagePoolExausted(String pageName, Locale locale, int hardLimit)
+    {
+        return MESSAGES.format("page-pool-exausted", pageName, locale.toString(), hardLimit);
+    }
+
+    public static String noTranslatorForType(Class valueType, Collection<String> typeNames)
+    {
+        return MESSAGES.format("no-translator-for-type", ClassFabUtils.toJavaClassName(valueType), InternalUtils
+                .joinSorted(typeNames));
+    }
+
+    public static String emptyBinding(String parameterName)
+    {
+        return MESSAGES.format("parameter-binding-must-not-be-empty", parameterName);
+    }
+
+    public static String noSuchMethod(Class clazz, String methodName)
+    {
+        return MESSAGES.format("no-such-method", ClassFabUtils.toJavaClassName(clazz), methodName);
+    }
+
+    public static String forbidInstantiateComponentClass(String className)
+    {
+        return MESSAGES.format("forbid-instantiate-component-class", className);
+    }
+
+    public static String eventNotHandled(ComponentPageElement element, String eventName)
+    {
+        return MESSAGES.format("event-not-handled", eventName, element.getCompleteId());
+    }
+
+    public static String documentMissingHTMLRoot(String rootElementName)
+    {
+        return MESSAGES.format("document-missing-html-root", rootElementName);
+    }
+
+    public static String addNewMethodConflict(TransformMethodSignature signature)
+    {
+        return MESSAGES.format("add-new-method-conflict", signature);
+    }
+
+    public static String parameterElementDoesNotAllowAttributes()
+    {
+        return MESSAGES.get("parameter-element-does-not-allow-attributes");
+    }
+
+    public static String invalidPathForLibraryNamespace(String URI)
+    {
+        return MESSAGES.format("invalid-path-for-library-namespace", URI);
+    }
+
+    public static String literalConduitNotUpdateable()
+    {
+        return MESSAGES.get("literal-conduit-not-updateable");
+    }
+
+    public static String requestRewriteReturnedNull()
+    {
+        return MESSAGES.get("request-rewrite-returned-null");
+    }
+
+    public static String linkRewriteReturnedNull()
+    {
+        return MESSAGES.get("link-rewrite-returned-null");
+    }
+
+    public static String markupWriterAttributeNameOrValueOmitted(String element, Object[] namesAndValues)
+    {
+        return MESSAGES.format("markup-writer-attribute-name-or-value-omitted", element, InternalUtils.join(Arrays
+                .asList(namesAndValues)));
+    }
 }

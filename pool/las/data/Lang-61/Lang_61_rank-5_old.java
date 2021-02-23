@@ -1,341 +1,155 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-/**
- * 
- */
-package com.gemstone.gemfire.internal.cache.tier.sockets.command;
+package brooklyn.location.basic;
 
-import com.gemstone.gemfire.i18n.LogWriterI18n;
-import com.gemstone.gemfire.internal.cache.Token;
-import com.gemstone.gemfire.internal.cache.OpType;
-import com.gemstone.gemfire.internal.cache.EntryEventImpl;
-import com.gemstone.gemfire.internal.cache.EventID;
-import com.gemstone.gemfire.internal.cache.EventIDHolder;
-import com.gemstone.gemfire.internal.cache.LocalRegion;
-import com.gemstone.gemfire.internal.cache.PartitionedRegion;
-import com.gemstone.gemfire.internal.cache.tier.CachedRegionHelper;
-import com.gemstone.gemfire.internal.cache.tier.Command;
-import com.gemstone.gemfire.internal.cache.tier.MessageType;
-import com.gemstone.gemfire.internal.cache.tier.sockets.*;
-import com.gemstone.gemfire.internal.cache.versions.VersionTag;
-import com.gemstone.gemfire.internal.i18n.LocalizedStrings;
-import com.gemstone.gemfire.internal.logging.log4j.LocalizedMessage;
-import com.gemstone.gemfire.internal.security.AuthorizeRequest;
-import com.gemstone.gemfire.internal.util.Breadcrumbs;
-import com.gemstone.gemfire.security.GemFireSecurityException;
-import com.gemstone.gemfire.cache.DynamicRegionFactory;
-import com.gemstone.gemfire.cache.EntryNotFoundException;
-import com.gemstone.gemfire.cache.Operation;
-import com.gemstone.gemfire.cache.RegionDestroyedException;
-import com.gemstone.gemfire.cache.client.internal.DestroyOp;
-import com.gemstone.gemfire.cache.operations.DestroyOperationContext;
-import com.gemstone.gemfire.cache.operations.RegionDestroyOperationContext;
-import com.gemstone.gemfire.distributed.internal.DistributionStats;
-import com.gemstone.gemfire.distributed.internal.InternalDistributedSystem;
+import java.net.InetAddress;
+import java.util.Collection;
+import java.util.Iterator;
 
-import java.io.IOException;
-import java.nio.ByteBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import brooklyn.entity.Entity;
+import brooklyn.entity.basic.Attributes;
+import brooklyn.location.Location;
+import brooklyn.location.MachineLocation;
+import brooklyn.location.basic.LocalhostMachineProvisioningLocation.LocalhostMachine;
+import brooklyn.util.guava.Maybe;
 
-public class Destroy65 extends BaseCommand {
+/** utilities for working with MachineLocations */
+public class Machines {
 
-  private final static Destroy65 singleton = new Destroy65();
-
-  public static Command getCommand() {
-    return singleton;
-  }
-
-  protected Destroy65() {
-  }
-
-  @Override
-  protected void writeReplyWithRefreshMetadata(Message origMsg,
-      ServerConnection servConn, PartitionedRegion pr, byte nwHop) throws IOException {
-    throw new UnsupportedOperationException();
-  }
-  
-  protected void writeReplyWithRefreshMetadata(Message origMsg,
-      ServerConnection servConn, PartitionedRegion pr,
-      boolean entryNotFoundForRemove, byte nwHop, VersionTag tag) throws IOException {
-    Message replyMsg = servConn.getReplyMessage();
-    servConn.getCache().getCancelCriterion().checkCancelInProgress(null);
-    replyMsg.setMessageType(MessageType.REPLY);
-    replyMsg.setNumberOfParts(2);
-    replyMsg.setTransactionId(origMsg.getTransactionId());
-    replyMsg.addBytesPart(new byte[]{pr.getMetadataVersion().byteValue(), nwHop});
-    pr.getPrStats().incPRMetaDataSentCount();
-    replyMsg.addIntPart(entryNotFoundForRemove? 1 : 0);
-    replyMsg.send(servConn);
-    if (logger.isTraceEnabled()) {
-      logger.trace("{}: rpl with REFRESH_METADAT tx: {}", servConn.getName(), origMsg.getTransactionId());
-    }
-  }
-
-  protected void writeReply(Message origMsg, ServerConnection servConn,
-      boolean entryNotFound, VersionTag tag)
-  throws IOException {
-    Message replyMsg = servConn.getReplyMessage();
-    servConn.getCache().getCancelCriterion().checkCancelInProgress(null);
-    replyMsg.setMessageType(MessageType.REPLY);
-    replyMsg.setNumberOfParts(2);
-    replyMsg.setTransactionId(origMsg.getTransactionId());
-    replyMsg.addBytesPart(OK_BYTES);
-    replyMsg.addIntPart(entryNotFound? 1 : 0);
-    replyMsg.send(servConn);
-    if (logger.isTraceEnabled()) {
-      logger.trace("{}: rpl tx: {} parts={}", servConn.getName(), origMsg.getTransactionId(), replyMsg.getNumberOfParts());
-    }
-  }
-
-  @Override
-  public void cmdExecute(Message msg, ServerConnection servConn, long start)
-      throws IOException, InterruptedException {
-    Part regionNamePart;
-    Part keyPart;
-    Part callbackArgPart;
-    Part eventPart;
-    Part expectedOldValuePart;
-
-    Object operation = null;
-    Object expectedOldValue = null;
-
-    String regionName = null;
-    Object callbackArg = null, key = null;
-    StringBuffer errMessage = new StringBuffer();
-    CachedRegionHelper crHelper = servConn.getCachedRegionHelper();
-    CacheServerStats stats = servConn.getCacheServerStats();
-    servConn.setAsTrue(REQUIRES_RESPONSE);
-
-    long now =  DistributionStats.getStatTime();
-    stats.incReadDestroyRequestTime(now - start);
+    private static final Logger log = LoggerFactory.getLogger(Machines.class);
     
-    // Retrieve the data from the message parts
-    regionNamePart = msg.getPart(0);
-    keyPart = msg.getPart(1);
-    expectedOldValuePart = msg.getPart(2);
-    try {
-    	
-        operation = msg.getPart(3).getObject();                
-        
-        if (( (operation instanceof Operation) && ((Operation)operation == Operation.REMOVE ))
-        		|| ((operation instanceof Byte) && (Byte)operation == OpType.DESTROY ))
-        		
-        {        	
-          expectedOldValue = expectedOldValuePart.getObject();
+    public static Maybe<String> getSubnetHostname(Location where) {
+        String hostname = null;
+        if (where instanceof HasSubnetHostname) {
+            hostname = ((HasSubnetHostname) where).getSubnetHostname();
         }
-    } catch (Exception e) {
-      writeException(msg, e, false, servConn);
-      servConn.setAsTrue(RESPONDED);
-      return;
-    }
-
-    eventPart = msg.getPart(4);
-
-    if (msg.getNumberOfParts() > 5) {
-      callbackArgPart = msg.getPart(5);
-      try {
-        callbackArg = callbackArgPart.getObject();
-      }
-      catch (Exception e) {
-        writeException(msg, e, false, servConn);
-        servConn.setAsTrue(RESPONDED);
-        return;
-      }
-    }
-    regionName = regionNamePart.getString();
-    try {
-      key = keyPart.getStringOrObject();
-    }
-    catch (Exception e) {
-      writeException(msg, e, false, servConn);
-      servConn.setAsTrue(RESPONDED);
-      return;
-    }
-    if (logger.isDebugEnabled()) {
-      logger.debug("{}: Received destroy65 request ({} bytes; op={}) from {} for region {} key {}{} txId {}", servConn.getName(), msg.getPayloadLength(), operation, servConn.getSocketString(), regionName, key, (operation == Operation.REMOVE? " value=" + expectedOldValue : ""), msg.getTransactionId());
-    }
-    boolean entryNotFoundForRemove = false;
-
-    // Process the destroy request
-    if (key == null || regionName == null) {
-      if (key == null) {
-        logger.warn(LocalizedMessage.create(LocalizedStrings.Destroy_0_THE_INPUT_KEY_FOR_THE_DESTROY_REQUEST_IS_NULL, servConn.getName()));
-        errMessage.append(LocalizedStrings.Destroy__THE_INPUT_KEY_FOR_THE_DESTROY_REQUEST_IS_NULL.toLocalizedString());
-      }
-      if (regionName == null) {
-        logger.warn(LocalizedMessage.create(LocalizedStrings.Destroy_0_THE_INPUT_REGION_NAME_FOR_THE_DESTROY_REQUEST_IS_NULL, servConn.getName()));
-        errMessage
-            .append(LocalizedStrings.Destroy__THE_INPUT_REGION_NAME_FOR_THE_DESTROY_REQUEST_IS_NULL.toLocalizedString());
-      }
-      writeErrorResponse(msg, MessageType.DESTROY_DATA_ERROR, errMessage
-          .toString(), servConn);
-      servConn.setAsTrue(RESPONDED);
-    }
-    else {
-      LocalRegion region = (LocalRegion)crHelper.getRegion(regionName);
-      if (region == null) {
-        String reason = LocalizedStrings.Destroy__0_WAS_NOT_FOUND_DURING_DESTROY_REQUEST.toLocalizedString(regionName);
-        writeRegionDestroyedEx(msg, regionName, reason, servConn);
-        servConn.setAsTrue(RESPONDED);
-      }
-      else {
-        // Destroy the entry
-        ByteBuffer eventIdPartsBuffer = ByteBuffer.wrap(eventPart
-            .getSerializedForm());
-        long threadId = EventID
-            .readEventIdPartsFromOptmizedByteArray(eventIdPartsBuffer);
-        long sequenceId = EventID
-            .readEventIdPartsFromOptmizedByteArray(eventIdPartsBuffer);
-        EventID eventId = new EventID(servConn.getEventMemberIDByteArray(),
-            threadId, sequenceId);
-        EventIDHolder clientEvent = new EventIDHolder(eventId);
-        
-        Breadcrumbs.setEventId(eventId);
-
-        // msg.isRetry might be set by v7.0 and later clients
-        if (msg.isRetry()) {
-//          if (logger.isDebugEnabled()) {
-//            logger.debug("DEBUG: encountered isRetry in Destroy65");
-//          }
-          clientEvent.setPossibleDuplicate(true);
-          if (region.getAttributes().getConcurrencyChecksEnabled()) {
-            // recover the version tag from other servers
-            clientEvent.setRegion(region);
-            if (!recoverVersionTagForRetriedOperation(clientEvent)) {
-              clientEvent.setPossibleDuplicate(false); // no-one has seen this event
-            }
-          }
+        if (hostname == null && where instanceof MachineLocation) {
+            InetAddress addr = ((MachineLocation) where).getAddress();
+            if (addr != null) hostname = addr.getHostAddress();
         }
-        
-        try {
-          AuthorizeRequest authzRequest = servConn.getAuthzRequest();
-          if (authzRequest != null) {
-            // TODO SW: This is to handle DynamicRegionFactory destroy
-            // calls. Rework this when the semantics of DynamicRegionFactory are
-            // cleaned up.
-            if (DynamicRegionFactory.regionIsDynamicRegionList(regionName)) {
-              RegionDestroyOperationContext destroyContext = authzRequest
-                  .destroyRegionAuthorize((String)key, callbackArg);
-              callbackArg = destroyContext.getCallbackArg();
-            }
-            else {
-              DestroyOperationContext destroyContext = authzRequest
-                  .destroyAuthorize(regionName, key, callbackArg);
-              callbackArg = destroyContext.getCallbackArg();
-            }
-          }
-          if (operation == null  ||  operation == Operation.DESTROY) {        	  
-            region.basicBridgeDestroy(key, callbackArg, servConn.getProxyID(),
-                true, clientEvent);
-          } else {
-            // this throws exceptions if expectedOldValue checks fail
-            try {
-              if (expectedOldValue == null && operation != null) {
-            	  expectedOldValue = Token.INVALID;
-              }
-              if (operation == Operation.REMOVE  &&  msg.isRetry()  &&  clientEvent.getVersionTag() != null) {
-                // the operation was successful last time it was tried, so there's
-                // no need to perform it again.  Just return the version tag and
-                // success status
-                if (logger.isDebugEnabled()) {
-                  logger.debug("remove(k,v) operation was successful last time with version {}", clientEvent.getVersionTag());
+        log.debug("computed hostname {} for {}", hostname, where);
+        // TODO if Maybe.absent(message) appears, could/should use that
+        // TODO If no machine available, should we throw new IllegalStateException("Cannot find hostname for "+where);
+        return Maybe.fromNullable(hostname);
+    }
+
+    public static Maybe<String> getSubnetIp(Location where) {
+        // TODO Too much duplication between the ip and hostname methods
+        String result = null;
+        if (where instanceof HasSubnetHostname) {
+            result = ((HasSubnetHostname) where).getSubnetIp();
+        }
+        if (result == null && where instanceof MachineLocation) {
+            InetAddress addr = ((MachineLocation) where).getAddress();
+            if (addr != null) result = addr.getHostAddress();
+        }
+        log.debug("computed hostname {} for {}", result, where);
+        return Maybe.fromNullable(result);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <T> Maybe<T> findUniqueElement(Iterable<?> items, Class<T> type) {
+        if (items==null) return null;
+        Iterator<?> i = items.iterator();
+        T result = null;
+        while (i.hasNext()) {
+            Object candidate = i.next();
+            if (type.isInstance(candidate)) {
+                if (result==null) result = (T)candidate;
+                else {
+                    if (log.isTraceEnabled())
+                        log.trace("Multiple instances of "+type+" in "+items+"; ignoring");
+                    return Maybe.absent(new IllegalStateException("Multiple instances of "+type+" in "+items+"; expected a single one"));
                 }
-                // try the operation anyway to ensure that it's been distributed to all servers
-                try {
-                  region.basicBridgeRemove(key, expectedOldValue, 
-                      callbackArg, servConn.getProxyID(), true, clientEvent);
-                } catch (EntryNotFoundException e) {
-                  // ignore, and don't set entryNotFoundForRemove because this was a successful
-                  // operation - bug #51664
-                }
-              } else {
-                region.basicBridgeRemove(key, expectedOldValue, 
-                    callbackArg, servConn.getProxyID(), true, clientEvent);
-                if (logger.isDebugEnabled()) {
-                  logger.debug("region.remove succeeded");
-                }
-              }
-            } catch (EntryNotFoundException e) {
-              servConn.setModificationInfo(true, regionName, key);
-              if (logger.isDebugEnabled()) {
-                logger.debug("writing entryNotFound response");
-              }
-              entryNotFoundForRemove = true;
             }
-          }
-          servConn.setModificationInfo(true, regionName, key);
         }
-        catch (EntryNotFoundException e) {
-          // Don't send an exception back to the client if this
-          // exception happens. Just log it and continue.
-          logger.info(LocalizedMessage.create(LocalizedStrings.Destroy_0_DURING_ENTRY_DESTROY_NO_ENTRY_WAS_FOUND_FOR_KEY_1, new Object[] {servConn.getName(), key})); 
-          entryNotFoundForRemove = true;
-        }
-        catch (RegionDestroyedException rde) {
-          writeException(msg, rde, false, servConn);
-          servConn.setAsTrue(RESPONDED);
-          return;
-        }
-        catch (Exception e) {
-          // If an interrupted exception is thrown , rethrow it
-          checkForInterrupt(servConn, e);
-
-          // If an exception occurs during the destroy, preserve the connection
-          writeException(msg, e, false, servConn);
-          servConn.setAsTrue(RESPONDED);
-          if (e instanceof GemFireSecurityException) {
-            // Fine logging for security exceptions since these are already
-            // logged by the security logger
-            if (logger.isDebugEnabled())
-              logger.debug("{}: Unexpected Security exception", servConn.getName(), e);
-          }
-          else {
-            logger.warn(LocalizedMessage.create(LocalizedStrings.Destroy_0_UNEXPECTED_EXCEPTION, servConn.getName()), e); 
-          }
-          return;
-        }
-
-        // Update the statistics and write the reply
-        now = DistributionStats.getStatTime();
-        stats.incProcessDestroyTime(now - start);
-        
-        if (region instanceof PartitionedRegion) {
-          PartitionedRegion pr = (PartitionedRegion)region;
-          if (pr.isNetworkHop() != (byte)0) {
-            writeReplyWithRefreshMetadata(msg, servConn, pr, entryNotFoundForRemove, pr.isNetworkHop(), clientEvent.getVersionTag());
-            pr.setIsNetworkHop((byte)0);
-            pr.setMetadataVersion(Byte.valueOf((byte)0));
-          }
-          else {
-            writeReply(msg, servConn, entryNotFoundForRemove | clientEvent.getIsRedestroyedEntry(), clientEvent.getVersionTag());
-          }
-        }
-        else {
-          writeReply(msg, servConn, entryNotFoundForRemove | clientEvent.getIsRedestroyedEntry(), clientEvent.getVersionTag());
-        }
-        servConn.setAsTrue(RESPONDED);
-        if (logger.isDebugEnabled()) {
-          logger.debug("{}: Sent destroy response for region {} key {}", servConn.getName(), regionName, key);
-        }
-        stats.incWriteDestroyResponseTime(DistributionStats.getStatTime()
-            - start);
-      }
+        if (result==null) 
+            return Maybe.absent(new IllegalStateException("No instances of "+type+" available (in "+items+")"));
+        return Maybe.of(result);
     }
-
     
-  }
+    public static Maybe<MachineLocation> findUniqueMachineLocation(Iterable<? extends Location> locations) {
+        return findUniqueElement(locations, MachineLocation.class);
+    }
+
+    public static Maybe<SshMachineLocation> findUniqueSshMachineLocation(Iterable<? extends Location> locations) {
+        return findUniqueElement(locations, SshMachineLocation.class);
+    }
+
+    public static Maybe<String> findSubnetHostname(Iterable<? extends Location> ll) {
+        Maybe<MachineLocation> l = findUniqueMachineLocation(ll);
+        if (!l.isPresent()) {
+            return Maybe.absent();
+//            throw new IllegalStateException("Cannot find hostname for among "+ll);
+        }
+        return Machines.getSubnetHostname(l.get());
+    }
+
+    public static Maybe<String> findSubnetHostname(Entity entity) {
+        String sh = entity.getAttribute(Attributes.SUBNET_HOSTNAME);
+        if (sh!=null) return Maybe.of(sh);
+        return findSubnetHostname(entity.getLocations());
+    }
+    
+    public static Maybe<String> findSubnetOrPublicHostname(Entity entity) {
+        String hn = entity.getAttribute(Attributes.HOSTNAME);
+        if (hn!=null) {
+            // attributes already set, see if there was a SUBNET_HOSTNAME set
+            // note we rely on (public) hostname being set _after_ subnet_hostname,
+            // to prevent tiny possibility of races resulting in hostname being returned
+            // becasue subnet is still being looked up -- see MachineLifecycleEffectorTasks
+            Maybe<String> sn = findSubnetHostname(entity);
+            if (sn.isPresent()) return sn;
+            // short-circuit discovery if attributes have been set already
+            return Maybe.of(hn);
+        }
+        
+        Maybe<MachineLocation> l = findUniqueMachineLocation(entity.getLocations());
+        if (!l.isPresent()) return Maybe.absent();
+        InetAddress addr = l.get().getAddress();
+        if (addr==null) return Maybe.absent();
+        return Maybe.fromNullable(addr.getHostName());
+    }
+
+    public static Maybe<String> findSubnetOrPrivateIp(Entity entity) {
+        // see comments in findSubnetOrPrivateHostname
+        String hn = entity.getAttribute(Attributes.ADDRESS);
+        if (hn!=null) {
+            Maybe<String> sn = findSubnetIp(entity);
+            if (sn.isPresent()) return sn;
+            return Maybe.of(hn);
+        }
+        
+        Maybe<MachineLocation> l = findUniqueMachineLocation(entity.getLocations());
+        if (!l.isPresent()) return Maybe.absent();
+        InetAddress addr = l.get().getAddress();
+        if (addr==null) return Maybe.absent();
+        return Maybe.fromNullable(addr.getHostAddress());
+    }
+
+    public static Maybe<String> findSubnetIp(Entity entity) {
+        String sh = entity.getAttribute(Attributes.SUBNET_ADDRESS);
+        if (sh!=null) return Maybe.of(sh);
+        return findSubnetIp(entity.getLocations());
+    }
+    
+    public static Maybe<String> findSubnetIp(Iterable<? extends Location> ll) {
+        // TODO Or if can't find MachineLocation, should we throw new IllegalStateException("Cannot find hostname for among "+ll);
+        Maybe<MachineLocation> l = findUniqueMachineLocation(ll);
+        return (l.isPresent()) ? Machines.getSubnetIp(l.get()) : Maybe.<String>absent();
+    }
+
+    /** returns whether it is localhost (and has warned) */
+    public static boolean warnIfLocalhost(Collection<? extends Location> locations, String message) {
+        if (locations.size()==1) {
+            Location l = locations.iterator().next();
+            if (l instanceof LocalhostMachineProvisioningLocation || l instanceof LocalhostMachine) {
+                log.warn(message);
+                return true;
+            }
+        }
+        return false;
+    }
+    
 }

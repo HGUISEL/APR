@@ -163,9 +163,11 @@ public class Tester {
 		TestResult result = new TestResult(0, 0, 0);
 		for (String testClassName : testClasses) {
 
+
 			if(DEBUG)
 				System.out.println("Executing " + testClassName);
 			TestResult r = runTest(testClassName, classPath);
+
 
 			if(DEBUG)
 				System.out.println("Result:" + r.failCnt + "/" + r.runCnt);
@@ -177,11 +179,12 @@ public class Tester {
 	public TestResult runTest(String testClassName, String classPath) throws ClassNotFoundException, IOException {
 		TestResult result = null;
 		CommandLine command = CommandLine.parse(jvm);
-		// TE added javac at the beginning
+		// TE added bootclasspath
 		command.addArgument("-Xms512m");
 		command.addArgument("-Xmx2048m");
 		command.addArgument("-classpath");
 		command.addArgument(classPath);
+		//command.addArgument(" -bootclasspath /usr/lib/jvm/java-8-openjdk-amd64/jre/lib/rt.jar", false);
 		command.addArgument("-Duser.timezone=" + TZ_INFO);
 		command.addArgument("-Duser.language=en");
 

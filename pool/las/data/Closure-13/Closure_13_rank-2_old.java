@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,720 +7,1005 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
-package org.apache.drill.exec.physical.impl.project;
+package org.apache.myfaces.application;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.PrintStream;
-import java.util.HashMap;
-import java.util.List;
+import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Locale;
+import java.util.Map;
+import java.util.MissingResourceException;
+import java.util.concurrent.ConcurrentHashMap;
 
-import org.apache.commons.collections.map.CaseInsensitiveMap;
-import org.apache.drill.common.expression.ConvertExpression;
-import org.apache.drill.common.expression.ErrorCollector;
-import org.apache.drill.common.expression.ErrorCollectorImpl;
-import org.apache.drill.common.expression.ExpressionPosition;
-import org.apache.drill.common.expression.FieldReference;
-import org.apache.drill.common.expression.FunctionCall;
-import org.apache.drill.common.expression.FunctionCallFactory;
-import org.apache.drill.common.expression.LogicalExpression;
-import org.apache.drill.common.expression.PathSegment;
-import org.apache.drill.common.expression.PathSegment.NameSegment;
-import org.apache.drill.common.expression.SchemaPath;
-import org.apache.drill.common.expression.ValueExpressions;
-import org.apache.drill.common.expression.fn.CastFunctions;
-import org.apache.drill.common.logical.data.NamedExpression;
-import org.apache.drill.common.types.TypeProtos.MinorType;
-import org.apache.drill.common.types.Types;
-import org.apache.drill.exec.exception.ClassTransformationException;
-import org.apache.drill.exec.exception.SchemaChangeException;
-import org.apache.drill.exec.expr.ClassGenerator;
-import org.apache.drill.exec.expr.ClassGenerator.HoldingContainer;
-import org.apache.drill.exec.expr.CodeGenerator;
-import org.apache.drill.exec.expr.DrillFuncHolderExpr;
-import org.apache.drill.exec.expr.ExpressionTreeMaterializer;
-import org.apache.drill.exec.expr.TypeHelper;
-import org.apache.drill.exec.expr.ValueVectorReadExpression;
-import org.apache.drill.exec.expr.ValueVectorWriteExpression;
-import org.apache.drill.exec.expr.fn.DrillComplexWriterFuncHolder;
-import org.apache.drill.exec.memory.OutOfMemoryException;
-import org.apache.drill.exec.ops.FragmentContext;
-import org.apache.drill.exec.physical.config.Project;
-import org.apache.drill.exec.planner.StarColumnHelper;
-import org.apache.drill.exec.record.AbstractSingleRecordBatch;
-import org.apache.drill.exec.record.BatchSchema.SelectionVectorMode;
-import org.apache.drill.exec.record.MaterializedField;
-import org.apache.drill.exec.record.RecordBatch;
-import org.apache.drill.exec.record.TransferPair;
-import org.apache.drill.exec.record.TypedFieldId;
-import org.apache.drill.exec.record.VectorContainer;
-import org.apache.drill.exec.record.VectorWrapper;
-import org.apache.drill.exec.util.BatchPrinter;
-import org.apache.drill.exec.vector.AllocationHelper;
-import org.apache.drill.exec.vector.FixedWidthVector;
-import org.apache.drill.exec.vector.ValueVector;
-import org.apache.drill.exec.vector.VarCharVector;
-import org.apache.drill.exec.vector.complex.writer.BaseWriter.ComplexWriter;
+import javax.el.CompositeELResolver;
+import javax.el.ELContext;
+import javax.el.ELContextListener;
+import javax.el.ELException;
+import javax.el.ELResolver;
+import javax.el.ExpressionFactory;
+import javax.el.MethodExpression;
+import javax.el.ValueExpression;
+import javax.faces.FacesException;
+import javax.faces.application.Application;
+import javax.faces.application.NavigationHandler;
+import javax.faces.application.StateManager;
+import javax.faces.application.ViewHandler;
+import javax.faces.component.UIComponent;
+import javax.faces.component.UIViewRoot;
+import javax.faces.context.FacesContext;
+import javax.faces.convert.Converter;
+import javax.faces.el.MethodBinding;
+import javax.faces.el.PropertyResolver;
+import javax.faces.el.ReferenceSyntaxException;
+import javax.faces.el.ValueBinding;
+import javax.faces.el.VariableResolver;
+import javax.faces.event.ActionListener;
+import javax.faces.validator.Validator;
 
-import com.carrotsearch.hppc.IntOpenHashSet;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.sun.codemodel.JExpr;
+import org.apache.commons.beanutils.BeanUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.myfaces.application.jsp.JspStateManagerImpl;
+import org.apache.myfaces.application.jsp.JspViewHandlerImpl;
+import org.apache.myfaces.config.RuntimeConfig;
+import org.apache.myfaces.config.impl.digester.elements.Property;
+import org.apache.myfaces.config.impl.digester.elements.ResourceBundle;
+import org.apache.myfaces.el.PropertyResolverImpl;
+import org.apache.myfaces.el.VariableResolverToApplicationELResolverAdapter;
+import org.apache.myfaces.el.convert.MethodExpressionToMethodBinding;
+import org.apache.myfaces.el.convert.ValueBindingToValueExpression;
+import org.apache.myfaces.el.convert.ValueExpressionToValueBinding;
+import org.apache.myfaces.el.unified.ELResolverBuilder;
+import org.apache.myfaces.el.unified.ResolverBuilderForFaces;
+import org.apache.myfaces.el.unified.resolver.FacesCompositeELResolver;
+import org.apache.myfaces.el.unified.resolver.FacesCompositeELResolver.Scope;
+import org.apache.myfaces.shared_impl.util.ClassUtils;
 
-public class ProjectRecordBatch extends AbstractSingleRecordBatch<Project> {
-  static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(ProjectRecordBatch.class);
+/**
+ * DOCUMENT ME!
+ *
+ * @author Manfred Geiler (latest modification by $Author$)
+ * @author Anton Koinov
+ * @author Thomas Spiegl
+ * @author Stan Silvert
+ * @version $Revision$ $Date$
+ */
+@SuppressWarnings("deprecation")
+public class ApplicationImpl extends Application
+{
+    private static final Log log = LogFactory.getLog(ApplicationImpl.class);
 
-  private Projector projector;
-  private List<ValueVector> allocationVectors;
-  private List<ComplexWriter> complexWriters;
-  private boolean hasRemainder = false;
-  private int remainderIndex = 0;
-  private int recordCount;
-  private boolean buildingSchema = true;
+    private final static VariableResolver VARIABLERESOLVER = new VariableResolverToApplicationELResolverAdapter();
 
-  private static final String EMPTY_STRING = "";
-  private boolean first = true;
+    private final static PropertyResolver PROPERTYRESOLVER = new PropertyResolverImpl();
 
-  private class ClassifierResult {
-    public boolean isStar = false;
-    public List<String> outputNames;
-    public String prefix = "";
-    public HashMap<String, Integer> prefixMap = Maps.newHashMap();
-    public CaseInsensitiveMap outputMap = new CaseInsensitiveMap();
-    private CaseInsensitiveMap sequenceMap = new CaseInsensitiveMap();
+    // recives the runtime config instance during initializing
+    private final static ThreadLocal<RuntimeConfig> initializingRuntimeConfig = new ThreadLocal<RuntimeConfig>();
 
-    private void clear() {
-      isStar = false;
-      prefix = "";
-      if (outputNames != null) {
-        outputNames.clear();
-      }
+    // ~ Instance fields
+    // ----------------------------------------------------------------------------
 
-      // note:  don't clear the internal maps since they have cumulative data..
+    private Collection<Locale> _supportedLocales = Collections.emptySet();
+    private Locale _defaultLocale;
+    private String _messageBundle;
+
+    private ViewHandler _viewHandler;
+    private NavigationHandler _navigationHandler;
+    private ActionListener _actionListener;
+    private String _defaultRenderKitId;
+    private StateManager _stateManager;
+
+    private ArrayList<ELContextListener> _elContextListeners;
+
+    // components, converters, and validators can be added at runtime--must
+    // synchronize, uses ConcurrentHashMap to allow concurrent read of map
+    private final Map<String, Class> _converterIdToClassMap = new ConcurrentHashMap<String, Class>();
+    private final Map<Class, String> _converterClassNameToClassMap = new ConcurrentHashMap<Class, String>();
+    private final Map<String, org.apache.myfaces.config.impl.digester.elements.Converter> _converterClassNameToConfigurationMap = new ConcurrentHashMap<String, org.apache.myfaces.config.impl.digester.elements.Converter>();
+    private final Map<String, Class> _componentClassMap = new ConcurrentHashMap<String, Class>();
+    private final Map<String, Class> _validatorClassMap = new ConcurrentHashMap<String, Class>();
+
+    private final RuntimeConfig _runtimeConfig;
+
+    private ELResolver elResolver;
+
+    private ELResolverBuilder resolverBuilderForFaces;
+
+    // ~ Constructors
+    // -------------------------------------------------------------------------------
+
+    public ApplicationImpl()
+    {
+        this(internalGetRuntimeConfig());
     }
-  }
 
-  public ProjectRecordBatch(Project pop, RecordBatch incoming, FragmentContext context) throws OutOfMemoryException {
-    super(pop, context, incoming);
-  }
+    private static RuntimeConfig internalGetRuntimeConfig()
+    {
+        if (initializingRuntimeConfig.get() == null)
+        {
+            //It may happen that the current thread value
+            //for initializingRuntimeConfig is not set 
+            //(note that this value is final, so it just 
+            //allow set only once per thread).
+            //So the better for this case is try to get
+            //the value using RuntimeConfig.getCurrentInstance()
+            //instead throw an IllegalStateException (only fails if
+            //the constructor is called before setInitializingRuntimeConfig).
+            //From other point of view, AbstractFacesInitializer do 
+            //the same as below, so there is not problem if
+            //we do this here and this is the best place to do
+            //this.
+            //log.info("initializingRuntimeConfig.get() == null, so loading from ExternalContext");
+            ApplicationImpl.setInitializingRuntimeConfig(
+                    RuntimeConfig.getCurrentInstance(
+                            FacesContext.getCurrentInstance()
+                            .getExternalContext()));
 
-  @Override
-  public int getRecordCount() {
-    return recordCount;
-  }
-
-
-  @Override
-  protected void killIncoming(boolean sendUpstream) {
-    super.killIncoming(sendUpstream);
-    hasRemainder = false;
-  }
-
-
-  @Override
-  public IterOutcome innerNext() {
-    if (hasRemainder) {
-      handleRemainder();
-      return IterOutcome.OK;
-    }
-    return super.innerNext();
-  }
-
-  @Override
-  public VectorContainer getOutgoingContainer() {
-    return this.container;
-  }
-
-  @Override
-  protected IterOutcome doWork() {
-    int incomingRecordCount = incoming.getRecordCount();
-
-    if (first && incomingRecordCount == 0) {
-      if (complexWriters != null) {
-        IterOutcome next = null;
-        while (incomingRecordCount == 0) {
-          next = next(incoming);
-          if (next != IterOutcome.OK && next != IterOutcome.OK_NEW_SCHEMA) {
-            return next;
-          }
-          incomingRecordCount = incoming.getRecordCount();
+            //throw new IllegalStateException("The runtime config instance which is created while initialize myfaces "
+            //        + "must be set through ApplicationImpl.setInitializingRuntimeConfig");
         }
-        if (next == IterOutcome.OK_NEW_SCHEMA) {
-          try {
-            setupNewSchema();
-          } catch (SchemaChangeException e) {
-            throw new RuntimeException(e);
-          }
+        return initializingRuntimeConfig.get();
+    }
+
+    ApplicationImpl(final RuntimeConfig runtimeConfig)
+    {
+        if (runtimeConfig == null)
+        {
+            throw new IllegalArgumentException("runtimeConfig must mot be null");
         }
-      }
-    }
-    first = false;
+        // set default implementation in constructor
+        // pragmatic approach, no syncronizing will be needed in get methods
+        _viewHandler = new JspViewHandlerImpl();
+        _navigationHandler = new NavigationHandlerImpl();
+        _actionListener = new ActionListenerImpl();
+        _defaultRenderKitId = "HTML_BASIC";
+        _stateManager = new JspStateManagerImpl();
+        _elContextListeners = new ArrayList<ELContextListener>();
+        _runtimeConfig = runtimeConfig;
 
-    container.zeroVectors();
-
-    if (!doAlloc()) {
-      outOfMemory = true;
-      return IterOutcome.OUT_OF_MEMORY;
-    }
-
-    int outputRecords = projector.projectRecords(0, incomingRecordCount, 0);
-    if (outputRecords < incomingRecordCount) {
-      setValueCount(outputRecords);
-      hasRemainder = true;
-      remainderIndex = outputRecords;
-      this.recordCount = remainderIndex;
-    } else {
-      setValueCount(incomingRecordCount);
-      for(VectorWrapper<?> v: incoming) {
-        v.clear();
-      }
-      this.recordCount = outputRecords;
-    }
-    // In case of complex writer expression, vectors would be added to batch run-time.
-    // We have to re-build the schema.
-    if (complexWriters != null) {
-      container.buildSchema(SelectionVectorMode.NONE);
+        if (log.isTraceEnabled())
+            log.trace("New Application instance created");
     }
 
-    return IterOutcome.OK;
-  }
-
-  private void handleRemainder() {
-    int remainingRecordCount = incoming.getRecordCount() - remainderIndex;
-    if (!doAlloc()) {
-      outOfMemory = true;
-      return;
-    }
-    int projRecords = projector.projectRecords(remainderIndex, remainingRecordCount, 0);
-    if (projRecords < remainingRecordCount) {
-      setValueCount(projRecords);
-      this.recordCount = projRecords;
-      remainderIndex += projRecords;
-    } else {
-      setValueCount(remainingRecordCount);
-      hasRemainder = false;
-      remainderIndex = 0;
-      for (VectorWrapper<?> v : incoming) {
-        v.clear();
-      }
-      this.recordCount = remainingRecordCount;
-    }
-    // In case of complex writer expression, vectors would be added to batch run-time.
-    // We have to re-build the schema.
-    if (complexWriters != null) {
-      container.buildSchema(SelectionVectorMode.NONE);
-    }
-  }
-
-  public void addComplexWriter(ComplexWriter writer) {
-    complexWriters.add(writer);
-  }
-
-  private boolean doAlloc() {
-    //Allocate vv in the allocationVectors.
-    for (ValueVector v : this.allocationVectors) {
-      AllocationHelper.allocateNew(v, incoming.getRecordCount());
+    public static void setInitializingRuntimeConfig(RuntimeConfig config)
+    {
+        initializingRuntimeConfig.set(config);
     }
 
-    //Allocate vv for complexWriters.
-    if (complexWriters == null) {
-      return true;
+    // ~ Methods
+    // ------------------------------------------------------------------------------------
+
+    @Override
+    public final void addELResolver(final ELResolver resolver)
+    {
+        if (FacesContext.getCurrentInstance() != null)
+        {
+            throw new IllegalStateException("It is illegal to add a resolver after the first request is processed");
+        }
+        if (resolver != null)
+        {
+            _runtimeConfig.addApplicationElResolver(resolver);
+        }
     }
 
-    for (ComplexWriter writer : complexWriters) {
-      writer.allocate();
+    @Override
+    public final ELResolver getELResolver()
+    {
+        // we don't need synchronization here since it is ok to have multiple instances of the elresolver
+        if (elResolver == null)
+        {
+            elResolver = createFacesResolver();
+        }
+        return elResolver;
     }
 
-    return true;
-  }
-
-  private void setValueCount(int count) {
-    for (ValueVector v : allocationVectors) {
-      ValueVector.Mutator m = v.getMutator();
-      m.setValueCount(count);
+    private ELResolver createFacesResolver()
+    {
+        final CompositeELResolver resolver = new FacesCompositeELResolver(Scope.Faces);
+        getResolverBuilderForFaces().build(resolver);
+        return resolver;
     }
 
-    if (complexWriters == null) {
-      return;
+    protected final ELResolverBuilder getResolverBuilderForFaces()
+    {
+        if (resolverBuilderForFaces == null)
+        {
+            resolverBuilderForFaces = new ResolverBuilderForFaces(_runtimeConfig);
+        }
+        return resolverBuilderForFaces;
     }
 
-    for (ComplexWriter writer : complexWriters) {
-      writer.setValueCount(count);
+    public final void setResolverBuilderForFaces(final ELResolverBuilder factory)
+    {
+        resolverBuilderForFaces = factory;
     }
-  }
 
-  /** hack to make ref and full work together... need to figure out if this is still necessary. **/
-  private FieldReference getRef(NamedExpression e) {
-    FieldReference ref = e.getRef();
-    PathSegment seg = ref.getRootSegment();
+    @Override
+    public final java.util.ResourceBundle getResourceBundle(final FacesContext facesContext, final String name) throws FacesException,
+            NullPointerException
+    {
 
-//    if (seg.isNamed() && "output".contentEquals(seg.getNameSegment().getPath())) {
-//      return new FieldReference(ref.getPath().toString().subSequence(7, ref.getPath().length()), ref.getPosition());
-//    }
-    return ref;
-  }
+        checkNull(facesContext, "facesContext");
+        checkNull(name, "name");
 
-  private boolean isAnyWildcard(List<NamedExpression> exprs) {
-    for (NamedExpression e : exprs) {
-      if (isWildcard(e)) {
-        return true;
-      }
+        final String bundleName = getBundleName(facesContext, name);
+
+        if (bundleName == null)
+        {
+            return null;
+        }
+
+        Locale locale = Locale.getDefault();
+
+        final UIViewRoot viewRoot = facesContext.getViewRoot();
+        if (viewRoot != null && viewRoot.getLocale() != null)
+        {
+            locale = viewRoot.getLocale();
+        }
+
+        try
+        {
+            return getResourceBundle(bundleName, locale, getClassLoader());
+        }
+        catch (MissingResourceException e)
+        {
+            throw new FacesException("Could not load resource bundle for name '" + name + "': " + e.getMessage(), e);
+        }
     }
-    return false;
-  }
 
-  private boolean isWildcard(NamedExpression ex) {
-    if ( !(ex.getExpr() instanceof SchemaPath)) {
-      return false;
+    private ClassLoader getClassLoader()
+    {
+        return Thread.currentThread().getContextClassLoader();
     }
-    NameSegment expr = ((SchemaPath)ex.getExpr()).getRootSegment();
-    return expr.getPath().contains(StarColumnHelper.STAR_COLUMN);
-  }
 
-  @Override
-  protected boolean setupNewSchema() throws SchemaChangeException {
-    if (allocationVectors != null) {
-      for (ValueVector v : allocationVectors) {
-        v.clear();
-      }
+    String getBundleName(final FacesContext facesContext, final String name)
+    {
+        ResourceBundle bundle = getRuntimeConfig(facesContext).getResourceBundle(name);
+        return bundle != null ? bundle.getBaseName() : null;
     }
-    this.allocationVectors = Lists.newArrayList();
-    if (complexWriters != null) {
-      container.clear();
-    } else {
-      container.zeroVectors();
+
+    java.util.ResourceBundle getResourceBundle(final String name, final Locale locale, final ClassLoader loader)
+            throws MissingResourceException
+    {
+        return java.util.ResourceBundle.getBundle(name, locale, loader);
     }
-    final List<NamedExpression> exprs = getExpressionList();
-    final ErrorCollector collector = new ErrorCollectorImpl();
-    final List<TransferPair> transfers = Lists.newArrayList();
 
-    final ClassGenerator<Projector> cg = CodeGenerator.getRoot(Projector.TEMPLATE_DEFINITION, context.getFunctionRegistry());
+    final RuntimeConfig getRuntimeConfig(final FacesContext facesContext)
+    {
+        return RuntimeConfig.getCurrentInstance(facesContext.getExternalContext());
+    }
 
-    IntOpenHashSet transferFieldIds = new IntOpenHashSet();
+    final FacesContext getFaceContext()
+    {
+        return FacesContext.getCurrentInstance();
+    }
 
-    boolean isAnyWildcard = isAnyWildcard(exprs);
+    @Override
+    public final UIComponent createComponent(final ValueExpression componentExpression, final FacesContext facesContext,
+            final String componentType) throws FacesException, NullPointerException
+    {
 
-    ClassifierResult result = new ClassifierResult();
-    boolean classify = isClassificationNeeded(exprs);
+        checkNull(componentExpression, "componentExpression");
+        checkNull(facesContext, "facesContext");
+        checkNull(componentType, "componentType");
 
-    for (int i = 0; i < exprs.size(); i++) {
-      final NamedExpression namedExpression = exprs.get(i);
-      result.clear();
+        final ELContext elContext = facesContext.getELContext();
 
-      if (classify && namedExpression.getExpr() instanceof SchemaPath) {
-        classifyExpr(namedExpression, incoming, result);
+        try
+        {
+            final Object retVal = componentExpression.getValue(elContext);
 
-        if (result.isStar) {
-          // The value indicates which wildcard we are processing now
-          Integer value = result.prefixMap.get(result.prefix);
-          if (value != null && value.intValue() == 1) {
-            int k = 0;
-            for (VectorWrapper<?> wrapper : incoming) {
-              ValueVector vvIn = wrapper.getValueVector();
-              SchemaPath originalPath = vvIn.getField().getPath();
-              if (k > result.outputNames.size()-1) {
-                assert false;
-              }
-              String name = result.outputNames.get(k++);  // get the renamed column names
-              if (name == EMPTY_STRING) {
-                continue;
-              }
-              FieldReference ref = new FieldReference(name);
-              ValueVector vvOut = container.addOrGet(MaterializedField.create(ref, vvIn.getField().getType()));
-              TransferPair tp = vvIn.makeTransferPair(vvOut);
-              transfers.add(tp);
+            UIComponent createdComponent;
+
+            if (retVal instanceof UIComponent)
+            {
+                createdComponent = (UIComponent) retVal;
             }
-          } else if (value != null && value.intValue() > 1) { // subsequent wildcards should do a copy of incoming valuevectors
-            int k = 0;
-            for (VectorWrapper<?> wrapper : incoming) {
-              ValueVector vvIn = wrapper.getValueVector();
-              SchemaPath originalPath = vvIn.getField().getPath();
-              if (k > result.outputNames.size()-1) {
-                assert false;
-              }
-              String name = result.outputNames.get(k++);  // get the renamed column names
-              if (name == EMPTY_STRING) {
-                continue;
-              }
-
-              final LogicalExpression expr = ExpressionTreeMaterializer.materialize(originalPath, incoming, collector, context.getFunctionRegistry() );
-              if (collector.hasErrors()) {
-                throw new SchemaChangeException(String.format("Failure while trying to materialize incoming schema.  Errors:\n %s.", collector.toErrorString()));
-              }
-
-              MaterializedField outputField = MaterializedField.create(name, expr.getMajorType());
-              ValueVector vv = container.addOrGet(outputField, callBack);
-              allocationVectors.add(vv);
-              TypedFieldId fid = container.getValueVectorId(outputField.getPath());
-              ValueVectorWriteExpression write = new ValueVectorWriteExpression(fid, expr, true);
-              HoldingContainer hc = cg.addExpr(write);
+            else
+            {
+                createdComponent = createComponent(componentType);
+                componentExpression.setValue(elContext, createdComponent);
             }
-          }
-          continue;
+
+            return createdComponent;
         }
-      } else {
-        // For the columns which do not needed to be classified,
-        // it is still necessary to ensure the output column name is unique
-        result.outputNames = Lists.newArrayList();
-        String outputName = getRef(namedExpression).getRootSegment().getPath();
-        addToResultMaps(outputName, result, true);
-      }
-
-      String outputName = getRef(namedExpression).getRootSegment().getPath();
-      if (result != null && result.outputNames != null && result.outputNames.size() > 0) {
-        boolean isMatched = false;
-        for (int j = 0; j < result.outputNames.size(); j++) {
-          if (!result.outputNames.get(j).equals(EMPTY_STRING)) {
-            outputName = result.outputNames.get(j);
-            isMatched = true;
-            break;
-          }
+        catch (FacesException e)
+        {
+            throw e;
         }
-
-        if(!isMatched) {
-          continue;
+        catch (Exception e)
+        {
+            throw new FacesException(e);
         }
-      }
+    }
 
-      final LogicalExpression expr = ExpressionTreeMaterializer.materialize(namedExpression.getExpr(), incoming, collector, context.getFunctionRegistry(), true);
-      final MaterializedField outputField = MaterializedField.create(outputName, expr.getMajorType());
-      if (collector.hasErrors()) {
-        throw new SchemaChangeException(String.format("Failure while trying to materialize incoming schema.  Errors:\n %s.", collector.toErrorString()));
-      }
+    @Override
+    public final ExpressionFactory getExpressionFactory()
+    {
+        return _runtimeConfig.getExpressionFactory();
+    }
 
-      // add value vector to transfer if direct reference and this is allowed, otherwise, add to evaluation stack.
-      if (expr instanceof ValueVectorReadExpression && incoming.getSchema().getSelectionVectorMode() == SelectionVectorMode.NONE
-          && !((ValueVectorReadExpression) expr).hasReadPath()
-          && !isAnyWildcard
-          && !transferFieldIds.contains(((ValueVectorReadExpression) expr).getFieldId().getFieldIds()[0])) {
+    @Override
+    public final Object evaluateExpressionGet(final FacesContext context, final String expression, final Class expectedType) throws ELException
+    {
+        ELContext elContext = context.getELContext();
+        return getExpressionFactory().createValueExpression(elContext, expression, expectedType).getValue(elContext);
+    }
 
-        ValueVectorReadExpression vectorRead = (ValueVectorReadExpression) expr;
-        TypedFieldId id = vectorRead.getFieldId();
-        ValueVector vvIn = incoming.getValueAccessorById(id.getIntermediateClass(), id.getFieldIds()).getValueVector();
-        Preconditions.checkNotNull(incoming);
+    @Override
+    public final void addELContextListener(final ELContextListener listener)
+    {
 
-        FieldReference ref = getRef(namedExpression);
-        ValueVector vvOut = container.addOrGet(MaterializedField.create(ref, vectorRead.getMajorType()));
-        TransferPair tp = vvIn.makeTransferPair(vvOut);
-        transfers.add(tp);
-        transferFieldIds.add(vectorRead.getFieldId().getFieldIds()[0]);
-        logger.debug("Added transfer for project expression.");
-      } else if (expr instanceof DrillFuncHolderExpr &&
-          ((DrillFuncHolderExpr) expr).isComplexWriterFuncHolder())  {
-        // Need to process ComplexWriter function evaluation.
-        // Lazy initialization of the list of complex writers, if not done yet.
-        if (complexWriters == null) {
-          complexWriters = Lists.newArrayList();
-        } else {
-          complexWriters.clear();
+        synchronized (_elContextListeners)
+        {
+            _elContextListeners.add(listener);
         }
-
-        // The reference name will be passed to ComplexWriter, used as the name of the output vector from the writer.
-        ((DrillComplexWriterFuncHolder) ((DrillFuncHolderExpr) expr).getHolder()).setReference(namedExpression.getRef());
-        cg.addExpr(expr);
-      } else{
-        // need to do evaluation.
-        ValueVector vector = container.addOrGet(outputField, callBack);
-        allocationVectors.add(vector);
-        TypedFieldId fid = container.getValueVectorId(outputField.getPath());
-        boolean useSetSafe = !(vector instanceof FixedWidthVector);
-        ValueVectorWriteExpression write = new ValueVectorWriteExpression(fid, expr, useSetSafe);
-        HoldingContainer hc = cg.addExpr(write);
-
-        logger.debug("Added eval for project expression.");
-      }
     }
 
-    try {
-      this.projector = context.getImplementationClass(cg.getCodeGenerator());
-      projector.setup(context, incoming, this, transfers);
-    } catch (ClassTransformationException | IOException e) {
-      throw new SchemaChangeException("Failure while attempting to load generated class", e);
-    }
-    if (container.isSchemaChanged()) {
-      container.buildSchema(SelectionVectorMode.NONE);
-      return true;
-    } else {
-      return false;
-    }
-  }
-
-  private List<NamedExpression> getExpressionList() {
-    if (popConfig.getExprs() != null) {
-      return popConfig.getExprs();
+    @Override
+    public final void removeELContextListener(final ELContextListener listener)
+    {
+        synchronized (_elContextListeners)
+        {
+            _elContextListeners.remove(listener);
+        }
     }
 
-    List<NamedExpression> exprs = Lists.newArrayList();
-    for (MaterializedField field : incoming.getSchema()) {
-      if (Types.isComplex(field.getType()) || Types.isRepeated(field.getType())) {
-        LogicalExpression convertToJson = FunctionCallFactory.createConvert(ConvertExpression.CONVERT_TO, "JSON", field.getPath(), ExpressionPosition.UNKNOWN);
-        String castFuncName = CastFunctions.getCastFunc(MinorType.VARCHAR);
-        List<LogicalExpression> castArgs = Lists.newArrayList();
-        castArgs.add(convertToJson);  //input_expr
-        /*
-         * We are implicitly casting to VARCHAR so we don't have a max length,
-         * using an arbitrary value. We trim down the size of the stored bytes
-         * to the actual size so this size doesn't really matter.
-         */
-        castArgs.add(new ValueExpressions.LongExpression(TypeHelper.VARCHAR_DEFAULT_CAST_LEN, null)); //
-        FunctionCall castCall = new FunctionCall(castFuncName, castArgs, ExpressionPosition.UNKNOWN);
-        exprs.add(new NamedExpression(castCall, new FieldReference(field.getPath())));
-      } else {
-        exprs.add(new NamedExpression(field.getPath(), new FieldReference(field.getPath())));
-      }
-    }
-    return exprs;
-  }
-
-  private boolean isClassificationNeeded(List<NamedExpression> exprs) {
-    boolean needed = false;
-    for (int i = 0; i < exprs.size(); i++) {
-      final NamedExpression ex = exprs.get(i);
-      if (!(ex.getExpr() instanceof SchemaPath)) {
-        continue;
-      }
-      NameSegment expr = ((SchemaPath) ex.getExpr()).getRootSegment();
-      NameSegment ref = ex.getRef().getRootSegment();
-      boolean refHasPrefix = ref.getPath().contains(StarColumnHelper.PREFIX_DELIMITER);
-      boolean exprContainsStar = expr.getPath().contains(StarColumnHelper.STAR_COLUMN);
-
-      if (refHasPrefix || exprContainsStar) {
-        needed = true;
-        break;
-      }
-    }
-    return needed;
-  }
-
-  private String getUniqueName(String name, ClassifierResult result) {
-    Integer currentSeq = (Integer) result.sequenceMap.get(name);
-    if (currentSeq == null) { // name is unique, so return the original name
-      Integer n = -1;
-      result.sequenceMap.put(name, n);
-      return name;
-    }
-    // create a new name
-    Integer newSeq = currentSeq + 1;
-    String newName = name + newSeq;
-    result.sequenceMap.put(name, newSeq);
-    result.sequenceMap.put(newName, -1);
-
-    return newName;
-  }
-
-  /**
-  * Helper method to ensure unique output column names. If allowDupsWithRename is set to true, the original name
-  * will be appended with a suffix number to ensure uniqueness. Otherwise, the original column would not be renamed even
-  * even if it has been used
-  *
-  * @param origName            the original input name of the column
-  * @param result              the data structure to keep track of the used names and decide what output name should be
-  *                            to ensure uniqueness
-  * @Param allowDupsWithRename if the original name has been used, is renaming allowed to ensure output name unique
-  */
-  private void addToResultMaps(String origName, ClassifierResult result, boolean allowDupsWithRename) {
-    String name = origName;
-    if (allowDupsWithRename) {
-      name = getUniqueName(origName, result);
-    }
-    if (!result.outputMap.containsKey(name)) {
-      result.outputNames.add(name);
-      result.outputMap.put(name,  name);
-    } else {
-      result.outputNames.add(EMPTY_STRING);
-    }
-  }
-
-  private void classifyExpr(NamedExpression ex, RecordBatch incoming, ClassifierResult result)  {
-    NameSegment expr = ((SchemaPath)ex.getExpr()).getRootSegment();
-    NameSegment ref = ex.getRef().getRootSegment();
-    boolean exprHasPrefix = expr.getPath().contains(StarColumnHelper.PREFIX_DELIMITER);
-    boolean refHasPrefix = ref.getPath().contains(StarColumnHelper.PREFIX_DELIMITER);
-    boolean exprIsStar = expr.getPath().equals(StarColumnHelper.STAR_COLUMN);
-    boolean refContainsStar = ref.getPath().contains(StarColumnHelper.STAR_COLUMN);
-    boolean exprContainsStar = expr.getPath().contains(StarColumnHelper.STAR_COLUMN);
-    boolean refEndsWithStar = ref.getPath().endsWith(StarColumnHelper.STAR_COLUMN);
-
-    String exprPrefix = EMPTY_STRING;
-    String exprSuffix = expr.getPath();
-
-    if (exprHasPrefix) {
-      // get the prefix of the expr
-      String[] exprComponents = expr.getPath().split(StarColumnHelper.PREFIX_DELIMITER, 2);
-      assert(exprComponents.length == 2);
-      exprPrefix = exprComponents[0];
-      exprSuffix = exprComponents[1];
-      result.prefix = exprPrefix;
+    @Override
+    public final ELContextListener[] getELContextListeners()
+    {
+        // this gets called on every request, so I can't afford to synchronize
+        // I just have to trust that toArray() with do the right thing if the
+        // list is changing (not likely)
+        return _elContextListeners.toArray(new ELContextListener[_elContextListeners.size()]);
     }
 
-    boolean exprIsFirstWildcard = false;
-    if (exprContainsStar) {
-      result.isStar = true;
-      Integer value = (Integer) result.prefixMap.get(exprPrefix);
-      if (value == null) {
-        Integer n = 1;
-        result.prefixMap.put(exprPrefix, n);
-        exprIsFirstWildcard = true;
-      } else {
-        Integer n = value + 1;
-        result.prefixMap.put(exprPrefix, n);
-      }
+    @Override
+    public final void setActionListener(final ActionListener actionListener)
+    {
+        checkNull(actionListener, "actionListener");
+
+        _actionListener = actionListener;
+        if (log.isTraceEnabled())
+            log.trace("set actionListener = " + actionListener.getClass().getName());
     }
 
-    int incomingSchemaSize = incoming.getSchema().getFieldCount();
-
-    // for debugging..
-    // if (incomingSchemaSize > 9) {
-    // assert false;
-    // }
-
-    // input is '*' and output is 'prefix_*'
-    if (exprIsStar && refHasPrefix && refEndsWithStar) {
-      String[] components = ref.getPath().split(StarColumnHelper.PREFIX_DELIMITER, 2);
-      assert(components.length == 2);
-      String prefix = components[0];
-      result.outputNames = Lists.newArrayList();
-      for(VectorWrapper<?> wrapper : incoming) {
-        ValueVector vvIn = wrapper.getValueVector();
-        String name = vvIn.getField().getPath().getRootSegment().getPath();
-
-        // add the prefix to the incoming column name
-        String newName = prefix + StarColumnHelper.PREFIX_DELIMITER + name;
-        addToResultMaps(newName, result, false);
-      }
+    @Override
+    public final ActionListener getActionListener()
+    {
+        return _actionListener;
     }
-    // input and output are the same
-    else if (expr.getPath().equals(ref.getPath()) && (!exprContainsStar || exprIsFirstWildcard)) {
-      if (exprContainsStar && exprHasPrefix) {
-        assert exprPrefix != null;
 
-        int k = 0;
-        result.outputNames = Lists.newArrayListWithCapacity(incomingSchemaSize);
-        for (int j=0; j < incomingSchemaSize; j++) {
-          result.outputNames.add(EMPTY_STRING);  // initialize
+    @Override
+    public final Iterator<String> getComponentTypes()
+    {
+        return _componentClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final Iterator<String> getConverterIds()
+    {
+        return _converterIdToClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final Iterator<Class> getConverterTypes()
+    {
+        return _converterClassNameToClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final void setDefaultLocale(final Locale locale)
+    {
+        checkNull(locale, "locale");
+
+        _defaultLocale = locale;
+        if (log.isTraceEnabled())
+            log.trace("set defaultLocale = " + locale.getCountry() + " " + locale.getLanguage());
+    }
+
+    @Override
+    public final Locale getDefaultLocale()
+    {
+        return _defaultLocale;
+    }
+
+    @Override
+    public final void setMessageBundle(final String messageBundle)
+    {
+        checkNull(messageBundle, "messageBundle");
+
+        _messageBundle = messageBundle;
+        if (log.isTraceEnabled())
+            log.trace("set MessageBundle = " + messageBundle);
+    }
+
+    @Override
+    public final String getMessageBundle()
+    {
+        return _messageBundle;
+    }
+
+    @Override
+    public final void setNavigationHandler(final NavigationHandler navigationHandler)
+    {
+        checkNull(navigationHandler, "navigationHandler");
+
+        _navigationHandler = navigationHandler;
+        if (log.isTraceEnabled())
+            log.trace("set NavigationHandler = " + navigationHandler.getClass().getName());
+    }
+
+    @Override
+    public final NavigationHandler getNavigationHandler()
+    {
+        return _navigationHandler;
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final void setPropertyResolver(final PropertyResolver propertyResolver)
+    {
+        checkNull(propertyResolver, "propertyResolver");
+
+        if (getFaceContext() != null)
+        {
+            throw new IllegalStateException("propertyResolver must be defined before request processing");
         }
 
-        for (VectorWrapper<?> wrapper : incoming) {
-          ValueVector vvIn = wrapper.getValueVector();
-          String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
-          // get the prefix of the name
-          String[] nameComponents = incomingName.split(StarColumnHelper.PREFIX_DELIMITER, 2);
-          // if incoming valuevector does not have a prefix, ignore it since this expression is not referencing it
-          if (nameComponents.length <= 1) {
-            k++;
-            continue;
-          }
-          String namePrefix = nameComponents[0];
-          if (exprPrefix.equals(namePrefix)) {
-            String newName = incomingName;
-            if (!result.outputMap.containsKey(newName)) {
-              result.outputNames.set(k, newName);
-              result.outputMap.put(newName,  newName);
+        _runtimeConfig.setPropertyResolver(propertyResolver);
+
+        if (log.isTraceEnabled())
+            log.trace("set PropertyResolver = " + propertyResolver.getClass().getName());
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final PropertyResolver getPropertyResolver()
+    {
+        return PROPERTYRESOLVER;
+    }
+
+    @Override
+    public final void setSupportedLocales(final Collection<Locale> locales)
+    {
+        checkNull(locales, "locales");
+
+        _supportedLocales = locales;
+        if (log.isTraceEnabled())
+            log.trace("set SupportedLocales");
+    }
+
+    @Override
+    public final Iterator<Locale> getSupportedLocales()
+    {
+        return _supportedLocales.iterator();
+    }
+
+    @Override
+    public final Iterator<String> getValidatorIds()
+    {
+        return _validatorClassMap.keySet().iterator();
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final void setVariableResolver(final VariableResolver variableResolver)
+    {
+        checkNull(variableResolver, "variableResolver");
+
+        if (getFaceContext() != null)
+        {
+            throw new IllegalStateException("variableResolver must be defined before request processing");
+        }
+
+        _runtimeConfig.setVariableResolver(variableResolver);
+
+        if (log.isTraceEnabled())
+            log.trace("set VariableResolver = " + variableResolver.getClass().getName());
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final VariableResolver getVariableResolver()
+    {
+        return VARIABLERESOLVER;
+    }
+
+    @Override
+    public final void setViewHandler(final ViewHandler viewHandler)
+    {
+        checkNull(viewHandler, "viewHandler");
+
+        _viewHandler = viewHandler;
+        if (log.isTraceEnabled())
+            log.trace("set ViewHandler = " + viewHandler.getClass().getName());
+    }
+
+    @Override
+    public final ViewHandler getViewHandler()
+    {
+        return _viewHandler;
+    }
+
+    @Override
+    public final void addComponent(final String componentType, final String componentClassName)
+    {
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+        checkNull(componentClassName, "componentClassName");
+        checkEmpty(componentClassName, "componentClassName");
+
+        try
+        {
+            _componentClassMap.put(componentType, ClassUtils.simpleClassForName(componentClassName));
+            if (log.isTraceEnabled())
+                log.trace("add Component class = " + componentClassName + " for type = " + componentType);
+        }
+        catch (Exception e)
+        {
+            log.error("Component class " + componentClassName + " not found", e);
+        }
+    }
+
+    @Override
+    public final void addConverter(final String converterId, final String converterClass)
+    {
+        checkNull(converterId, "converterId");
+        checkEmpty(converterId, "converterId");
+        checkNull(converterClass, "converterClass");
+        checkEmpty(converterClass, "converterClass");
+
+        try
+        {
+            _converterIdToClassMap.put(converterId, ClassUtils.simpleClassForName(converterClass));
+            if (log.isTraceEnabled())
+                log.trace("add Converter id = " + converterId + " converterClass = " + converterClass);
+        }
+        catch (Exception e)
+        {
+            log.error("Converter class " + converterClass + " not found", e);
+        }
+    }
+
+    @Override
+    public final void addConverter(final Class targetClass, final String converterClass)
+    {
+        checkNull(targetClass, "targetClass");
+        checkNull(converterClass, "converterClass");
+        checkEmpty(converterClass, "converterClass");
+
+        try
+        {
+            _converterClassNameToClassMap.put(targetClass, converterClass);
+            if (log.isTraceEnabled())
+                log.trace("add Converter for class = " + targetClass + " converterClass = " + converterClass);
+        }
+        catch (Exception e)
+        {
+            log.error("Converter class " + converterClass + " not found", e);
+        }
+    }
+
+    public final void addConverterConfiguration(final String converterClassName,
+            final org.apache.myfaces.config.impl.digester.elements.Converter configuration)
+    {
+        checkNull(converterClassName, "converterClassName");
+        checkEmpty(converterClassName, "converterClassName");
+        checkNull(configuration, "configuration");
+
+        _converterClassNameToConfigurationMap.put(converterClassName, configuration);
+    }
+
+    @Override
+    public final void addValidator(final String validatorId, final String validatorClass)
+    {
+        checkNull(validatorId, "validatorId");
+        checkEmpty(validatorId, "validatorId");
+        checkNull(validatorClass, "validatorClass");
+        checkEmpty(validatorClass, "validatorClass");
+
+        try
+        {
+            _validatorClassMap.put(validatorId, ClassUtils.simpleClassForName(validatorClass));
+            if (log.isTraceEnabled())
+                log.trace("add Validator id = " + validatorId + " class = " + validatorClass);
+        }
+        catch (Exception e)
+        {
+            log.error("Validator class " + validatorClass + " not found", e);
+        }
+    }
+
+    @Override
+    public final UIComponent createComponent(final String componentType) throws FacesException
+    {
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+
+        final Class componentClass = _componentClassMap.get(componentType);
+        if (componentClass == null)
+        {
+            log.error("Undefined component type " + componentType);
+            throw new FacesException("Undefined component type " + componentType);
+        }
+
+        try
+        {
+            return (UIComponent) componentClass.newInstance();
+        }
+        catch (Exception e)
+        {
+            log.error("Could not instantiate component componentType = " + componentType, e);
+            throw new FacesException("Could not instantiate component componentType = " + componentType, e);
+        }
+    }
+
+    /**
+     * @deprecated Use createComponent(ValueExpression, FacesContext, String) instead.
+     */
+    @Deprecated
+    @Override
+    public final UIComponent createComponent(final ValueBinding valueBinding, final FacesContext facesContext,
+            final String componentType) throws FacesException
+    {
+
+        checkNull(valueBinding, "valueBinding");
+        checkNull(facesContext, "facesContext");
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+
+        final ValueExpression valExpression = new ValueBindingToValueExpression(valueBinding);
+
+        return createComponent(valExpression, facesContext, componentType);
+    }
+
+    /**
+     * Return an instance of the converter class that has been registered under
+     * the specified id.
+     * <p>
+     * Converters are registered via faces-config.xml files, and can also be registered
+     * via the addConverter(String id, Class converterClass) method on this class. Here
+     * the the appropriate Class definition is found, then an instance is created and
+     * returned.
+     * <p>
+     * A converter registered via a config file can have any number of nested attribute or
+     * property tags. The JSF specification is very vague about what effect these nested
+     * tags have. This method ignores nested attribute definitions, but for each nested
+     * property tag the corresponding setter is invoked on the new Converter instance
+     * passing the property's defaultValuer. Basic typeconversion is done so the target
+     * properties on the Converter instance can be String, int, boolean, etc. Note that:
+     * <ol>
+     * <li>the Sun Mojarra JSF implemenation ignores nested property tags completely, so
+     * this behaviour cannot be relied on across implementations.
+     * <li>there is no equivalent functionality for converter classes registered via
+     * the Application.addConverter api method.
+     * </ol>
+     * <p>
+     * Note that this method is most commonly called from the standard f:attribute tag.
+     * As an alternative, most components provide a "converter" attribute which uses an
+     * EL expression to create a Converter instance, in which case this method is not
+     * invoked at all. The converter attribute allows the returned Converter instance to
+     * be configured via normal dependency-injection, and is generally a better choice
+     * than using this method.
+     */
+    @Override
+    public final Converter createConverter(final String converterId)
+    {
+        checkNull(converterId, "converterId");
+        checkEmpty(converterId, "converterId");
+
+        final Class converterClass = _converterIdToClassMap.get(converterId);
+        if(converterClass == null)
+        {
+            throw new FacesException("Could not find any registered converter-class by converterId : "+converterId);
+        }
+
+        try
+        {
+            final Converter converter = (Converter) converterClass.newInstance();
+
+            setConverterProperties(converterClass, converter);
+
+            return converter;
+        }
+        catch (Exception e)
+        {
+            log.error("Could not instantiate converter " + converterClass, e);
+            throw new FacesException("Could not instantiate converter: " + converterClass, e);
+        }
+    }
+
+    @Override
+    public final Converter createConverter(final Class targetClass)
+    {
+        checkNull(targetClass, "targetClass");
+
+        return internalCreateConverter(targetClass);
+    }
+
+    private Converter internalCreateConverter(final Class targetClass)
+    {
+        // Locate a Converter registered for the target class itself.
+        String converterClassName = _converterClassNameToClassMap.get(targetClass);
+
+        // Get EnumConverter for enum classes with no special converter, check
+        // here as recursive call with java.lang.Enum will not work
+        if (converterClassName == null && targetClass.isEnum()) {
+            converterClassName = _converterClassNameToClassMap.get(Enum.class);
+        }
+
+        // Locate a Converter registered for interfaces that are
+        // implemented by the target class (directly or indirectly).
+        if (converterClassName == null)
+        {
+            final Class interfaces[] = targetClass.getInterfaces();
+            if (interfaces != null)
+            {
+                for (int i = 0, len = interfaces.length; i < len; i++)
+                {
+                    // search all superinterfaces for a matching converter,
+                    // create it
+                    final Converter converter = internalCreateConverter(interfaces[i]);
+                    if (converter != null)
+                    {
+                        return converter;
+                    }
+                }
             }
-          }
-          k++;
         }
-      } else {
-        result.outputNames = Lists.newArrayList();
-        if (exprContainsStar) {
-          for (VectorWrapper<?> wrapper : incoming) {
-            ValueVector vvIn = wrapper.getValueVector();
-            String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
-            if (refContainsStar) {
-              addToResultMaps(incomingName, result, true); // allow dups since this is likely top-level project
-            } else {
-              addToResultMaps(incomingName, result, false);
+
+        if (converterClassName != null)
+        {
+            try
+            {
+                final Class converterClass = ClassUtils.simpleClassForName(converterClassName);
+
+                Converter converter = null;
+                try
+                {
+                    // look for a constructor that takes a single Class object
+                    // See JSF 1.2 javadoc for Converter
+                    final Constructor constructor = converterClass.getConstructor(new Class[] { Class.class });
+                    converter = (Converter) constructor.newInstance(new Object[] { targetClass });
+                }
+                catch (Exception e)
+                {
+                    // if there is no matching constructor use no-arg
+                    // constructor
+                    converter = (Converter) converterClass.newInstance();
+                }
+
+                setConverterProperties(converterClass, converter);
+
+                return converter;
             }
-          }
-        } else {
-          String newName = expr.getPath();
-          if (!refHasPrefix && !exprHasPrefix) {
-            addToResultMaps(newName, result, true); // allow dups since this is likely top-level project
-          } else {
-            addToResultMaps(newName, result, false);
-          }
+            catch (Exception e)
+            {
+                log.error("Could not instantiate converter " + converterClassName, e);
+                throw new FacesException("Could not instantiate converter: " + converterClassName, e);
+            }
         }
-      }
+
+        // locate converter for primitive types
+        if (targetClass == Long.TYPE)
+        {
+            return internalCreateConverter(Long.class);
+        }
+        else if (targetClass == Boolean.TYPE)
+        {
+            return internalCreateConverter(Boolean.class);
+        }
+        else if (targetClass == Double.TYPE)
+        {
+            return internalCreateConverter(Double.class);
+        }
+        else if (targetClass == Byte.TYPE)
+        {
+            return internalCreateConverter(Byte.class);
+        }
+        else if (targetClass == Short.TYPE)
+        {
+            return internalCreateConverter(Short.class);
+        }
+        else if (targetClass == Integer.TYPE)
+        {
+            return internalCreateConverter(Integer.class);
+        }
+        else if (targetClass == Float.TYPE)
+        {
+            return internalCreateConverter(Float.class);
+        }
+        else if (targetClass == Character.TYPE)
+        {
+            return internalCreateConverter(Character.class);
+        }
+
+        // Locate a Converter registered for the superclass (if any) of the
+        // target class,
+        // recursively working up the inheritance hierarchy.
+        Class superClazz = targetClass.getSuperclass();
+
+        return superClazz != null ? internalCreateConverter(superClazz) : null;
+
     }
 
-    // input is wildcard and it is not the first wildcard
-    else if(exprIsStar) {
-      result.outputNames = Lists.newArrayList();
-      for (VectorWrapper<?> wrapper : incoming) {
-        ValueVector vvIn = wrapper.getValueVector();
-        String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
-        addToResultMaps(incomingName, result, true); // allow dups since this is likely top-level project
-      }
+    private void setConverterProperties(final Class converterClass, final Converter converter)
+    {
+        final org.apache.myfaces.config.impl.digester.elements.Converter converterConfig = _converterClassNameToConfigurationMap
+                .get(converterClass.getName());
+
+        if (converterConfig != null)
+        {
+
+            final Iterator it = converterConfig.getProperties();
+
+            while (it.hasNext())
+            {
+                final Property property = (Property) it.next();
+
+                try
+                {
+                    BeanUtils.setProperty(converter, property.getPropertyName(), property.getDefaultValue());
+                }
+                catch (Throwable th)
+                {
+                    log.error("Initializing converter : " + converterClass.getName() + " with property : "
+                            + property.getPropertyName() + " and value : " + property.getDefaultValue() + " failed.");
+                }
+            }
+        }
     }
 
-    // only the output has prefix
-    else if (!exprHasPrefix && refHasPrefix) {
-      result.outputNames = Lists.newArrayList();
-      String newName = ref.getPath();
-      addToResultMaps(newName, result, false);
-    }
-    // input has prefix but output does not
-    else if (exprHasPrefix && !refHasPrefix) {
-      int k = 0;
-      result.outputNames = Lists.newArrayListWithCapacity(incomingSchemaSize);
-      for (int j=0; j < incomingSchemaSize; j++) {
-        result.outputNames.add(EMPTY_STRING);  // initialize
-      }
+    // Note: this method used to be synchronized in the JSF 1.1 version. Why?
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final MethodBinding createMethodBinding(final String reference, Class[] params) throws ReferenceSyntaxException
+    {
+        checkNull(reference, "reference");
+        checkEmpty(reference, "reference");
 
-      for (VectorWrapper<?> wrapper : incoming) {
-        ValueVector vvIn = wrapper.getValueVector();
-        String name = vvIn.getField().getPath().getRootSegment().getPath();
-        String[] components = name.split(StarColumnHelper.PREFIX_DELIMITER, 2);
-        if (components.length <= 1)  {
-          k++;
-          continue;
+        // TODO: this check should be performed by the expression factory. It is a requirement of the TCK
+        if (!(reference.startsWith("#{") && reference.endsWith("}")))
+        {
+            throw new ReferenceSyntaxException("Invalid method reference: '" + reference + "'");
         }
-        String namePrefix = components[0];
-        String nameSuffix = components[1];
-        if (exprPrefix.equals(namePrefix)) {
-          if (refContainsStar) {
-            // remove the prefix from the incoming column names
-            String newName = getUniqueName(nameSuffix, result);  // for top level we need to make names unique
-            result.outputNames.set(k, newName);
-          } else if (exprSuffix.equals(nameSuffix)) {
-            // example: ref: $f1, expr: T0<PREFIX><column_name>
-            String newName = ref.getPath();
-            result.outputNames.set(k, newName);
-          }
-        } else {
-          result.outputNames.add(EMPTY_STRING);
-        }
-        k++;
-      }
-    }
-    // input and output have prefixes although they could be different...
-    else if (exprHasPrefix && refHasPrefix) {
-      String[] input = expr.getPath().split(StarColumnHelper.PREFIX_DELIMITER, 2);
-      assert(input.length == 2);
-      assert false : "Unexpected project expression or reference";  // not handled yet
-    }
-    else {
-      // if the incoming schema's column name matches the expression name of the Project,
-      // then we just want to pick the ref name as the output column name
 
-      result.outputNames = Lists.newArrayList();
-      for (VectorWrapper<?> wrapper : incoming) {
-        ValueVector vvIn = wrapper.getValueVector();
-        String incomingName = vvIn.getField().getPath().getRootSegment().getPath();
-        if (expr.getPath().equals(incomingName)) {
-          String newName = ref.getPath();
-          addToResultMaps(newName, result, true);
+        if (params == null)
+            params = new Class[0];
+
+        MethodExpression methodExpression;
+
+        try
+        {
+            methodExpression = getExpressionFactory().createMethodExpression(threadELContext(), reference,
+                    Object.class, params);
         }
-      }
+        catch (ELException e)
+        {
+            throw new ReferenceSyntaxException(e);
+        }
+
+        return new MethodExpressionToMethodBinding(methodExpression);
     }
-  }
+
+    @Override
+    public final Validator createValidator(final String validatorId) throws FacesException
+    {
+        checkNull(validatorId, "validatorId");
+        checkEmpty(validatorId, "validatorId");
+
+        Class validatorClass = _validatorClassMap.get(validatorId);
+        if (validatorClass == null)
+        {
+            String message = "Unknown validator id '" + validatorId + "'.";
+            log.error(message);
+            throw new FacesException(message);
+        }
+
+        try
+        {
+            return (Validator) validatorClass.newInstance();
+        }
+        catch (Exception e)
+        {
+            log.error("Could not instantiate validator " + validatorClass, e);
+            throw new FacesException("Could not instantiate validator: " + validatorClass, e);
+        }
+    }
+
+    /**
+     * @deprecated
+     */
+    @Override
+    public final ValueBinding createValueBinding(final String reference) throws ReferenceSyntaxException
+    {
+        checkNull(reference, "reference");
+        checkEmpty(reference, "reference");
+
+        ValueExpression valueExpression;
+
+        try
+        {
+            valueExpression = getExpressionFactory().createValueExpression(threadELContext(), reference, Object.class);
+        }
+        catch (ELException e)
+        {
+            throw new ReferenceSyntaxException(e);
+        }
+
+        return new ValueExpressionToValueBinding(valueExpression);
+    }
+
+    // gets the elContext from the current FacesContext()
+    private final ELContext threadELContext()
+    {
+        return getFaceContext().getELContext();
+    }
+
+    @Override
+    public final String getDefaultRenderKitId()
+    {
+        return _defaultRenderKitId;
+    }
+
+    @Override
+    public final void setDefaultRenderKitId(final String defaultRenderKitId)
+    {
+        _defaultRenderKitId = defaultRenderKitId;
+    }
+
+    @Override
+    public final StateManager getStateManager()
+    {
+        return _stateManager;
+    }
+
+    @Override
+    public final void setStateManager(final StateManager stateManager)
+    {
+        _stateManager = stateManager;
+    }
+
+    private void checkNull(final Object param, final String paramName)
+    {
+        if (param == null)
+        {
+            throw new NullPointerException(paramName + " can not be null.");
+        }
+    }
+
+    private void checkEmpty(final String param, final String paramName)
+    {
+        if (param.length() == 0)
+        {
+            throw new NullPointerException("String " + paramName + " can not be empty.");
+        }
+    }
 }

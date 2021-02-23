@@ -1,13 +1,14 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,651 +16,1377 @@
  * limitations under the License.
  */
 
-package org.apache.commons.dbcp2;
+package org.apache.flink.runtime.taskexecutor;
 
-import java.net.URL;
-import java.sql.CallableStatement;
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.runtime.accumulators.AccumulatorSnapshot;
+import org.apache.flink.runtime.blob.BlobCacheService;
+import org.apache.flink.runtime.broadcast.BroadcastVariableManager;
+import org.apache.flink.runtime.checkpoint.CheckpointOptions;
+import org.apache.flink.runtime.checkpoint.JobManagerTaskRestore;
+import org.apache.flink.runtime.clusterframework.types.AllocationID;
+import org.apache.flink.runtime.clusterframework.types.ResourceID;
+import org.apache.flink.runtime.clusterframework.types.SlotID;
+import org.apache.flink.runtime.concurrent.FutureUtils;
+import org.apache.flink.runtime.deployment.TaskDeploymentDescriptor;
+import org.apache.flink.runtime.execution.librarycache.BlobLibraryCacheManager;
+import org.apache.flink.runtime.execution.librarycache.LibraryCacheManager;
+import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
+import org.apache.flink.runtime.executiongraph.JobInformation;
+import org.apache.flink.runtime.executiongraph.PartitionInfo;
+import org.apache.flink.runtime.executiongraph.TaskInformation;
+import org.apache.flink.runtime.filecache.FileCache;
+import org.apache.flink.runtime.heartbeat.HeartbeatListener;
+import org.apache.flink.runtime.heartbeat.HeartbeatManager;
+import org.apache.flink.runtime.heartbeat.HeartbeatServices;
+import org.apache.flink.runtime.heartbeat.HeartbeatTarget;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
+import org.apache.flink.runtime.instance.HardwareDescription;
+import org.apache.flink.runtime.io.disk.iomanager.IOManager;
+import org.apache.flink.runtime.io.network.NetworkEnvironment;
+import org.apache.flink.runtime.io.network.netty.PartitionProducerStateChecker;
+import org.apache.flink.runtime.io.network.partition.ResultPartitionConsumableNotifier;
+import org.apache.flink.runtime.io.network.partition.consumer.SingleInputGate;
+import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
+import org.apache.flink.runtime.jobgraph.tasks.InputSplitProvider;
+import org.apache.flink.runtime.jobmaster.JMTMRegistrationSuccess;
+import org.apache.flink.runtime.jobmaster.JobMasterGateway;
+import org.apache.flink.runtime.jobmaster.JobMasterId;
+import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalListener;
+import org.apache.flink.runtime.memory.MemoryManager;
+import org.apache.flink.runtime.messages.Acknowledge;
+import org.apache.flink.runtime.metrics.groups.TaskManagerMetricGroup;
+import org.apache.flink.runtime.metrics.groups.TaskMetricGroup;
+import org.apache.flink.runtime.registration.RegistrationConnectionListener;
+import org.apache.flink.runtime.resourcemanager.ResourceManagerGateway;
+import org.apache.flink.runtime.resourcemanager.ResourceManagerId;
+import org.apache.flink.runtime.rpc.FatalErrorHandler;
+import org.apache.flink.runtime.rpc.RpcEndpoint;
+import org.apache.flink.runtime.rpc.RpcService;
+import org.apache.flink.runtime.rpc.akka.AkkaRpcServiceUtils;
+import org.apache.flink.runtime.state.TaskLocalStateStore;
+import org.apache.flink.runtime.state.TaskStateManager;
+import org.apache.flink.runtime.state.TaskStateManagerImpl;
+import org.apache.flink.runtime.state.TaskExecutorLocalStateStoresManager;
+import org.apache.flink.runtime.taskexecutor.exceptions.CheckpointException;
+import org.apache.flink.runtime.taskexecutor.exceptions.PartitionException;
+import org.apache.flink.runtime.taskexecutor.exceptions.SlotAllocationException;
+import org.apache.flink.runtime.taskexecutor.exceptions.SlotOccupiedException;
+import org.apache.flink.runtime.taskexecutor.exceptions.TaskException;
+import org.apache.flink.runtime.taskexecutor.exceptions.TaskSubmissionException;
+import org.apache.flink.runtime.taskexecutor.rpc.RpcCheckpointResponder;
+import org.apache.flink.runtime.taskexecutor.rpc.RpcInputSplitProvider;
+import org.apache.flink.runtime.taskexecutor.rpc.RpcPartitionStateChecker;
+import org.apache.flink.runtime.taskexecutor.rpc.RpcResultPartitionConsumableNotifier;
+import org.apache.flink.runtime.taskexecutor.slot.SlotActions;
+import org.apache.flink.runtime.taskexecutor.slot.SlotNotActiveException;
+import org.apache.flink.runtime.taskexecutor.slot.SlotNotFoundException;
+import org.apache.flink.runtime.taskexecutor.slot.SlotOffer;
+import org.apache.flink.runtime.taskexecutor.slot.TaskSlot;
+import org.apache.flink.runtime.taskexecutor.slot.TaskSlotTable;
+import org.apache.flink.runtime.taskmanager.CheckpointResponder;
+import org.apache.flink.runtime.taskmanager.Task;
+import org.apache.flink.runtime.taskmanager.TaskExecutionState;
+import org.apache.flink.runtime.taskmanager.TaskManagerActions;
+import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
+import org.apache.flink.util.ExceptionUtils;
+import org.apache.flink.util.FlinkException;
+import org.apache.flink.util.Preconditions;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
-import java.sql.Ref;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Array;
-import java.util.Calendar;
-import java.io.InputStream;
-import java.io.Reader;
-import java.sql.SQLException;
-/* JDBC_4_ANT_KEY_BEGIN */
-import java.sql.NClob;
-import java.sql.RowId;
-import java.sql.SQLXML;
-/* JDBC_4_ANT_KEY_END */
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
+
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
- * A base delegating implementation of {@link CallableStatement}.
- * <p>
- * All of the methods from the {@link CallableStatement} interface
- * simply call the corresponding method on the "delegate"
- * provided in my constructor.
- * <p>
- * Extends AbandonedTrace to implement Statement tracking and
- * logging of code which created the Statement. Tracking the
- * Statement ensures that the Connection which created it can
- * close any open Statement's on Connection close.
- *
- * @author Glenn L. Nielsen
- * @author James House
- * @author Dirk Verbeeck
- * @version $Revision$ $Date$
+ * TaskExecutor implementation. The task executor is responsible for the execution of multiple
+ * {@link Task}.
  */
-public class DelegatingCallableStatement extends DelegatingPreparedStatement
-        implements CallableStatement {
-
-    /**
-     * Create a wrapper for the Statement which traces this
-     * Statement to the Connection which created it and the
-     * code which created it.
-     *
-     * @param c the {@link DelegatingConnection} that created this statement
-     * @param s the {@link CallableStatement} to delegate all calls to
-     */
-    public DelegatingCallableStatement(DelegatingConnection c,
-                                       CallableStatement s) {
-        super(c, s);
-    }
+public class TaskExecutor extends RpcEndpoint implements TaskExecutorGateway {
 
-    public boolean equals(Object obj) {
-    	if (this == obj) return true;
-        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
-        if (delegate == null) {
-            return false;
-        }
-        if (obj instanceof DelegatingCallableStatement) {
-            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
-            return delegate.equals(s.getInnermostDelegate());
-        }
-        else {
-            return delegate.equals(obj);
-        }
-    }
+	public static final String TASK_MANAGER_NAME = "taskmanager";
 
-    /** Sets my delegate. */
-    public void setDelegate(CallableStatement s) {
-        super.setDelegate(s);
-        _stmt = s;
-    }
+	/** The connection information of this task manager. */
+	private final TaskManagerLocation taskManagerLocation;
 
-    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
+	/** Max blob port which is accepted. */
+	public static final int MAX_BLOB_PORT = 65536;
 
-    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
+	/** The access to the leader election and retrieval services. */
+	private final HighAvailabilityServices haServices;
 
-    public boolean wasNull() throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
+	/** The task manager configuration. */
+	private final TaskManagerConfiguration taskManagerConfiguration;
 
-    public String getString(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+	/** The I/O manager component in the task manager. */
+	private final IOManager ioManager;
 
-    public boolean getBoolean(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
+	/** The memory manager component in the task manager. */
+	private final MemoryManager memoryManager;
 
-    public byte getByte(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+	/** The state manager for this task, providing state managers per slot. */
+	private final TaskExecutorLocalStateStoresManager localStateStoresManager;
 
-    public short getShort(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+	/** The network component in the task manager. */
+	private final NetworkEnvironment networkEnvironment;
 
-    public int getInt(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+	/** The heartbeat manager for job manager in the task manager. */
+	private final HeartbeatManager<Void, Void> jobManagerHeartbeatManager;
 
-    public long getLong(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+	/** The heartbeat manager for resource manager in the task manager. */
+	private final HeartbeatManager<Void, SlotReport> resourceManagerHeartbeatManager;
 
-    public float getFloat(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+	/** The fatal error handler to use in case of a fatal error. */
+	private final FatalErrorHandler fatalErrorHandler;
 
-    public double getDouble(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
+	private final TaskManagerMetricGroup taskManagerMetricGroup;
 
-    /** @deprecated */
-    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
+	private final BroadcastVariableManager broadcastVariableManager;
 
-    public byte[] getBytes(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+	private final FileCache fileCache;
 
-    public Date getDate(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+	// --------- resource manager --------
 
-    public Time getTime(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+	private TaskExecutorToResourceManagerConnection resourceManagerConnection;
 
-    public Timestamp getTimestamp(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+	// --------- job manager connections -----------
 
-    public Object getObject(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+	private Map<ResourceID, JobManagerConnection> jobManagerConnections;
 
-    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+	// --------- task slot allocation table -----------
 
-    public Object getObject(int i, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
+	private final TaskSlotTable taskSlotTable;
 
-    public Ref getRef(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
+	private final JobManagerTable jobManagerTable;
 
-    public Blob getBlob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
+	private final JobLeaderService jobLeaderService;
 
-    public Clob getClob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
+	// ------------------------------------------------------------------------
 
-    public Array getArray(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
+	private final HardwareDescription hardwareDescription;
 
-    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+	public TaskExecutor(
+			RpcService rpcService,
+			TaskManagerConfiguration taskManagerConfiguration,
+			TaskManagerLocation taskManagerLocation,
+			MemoryManager memoryManager,
+			IOManager ioManager,
+			TaskExecutorLocalStateStoresManager localStateStoresManager,
+			NetworkEnvironment networkEnvironment,
+			HighAvailabilityServices haServices,
+			HeartbeatServices heartbeatServices,
+			TaskManagerMetricGroup taskManagerMetricGroup,
+			BroadcastVariableManager broadcastVariableManager,
+			FileCache fileCache,
+			TaskSlotTable taskSlotTable,
+			JobManagerTable jobManagerTable,
+			JobLeaderService jobLeaderService,
+			FatalErrorHandler fatalErrorHandler) {
 
-    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+		super(rpcService, AkkaRpcServiceUtils.createRandomName(TaskExecutor.TASK_MANAGER_NAME));
 
-    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
+		checkArgument(taskManagerConfiguration.getNumberSlots() > 0, "The number of slots has to be larger than 0.");
 
-    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
+		this.taskManagerConfiguration = checkNotNull(taskManagerConfiguration);
+		this.taskManagerLocation = checkNotNull(taskManagerLocation);
+		this.memoryManager = checkNotNull(memoryManager);
+		this.localStateStoresManager = checkNotNull(localStateStoresManager);
+		this.ioManager = checkNotNull(ioManager);
+		this.networkEnvironment = checkNotNull(networkEnvironment);
+		this.haServices = checkNotNull(haServices);
+		this.taskSlotTable = checkNotNull(taskSlotTable);
+		this.fatalErrorHandler = checkNotNull(fatalErrorHandler);
+		this.taskManagerMetricGroup = checkNotNull(taskManagerMetricGroup);
+		this.broadcastVariableManager = checkNotNull(broadcastVariableManager);
+		this.fileCache = checkNotNull(fileCache);
+		this.jobManagerTable = checkNotNull(jobManagerTable);
+		this.jobLeaderService = checkNotNull(jobLeaderService);
 
-    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+		this.jobManagerConnections = new HashMap<>(4);
 
-    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
+		this.jobManagerHeartbeatManager = heartbeatServices.createHeartbeatManager(
+			getResourceID(),
+			new JobManagerHeartbeatListener(),
+			rpcService.getScheduledExecutor(),
+			log);
 
-    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
+		this.resourceManagerHeartbeatManager = heartbeatServices.createHeartbeatManager(
+			getResourceID(),
+			new ResourceManagerHeartbeatListener(),
+			rpcService.getScheduledExecutor(),
+			log);
 
-    public URL getURL(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
+		hardwareDescription = HardwareDescription.extractFromSystem(memoryManager.getMemorySize());
+	}
 
-    public void setURL(String parameterName, URL val) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
+	// ------------------------------------------------------------------------
+	//  Life cycle
+	// ------------------------------------------------------------------------
 
-    public void setNull(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
+	@Override
+	public void start() throws Exception {
+		super.start();
 
-    public void setBoolean(String parameterName, boolean x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setByte(String parameterName, byte x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setShort(String parameterName, short x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setInt(String parameterName, int x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setLong(String parameterName, long x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setFloat(String parameterName, float x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDouble(String parameterName, double x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setString(String parameterName, String x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBytes(String parameterName, byte [] x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDate(String parameterName, Date x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
-    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
-
-    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
-
-    public String getString(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public byte[] getBytes(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public URL getURL(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-/* JDBC_4_ANT_KEY_BEGIN */
-
-    public RowId getRowId(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public RowId getRowId(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void setRowId(String parameterName, RowId value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setRowId(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setNString(String parameterName, String value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNString(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setNClob(String parameterName, NClob value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public NClob getNClob(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public NClob getNClob(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public SQLXML getSQLXML(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public String getNString(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public String getNString(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getNCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void setBlob(String parameterName, Blob blob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, blob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setClob(String parameterName, Clob clob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, clob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setNClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-/* JDBC_4_ANT_KEY_END */
+		// start by connecting to the ResourceManager
+		try {
+			haServices.getResourceManagerLeaderRetriever().start(new ResourceManagerLeaderListener());
+		} catch (Exception e) {
+			onFatalError(e);
+		}
+
+		// tell the task slot table who's responsible for the task slot actions
+		taskSlotTable.start(new SlotActionsImpl());
+
+		// start the job leader service
+		jobLeaderService.start(getAddress(), getRpcService(), haServices, new JobLeaderListenerImpl());
+	}
+
+	/**
+	 * Called to shut down the TaskManager. The method closes all TaskManager services.
+	 */
+	@Override
+	public void postStop() throws Exception {
+		log.info("Stopping TaskManager {}.", getAddress());
+
+		Throwable throwable = null;
+
+		taskSlotTable.stop();
+
+		if (isConnectedToResourceManager()) {
+			resourceManagerConnection.close();
+		}
+
+		for (JobManagerConnection jobManagerConnection : jobManagerConnections.values()) {
+			try {
+				disassociateFromJobManager(jobManagerConnection, new FlinkException("The TaskExecutor is shutting down."));
+			} catch (Throwable t) {
+				throwable = ExceptionUtils.firstOrSuppressed(t, throwable);
+			}
+		}
+
+		jobManagerHeartbeatManager.stop();
+
+		resourceManagerHeartbeatManager.stop();
+
+		ioManager.shutdown();
+
+		memoryManager.shutdown();
+
+		networkEnvironment.shutdown();
+
+		fileCache.shutdown();
+
+		try {
+			super.postStop();
+		} catch (Throwable e) {
+			throwable = ExceptionUtils.firstOrSuppressed(e, throwable);
+		}
+
+		if (throwable != null) {
+			ExceptionUtils.rethrowException(throwable, "Error while shutting the TaskExecutor down.");
+		}
+
+		log.info("Stopped TaskManager {}.", getAddress());
+	}
+
+	// ======================================================================
+	//  RPC methods
+	// ======================================================================
+
+	// ----------------------------------------------------------------------
+	// Task lifecycle RPCs
+	// ----------------------------------------------------------------------
+
+	@Override
+	public CompletableFuture<Acknowledge> submitTask(
+			TaskDeploymentDescriptor tdd,
+			JobMasterId jobMasterId,
+			Time timeout) {
+
+		try {
+			final JobID jobId = tdd.getJobId();
+			final JobManagerConnection jobManagerConnection = jobManagerTable.get(jobId);
+
+			if (jobManagerConnection == null) {
+				final String message = "Could not submit task because there is no JobManager " +
+					"associated for the job " + jobId + '.';
+
+				log.debug(message);
+				throw new TaskSubmissionException(message);
+			}
+
+			if (!Objects.equals(jobManagerConnection.getJobMasterId(), jobMasterId)) {
+				final String message = "Rejecting the task submission because the job manager leader id " +
+					jobMasterId + " does not match the expected job manager leader id " +
+					jobManagerConnection.getJobMasterId() + '.';
+
+				log.debug(message);
+				throw new TaskSubmissionException(message);
+			}
+
+			if (!taskSlotTable.existsActiveSlot(jobId, tdd.getAllocationId())) {
+				final String message = "No task slot allocated for job ID " + jobId +
+					" and allocation ID " + tdd.getAllocationId() + '.';
+				log.debug(message);
+				throw new TaskSubmissionException(message);
+			}
+
+			// re-integrate offloaded data:
+			BlobCacheService blobCache = jobManagerConnection.getBlobService();
+			try {
+				tdd.loadBigData(blobCache.getPermanentBlobService());
+			} catch (IOException | ClassNotFoundException e) {
+				throw new TaskSubmissionException("Could not re-integrate offloaded TaskDeploymentDescriptor data.", e);
+			}
+
+			// deserialize the pre-serialized information
+			final JobInformation jobInformation;
+			final TaskInformation taskInformation;
+			try {
+				jobInformation = tdd.getSerializedJobInformation().deserializeValue(getClass().getClassLoader());
+				taskInformation = tdd.getSerializedTaskInformation().deserializeValue(getClass().getClassLoader());
+			} catch (IOException | ClassNotFoundException e) {
+				throw new TaskSubmissionException("Could not deserialize the job or task information.", e);
+			}
+
+			if (!jobId.equals(jobInformation.getJobId())) {
+				throw new TaskSubmissionException(
+					"Inconsistent job ID information inside TaskDeploymentDescriptor (" +
+						tdd.getJobId() + " vs. " + jobInformation.getJobId() + ")");
+			}
+
+			TaskMetricGroup taskMetricGroup = taskManagerMetricGroup.addTaskForJob(
+				jobInformation.getJobId(),
+				jobInformation.getJobName(),
+				taskInformation.getJobVertexId(),
+				tdd.getExecutionAttemptId(),
+				taskInformation.getTaskName(),
+				tdd.getSubtaskIndex(),
+				tdd.getAttemptNumber());
+
+			InputSplitProvider inputSplitProvider = new RpcInputSplitProvider(
+				jobManagerConnection.getJobManagerGateway(),
+				taskInformation.getJobVertexId(),
+				tdd.getExecutionAttemptId(),
+				taskManagerConfiguration.getTimeout());
+
+			TaskManagerActions taskManagerActions = jobManagerConnection.getTaskManagerActions();
+			CheckpointResponder checkpointResponder = jobManagerConnection.getCheckpointResponder();
+
+			BlobCacheService blobService = jobManagerConnection.getBlobService();
+			LibraryCacheManager libraryCache = jobManagerConnection.getLibraryCacheManager();
+			ResultPartitionConsumableNotifier resultPartitionConsumableNotifier = jobManagerConnection.getResultPartitionConsumableNotifier();
+			PartitionProducerStateChecker partitionStateChecker = jobManagerConnection.getPartitionStateChecker();
+
+			final TaskLocalStateStore localStateStore = localStateStoresManager.localStateStoreForTask(
+				jobId,
+				taskInformation.getJobVertexId(),
+				tdd.getSubtaskIndex());
+
+			final JobManagerTaskRestore taskRestore = tdd.getTaskRestore();
+
+			final TaskStateManager taskStateManager = new TaskStateManagerImpl(
+				jobId,
+				tdd.getExecutionAttemptId(),
+				localStateStore,
+				taskRestore,
+				checkpointResponder);
+
+			Task task = new Task(
+				jobInformation,
+				taskInformation,
+				tdd.getExecutionAttemptId(),
+				tdd.getAllocationId(),
+				tdd.getSubtaskIndex(),
+				tdd.getAttemptNumber(),
+				tdd.getProducedPartitions(),
+				tdd.getInputGates(),
+				tdd.getTargetSlotNumber(),
+				memoryManager,
+				ioManager,
+				networkEnvironment,
+				broadcastVariableManager,
+				taskStateManager,
+				taskManagerActions,
+				inputSplitProvider,
+				checkpointResponder,
+				blobService,
+				libraryCache,
+				fileCache,
+				taskManagerConfiguration,
+				taskMetricGroup,
+				resultPartitionConsumableNotifier,
+				partitionStateChecker,
+				getRpcService().getExecutor());
+
+			log.info("Received task {}.", task.getTaskInfo().getTaskNameWithSubtasks());
+
+			boolean taskAdded;
+
+			try {
+				taskAdded = taskSlotTable.addTask(task);
+			} catch (SlotNotFoundException | SlotNotActiveException e) {
+				throw new TaskSubmissionException("Could not submit task.", e);
+			}
+
+			if (taskAdded) {
+				task.startTaskThread();
+
+				return CompletableFuture.completedFuture(Acknowledge.get());
+			} else {
+				final String message = "TaskManager already contains a task for id " +
+					task.getExecutionId() + '.';
+
+				log.debug(message);
+				throw new TaskSubmissionException(message);
+			}
+		} catch (TaskSubmissionException e) {
+			return FutureUtils.completedExceptionally(e);
+		}
+	}
+
+	@Override
+	public CompletableFuture<Acknowledge> cancelTask(ExecutionAttemptID executionAttemptID, Time timeout) {
+		final Task task = taskSlotTable.getTask(executionAttemptID);
+
+		if (task != null) {
+			try {
+				task.cancelExecution();
+				return CompletableFuture.completedFuture(Acknowledge.get());
+			} catch (Throwable t) {
+				return FutureUtils.completedExceptionally(
+					new TaskException("Cannot cancel task for execution " + executionAttemptID + '.', t));
+			}
+		} else {
+			final String message = "Cannot find task to stop for execution " + executionAttemptID + '.';
+
+			log.debug(message);
+			return FutureUtils.completedExceptionally(new TaskException(message));
+		}
+	}
+
+	@Override
+	public CompletableFuture<Acknowledge> stopTask(ExecutionAttemptID executionAttemptID, Time timeout) {
+		final Task task = taskSlotTable.getTask(executionAttemptID);
+
+		if (task != null) {
+			try {
+				task.stopExecution();
+				return CompletableFuture.completedFuture(Acknowledge.get());
+			} catch (Throwable t) {
+				return FutureUtils.completedExceptionally(new TaskException("Cannot stop task for execution " + executionAttemptID + '.', t));
+			}
+		} else {
+			final String message = "Cannot find task to stop for execution " + executionAttemptID + '.';
+
+			log.debug(message);
+			return FutureUtils.completedExceptionally(new TaskException(message));
+		}
+	}
+
+	// ----------------------------------------------------------------------
+	// Partition lifecycle RPCs
+	// ----------------------------------------------------------------------
+
+	@Override
+	public CompletableFuture<Acknowledge> updatePartitions(
+			final ExecutionAttemptID executionAttemptID,
+			Iterable<PartitionInfo> partitionInfos,
+			Time timeout) {
+		final Task task = taskSlotTable.getTask(executionAttemptID);
+
+		if (task != null) {
+			for (final PartitionInfo partitionInfo: partitionInfos) {
+				IntermediateDataSetID intermediateResultPartitionID = partitionInfo.getIntermediateDataSetID();
+
+				final SingleInputGate singleInputGate = task.getInputGateById(intermediateResultPartitionID);
+
+				if (singleInputGate != null) {
+					// Run asynchronously because it might be blocking
+					getRpcService().execute(
+						() -> {
+							try {
+								singleInputGate.updateInputChannel(partitionInfo.getInputChannelDeploymentDescriptor());
+							} catch (IOException | InterruptedException e) {
+								log.error("Could not update input data location for task {}. Trying to fail task.", task.getTaskInfo().getTaskName(), e);
+
+								try {
+									task.failExternally(e);
+								} catch (RuntimeException re) {
+									// TODO: Check whether we need this or make exception in failExtenally checked
+									log.error("Failed canceling task with execution ID {} after task update failure.", executionAttemptID, re);
+								}
+							}
+						});
+				} else {
+					return FutureUtils.completedExceptionally(
+						new PartitionException("No reader with ID " + intermediateResultPartitionID +
+							" for task " + executionAttemptID + " was found."));
+				}
+			}
+
+			return CompletableFuture.completedFuture(Acknowledge.get());
+		} else {
+			log.debug("Discard update for input partitions of task {}. Task is no longer running.", executionAttemptID);
+			return CompletableFuture.completedFuture(Acknowledge.get());
+		}
+	}
+
+	@Override
+	public void failPartition(ExecutionAttemptID executionAttemptID) {
+		log.info("Discarding the results produced by task execution {}.", executionAttemptID);
+
+		try {
+			networkEnvironment.getResultPartitionManager().releasePartitionsProducedBy(executionAttemptID);
+		} catch (Throwable t) {
+			// TODO: Do we still need this catch branch?
+			onFatalError(t);
+		}
+
+		// TODO: Maybe it's better to return an Acknowledge here to notify the JM about the success/failure with an Exception
+	}
+
+	// ----------------------------------------------------------------------
+	// Heartbeat RPC
+	// ----------------------------------------------------------------------
+
+	@Override
+	public void heartbeatFromJobManager(ResourceID resourceID) {
+		jobManagerHeartbeatManager.requestHeartbeat(resourceID, null);
+	}
+
+	@Override
+	public void heartbeatFromResourceManager(ResourceID resourceID) {
+		resourceManagerHeartbeatManager.requestHeartbeat(resourceID, null);
+	}
+
+	// ----------------------------------------------------------------------
+	// Checkpointing RPCs
+	// ----------------------------------------------------------------------
+
+	@Override
+	public CompletableFuture<Acknowledge> triggerCheckpoint(
+			ExecutionAttemptID executionAttemptID,
+			long checkpointId,
+			long checkpointTimestamp,
+			CheckpointOptions checkpointOptions) {
+		log.debug("Trigger checkpoint {}@{} for {}.", checkpointId, checkpointTimestamp, executionAttemptID);
+
+		final Task task = taskSlotTable.getTask(executionAttemptID);
+
+		if (task != null) {
+			task.triggerCheckpointBarrier(checkpointId, checkpointTimestamp, checkpointOptions);
+
+			return CompletableFuture.completedFuture(Acknowledge.get());
+		} else {
+			final String message = "TaskManager received a checkpoint request for unknown task " + executionAttemptID + '.';
+
+			log.debug(message);
+			return FutureUtils.completedExceptionally(new CheckpointException(message));
+		}
+	}
+
+	@Override
+	public CompletableFuture<Acknowledge> confirmCheckpoint(
+			ExecutionAttemptID executionAttemptID,
+			long checkpointId,
+			long checkpointTimestamp) {
+		log.debug("Confirm checkpoint {}@{} for {}.", checkpointId, checkpointTimestamp, executionAttemptID);
+
+		final Task task = taskSlotTable.getTask(executionAttemptID);
+
+		if (task != null) {
+			task.notifyCheckpointComplete(checkpointId);
+
+			return CompletableFuture.completedFuture(Acknowledge.get());
+		} else {
+			final String message = "TaskManager received a checkpoint confirmation for unknown task " + executionAttemptID + '.';
+
+			log.debug(message);
+			return FutureUtils.completedExceptionally(new CheckpointException(message));
+		}
+	}
+
+	// ----------------------------------------------------------------------
+	// Slot allocation RPCs
+	// ----------------------------------------------------------------------
+
+	@Override
+	public CompletableFuture<Acknowledge> requestSlot(
+		final SlotID slotId,
+		final JobID jobId,
+		final AllocationID allocationId,
+		final String targetAddress,
+		final ResourceManagerId resourceManagerId,
+		final Time timeout) {
+		// TODO: Filter invalid requests from the resource manager by using the instance/registration Id
+
+		log.info("Receive slot request {} for job {} from resource manager with leader id {}.",
+			allocationId, jobId, resourceManagerId);
+
+		try {
+			if (resourceManagerConnection == null) {
+				final String message = "TaskManager is not connected to a resource manager.";
+				log.debug(message);
+				throw new SlotAllocationException(message);
+			}
+
+			if (!Objects.equals(resourceManagerConnection.getTargetLeaderId(), resourceManagerId)) {
+				final String message = "The leader id " + resourceManagerId +
+					" does not match with the leader id of the connected resource manager " +
+					resourceManagerConnection.getTargetLeaderId() + '.';
+
+				log.debug(message);
+				throw new SlotAllocationException(message);
+			}
+
+			if (taskSlotTable.isSlotFree(slotId.getSlotNumber())) {
+				if (taskSlotTable.allocateSlot(slotId.getSlotNumber(), jobId, allocationId, taskManagerConfiguration.getTimeout())) {
+					log.info("Allocated slot for {}.", allocationId);
+				} else {
+					log.info("Could not allocate slot for {}.", allocationId);
+					throw new SlotAllocationException("Could not allocate slot.");
+				}
+			} else if (!taskSlotTable.isAllocated(slotId.getSlotNumber(), jobId, allocationId)) {
+				final String message = "The slot " + slotId + " has already been allocated for a different job.";
+
+				log.info(message);
+
+				throw new SlotOccupiedException(message, taskSlotTable.getCurrentAllocation(slotId.getSlotNumber()));
+			}
+
+			if (jobManagerTable.contains(jobId)) {
+				offerSlotsToJobManager(jobId);
+			} else {
+				try {
+					jobLeaderService.addJob(jobId, targetAddress);
+				} catch (Exception e) {
+					// free the allocated slot
+					try {
+						taskSlotTable.freeSlot(allocationId);
+					} catch (SlotNotFoundException slotNotFoundException) {
+						// slot no longer existent, this should actually never happen, because we've
+						// just allocated the slot. So let's fail hard in this case!
+						onFatalError(slotNotFoundException);
+					}
+
+					// sanity check
+					if (!taskSlotTable.isSlotFree(slotId.getSlotNumber())) {
+						onFatalError(new Exception("Could not free slot " + slotId));
+					}
+
+					throw new SlotAllocationException("Could not add job to job leader service.", e);
+				}
+			}
+		} catch (SlotAllocationException slotAllocationException) {
+			return FutureUtils.completedExceptionally(slotAllocationException);
+		}
+
+		return CompletableFuture.completedFuture(Acknowledge.get());
+	}
+
+	@Override
+	public CompletableFuture<Acknowledge> freeSlot(AllocationID allocationId, Throwable cause, Time timeout) {
+		freeSlotInternal(allocationId, cause);
+
+		return CompletableFuture.completedFuture(Acknowledge.get());
+	}
+
+	// ----------------------------------------------------------------------
+	// Disconnection RPCs
+	// ----------------------------------------------------------------------
+
+	@Override
+	public void disconnectJobManager(JobID jobId, Exception cause) {
+		closeJobManagerConnection(jobId, cause);
+		jobLeaderService.reconnect(jobId);
+	}
+
+	@Override
+	public void disconnectResourceManager(Exception cause) {
+		closeResourceManagerConnection(cause);
+	}
+
+	// ======================================================================
+	//  Internal methods
+	// ======================================================================
+
+	// ------------------------------------------------------------------------
+	//  Internal resource manager connection methods
+	// ------------------------------------------------------------------------
+
+	private void notifyOfNewResourceManagerLeader(String newLeaderAddress, ResourceManagerId newResourceManagerId) {
+		if (resourceManagerConnection != null) {
+			if (newLeaderAddress != null) {
+				// the resource manager switched to a new leader
+				log.info("ResourceManager leader changed from {} to {}. Registering at new leader.",
+					resourceManagerConnection.getTargetAddress(), newLeaderAddress);
+			}
+			else {
+				// address null means that the current leader is lost without a new leader being there, yet
+				log.info("Current ResourceManager {} lost leader status. Waiting for new ResourceManager leader.",
+					resourceManagerConnection.getTargetAddress());
+			}
+
+			// drop the current connection or connection attempt
+			closeResourceManagerConnection(
+				new FlinkException("New ResourceManager leader found under: " + newLeaderAddress +
+					'(' + newResourceManagerId + ')'));
+		}
+
+		// establish a connection to the new leader
+		if (newLeaderAddress != null) {
+			log.info("Attempting to register at ResourceManager {} ({})", newLeaderAddress, newResourceManagerId);
+			resourceManagerConnection =
+				new TaskExecutorToResourceManagerConnection(
+					log,
+					getRpcService(),
+					getAddress(),
+					getResourceID(),
+					taskSlotTable.createSlotReport(getResourceID()),
+					taskManagerLocation.dataPort(),
+					hardwareDescription,
+					newLeaderAddress,
+					newResourceManagerId,
+					getMainThreadExecutor(),
+					new ResourceManagerRegistrationListener());
+			resourceManagerConnection.start();
+		}
+	}
+
+	private void establishResourceManagerConnection(ResourceID resourceManagerResourceId) {
+		// monitor the resource manager as heartbeat target
+		resourceManagerHeartbeatManager.monitorTarget(resourceManagerResourceId, new HeartbeatTarget<SlotReport>() {
+			@Override
+			public void receiveHeartbeat(ResourceID resourceID, SlotReport slotReport) {
+				ResourceManagerGateway resourceManagerGateway = resourceManagerConnection.getTargetGateway();
+				resourceManagerGateway.heartbeatFromTaskManager(resourceID, slotReport);
+			}
+
+			@Override
+			public void requestHeartbeat(ResourceID resourceID, SlotReport slotReport) {
+				// the TaskManager won't send heartbeat requests to the ResourceManager
+			}
+		});
+	}
+
+	private void closeResourceManagerConnection(Exception cause) {
+		if (resourceManagerConnection != null) {
+
+			if (resourceManagerConnection.isConnected()) {
+				log.info("Close ResourceManager connection {}.", resourceManagerConnection.getResourceManagerId(), cause);
+				resourceManagerHeartbeatManager.unmonitorTarget(resourceManagerConnection.getResourceManagerId());
+
+				ResourceManagerGateway resourceManagerGateway = resourceManagerConnection.getTargetGateway();
+				resourceManagerGateway.disconnectTaskManager(getResourceID(), cause);
+			} else {
+				log.info("Terminating registration attempts towards ResourceManager {}.", resourceManagerConnection.getTargetAddress(), cause);
+			}
+
+			resourceManagerConnection.close();
+			resourceManagerConnection = null;
+		}
+	}
+
+	// ------------------------------------------------------------------------
+	//  Internal job manager connection methods
+	// ------------------------------------------------------------------------
+
+	private void offerSlotsToJobManager(final JobID jobId) {
+		final JobManagerConnection jobManagerConnection = jobManagerTable.get(jobId);
+
+		if (jobManagerConnection == null) {
+			log.debug("There is no job manager connection to the leader of job {}.", jobId);
+		} else {
+			if (taskSlotTable.hasAllocatedSlots(jobId)) {
+				log.info("Offer reserved slots to the leader of job {}.", jobId);
+
+				final JobMasterGateway jobMasterGateway = jobManagerConnection.getJobManagerGateway();
+
+				final Iterator<TaskSlot> reservedSlotsIterator = taskSlotTable.getAllocatedSlots(jobId);
+				final JobMasterId jobMasterId = jobManagerConnection.getJobMasterId();
+
+				final Collection<SlotOffer> reservedSlots = new HashSet<>(2);
+
+				while (reservedSlotsIterator.hasNext()) {
+					SlotOffer offer = reservedSlotsIterator.next().generateSlotOffer();
+					try {
+						if (!taskSlotTable.markSlotActive(offer.getAllocationId())) {
+							// the slot is either free or releasing at the moment
+							final String message = "Could not mark slot " + jobId + " active.";
+							log.debug(message);
+							jobMasterGateway.failSlot(getResourceID(), offer.getAllocationId(), new Exception(message));
+						}
+					} catch (SlotNotFoundException e) {
+						final String message = "Could not mark slot " + jobId + " active.";
+						jobMasterGateway.failSlot(getResourceID(), offer.getAllocationId(), new Exception(message));
+						continue;
+					}
+					reservedSlots.add(offer);
+				}
+
+				CompletableFuture<Collection<SlotOffer>> acceptedSlotsFuture = jobMasterGateway.offerSlots(
+					getResourceID(),
+					reservedSlots,
+					taskManagerConfiguration.getTimeout());
+
+				acceptedSlotsFuture.whenCompleteAsync(
+					(Iterable<SlotOffer> acceptedSlots, Throwable throwable) -> {
+						if (throwable != null) {
+							if (throwable instanceof TimeoutException) {
+								log.info("Slot offering to JobManager did not finish in time. Retrying the slot offering.");
+								// We ran into a timeout. Try again.
+								offerSlotsToJobManager(jobId);
+							} else {
+								log.warn("Slot offering to JobManager failed. Freeing the slots " +
+									"and returning them to the ResourceManager.", throwable);
+
+								// We encountered an exception. Free the slots and return them to the RM.
+								for (SlotOffer reservedSlot: reservedSlots) {
+									freeSlotInternal(reservedSlot.getAllocationId(), throwable);
+								}
+							}
+						} else {
+							// check if the response is still valid
+							if (isJobManagerConnectionValid(jobId, jobMasterId)) {
+								// mark accepted slots active
+								for (SlotOffer acceptedSlot : acceptedSlots) {
+									reservedSlots.remove(acceptedSlot);
+								}
+
+								final Exception e = new Exception("The slot was rejected by the JobManager.");
+
+								for (SlotOffer rejectedSlot : reservedSlots) {
+									freeSlotInternal(rejectedSlot.getAllocationId(), e);
+								}
+							} else {
+								// discard the response since there is a new leader for the job
+								log.debug("Discard offer slot response since there is a new leader " +
+									"for the job {}.", jobId);
+							}
+						}
+					},
+					getMainThreadExecutor());
+
+			} else {
+				log.debug("There are no unassigned slots for the job {}.", jobId);
+			}
+		}
+	}
+
+	private void establishJobManagerConnection(JobID jobId, final JobMasterGateway jobMasterGateway, JMTMRegistrationSuccess registrationSuccess) {
+
+		if (jobManagerTable.contains(jobId)) {
+			JobManagerConnection oldJobManagerConnection = jobManagerTable.get(jobId);
+
+			if (Objects.equals(oldJobManagerConnection.getJobMasterId(), jobMasterGateway.getFencingToken())) {
+				// we already are connected to the given job manager
+				log.debug("Ignore JobManager gained leadership message for {} because we are already connected to it.", jobMasterGateway.getFencingToken());
+				return;
+			} else {
+				closeJobManagerConnection(jobId, new Exception("Found new job leader for job id " + jobId + '.'));
+			}
+		}
+
+		log.info("Establish JobManager connection for job {}.", jobId);
+
+		ResourceID jobManagerResourceID = registrationSuccess.getResourceID();
+		JobManagerConnection newJobManagerConnection = associateWithJobManager(
+				jobId,
+				jobManagerResourceID,
+				jobMasterGateway,
+				registrationSuccess.getBlobPort());
+		jobManagerConnections.put(jobManagerResourceID, newJobManagerConnection);
+		jobManagerTable.put(jobId, newJobManagerConnection);
+
+		// monitor the job manager as heartbeat target
+		jobManagerHeartbeatManager.monitorTarget(jobManagerResourceID, new HeartbeatTarget<Void>() {
+			@Override
+			public void receiveHeartbeat(ResourceID resourceID, Void payload) {
+				jobMasterGateway.heartbeatFromTaskManager(resourceID);
+			}
+
+			@Override
+			public void requestHeartbeat(ResourceID resourceID, Void payload) {
+				// request heartbeat will never be called on the task manager side
+			}
+		});
+
+		offerSlotsToJobManager(jobId);
+	}
+
+	private void closeJobManagerConnection(JobID jobId, Exception cause) {
+		log.info("Close JobManager connection for job {}.", jobId);
+
+		// 1. fail tasks running under this JobID
+		Iterator<Task> tasks = taskSlotTable.getTasks(jobId);
+
+		final FlinkException failureCause = new FlinkException("JobManager responsible for " + jobId +
+			" lost the leadership.", cause);
+
+		while (tasks.hasNext()) {
+			tasks.next().failExternally(failureCause);
+		}
+
+		// 2. Move the active slots to state allocated (possible to time out again)
+		Iterator<AllocationID> activeSlots = taskSlotTable.getActiveSlots(jobId);
+
+		final FlinkException freeingCause = new FlinkException("Slot could not be marked inactive.");
+
+		while (activeSlots.hasNext()) {
+			AllocationID activeSlot = activeSlots.next();
+
+			try {
+				if (!taskSlotTable.markSlotInactive(activeSlot, taskManagerConfiguration.getTimeout())) {
+					freeSlotInternal(activeSlot, freeingCause);
+				}
+			} catch (SlotNotFoundException e) {
+				log.debug("Could not mark the slot {} inactive.", jobId, e);
+			}
+		}
+
+		// 3. Disassociate from the JobManager
+		JobManagerConnection jobManagerConnection = jobManagerTable.remove(jobId);
+
+		if (jobManagerConnection != null) {
+			try {
+				jobManagerHeartbeatManager.unmonitorTarget(jobManagerConnection.getResourceID());
+
+				jobManagerConnections.remove(jobManagerConnection.getResourceID());
+				disassociateFromJobManager(jobManagerConnection, cause);
+			} catch (IOException e) {
+				log.warn("Could not properly disassociate from JobManager {}.",
+					jobManagerConnection.getJobManagerGateway().getAddress(), e);
+			}
+		}
+	}
+
+	private JobManagerConnection associateWithJobManager(
+			JobID jobID,
+			ResourceID resourceID,
+			JobMasterGateway jobMasterGateway,
+			int blobPort) {
+		Preconditions.checkNotNull(jobID);
+		Preconditions.checkNotNull(resourceID);
+		Preconditions.checkNotNull(jobMasterGateway);
+		Preconditions.checkArgument(blobPort > 0 && blobPort < MAX_BLOB_PORT, "Blob server port is out of range.");
+
+		TaskManagerActions taskManagerActions = new TaskManagerActionsImpl(jobMasterGateway);
+
+		CheckpointResponder checkpointResponder = new RpcCheckpointResponder(jobMasterGateway);
+
+		InetSocketAddress blobServerAddress = new InetSocketAddress(jobMasterGateway.getHostname(), blobPort);
+
+		final LibraryCacheManager libraryCacheManager;
+		final BlobCacheService blobService;
+		try {
+			blobService = new BlobCacheService(
+				blobServerAddress,
+				taskManagerConfiguration.getConfiguration(),
+				haServices.createBlobStore());
+			libraryCacheManager = new BlobLibraryCacheManager(
+				blobService.getPermanentBlobService(),
+				taskManagerConfiguration.getClassLoaderResolveOrder(),
+				taskManagerConfiguration.getAlwaysParentFirstLoaderPatterns());
+		} catch (IOException e) {
+			// Can't pass the IOException up - we need a RuntimeException anyway
+			// two levels up where this is run asynchronously. Also, we don't
+			// know whether this is caught in the thread running this method.
+			final String message = "Could not create BLOB cache or library cache.";
+			log.error(message, e);
+			throw new RuntimeException(message, e);
+		}
+
+		ResultPartitionConsumableNotifier resultPartitionConsumableNotifier = new RpcResultPartitionConsumableNotifier(
+			jobMasterGateway,
+			getRpcService().getExecutor(),
+			taskManagerConfiguration.getTimeout());
+
+		PartitionProducerStateChecker partitionStateChecker = new RpcPartitionStateChecker(jobMasterGateway);
+
+		return new JobManagerConnection(
+			jobID,
+			resourceID,
+			jobMasterGateway,
+			taskManagerActions,
+			checkpointResponder,
+			blobService,
+			libraryCacheManager,
+			resultPartitionConsumableNotifier,
+			partitionStateChecker);
+	}
+
+	private void disassociateFromJobManager(JobManagerConnection jobManagerConnection, Exception cause) throws IOException {
+		Preconditions.checkNotNull(jobManagerConnection);
+		JobMasterGateway jobManagerGateway = jobManagerConnection.getJobManagerGateway();
+		jobManagerGateway.disconnectTaskManager(getResourceID(), cause);
+		jobManagerConnection.getLibraryCacheManager().shutdown();
+		jobManagerConnection.getBlobService().close();
+	}
+
+	// ------------------------------------------------------------------------
+	//  Internal task methods
+	// ------------------------------------------------------------------------
+
+	private void failTask(final ExecutionAttemptID executionAttemptID, final Throwable cause) {
+		final Task task = taskSlotTable.getTask(executionAttemptID);
+
+		if (task != null) {
+			try {
+				task.failExternally(cause);
+			} catch (Throwable t) {
+				log.error("Could not fail task {}.", executionAttemptID, t);
+			}
+		} else {
+			log.debug("Cannot find task to fail for execution {}.", executionAttemptID);
+		}
+	}
+
+	private void updateTaskExecutionState(
+			final JobMasterGateway jobMasterGateway,
+			final TaskExecutionState taskExecutionState) {
+		final ExecutionAttemptID executionAttemptID = taskExecutionState.getID();
+
+		CompletableFuture<Acknowledge> futureAcknowledge = jobMasterGateway.updateTaskExecutionState(taskExecutionState);
+
+		futureAcknowledge.whenCompleteAsync(
+			(ack, throwable) -> {
+				if (throwable != null) {
+					failTask(executionAttemptID, throwable);
+				}
+			},
+			getMainThreadExecutor());
+	}
+
+	private void unregisterTaskAndNotifyFinalState(
+			final JobMasterGateway jobMasterGateway,
+			final ExecutionAttemptID executionAttemptID) {
+
+		Task task = taskSlotTable.removeTask(executionAttemptID);
+		if (task != null) {
+			if (!task.getExecutionState().isTerminal()) {
+				try {
+					task.failExternally(new IllegalStateException("Task is being remove from TaskManager."));
+				} catch (Exception e) {
+					log.error("Could not properly fail task.", e);
+				}
+			}
+
+			log.info("Un-registering task and sending final execution state {} to JobManager for task {} {}.",
+				task.getExecutionState(), task.getTaskInfo().getTaskName(), task.getExecutionId());
+
+			AccumulatorSnapshot accumulatorSnapshot = task.getAccumulatorRegistry().getSnapshot();
+
+			updateTaskExecutionState(
+					jobMasterGateway,
+					new TaskExecutionState(
+						task.getJobID(),
+						task.getExecutionId(),
+						task.getExecutionState(),
+						task.getFailureCause(),
+						accumulatorSnapshot,
+						task.getMetricGroup().getIOMetricGroup().createSnapshot()));
+		} else {
+			log.error("Cannot find task with ID {} to unregister.", executionAttemptID);
+		}
+	}
+
+	private void freeSlotInternal(AllocationID allocationId, Throwable cause) {
+		Preconditions.checkNotNull(allocationId);
+
+		try {
+			TaskSlot taskSlot = taskSlotTable.freeSlot(allocationId, cause);
+
+			if (taskSlot != null && isConnectedToResourceManager()) {
+				// the slot was freed. Tell the RM about it
+				ResourceManagerGateway resourceManagerGateway = resourceManagerConnection.getTargetGateway();
+
+				resourceManagerGateway.notifySlotAvailable(
+					resourceManagerConnection.getRegistrationId(),
+					new SlotID(getResourceID(), taskSlot.getIndex()),
+					allocationId);
+
+				// check whether we still have allocated slots for the same job
+				final JobID jobId = taskSlot.getJobId();
+				final Iterator<Task> tasks = taskSlotTable.getTasks(jobId);
+
+				if (!tasks.hasNext()) {
+					// we can remove the job from the job leader service
+					try {
+						jobLeaderService.removeJob(jobId);
+					} catch (Exception e) {
+						log.info("Could not remove job {} from JobLeaderService.", jobId, e);
+					}
+
+					closeJobManagerConnection(
+						jobId,
+						new FlinkException("TaskExecutor " + getAddress() +
+							" has no more allocated slots for job " + jobId + '.'));
+				}
+			}
+		} catch (SlotNotFoundException e) {
+			log.debug("Could not free slot for allocation id {}.", allocationId, e);
+		}
+	}
+
+	private void freeSlotInternal(AllocationID allocationId) {
+		freeSlotInternal(allocationId, new Exception("The slot " + allocationId + " is being freed."));
+	}
+
+	private void timeoutSlot(AllocationID allocationId, UUID ticket) {
+		Preconditions.checkNotNull(allocationId);
+		Preconditions.checkNotNull(ticket);
+
+		if (taskSlotTable.isValidTimeout(allocationId, ticket)) {
+			freeSlotInternal(allocationId, new Exception("The slot " + allocationId + " has timed out."));
+		} else {
+			log.debug("Received an invalid timeout for allocation id {} with ticket {}.", allocationId, ticket);
+		}
+	}
+
+	// ------------------------------------------------------------------------
+	//  Internal utility methods
+	// ------------------------------------------------------------------------
+
+	private boolean isConnectedToResourceManager() {
+		return (resourceManagerConnection != null && resourceManagerConnection.isConnected());
+	}
+
+	private boolean isJobManagerConnectionValid(JobID jobId, JobMasterId jobMasterId) {
+		JobManagerConnection jmConnection = jobManagerTable.get(jobId);
+
+		return jmConnection != null && Objects.equals(jmConnection.getJobMasterId(), jobMasterId);
+	}
+
+	// ------------------------------------------------------------------------
+	//  Properties
+	// ------------------------------------------------------------------------
+
+	public ResourceID getResourceID() {
+		return taskManagerLocation.getResourceID();
+	}
+
+	// ------------------------------------------------------------------------
+	//  Error Handling
+	// ------------------------------------------------------------------------
+
+	/**
+	 * Notifies the TaskExecutor that a fatal error has occurred and it cannot proceed.
+	 *
+	 * @param t The exception describing the fatal error
+	 */
+	void onFatalError(final Throwable t) {
+		try {
+			log.error("Fatal error occurred in TaskExecutor.", t);
+		} catch (Throwable ignored) {}
+
+		// The fatal error handler implementation should make sure that this call is non-blocking
+		fatalErrorHandler.onFatalError(t);
+	}
+
+	// ------------------------------------------------------------------------
+	//  Access to fields for testing
+	// ------------------------------------------------------------------------
+
+	@VisibleForTesting
+	TaskExecutorToResourceManagerConnection getResourceManagerConnection() {
+		return resourceManagerConnection;
+	}
+
+	@VisibleForTesting
+	HeartbeatManager<Void, SlotReport> getResourceManagerHeartbeatManager() {
+		return resourceManagerHeartbeatManager;
+	}
+
+	// ------------------------------------------------------------------------
+	//  Utility classes
+	// ------------------------------------------------------------------------
+
+	/**
+	 * The listener for leader changes of the resource manager.
+	 */
+	private final class ResourceManagerLeaderListener implements LeaderRetrievalListener {
+
+		@Override
+		public void notifyLeaderAddress(final String leaderAddress, final UUID leaderSessionID) {
+			runAsync(
+				() -> notifyOfNewResourceManagerLeader(
+					leaderAddress,
+					leaderSessionID != null ? new ResourceManagerId(leaderSessionID) : null));
+		}
+
+		@Override
+		public void handleError(Exception exception) {
+			onFatalError(exception);
+		}
+	}
+
+	private final class JobLeaderListenerImpl implements JobLeaderListener {
+
+		@Override
+		public void jobManagerGainedLeadership(
+			final JobID jobId,
+			final JobMasterGateway jobManagerGateway,
+			final JMTMRegistrationSuccess registrationMessage) {
+			runAsync(
+				() ->
+					establishJobManagerConnection(
+						jobId,
+						jobManagerGateway,
+						registrationMessage));
+		}
+
+		@Override
+		public void jobManagerLostLeadership(final JobID jobId, final JobMasterId jobMasterId) {
+			log.info("JobManager for job {} with leader id {} lost leadership.", jobId, jobMasterId);
+
+			runAsync(() ->
+				closeJobManagerConnection(
+					jobId,
+					new Exception("Job leader for job id " + jobId + " lost leadership.")));
+		}
+
+		@Override
+		public void handleError(Throwable throwable) {
+			onFatalError(throwable);
+		}
+	}
+
+	private final class ResourceManagerRegistrationListener implements RegistrationConnectionListener<TaskExecutorRegistrationSuccess> {
+
+		@Override
+		public void onRegistrationSuccess(TaskExecutorRegistrationSuccess success) {
+			final ResourceID resourceManagerId = success.getResourceManagerId();
+
+			runAsync(
+				() -> establishResourceManagerConnection(resourceManagerId)
+			);
+		}
+
+		@Override
+		public void onRegistrationFailure(Throwable failure) {
+			onFatalError(failure);
+		}
+	}
+
+	private final class TaskManagerActionsImpl implements TaskManagerActions {
+		private final JobMasterGateway jobMasterGateway;
+
+		private TaskManagerActionsImpl(JobMasterGateway jobMasterGateway) {
+			this.jobMasterGateway = Preconditions.checkNotNull(jobMasterGateway);
+		}
+
+		@Override
+		public void notifyFinalState(final ExecutionAttemptID executionAttemptID) {
+			runAsync(() -> unregisterTaskAndNotifyFinalState(jobMasterGateway, executionAttemptID));
+		}
+
+		@Override
+		public void notifyFatalError(String message, Throwable cause) {
+			try {
+				log.error(message, cause);
+			} catch (Throwable ignored) {}
+
+			// The fatal error handler implementation should make sure that this call is non-blocking
+			fatalErrorHandler.onFatalError(cause);
+		}
+
+		@Override
+		public void failTask(final ExecutionAttemptID executionAttemptID, final Throwable cause) {
+			runAsync(() -> TaskExecutor.this.failTask(executionAttemptID, cause));
+		}
+
+		@Override
+		public void updateTaskExecutionState(final TaskExecutionState taskExecutionState) {
+			TaskExecutor.this.updateTaskExecutionState(jobMasterGateway, taskExecutionState);
+		}
+	}
+
+	private class SlotActionsImpl implements SlotActions {
+
+		@Override
+		public void freeSlot(final AllocationID allocationId) {
+			runAsync(() -> TaskExecutor.this.freeSlotInternal(allocationId));
+		}
+
+		@Override
+		public void timeoutSlot(final AllocationID allocationId, final UUID ticket) {
+			runAsync(() -> TaskExecutor.this.timeoutSlot(allocationId, ticket));
+		}
+	}
+
+	private class JobManagerHeartbeatListener implements HeartbeatListener<Void, Void> {
+
+		@Override
+		public void notifyHeartbeatTimeout(final ResourceID resourceID) {
+			runAsync(() -> {
+				log.info("The heartbeat of JobManager with id {} timed out.", resourceID);
+
+				if (jobManagerConnections.containsKey(resourceID)) {
+					JobManagerConnection jobManagerConnection = jobManagerConnections.get(resourceID);
+
+					if (jobManagerConnection != null) {
+						closeJobManagerConnection(
+							jobManagerConnection.getJobID(),
+							new TimeoutException("The heartbeat of JobManager with id " + resourceID + " timed out."));
+
+						jobLeaderService.reconnect(jobManagerConnection.getJobID());
+					}
+				}
+			});
+		}
+
+		@Override
+		public void reportPayload(ResourceID resourceID, Void payload) {
+			// nothing to do since the payload is of type Void
+		}
+
+		@Override
+		public CompletableFuture<Void> retrievePayload() {
+			return CompletableFuture.completedFuture(null);
+		}
+	}
+
+	private class ResourceManagerHeartbeatListener implements HeartbeatListener<Void, SlotReport> {
+
+		@Override
+		public void notifyHeartbeatTimeout(final ResourceID resourceId) {
+			runAsync(() -> {
+				// first check whether the timeout is still valid
+				if (resourceManagerConnection != null && resourceManagerConnection.getResourceManagerId().equals(resourceId)) {
+					log.info("The heartbeat of ResourceManager with id {} timed out.", resourceId);
+
+					closeResourceManagerConnection(
+						new TimeoutException(
+							"The heartbeat of ResourceManager with id " + resourceId + " timed out."));
+				} else {
+					log.debug("Received heartbeat timeout for outdated ResourceManager id {}. Ignoring the timeout.", resourceId);
+				}
+			});
+		}
+
+		@Override
+		public void reportPayload(ResourceID resourceID, Void payload) {
+			// nothing to do since the payload is of type Void
+		}
+
+		@Override
+		public CompletableFuture<SlotReport> retrievePayload() {
+			return callAsync(
+					() -> taskSlotTable.createSlotReport(getResourceID()),
+					taskManagerConfiguration.getTimeout());
+		}
+	}
 }

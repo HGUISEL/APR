@@ -6,564 +6,323 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * 
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
-package org.apache.phoenix.tx;
-import static org.apache.phoenix.util.TestUtil.INDEX_DATA_SCHEMA;
-import static org.apache.phoenix.util.TestUtil.TEST_PROPERTIES;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
-import java.sql.Connection;
-import java.sql.Date;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
+package org.apache.uima.jcas.cas;
+
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
-import java.util.Properties;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Spliterator;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
-import org.apache.hadoop.hbase.HColumnDescriptor;
-import org.apache.hadoop.hbase.HTableDescriptor;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.client.HBaseAdmin;
-import org.apache.hadoop.hbase.client.HTableInterface;
-import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.coprocessor.RegionObserver;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.phoenix.coprocessor.TephraTransactionalProcessor;
-import org.apache.phoenix.end2end.ParallelStatsDisabledIT;
-import org.apache.phoenix.exception.SQLExceptionCode;
-import org.apache.phoenix.jdbc.PhoenixConnection;
-import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
-import org.apache.phoenix.query.QueryConstants;
-import org.apache.phoenix.query.QueryServices;
-import org.apache.phoenix.schema.PTable;
-import org.apache.phoenix.schema.PTableImpl;
-import org.apache.phoenix.schema.PTableKey;
-import org.apache.phoenix.schema.types.PInteger;
-import org.apache.phoenix.transaction.PhoenixTransactionContext;
-import org.apache.phoenix.transaction.PhoenixTransactionProvider;
-import org.apache.phoenix.transaction.PhoenixTransactionProvider.Feature;
-import org.apache.phoenix.transaction.TransactionFactory;
-import org.apache.phoenix.util.ByteUtil;
-import org.apache.phoenix.util.PropertiesUtil;
-import org.apache.phoenix.util.TestUtil;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
+import org.apache.uima.cas.CAS;
+import org.apache.uima.cas.CASRuntimeException;
+import org.apache.uima.cas.CommonArrayFS;
+import org.apache.uima.cas.FeatureStructure;
+import org.apache.uima.cas.impl.CASImpl;
+import org.apache.uima.cas.impl.TypeImpl;
+import org.apache.uima.jcas.JCas;
+import org.apache.uima.jcas.JCasRegistry;
 
-import com.google.common.collect.Lists;
+/** Java Class model for Cas FSArray type
+ *  extends FeatureStructure for backwards compatibility 
+ *  when using FSArray with no typing. 
+ */
+public final class FSArray<T extends FeatureStructure> extends TOP 
+                           implements ArrayFSImpl<T>,
+                                      Iterable<T>,                                      
+                                      SelectViaCopyToArray<T> {
 
-@RunWith(Parameterized.class)
-public class ParameterizedTransactionIT extends ParallelStatsDisabledIT {
+  /* public static string for use where constants are needed, e.g. in some Java Annotations */
+  public final static String _TypeName = CAS.TYPE_NAME_FS_ARRAY;
+
+  /**
+   * each cover class when loaded sets an index. used in the JCas typeArray to go from the cover
+   * class or class instance to the corresponding instance of the _Type class
+   */
+  public final static int typeIndexID = JCasRegistry.register(FSArray.class);
+
+  public final static int type = typeIndexID;
+
+  /**
+   * used to obtain reference to the _Type instance
+   * 
+   * @return the type array index
+   */
+  // can't be factored - refs locally defined field
+  @Override
+  public int getTypeIndexID() {
+    return typeIndexID;
+  }
+
+  private final TOP[] theArray;
+  
+  // never called. Here to disable default constructor
+  @SuppressWarnings("unused")
+  private FSArray() {
+    theArray = null;
+  }
+
+  /**
+   * Make a new FSArray of given size
+   * @param jcas The JCas
+   * @param length The number of elements in the new array
+   */
+  public FSArray(JCas jcas, int length) {
+    super(jcas);
+    _casView.validateArraySize(length);
+    theArray = new TOP[length];
+
+    if (CASImpl.traceFSs) { // tracing done after array setting, skipped in super class
+      _casView.traceFSCreate(this);
+    }
+    if (_casView.isId2Fs()) {
+      _casView.adjustLastFsV2Size_arrays(length);
+    }    
+  }
+  
+  /**
+   * used by generator
+   * Make a new FSArray of given size
+   * @param c -
+   * @param t -
+   * @param length the length of the array
+   */
+  public FSArray(TypeImpl t, CASImpl c, int length) {
+    super(t, c);  
+    _casView.validateArraySize(length);
+    theArray = new TOP[length];
     
-    private final String tableDDLOptions;
-    private final String tableDDLOptionsWithoutProvider;
-    private final PhoenixTransactionProvider transactionProvider;
+    if (CASImpl.traceFSs) { // tracing done after array setting, skipped in super class
+      _casView.traceFSCreate(this);
+    }
+    if (_casView.isId2Fs()) {
+      _casView.adjustLastFsV2Size_arrays(length);
+    }    
+  }
 
-    public ParameterizedTransactionIT(Boolean mutable, Boolean columnEncoded, String transactionProvider) {
-        StringBuilder optionBuilder = new StringBuilder();
-        optionBuilder.append("TRANSACTION_PROVIDER='"+transactionProvider+"',");
-        this.transactionProvider = TransactionFactory.Provider.valueOf(transactionProvider).getTransactionProvider();
-        StringBuilder optionBuilder2 = new StringBuilder();
-        if (!columnEncoded) {
-            optionBuilder2.append("COLUMN_ENCODED_BYTES=0,");
-        }
-        if (!mutable) {
-            optionBuilder2.append("IMMUTABLE_ROWS=true,");
-            if (!columnEncoded) {
-                optionBuilder2.append("IMMUTABLE_STORAGE_SCHEME="+PTableImpl.ImmutableStorageScheme.ONE_CELL_PER_COLUMN +",");
-            }
-        }
-        if (optionBuilder2.length() > 0) {
-            optionBuilder2.setLength(optionBuilder2.length()-1);
-            optionBuilder.append(optionBuilder2);
-        } else {
-            optionBuilder.setLength(optionBuilder.length()-1);
-        }
-        this.tableDDLOptions = optionBuilder.toString();
-        this.tableDDLOptionsWithoutProvider = optionBuilder2.toString();
+
+  /** return the indexed value from the corresponding Cas FSArray as a Java Model object. */
+  @Override
+  public <U extends FeatureStructure> U get(int i) {
+    return (U) _maybeGetPearFs(theArray[i]);
+  }
+  
+  // internal use
+  TOP get_without_PEAR_conversion(int i) {
+    return theArray[i];
+  }
+
+  /** updates the Cas, setting the indexed value with the corresponding Cas FeatureStructure. */
+  @Override
+  public void set(int i, T av) {
+    TOP v = (TOP) av;
+    if (v != null && _casView.getBaseCAS() != v._casView.getBaseCAS()) {
+      /** Feature Structure {0} belongs to CAS {1}, may not be set as the value of an array or list element in a different CAS {2}.*/
+      throw new CASRuntimeException(CASRuntimeException.FS_NOT_MEMBER_OF_CAS, v, v._casView, _casView);
+    }
+    theArray[i] = _maybeGetBaseForPearFs(v);
+    _casView.maybeLogArrayUpdate(this, null, i);
+  }
+  
+  // internal use
+  void set_without_PEAR_conversion(int i, TOP v) {
+    theArray[i] = v;
+    _casView.maybeLogArrayUpdate(this, null, i);
+  }
+
+  /** return the size of the array. */
+  @Override
+  public int size() {
+    return theArray.length;
+  }
+
+  /**
+   * @see org.apache.uima.cas.ArrayFS#copyFromArray(FeatureStructure[], int, int, int)
+   */
+  @Override
+  public <U extends FeatureStructure> void copyFromArray(U[] src, int srcPos, int destPos, int length) {
+    int srcEnd = srcPos + length;
+    int destEnd = destPos + length;
+    if (srcPos < 0 ||
+        srcEnd > src.length ||
+        destEnd > size()) {
+      throw new ArrayIndexOutOfBoundsException(
+          String.format("FSArray.copyFromArray, srcPos: %,d destPos: %,d length: %,d",  srcPos, destPos, length));
     }
     
-    @Parameters(name="ParameterizedTransactionIT_mutable={0},columnEncoded={1},transactionProvider={2}") // name is used by failsafe as file name in reports
-    public static Collection<Object[]> data() {
-        return TestUtil.filterTxParamData(Arrays.asList(new Object[][] {     
-                 {false, false, "TEPHRA" }, {false, true, "TEPHRA" }, {true, false, "TEPHRA" }, { true, true, "TEPHRA" },
-                 {false, false, "OMID" }, {true, false, "OMID" },
-           }), 2);
+    // doing this element by element to get pear conversions done if needed, and 
+    // to get journaling done
+    for (;srcPos < srcEnd && destPos < destEnd;) {
+      set(destPos++, (T) src[srcPos++]);
+    }
+  }
+
+  /**
+   * @see org.apache.uima.cas.ArrayFS#copyToArray(int, FeatureStructure[], int, int)
+   */
+  @Override
+  public <U extends FeatureStructure> void copyToArray(int srcPos, U[] dest, int destPos, int length) {
+    int srcEnd = srcPos + length;
+    int destEnd = destPos + length;
+    if (srcPos < 0 ||
+        srcEnd > size() ||
+        destEnd > dest.length) {
+      throw new ArrayIndexOutOfBoundsException(
+          String.format("FSArray.copyToArray, srcPos: %,d destPos: %,d length: %,d",  srcPos, destPos, length));
+    }
+    for (;srcPos < srcEnd && destPos < destEnd;) {
+      dest[destPos++] = (U) _maybeGetPearFs(get(srcPos++));
+    }
+  }
+
+  /**
+   * @see org.apache.uima.cas.ArrayFS#toArray()
+   */
+  @Override
+  public FeatureStructure[] toArray() {
+    FeatureStructure[] r = new FeatureStructure[size()];
+    copyToArray(0, r, 0, size());
+    return r;
+  }
+  
+  @Override
+  public FeatureStructure[] _toArrayForSelect() { return toArray(); }
+
+  /**
+   * Not supported, will throw UnsupportedOperationException
+   */
+  @Override
+  public void copyFromArray(String[] src, int srcPos, int destPos, int length) {
+    throw new UnsupportedOperationException();
+  }
+    
+  /**
+   * Copies an array of Feature Structures to an Array of Strings.
+   * The strings are the "toString()" representation of the feature structures, 
+   * 
+   * @param srcPos
+   *                The index of the first element to copy.
+   * @param dest
+   *                The array to copy to.
+   * @param destPos
+   *                Where to start copying into <code>dest</code>.
+   * @param length
+   *                The number of elements to copy.
+   * @exception ArrayIndexOutOfBoundsException
+   *                    If <code>srcPos &lt; 0</code> or
+   *                    <code>length &gt; size()</code> or
+   *                    <code>destPos + length &gt; destArray.length</code>.
+   */
+  @Override
+  public void copyToArray(int srcPos, String[] dest, int destPos, int length) {
+    _casView.checkArrayBounds(theArray.length, srcPos, length);
+    for (int i = 0; i < length; i++) {
+      FeatureStructure fs = _maybeGetPearFs(theArray[i + srcPos]);
+      dest[i + destPos] = (fs == null) ? null : fs.toString();
+    }
+  }
+
+  // internal use
+  // used by serializers, other impls (e.g. FSHashSet)
+  // no conversion to Pear trampolines done
+  public TOP[] _getTheArray() {
+    return theArray;
+  }
+    
+  /* (non-Javadoc)
+   * @see org.apache.uima.jcas.cas.CommonArray#copyValuesFrom(org.apache.uima.jcas.cas.CommonArray)
+   * no conversion to Pear trampolines done
+   */
+  @Override
+  public void copyValuesFrom(CommonArrayFS<T> v) {
+    FSArray<T> bv = (FSArray<T>) v;
+    System.arraycopy(bv.theArray,  0,  theArray, 0, theArray.length);
+    _casView.maybeLogArrayUpdates(this, 0, size());
+  }
+  
+  /**
+   * Convenience - create a FSArray from an existing FeatureStructure[]
+   * @param jcas -
+   * @param a -
+   * @param <U> the element type of the FSArray, subtype of FeatureStructure
+   * @return -
+   */
+  public static <U extends FeatureStructure> FSArray<U> create(JCas jcas, FeatureStructure[] a) {
+    FSArray<U> fsa = new FSArray<>(jcas, a.length);
+    fsa.copyFromArray(a, 0, 0, a.length);
+    return fsa;
+  }
+
+  @Override
+  public Iterator<T> iterator() {
+    return new Iterator<T>() {
+      int i = 0;
+      
+      @Override
+      public boolean hasNext() {
+        return i < size();
+      }
+
+      @Override
+      public T next() {
+        if (!hasNext()) {
+          throw new NoSuchElementException();
+        }
+        return (T) get(i++);  // does trampoline conversion
+      }
+    };
+  }
+  
+  @Override
+  public Spliterator<T> spliterator() {
+    return (Spliterator<T>) Arrays.spliterator(theArray);
+  }
+  
+  public Stream<T> stream() {
+    return StreamSupport.stream(spliterator(), false);
+  }
+
+  public boolean contains(Object o) {
+    if (null == o) {
+      for (TOP e : theArray) {
+        if (e == null) {
+          return true;
+        }
+      }
+      return false;
     }
     
-    @Test
-    public void testReadOwnWrites() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        String selectSql = "SELECT * FROM "+ fullTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.setAutoCommit(false);
-            ResultSet rs = conn.createStatement().executeQuery(selectSql);
-            assertFalse(rs.next());
-            
-            String upsert = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk) VALUES(?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn.prepareStatement(upsert);
-            // upsert two rows
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.execute();
-            TestUtil.setRowKeyColumns(stmt, 2);
-            stmt.execute();
-            
-            // verify rows can be read even though commit has not been called
-            rs = conn.createStatement().executeQuery(selectSql);
-            TestUtil.validateRowKeyColumns(rs, 1);
-            TestUtil.validateRowKeyColumns(rs, 2);
-            assertFalse(rs.next());
-            
-            conn.commit();
-            
-            // verify rows can be read after commit
-            rs = conn.createStatement().executeQuery(selectSql);
-            TestUtil.validateRowKeyColumns(rs, 1);
-            TestUtil.validateRowKeyColumns(rs, 2);
-            assertFalse(rs.next());
-        }
+    if (!(o instanceof TOP)) {
+      return false;
     }
-    
-    // @Test - disabled, doesn't test anything new. TODO: Fix or remove.
-    public void testTxnClosedCorrecty() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        String selectSql = "SELECT * FROM "+fullTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            String ddl = "create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true";
-            conn.createStatement().execute(ddl);
-            conn.setAutoCommit(false);
-            ResultSet rs = conn.createStatement().executeQuery(selectSql);
-            assertFalse(rs.next());
-            
-            String upsert = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk) VALUES(?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn.prepareStatement(upsert);
-            // upsert two rows
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.execute();
-            TestUtil.setRowKeyColumns(stmt, 2);
-            stmt.execute();
-            
-            // verify rows can be read even though commit has not been called
-            rs = conn.createStatement().executeQuery(selectSql);
-            TestUtil.validateRowKeyColumns(rs, 1);
-            TestUtil.validateRowKeyColumns(rs, 2);
-            // Long currentTx = rs.unwrap(PhoenixResultSet.class).getCurrentRow().getValue(0).getTimestamp();
-            assertFalse(rs.next());
-            
-            conn.close();
-            // start new connection
-            // conn.createStatement().executeQuery(selectSql);
-            // assertFalse("This transaction should not be on the invalid transactions",
-            // txManager.getCurrentState().getInvalid().contains(currentTx));
-        }
+    TOP item = (TOP) o;
+    for (TOP e : theArray) {
+      if (item.equals(e)) {
+        return true;
+      }
     }
-    
-    @Test
-    public void testAutoCommitQuery() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.setAutoCommit(true);
-            // verify no rows returned with single table
-            ResultSet rs = conn.createStatement().executeQuery("SELECT * FROM " + fullTableName);
-            assertFalse(rs.next());
+    return false;
+  }
 
-            // verify no rows returned with multiple tables
-            rs = conn.createStatement().executeQuery("SELECT * FROM " + fullTableName + " x JOIN " + fullTableName + " y ON (x.long_pk = y.int_pk)");
-            assertFalse(rs.next());
-        } 
+  public <U extends TOP> U[] toArray(U[] a) {
+    final int sz = size();
+    if (a.length < sz) {
+      return (U[]) Arrays.copyOf(theArray, sz, a.getClass());
     }
-    
-    @Test
-    public void testSelfJoin() throws Exception {
-        String t1 = generateUniqueName();
-        String t2 = generateUniqueName();
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + t1 + " (varchar_pk VARCHAR NOT NULL primary key, a.varchar_col1 VARCHAR, b.varchar_col2 VARCHAR)" + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.createStatement().execute("create table " + t2 + " (varchar_pk VARCHAR NOT NULL primary key, a.varchar_col1 VARCHAR, b.varchar_col1 VARCHAR)" + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            // verify no rows returned
-            ResultSet rs = conn.createStatement().executeQuery("SELECT * FROM " + t1 + " x JOIN " + t1 + " y ON (x.varchar_pk = y.a.varchar_col1)");
-            assertFalse(rs.next());
-            rs = conn.createStatement().executeQuery("SELECT * FROM " + t2 + " x JOIN " + t2 + " y ON (x.varchar_pk = y.a.varchar_col1)");
-            assertFalse(rs.next());
-        } 
-    }
-    
-    private void testRowConflicts(String fullTableName) throws Exception {
-        try (Connection conn1 = DriverManager.getConnection(getUrl());
-                Connection conn2 = DriverManager.getConnection(getUrl())) {
-            conn1.setAutoCommit(false);
-            conn2.setAutoCommit(false);
-            String selectSql = "SELECT * FROM "+fullTableName;
-            conn1.setAutoCommit(false);
-            ResultSet rs = conn1.createStatement().executeQuery(selectSql);
-            boolean immutableRows = conn1.unwrap(PhoenixConnection.class).getTable(new PTableKey(null, fullTableName)).isImmutableRows();
-            assertFalse(rs.next());
-            // upsert row using conn1
-            String upsertSql = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk, a.int_col1) VALUES(?, ?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn1.prepareStatement(upsertSql);
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.setInt(7, 10);
-            stmt.execute();
-            // upsert row using conn2
-            upsertSql = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk, b.int_col2) VALUES(?, ?, ?, ?, ?, ?, ?)";
-            stmt = conn2.prepareStatement(upsertSql);
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.setInt(7, 11);
-            stmt.execute();
-            
-            conn1.commit();
-            //second commit should fail
-            try {
-                conn2.commit();
-                if (!immutableRows) fail();
-            }   
-            catch (SQLException e) {
-                if (immutableRows) fail();
-                assertEquals(e.getErrorCode(), SQLExceptionCode.TRANSACTION_CONFLICT_EXCEPTION.getErrorCode());
-            }
-        }
-    }
-    
-    @Test
-    public void testRowConflictDetected() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        Connection conn = DriverManager.getConnection(getUrl());
-        conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-        testRowConflicts(fullTableName);
-    }
-    
-    @Test
-    public void testNoConflictDetectionForImmutableRows() throws Exception {
-        if (tableDDLOptions.contains("IMMUTABLE_ROWS=true")) {
-            // only need to test this for immutable rows
-            String transTableName = generateUniqueName();
-            String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-            Connection conn = DriverManager.getConnection(getUrl());
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            testRowConflicts(fullTableName);
-        }
-    }
-    
-    @Test
-    public void testNonTxToTxTable() throws Exception {
-        String nonTxTableName = generateUniqueName();
-
-        Connection conn = DriverManager.getConnection(getUrl());
-        conn.createStatement().execute("CREATE TABLE " + nonTxTableName + "(k INTEGER PRIMARY KEY, v VARCHAR)" + tableDDLOptionsWithoutProvider);
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (1)");
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (2, 'a')");
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (3, 'b')");
-        conn.commit();
-        
-        String index = generateUniqueName();
-        conn.createStatement().execute("CREATE INDEX " + index + " ON " + nonTxTableName + "(v)");
-        // Reset empty column value to an empty value like it is pre-transactions
-        HTableInterface htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes( nonTxTableName));
-        List<Put>puts = Lists.newArrayList(new Put(PInteger.INSTANCE.toBytes(1)), new Put(PInteger.INSTANCE.toBytes(2)), new Put(PInteger.INSTANCE.toBytes(3)));
-        for (Put put : puts) {
-            put.addColumn(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES, QueryConstants.EMPTY_COLUMN_BYTES, ByteUtil.EMPTY_BYTE_ARRAY);
-        }
-        htable.put(puts);
-        
-        try {
-            conn.createStatement().execute("ALTER TABLE " + nonTxTableName + " SET TRANSACTIONAL=true,TRANSACTION_PROVIDER='" + transactionProvider + "'");
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                fail();
-            }
-        } catch (SQLException e) {
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                assertEquals(SQLExceptionCode.CANNOT_ALTER_TABLE_FROM_NON_TXN_TO_TXNL.getErrorCode(), e.getErrorCode());
-                return;
-            } else {
-                throw e;
-            }
-        }
-        
-        htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes( nonTxTableName));
-        assertTrue(htable.getTableDescriptor().getCoprocessors().contains(TephraTransactionalProcessor.class.getName()));
-        htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes(index));
-        assertTrue(htable.getTableDescriptor().getCoprocessors().contains(TephraTransactionalProcessor.class.getName()));
-
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (4, 'c')");
-        ResultSet rs = conn.createStatement().executeQuery("SELECT /*+ NO_INDEX */ k FROM " + nonTxTableName + " WHERE v IS NULL");
-        assertTrue(conn.unwrap(PhoenixConnection.class).getTable(new PTableKey(null,  nonTxTableName)).isTransactional());
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertFalse(rs.next());
-        conn.commit();
-        
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (5, 'd')");
-        rs = conn.createStatement().executeQuery("SELECT k FROM " + nonTxTableName);
-        assertTrue(conn.unwrap(PhoenixConnection.class).getTable(new PTableKey(null, index)).isTransactional());
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(2,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(3,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(4,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(5,rs.getInt(1));
-        assertFalse(rs.next());
-        conn.rollback();
-        
-        rs = conn.createStatement().executeQuery("SELECT k FROM " + nonTxTableName);
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(2,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(3,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(4,rs.getInt(1));
-        assertFalse(rs.next());
-    }
-    
-    @Test
-    public void testNonTxToTxTableFailure() throws Exception {
-        if (tableDDLOptions.contains("COLUMN_ENCODED_BYTES")) {
-            // no need to test this with all variations of column encoding
-            return;
-        }
-
-        String nonTxTableName = generateUniqueName();
-
-        Connection conn = DriverManager.getConnection(getUrl());
-        // Put table in SYSTEM schema to prevent attempts to update the cache after we disable SYSTEM.CATALOG
-        conn.createStatement().execute("CREATE TABLE \"SYSTEM\"." + nonTxTableName + "(k INTEGER PRIMARY KEY, v VARCHAR)" + tableDDLOptionsWithoutProvider);
-        conn.createStatement().execute("UPSERT INTO \"SYSTEM\"." + nonTxTableName + " VALUES (1)");
-        conn.commit();
-        // Reset empty column value to an empty value like it is pre-transactions
-        HTableInterface htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes("SYSTEM." + nonTxTableName));
-        Put put = new Put(PInteger.INSTANCE.toBytes(1));
-        put.addColumn(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES, QueryConstants.EMPTY_COLUMN_BYTES, ByteUtil.EMPTY_BYTE_ARRAY);
-        htable.put(put);
-        
-        HBaseAdmin admin = conn.unwrap(PhoenixConnection.class).getQueryServices().getAdmin();
-        admin.disableTable(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME);
-        try {
-            // This will succeed initially in updating the HBase metadata, but then will fail when
-            // the SYSTEM.CATALOG table is attempted to be updated, exercising the code to restore
-            // the coprocessors back to the non transactional ones.
-            conn.createStatement().execute("ALTER TABLE \"SYSTEM\"." + nonTxTableName + " SET TRANSACTIONAL=true,TRANSACTION_PROVIDER='" + transactionProvider + "'");
-            fail();
-        } catch (SQLException e) {
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                assertEquals(SQLExceptionCode.CANNOT_ALTER_TABLE_FROM_NON_TXN_TO_TXNL.getErrorCode(), e.getErrorCode());
-            } else {
-                assertTrue(e.getMessage().contains(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME + " is disabled"));
-            }
-        } finally {
-            admin.enableTable(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME);
-            admin.close();
-        }
-        
-        ResultSet rs = conn.createStatement().executeQuery("SELECT k FROM \"SYSTEM\"." + nonTxTableName + " WHERE v IS NULL");
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertFalse(rs.next());
-        
-        htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes("SYSTEM." + nonTxTableName));
-        Class<? extends RegionObserver> clazz = transactionProvider.getCoprocessor();
-        assertFalse(htable.getTableDescriptor().getCoprocessors().contains(clazz.getName()));
-        assertEquals(1,conn.unwrap(PhoenixConnection.class).getQueryServices().
-                getTableDescriptor(Bytes.toBytes("SYSTEM." + nonTxTableName)).
-                getFamily(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES).getMaxVersions());
-    }
-    
-    @Test
-    public void testCreateTableToBeTransactional() throws Exception {
-        if (tableDDLOptions.contains("COLUMN_ENCODED_BYTES")) {
-            // no need to test this with all variations of column encoding
-            return;
-        }
-
-        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
-        Connection conn = DriverManager.getConnection(getUrl(), props);
-        String t1 = generateUniqueName();
-        String t2 = generateUniqueName();
-        String ddl = "CREATE TABLE " + t1 + " (k varchar primary key)" + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true";
-        conn.createStatement().execute(ddl);
-        PhoenixConnection pconn = conn.unwrap(PhoenixConnection.class);
-        PTable table = pconn.getTable(new PTableKey(null, t1));
-        HTableInterface htable = pconn.getQueryServices().getTable(Bytes.toBytes(t1));
-        assertTrue(table.isTransactional());
-        Class<? extends RegionObserver> clazz = transactionProvider.getCoprocessor();
-        assertTrue(htable.getTableDescriptor().getCoprocessors().contains(clazz.getName()));
-        
-        try {
-            ddl = "ALTER TABLE " + t1 + " SET transactional=false";
-            conn.createStatement().execute(ddl);
-            fail();
-        } catch (SQLException e) {
-            assertEquals(SQLExceptionCode.TX_MAY_NOT_SWITCH_TO_NON_TX.getErrorCode(), e.getErrorCode());
-        }
-
-        HBaseAdmin admin = pconn.getQueryServices().getAdmin();
-        HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(t2));
-        desc.addFamily(new HColumnDescriptor(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES));
-        admin.createTable(desc);
-        try {
-            ddl = "CREATE TABLE " + t2 + " (k varchar primary key) transactional=true,transaction_provider='" + transactionProvider + "'";
-            conn.createStatement().execute(ddl);
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                fail();
-            }
-        } catch (SQLException e) {
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                assertEquals(SQLExceptionCode.CANNOT_ALTER_TABLE_FROM_NON_TXN_TO_TXNL.getErrorCode(), e.getErrorCode());
-                return;
-            }
-            throw e;
-        }
-
-        HTableDescriptor htableDescriptor = admin.getTableDescriptor(TableName.valueOf(t2));
-        String str = htableDescriptor.getValue(PhoenixTransactionContext.READ_NON_TX_DATA);
-        assertEquals(Boolean.TRUE.toString(), str);
-        
-        // Should be ok, as HBase metadata should match existing metadata.
-        ddl = "CREATE TABLE IF NOT EXISTS " + t1 + " (k varchar primary key)"; 
-        try {
-            conn.createStatement().execute(ddl);
-            fail();
-        } catch (SQLException e) {
-            assertEquals(SQLExceptionCode.TX_MAY_NOT_SWITCH_TO_NON_TX.getErrorCode(), e.getErrorCode());
-        }
-        ddl += " transactional=true,transaction_provider='" + transactionProvider + "'";
-        conn.createStatement().execute(ddl);
-        table = pconn.getTable(new PTableKey(null, t1));
-        htable = pconn.getQueryServices().getTable(Bytes.toBytes(t1));
-        assertTrue(table.isTransactional());
-        assertTrue(htable.getTableDescriptor().getCoprocessors().contains(clazz.getName()));
-    }
-
-    @Test
-    public void testCurrentDate() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        String selectSql = "SELECT current_date() FROM "+fullTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.setAutoCommit(false);
-            ResultSet rs = conn.createStatement().executeQuery(selectSql);
-            assertFalse(rs.next());
-            
-            String upsert = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk) VALUES(?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn.prepareStatement(upsert);
-            // upsert two rows
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.execute();
-            conn.commit();
-            
-            rs = conn.createStatement().executeQuery(selectSql);
-            assertTrue(rs.next());
-            Date date1 = rs.getDate(1);
-            assertFalse(rs.next());
-            
-            Thread.sleep(1000);
-            
-            rs = conn.createStatement().executeQuery(selectSql);
-            assertTrue(rs.next());
-            Date date2 = rs.getDate(1);
-            assertFalse(rs.next());
-            assertTrue("current_date() should change while executing multiple statements", date2.getTime() > date1.getTime());
-        }
-    }
-    
-    
-    @Test
-    public void testParallelUpsertSelect() throws Exception {
-        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
-        props.setProperty(QueryServices.MUTATE_BATCH_SIZE_BYTES_ATTRIB, Integer.toString(512));
-        props.setProperty(QueryServices.SCAN_CACHE_SIZE_ATTRIB, Integer.toString(3));
-        props.setProperty(QueryServices.SCAN_RESULT_CHUNK_SIZE, Integer.toString(3));
-        Connection conn = DriverManager.getConnection(getUrl(), props);
-        conn.setAutoCommit(false);
-        String fullTableName1 = generateUniqueName();
-        String fullTableName2 = generateUniqueName();
-        String sequenceName = "S_" + generateUniqueName();
-        conn.createStatement().execute("CREATE SEQUENCE " + sequenceName);
-        conn.createStatement().execute("CREATE TABLE " + fullTableName1 + " (pk INTEGER PRIMARY KEY, val INTEGER) SALT_BUCKETS=4, TRANSACTIONAL=true"
-                + (tableDDLOptions.length() > 0 ? "," : "")  + tableDDLOptions);
-        conn.createStatement().execute("CREATE TABLE " + fullTableName2 + " (pk INTEGER PRIMARY KEY, val INTEGER)" );
-
-        for (int i = 0; i < 100; i++) {
-            conn.createStatement().execute("UPSERT INTO " + fullTableName1 + " VALUES (NEXT VALUE FOR " + sequenceName + ", " + (i%10) + ")");
-        }
-        conn.commit();
-        conn.setAutoCommit(true);
-        int upsertCount = conn.createStatement().executeUpdate("UPSERT INTO " + fullTableName2 + " SELECT pk, val FROM " + fullTableName1);
-        assertEquals(100,upsertCount);
-        conn.close();
-    }
-
-    @Test
-    public void testInflightPartialEval() throws SQLException {
-
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            String transactTableName = generateUniqueName();
-            Statement stmt = conn.createStatement();
-            stmt.execute("CREATE TABLE " + transactTableName + " (k VARCHAR PRIMARY KEY, v1 VARCHAR, v2 VARCHAR) " + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-
-            
-            try (Connection conn1 = DriverManager.getConnection(getUrl()); Connection conn2 = DriverManager.getConnection(getUrl())) {
-                conn1.createStatement().execute("UPSERT INTO " + transactTableName + " VALUES ('a','b','x')");
-                // Select to force uncommitted data to be written
-                ResultSet rs = conn1.createStatement().executeQuery("SELECT * FROM " + transactTableName);
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("b", rs.getString(2));
-                assertFalse(rs.next());
-                
-                conn2.createStatement().execute("UPSERT INTO " + transactTableName + " VALUES ('a','c','x')");
-                // Select to force uncommitted data to be written
-                rs = conn2.createStatement().executeQuery("SELECT * FROM " + transactTableName );
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("c", rs.getString(2));
-                assertFalse(rs.next());
-                
-                // If the AndExpression were to see the uncommitted row from conn2, the filter would
-                // filter the row out early and no longer continue to evaluate other cells due to
-                // the way partial evaluation holds state.
-                rs = conn1.createStatement().executeQuery("SELECT * FROM " +  transactTableName + " WHERE v1 != 'c' AND v2 = 'x'");
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("b", rs.getString(2));
-                assertFalse(rs.next());
-                
-                // Same as above for conn1 data
-                rs = conn2.createStatement().executeQuery("SELECT * FROM " + transactTableName + " WHERE v1 != 'b' AND v2 = 'x'");
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("c", rs.getString(2));
-                assertFalse(rs.next());
-            }
-
-        }
-    }
-    
+    System.arraycopy(theArray, 0, a, 0, size());
+    return a;
+  }
+ 
 }

@@ -1,125 +1,162 @@
 /*
- * Copyright (c) 2007 Mockito contributors
- * This program is made available under the terms of the MIT License.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.mockito.internal.stubbing.defaultanswers;
+package org.apache.drill.exec.planner.sql;
 
-import org.mockito.MockSettings;
-import org.mockito.internal.InternalMockHandler;
-import org.mockito.internal.MockitoCore;
-import org.mockito.internal.creation.settings.CreationSettings;
-import org.mockito.internal.stubbing.InvocationContainerImpl;
-import org.mockito.internal.stubbing.StubbedInvocationMatcher;
-import org.mockito.internal.util.MockUtil;
-import org.mockito.internal.util.reflection.GenericMetadataSupport;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
+import java.io.IOException;
 
-import java.io.Serializable;
+import org.apache.calcite.sql.SqlDescribeSchema;
+import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.tools.RelConversionException;
+import org.apache.calcite.tools.ValidationException;
+import org.apache.drill.common.exceptions.UserException;
+import org.apache.drill.exec.ops.QueryContext;
+import org.apache.drill.exec.physical.PhysicalPlan;
+import org.apache.drill.exec.planner.sql.handlers.AbstractSqlHandler;
+import org.apache.drill.exec.planner.sql.handlers.DefaultSqlHandler;
+import org.apache.drill.exec.planner.sql.handlers.DescribeSchemaHandler;
+import org.apache.drill.exec.planner.sql.handlers.DescribeTableHandler;
+import org.apache.drill.exec.planner.sql.handlers.ExplainHandler;
+import org.apache.drill.exec.planner.sql.handlers.SetOptionHandler;
+import org.apache.drill.exec.planner.sql.handlers.SqlHandlerConfig;
+import org.apache.drill.exec.planner.sql.parser.DrillSqlCall;
+import org.apache.drill.exec.planner.sql.parser.DrillSqlDescribeTable;
+import org.apache.drill.exec.planner.sql.parser.SqlCreateTable;
+import org.apache.drill.exec.testing.ControlsInjector;
+import org.apache.drill.exec.testing.ControlsInjectorFactory;
+import org.apache.drill.exec.util.Pointer;
+import org.apache.drill.exec.work.foreman.ForemanSetupException;
+import org.apache.drill.exec.work.foreman.SqlUnsupportedException;
+import org.apache.hadoop.security.AccessControlException;
 
-import static org.mockito.Mockito.withSettings;
+public class DrillSqlWorker {
+  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(DrillSqlWorker.class);
+  private static final ControlsInjector injector = ControlsInjectorFactory.getInjector(DrillSqlWorker.class);
 
-/**
- * Returning deep stub implementation.
- *
- * Will return previously created mock if the invocation matches.
- *
- * <p>Supports nested generic information, with this answer you can write code like this :
- *
- * <pre class="code"><code class="java">
- *     interface GenericsNest&lt;K extends Comparable&lt;K&gt; & Cloneable&gt; extends Map&lt;K, Set&lt;Number&gt;&gt; {}
- *
- *     GenericsNest&lt;?&gt; mock = mock(GenericsNest.class, new ReturnsGenericDeepStubs());
- *     Number number = mock.entrySet().iterator().next().getValue().iterator().next();
- * </code></pre>
- * </p>
- *
- * @see org.mockito.Mockito#RETURNS_DEEP_STUBS
- * @see org.mockito.Answers#RETURNS_DEEP_STUBS
- */
-public class ReturnsDeepStubs implements Answer<Object>, Serializable {
-    
-    private static final long serialVersionUID = -7105341425736035847L;
+  private DrillSqlWorker() {
+  }
 
-    private MockitoCore mockitoCore = new MockitoCore();
-    private ReturnsEmptyValues delegate = new ReturnsEmptyValues();
+  /**
+   * Converts sql query string into query physical plan.
+   *
+   * @param context query context
+   * @param sql sql query
+   * @return query physical plan
+   */
+  public static PhysicalPlan getPlan(QueryContext context, String sql) throws ForemanSetupException {
+    return getPlan(context, sql, null);
+  }
 
-    public Object answer(InvocationOnMock invocation) throws Throwable {
-        GenericMetadataSupport returnTypeGenericMetadata =
-                actualParameterizedType(invocation.getMock()).resolveGenericReturnType(invocation.getMethod());
+  /**
+   * Converts sql query string into query physical plan.
+   * In case of any errors (that might occur due to missing function implementation),
+   * checks if local function registry should be synchronized with remote function registry.
+   * If sync took place, reloads drill operator table
+   * (since functions were added to / removed from local function registry)
+   * and attempts to converts sql query string into query physical plan one more time.
+   *
+   * @param context query context
+   * @param sql sql query
+   * @param textPlan text plan
+   * @return query physical plan
+   */
+  public static PhysicalPlan getPlan(QueryContext context, String sql, Pointer<String> textPlan) throws ForemanSetupException {
+    Pointer<String> textPlanCopy = textPlan == null ? null : new Pointer<>(textPlan.value);
+    try {
+      return getQueryPlan(context, sql, textPlan);
+    } catch (Exception e) {
+      logger.trace("There was an error during conversion into physical plan. " +
+          "Will sync remote and local function registries if needed and retry " +
+          "in case if issue was due to missing function implementation.");
+      if (context.getFunctionRegistry().syncWithRemoteRegistry(
+          context.getDrillOperatorTable().getFunctionRegistryVersion())) {
+        context.reloadDrillOperatorTable();
+        logger.trace("Local function registry was synchronized with remote. Trying to find function one more time.");
+        return getQueryPlan(context, sql, textPlanCopy);
+      }
+      throw e;
+    }
+  }
 
-        Class<?> rawType = returnTypeGenericMetadata.rawType();
-        if (!mockitoCore.isTypeMockable(rawType)) {
-            return delegate.returnValueFor(rawType);
-        }
+  /**
+   * Converts sql query string into query physical plan.
+   *
+   * @param context query context
+   * @param sql sql query
+   * @param textPlan text plan
+   * @return query physical plan
+   */
+  private static PhysicalPlan getQueryPlan(QueryContext context, String sql, Pointer<String> textPlan)
+      throws ForemanSetupException {
 
-        return getMock(invocation, returnTypeGenericMetadata);
+    final SqlConverter parser = new SqlConverter(context);
+
+    injector.injectChecked(context.getExecutionControls(), "sql-parsing", ForemanSetupException.class);
+    final SqlNode sqlNode = parser.parse(sql);
+    final AbstractSqlHandler handler;
+    final SqlHandlerConfig config = new SqlHandlerConfig(context, parser);
+
+    switch(sqlNode.getKind()){
+    case EXPLAIN:
+      handler = new ExplainHandler(config, textPlan);
+      break;
+    case SET_OPTION:
+      handler = new SetOptionHandler(context);
+      break;
+    case DESCRIBE_TABLE:
+      if (sqlNode instanceof DrillSqlDescribeTable) {
+        handler = new DescribeTableHandler(config);
+        break;
+      }
+    case DESCRIBE_SCHEMA:
+      if (sqlNode instanceof SqlDescribeSchema) {
+        handler = new DescribeSchemaHandler(config);
+        break;
+      }
+    case OTHER:
+      if(sqlNode instanceof SqlCreateTable) {
+        handler = ((DrillSqlCall)sqlNode).getSqlHandler(config, textPlan);
+        break;
+      }
+
+      if (sqlNode instanceof DrillSqlCall) {
+        handler = ((DrillSqlCall)sqlNode).getSqlHandler(config);
+        break;
+      }
+      // fallthrough
+    default:
+      handler = new DefaultSqlHandler(config, textPlan);
     }
 
-    private Object getMock(InvocationOnMock invocation, GenericMetadataSupport returnTypeGenericMetadata) throws Throwable {
-    	InternalMockHandler<Object> handler = new MockUtil().getMockHandler(invocation.getMock());
-    	InvocationContainerImpl container = (InvocationContainerImpl) handler.getInvocationContainer();
-
-        // matches invocation for verification
-        for (StubbedInvocationMatcher stubbedInvocationMatcher : container.getStubbedInvocations()) {
-    		if(container.getInvocationForStubbing().matches(stubbedInvocationMatcher.getInvocation())) {
-    			return stubbedInvocationMatcher.answer(invocation);
-    		}
-		}
-
-        // deep stub
-        return recordDeepStubMock(createNewDeepStubMock(returnTypeGenericMetadata), container);
+    try {
+      return handler.getPlan(sqlNode);
+    } catch(ValidationException e) {
+      String errorMessage = e.getCause() != null ? e.getCause().getMessage() : e.getMessage();
+      throw UserException.validationError(e)
+          .message(errorMessage)
+          .build(logger);
+    } catch (AccessControlException e) {
+      throw UserException.permissionError(e)
+          .build(logger);
+    } catch(SqlUnsupportedException e) {
+      throw UserException.unsupportedError(e)
+          .build(logger);
+    } catch (IOException | RelConversionException e) {
+      throw new QueryInputException("Failure handling SQL.", e);
     }
-
-    /**
-     * Creates a mock using the Generics Metadata.
-     *
-     * <li>Finally as we want to mock the actual type, but we want to pass along the contextual generics meta-data
-     * that was resolved for the current return type, for this to happen we associate to the mock an new instance of
-     * {@link ReturnsDeepStubs} answer in which we will store the returned type generic metadata.
-     *
-     * @param returnTypeGenericMetadata The metadata to use to create the new mock.
-     * @return The mock
-     */
-    private Object createNewDeepStubMock(GenericMetadataSupport returnTypeGenericMetadata) {
-        return mockitoCore.mock(
-                returnTypeGenericMetadata.rawType(),
-                withSettingsUsing(returnTypeGenericMetadata)
-        );
-    }
-
-    private MockSettings withSettingsUsing(GenericMetadataSupport returnTypeGenericMetadata) {
-        MockSettings mockSettings =
-                returnTypeGenericMetadata.rawExtraInterfaces().length > 0 ?
-                withSettings().extraInterfaces(returnTypeGenericMetadata.rawExtraInterfaces())
-                : withSettings();
-
-        return mockSettings
-                .defaultAnswer(returnsDeepStubsAnswerUsing(returnTypeGenericMetadata));
-    }
-
-    private ReturnsDeepStubs returnsDeepStubsAnswerUsing(final GenericMetadataSupport returnTypeGenericMetadata) {
-        return new ReturnsDeepStubs() {
-            @Override
-            protected GenericMetadataSupport actualParameterizedType(Object mock) {
-                return returnTypeGenericMetadata;
-            }
-        };
-    }
-
-    private Object recordDeepStubMock(final Object mock, InvocationContainerImpl container) throws Throwable {
-
-        container.addAnswer(new Answer<Object>() {
-            public Object answer(InvocationOnMock invocation) throws Throwable {
-                return mock;
-            }
-        }, false);
-
-        return mock;
-    }
-
-    protected GenericMetadataSupport actualParameterizedType(Object mock) {
-        CreationSettings mockSettings = (CreationSettings) new MockUtil().getMockHandler(mock).getMockSettings();
-        return GenericMetadataSupport.inferFrom(mockSettings.getTypeToMock());
-    }
+  }
 }

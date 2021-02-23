@@ -1,372 +1,188 @@
 /*
- * $HeadURL$
- * $Revision$
- * $Date$
+ * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
+ * agreements. See the NOTICE file distributed with this work for additional information regarding
+ * copyright ownership. The ASF licenses this file to You under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the License. You may obtain a
+ * copy of the License at
  *
- * ====================================================================
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation.  For more
- * information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
  */
+package org.apache.geode.management.internal.beans;
 
-package org.apache.http.conn.ssl;
+import java.util.List;
+import java.util.Set;
 
-import org.apache.http.conn.LayeredSocketFactory;
-import org.apache.http.params.HttpConnectionParams;
-import org.apache.http.params.HttpParams;
+import org.apache.geode.annotations.VisibleForTesting;
+import org.apache.geode.cache.wan.GatewayReceiver;
+import org.apache.geode.cache.wan.GatewayTransportFilter;
+import org.apache.geode.internal.cache.InternalCacheServer;
+import org.apache.geode.internal.cache.tier.Acceptor;
+import org.apache.geode.internal.cache.tier.sockets.ServerConnection;
+import org.apache.geode.internal.cache.wan.GatewayReceiverStats;
+import org.apache.geode.management.internal.ManagementConstants;
+import org.apache.geode.management.internal.beans.stats.StatType;
+import org.apache.geode.management.internal.beans.stats.StatsKey;
+import org.apache.geode.management.internal.beans.stats.StatsRate;
 
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.TrustManagerFactory;
-import java.io.IOException;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.UnknownHostException;
-import java.security.KeyManagementException;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.security.UnrecoverableKeyException;
+public class GatewayReceiverMBeanBridge extends ServerBridge {
 
-/**
- * Layered socket factory for TLS/SSL connections, based on JSSE.
- *.
- * <p>
- * SSLSocketFactory can be used to validate the identity of the HTTPS 
- * server against a list of trusted certificates and to authenticate to
- * the HTTPS server using a private key. 
- * </p>
- * 
- * <p>
- * SSLSocketFactory will enable server authentication when supplied with
- * a {@link KeyStore truststore} file containg one or several trusted
- * certificates. The client secure socket will reject the connection during
- * the SSL session handshake if the target HTTPS server attempts to
- * authenticate itself with a non-trusted certificate.
- * </p>
- * 
- * <p>
- * Use JDK keytool utility to import a trusted certificate and generate a truststore file:    
- *    <pre>
- *     keytool -import -alias "my server cert" -file server.crt -keystore my.truststore
- *    </pre>
- * </p>
- * 
- * <p>
- * SSLSocketFactory will enable client authentication when supplied with
- * a {@link KeyStore keystore} file containg a private key/public certificate
- * pair. The client secure socket will use the private key to authenticate
- * itself to the target HTTPS server during the SSL session handshake if
- * requested to do so by the server.
- * The target HTTPS server will in its turn verify the certificate presented
- * by the client in order to establish client's authenticity
- * </p>
- * 
- * <p>
- * Use the following sequence of actions to generate a keystore file
- * </p>
- *   <ul>
- *     <li>
- *      <p>
- *      Use JDK keytool utility to generate a new key
- *      <pre>keytool -genkey -v -alias "my client key" -validity 365 -keystore my.keystore</pre>
- *      For simplicity use the same password for the key as that of the keystore
- *      </p>
- *     </li>
- *     <li>
- *      <p>
- *      Issue a certificate signing request (CSR)
- *      <pre>keytool -certreq -alias "my client key" -file mycertreq.csr -keystore my.keystore</pre>
- *     </p>
- *     </li>
- *     <li>
- *      <p>
- *      Send the certificate request to the trusted Certificate Authority for signature. 
- *      One may choose to act as her own CA and sign the certificate request using a PKI 
- *      tool, such as OpenSSL.
- *      </p>
- *     </li>
- *     <li>
- *      <p>
- *       Import the trusted CA root certificate
- *       <pre>keytool -import -alias "my trusted ca" -file caroot.crt -keystore my.keystore</pre> 
- *      </p>
- *     </li>
- *     <li>
- *      <p>
- *       Import the PKCS#7 file containg the complete certificate chain
- *       <pre>keytool -import -alias "my client key" -file mycert.p7 -keystore my.keystore</pre> 
- *      </p>
- *     </li>
- *     <li>
- *      <p>
- *       Verify the content the resultant keystore file
- *       <pre>keytool -list -v -keystore my.keystore</pre> 
- *      </p>
- *     </li>
- *   </ul>
- * @author <a href="mailto:oleg at ural.ru">Oleg Kalnichevski</a>
- * @author Julius Davies
- */
+  private final GatewayReceiver gatewayReceiver;
 
-public class SSLSocketFactory implements LayeredSocketFactory {
+  private StatsRate createRequestRate;
+  private StatsRate updateRequestRate;
+  private StatsRate destroyRequestRate;
+  private StatsRate eventsReceivedRate;
 
-    public static final String TLS   = "TLS";
-    public static final String SSL   = "SSL";
-    public static final String SSLV2 = "SSLv2";
-    
-    public static final HostnameVerifier ALLOW_ALL_HOSTNAME_VERIFIER 
-        = new AllowAllHostnameVerifier();
-    
-    public static final HostnameVerifier BROWSER_COMPATIBLE_HOSTNAME_VERIFIER 
-        = new BrowserCompatHostnameVerifier();
-    
-    public static final HostnameVerifier STRICT_HOSTNAME_VERIFIER 
-        = new StrictHostnameVerifier();
-    /**
-     * The factory using the default JVM settings for secure connections.
-     */
-    private static final SSLSocketFactory DEFAULT_FACTORY = new SSLSocketFactory();
-    
-    /**
-     * Gets an singleton instance of the SSLProtocolSocketFactory.
-     * @return a SSLProtocolSocketFactory
-     */
-    public static SSLSocketFactory getSocketFactory() {
-        return DEFAULT_FACTORY;
+  @VisibleForTesting
+  public GatewayReceiverMBeanBridge(GatewayReceiver gatewayReceiver) {
+    this.gatewayReceiver = gatewayReceiver;
+    initializeReceiverStats();
+  }
+
+  @Override
+  public int getClientConnectionCount() {
+    // we can't rely on ServerBridge as the HostStatSampler might not have ran between the last
+    // statistical update and the time at which this method is called.
+    return !isRunning() ? 0 : getReceiverServer().getAcceptor().getClientServerConnectionCount();
+  }
+
+  @Override
+  public void stopMonitor() {
+    monitor.stopListener();
+  }
+
+  public void addGatewayReceiverStats(GatewayReceiverStats stats) {
+    monitor.addStatisticsToMonitor(stats.getStats());
+  }
+
+  public String getBindAddress() {
+    return gatewayReceiver.getBindAddress();
+  }
+
+  public int getPort() {
+    return gatewayReceiver.getPort();
+  }
+
+  public int getSocketBufferSize() {
+    return gatewayReceiver.getSocketBufferSize();
+  }
+
+  public boolean isRunning() {
+    return gatewayReceiver.isRunning();
+  }
+
+  public void start() throws Exception {
+    try {
+      gatewayReceiver.start();
+    } catch (Exception e) {
+      throw new Exception(e.getMessage());
     }
-    
-    private final SSLContext sslcontext;
-    private final javax.net.ssl.SSLSocketFactory socketfactory;
-    private HostnameVerifier hostnameVerifier = BROWSER_COMPATIBLE_HOSTNAME_VERIFIER;
+  }
 
-    public SSLSocketFactory(
-        String algorithm, 
-        final KeyStore keystore, 
-        final String keystorePassword, 
-        final KeyStore truststore,
-        final SecureRandom random) 
-        throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException, UnrecoverableKeyException
-    {
-        super();
-        if (algorithm == null) {
-            algorithm = TLS;
-        }
-        KeyManager[] keymanagers = null;
-        if (keystore != null) {
-            keymanagers = createKeyManagers(keystore, keystorePassword);
-        }
-        TrustManager[] trustmanagers = null;
-        if (truststore != null) {
-            trustmanagers = createTrustManagers(truststore);
-        }
-        this.sslcontext = SSLContext.getInstance(algorithm);
-        this.sslcontext.init(keymanagers, trustmanagers, random);
-        this.socketfactory = this.sslcontext.getSocketFactory();
+  public void stop() throws Exception {
+    try {
+      gatewayReceiver.stop();
+    } catch (Exception e) {
+      throw new Exception(e.getMessage());
     }
+  }
 
-    public SSLSocketFactory(
-            final KeyStore keystore, 
-            final String keystorePassword, 
-            final KeyStore truststore) 
-            throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException, UnrecoverableKeyException
-    {
-        this(TLS, keystore, keystorePassword, truststore, null);
+  public int getEndPort() {
+    return gatewayReceiver.getEndPort();
+  }
+
+  public String[] getGatewayTransportFilters() {
+    List<GatewayTransportFilter> transportFilters = gatewayReceiver.getGatewayTransportFilters();
+    String[] transportFiltersStringArray = null;
+    if (transportFilters != null && !transportFilters.isEmpty()) {
+      transportFiltersStringArray = new String[transportFilters.size()];
+    } else {
+      return transportFiltersStringArray;
     }
-
-    public SSLSocketFactory(final KeyStore keystore, final String keystorePassword) 
-            throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException, UnrecoverableKeyException
-    {
-        this(TLS, keystore, keystorePassword, null, null);
+    int j = 0;
+    for (GatewayTransportFilter filter : transportFilters) {
+      transportFiltersStringArray[j] = filter.toString();
+      j++;
     }
+    return transportFiltersStringArray;
+  }
 
-    public SSLSocketFactory(final KeyStore truststore) 
-            throws NoSuchAlgorithmException, KeyManagementException, KeyStoreException, UnrecoverableKeyException
-    {
-        this(TLS, null, null, truststore, null);
+  public int getStartPort() {
+    return gatewayReceiver.getStartPort();
+  }
+
+  public int getMaximumTimeBetweenPings() {
+    return gatewayReceiver.getMaximumTimeBetweenPings();
+  }
+
+  public float getCreateRequestsRate() {
+    return createRequestRate.getRate();
+  }
+
+  public float getDestroyRequestsRate() {
+    return destroyRequestRate.getRate();
+  }
+
+  public int getDuplicateBatchesReceived() {
+    return getStatistic(StatsKey.DUPLICATE_BATCHES_RECEIVED).intValue();
+  }
+
+  public int getOutoforderBatchesReceived() {
+    return getStatistic(StatsKey.OUT_OF_ORDER_BATCHES_RECEIVED).intValue();
+  }
+
+  public float getUpdateRequestsRate() {
+    return updateRequestRate.getRate();
+  }
+
+  public float getEventsReceivedRate() {
+    return eventsReceivedRate.getRate();
+  }
+
+  protected void startServer() {
+    addServer(getReceiverServer());
+  }
+
+  protected void stopServer() {
+    removeServer();
+  }
+
+  void destroyServer() {
+    removeServer();
+  }
+
+  public String[] getConnectedGatewaySenders() {
+    Acceptor acceptor = getReceiverServer().getAcceptor();
+    Set<ServerConnection> serverConnections = acceptor.getAllServerConnections();
+    if (serverConnections == null || serverConnections.isEmpty()) {
+      return new String[0];
     }
+    return serverConnections.stream().map(ServerConnection::getMembershipID).toArray(String[]::new);
+  }
 
-    /**
-     * Creates the default SSL socket factory.
-     * This constructor is used exclusively to instantiate the factory for
-     * {@link #getSocketFactory getSocketFactory}.
-     */
-    private SSLSocketFactory() {
-        super();
-        this.sslcontext = null;
-        this.socketfactory = HttpsURLConnection.getDefaultSSLSocketFactory();
+  long getAverageBatchProcessingTime() {
+    if (getStatistic(StatsKey.TOTAL_BATCHES).longValue() != 0) {
+      long processTimeInNano = getStatistic(StatsKey.BATCH_PROCESS_TIME).longValue()
+          / getStatistic(StatsKey.TOTAL_BATCHES).longValue();
+
+      return ManagementConstants.nanoSeconds.toMillis(processTimeInNano);
     }
+    return 0;
+  }
 
-    private static KeyManager[] createKeyManagers(final KeyStore keystore, final String password)
-        throws KeyStoreException, NoSuchAlgorithmException, UnrecoverableKeyException {
-        if (keystore == null) {
-            throw new IllegalArgumentException("Keystore may not be null");
-        }
-        KeyManagerFactory kmfactory = KeyManagerFactory.getInstance(
-            KeyManagerFactory.getDefaultAlgorithm());
-        kmfactory.init(keystore, password != null ? password.toCharArray(): null);
-        return kmfactory.getKeyManagers(); 
-    }
+  private void initializeReceiverStats() {
+    createRequestRate = new StatsRate(StatsKey.CREAT_REQUESTS, StatType.INT_TYPE, monitor);
+    updateRequestRate = new StatsRate(StatsKey.UPDATE_REQUESTS, StatType.INT_TYPE, monitor);
+    destroyRequestRate = new StatsRate(StatsKey.DESTROY_REQUESTS, StatType.INT_TYPE, monitor);
+    eventsReceivedRate = new StatsRate(StatsKey.EVENTS_RECEIVED, StatType.INT_TYPE, monitor);
+  }
 
-    private static TrustManager[] createTrustManagers(final KeyStore keystore)
-        throws KeyStoreException, NoSuchAlgorithmException { 
-        if (keystore == null) {
-            throw new IllegalArgumentException("Keystore may not be null");
-        }
-        TrustManagerFactory tmfactory = TrustManagerFactory.getInstance(
-            TrustManagerFactory.getDefaultAlgorithm());
-        tmfactory.init(keystore);
-        return tmfactory.getTrustManagers();
-    }
-
-
-    // non-javadoc, see interface org.apache.http.conn.SocketFactory
-    public Socket createSocket()
-        throws IOException {
-
-        // the cast makes sure that the factory is working as expected
-        return (SSLSocket) this.socketfactory.createSocket();
-    }
-
-
-    // non-javadoc, see interface org.apache.http.conn.SocketFactory
-    public Socket connectSocket(
-        final Socket sock,
-        final String host,
-        final int port,
-        final InetAddress localAddress,
-        int localPort,
-        final HttpParams params
-    ) throws IOException {
-
-        if (host == null) {
-            throw new IllegalArgumentException("Target host may not be null.");
-        }
-        if (params == null) {
-            throw new IllegalArgumentException("Parameters may not be null.");
-        }
-
-        // resolve the target hostname first
-        final InetSocketAddress target = new InetSocketAddress(host, port);
-
-        SSLSocket sslock = (SSLSocket)
-            ((sock != null) ? sock : createSocket());
-
-        if ((localAddress != null) || (localPort > 0)) {
-
-            // we need to bind explicitly
-            if (localPort < 0)
-                localPort = 0; // indicates "any"
-
-            InetSocketAddress isa =
-                new InetSocketAddress(localAddress, localPort);
-            sslock.bind(isa);
-        }
-
-        int timeout = HttpConnectionParams.getConnectionTimeout(params);
-        sslock.connect(target, timeout);
-
-        try {
-            hostnameVerifier.verify(host, sslock);
-            // verifyHostName() didn't blowup - good!
-        } catch (IOException iox) {
-            // close the socket before re-throwing the exception
-            try { sslock.close(); } catch (Exception x) { /*ignore*/ }
-            throw iox;
-        }
-
-        return sslock;
-    }
-
-
-    /**
-     * Checks whether a socket connection is secure.
-     * This factory creates TLS/SSL socket connections
-     * which, by default, are considered secure.
-     * <br/>
-     * Derived classes may override this method to perform
-     * runtime checks, for example based on the cypher suite.
-     *
-     * @param sock      the connected socket
-     *
-     * @return  <code>true</code>
-     *
-     * @throws IllegalArgumentException if the argument is invalid
-     */
-    public boolean isSecure(Socket sock)
-        throws IllegalArgumentException {
-
-        if (sock == null) {
-            throw new IllegalArgumentException("Socket may not be null.");
-        }
-        // This instanceof check is in line with createSocket() above.
-        if (!(sock instanceof SSLSocket)) {
-            throw new IllegalArgumentException
-                ("Socket not created by this factory.");
-        }
-        // This check is performed last since it calls the argument object.
-        if (sock.isClosed()) {
-            throw new IllegalArgumentException("Socket is closed.");
-        }
-
-        return true;
-
-    } // isSecure
-
-
-    // non-javadoc, see interface LayeredSocketFactory
-    public Socket createSocket(
-        final Socket socket,
-        final String host,
-        final int port,
-        final boolean autoClose
-    ) throws IOException, UnknownHostException {
-        SSLSocket sslSocket = (SSLSocket) this.socketfactory.createSocket(
-              socket,
-              host,
-              port,
-              autoClose
-        );
-        hostnameVerifier.verify(host, sslSocket);
-        // verifyHostName() didn't blowup - good!
-        return sslSocket;
-    }
-
-    public void setHostnameVerifier(HostnameVerifier hostnameVerifier) {
-        if ( hostnameVerifier == null ) {
-            throw new IllegalArgumentException("Hostname verifier may not be null");
-        }
-        this.hostnameVerifier = hostnameVerifier;
-    }
-
-    public HostnameVerifier getHostnameVerifier() {
-        return hostnameVerifier;
-    }
-
+  private InternalCacheServer getReceiverServer() {
+    return (InternalCacheServer) gatewayReceiver.getServer();
+  }
 }

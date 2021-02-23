@@ -315,5 +315,4 @@ public class MultiStartUnivariateRealOptimizer implements UnivariateRealOptimize
             throws ConvergenceException, FunctionEvaluationException {
         return optimize(f, goalType, min, max);
     }
-
 }

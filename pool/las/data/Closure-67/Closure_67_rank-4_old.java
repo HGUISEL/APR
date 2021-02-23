@@ -5,661 +5,812 @@
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
- * 
+ *
  *      http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.pdfbox.pdmodel.fdf;
 
-package org.apache.commons.dbcp2;
-
-import java.net.URL;
-import java.sql.CallableStatement;
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
-import java.util.Map;
-import java.sql.Ref;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Array;
-import java.util.Calendar;
-import java.io.InputStream;
-import java.io.Reader;
-import java.sql.SQLException;
-/* JDBC_4_ANT_KEY_BEGIN */
-import java.sql.NClob;
-import java.sql.RowId;
-import java.sql.SQLXML;
-/* JDBC_4_ANT_KEY_END */
+import java.io.IOException;
+import java.io.Writer;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSBase;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSInteger;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSNumber;
+import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.cos.COSString;
+import org.apache.pdfbox.pdmodel.common.COSArrayList;
+import org.apache.pdfbox.pdmodel.common.COSObjectable;
+import org.apache.pdfbox.pdmodel.interactive.action.PDAction;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionFactory;
+import org.apache.pdfbox.pdmodel.interactive.action.PDAdditionalActions;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 /**
- * A base delegating implementation of {@link CallableStatement}.
- * <p>
- * All of the methods from the {@link CallableStatement} interface
- * simply call the corresponding method on the "delegate"
- * provided in my constructor.
- * <p>
- * Extends AbandonedTrace to implement Statement tracking and
- * logging of code which created the Statement. Tracking the
- * Statement ensures that the Connection which created it can
- * close any open Statement's on Connection close.
+ * This represents an FDF field that is part of the FDF document.
  *
- * @author Glenn L. Nielsen
- * @author James House
- * @author Dirk Verbeeck
- * @version $Revision$ $Date$
+ * @author Ben Litchfield
  */
-public class DelegatingCallableStatement extends DelegatingPreparedStatement
-        implements CallableStatement {
+public class FDFField implements COSObjectable
+{
+    private COSDictionary field;
 
     /**
-     * Create a wrapper for the Statement which traces this
-     * Statement to the Connection which created it and the
-     * code which created it.
-     *
-     * @param c the {@link DelegatingConnection} that created this statement
-     * @param s the {@link CallableStatement} to delegate all calls to
+     * Default constructor.
      */
-    public DelegatingCallableStatement(DelegatingConnection c,
-                                       CallableStatement s) {
-        super(c, s);
+    public FDFField()
+    {
+        field = new COSDictionary();
     }
 
-    public boolean equals(Object obj) {
-    	if (this == obj) return true;
-        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
-        if (delegate == null) {
-            return false;
-        }
-        if (obj instanceof DelegatingCallableStatement) {
-            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
-            return delegate.equals(s.getInnermostDelegate());
-        }
-        else {
-            return delegate.equals(obj);
-        }
+    /**
+     * Constructor.
+     *
+     * @param f The FDF field.
+     */
+    public FDFField(COSDictionary f)
+    {
+        field = f;
     }
 
-    /** Sets my delegate. */
-    public void setDelegate(CallableStatement s) {
-        super.setDelegate(s);
-        _stmt = s;
+    /**
+     * This will create an FDF field from an XFDF XML document.
+     *
+     * @param fieldXML The XML document that contains the XFDF data.
+     * @throws IOException If there is an error reading from the dom.
+     */
+    public FDFField(Element fieldXML) throws IOException
+    {
+        this();
+        this.setPartialFieldName(fieldXML.getAttribute("name"));
+        NodeList nodeList = fieldXML.getChildNodes();
+        List<FDFField> kids = new ArrayList<FDFField>();
+        for (int i = 0; i < nodeList.getLength(); i++)
+        {
+            Node node = nodeList.item(i);
+            if (node instanceof Element)
+            {
+                Element child = (Element) node;
+                if (child.getTagName().equals("value"))
+                {
+                    setValue(XMLUtil.getNodeValue(child));
+                }
+                else if (child.getTagName().equals("value-richtext"))
+                {
+                    setRichText(new COSString(XMLUtil.getNodeValue(child)));
+                }
+                else if (child.getTagName().equals("field"))
+                {
+                    kids.add(new FDFField(child));
+                }
+            }
+        }
+        if (kids.size() > 0)
+        {
+            setKids(kids);
+        }
+
     }
 
-    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
-
-    public boolean wasNull() throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public String getString(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    /** @deprecated */
-    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
-
-    public byte[] getBytes(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(int i, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
-
-    public URL getURL(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void setURL(String parameterName, URL val) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
-
-    public void setNull(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void setBoolean(String parameterName, boolean x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setByte(String parameterName, byte x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setShort(String parameterName, short x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setInt(String parameterName, int x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setLong(String parameterName, long x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setFloat(String parameterName, float x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDouble(String parameterName, double x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setString(String parameterName, String x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBytes(String parameterName, byte [] x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDate(String parameterName, Date x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
-    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
-
-    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
-
-    public String getString(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public byte[] getBytes(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public URL getURL(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-/* JDBC_4_ANT_KEY_BEGIN */
-
-    public RowId getRowId(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterIndex);
+    /**
+     * This will write this element as an XML document.
+     *
+     * @param output The stream to write the xml to.
+     *
+     * @throws IOException If there is an error writing the XML.
+     */
+    public void writeXML(Writer output) throws IOException
+    {
+        output.write("<field name=\"" + getPartialFieldName() + "\">\n");
+        Object value = getValue();
+        if (value != null)
+        {
+            if (value instanceof COSString)
+            {
+                output.write("<value>" + escapeXML(((COSString) value).getString()) + "</value>\n");
+            }
+            else if (value instanceof COSStream)
+            {
+                output.write("<value>" + escapeXML(((COSStream) value).toTextString()) + "</value>\n");
+            }
         }
-        catch (SQLException e) {
-            handleException(e);
+        String rt = getRichText();
+        if (rt != null)
+        {
+            output.write("<value-richtext>" + escapeXML(rt) + "</value-richtext>\n");
+        }
+        List<FDFField> kids = getKids();
+        if (kids != null)
+        {
+            for (FDFField kid : kids)
+            {
+                kid.writeXML(output);
+            }
+        }
+        output.write("</field>\n");
+    }
+
+    /**
+     * Convert this standard java object to a COS object.
+     *
+     * @return The cos object that matches this Java object.
+     */
+    @Override
+    public COSDictionary getCOSObject()
+    {
+        return field;
+    }
+
+    /**
+     * This will get the list of kids. This will return a list of FDFField objects. This will return null if the
+     * underlying list is null.
+     *
+     * @return The list of kids.
+     */
+    public List<FDFField> getKids()
+    {
+        COSArray kids = (COSArray) field.getDictionaryObject(COSName.KIDS);
+        List<FDFField> retval = null;
+        if (kids != null)
+        {
+            List<FDFField> actuals = new ArrayList<FDFField>();
+            for (int i = 0; i < kids.size(); i++)
+            {
+                actuals.add(new FDFField((COSDictionary) kids.getObject(i)));
+            }
+            retval = new COSArrayList<FDFField>(actuals, kids);
+        }
+        return retval;
+    }
+
+    /**
+     * This will set the list of kids.
+     *
+     * @param kids A list of FDFField objects.
+     */
+    public void setKids(List<FDFField> kids)
+    {
+        field.setItem(COSName.KIDS, COSArrayList.converterToCOSArray(kids));
+    }
+
+    /**
+     * This will get the "T" entry in the field dictionary. A partial field name. Where the fully qualified field name
+     * is a concatenation of the parent's fully qualified field name and "." as a separator. For example<br/>
+     * Address.State<br />
+     * Address.City<br />
+     *
+     * @return The partial field name.
+     */
+    public String getPartialFieldName()
+    {
+        return field.getString(COSName.T);
+    }
+
+    /**
+     * This will set the partial field name.
+     *
+     * @param partial The partial field name.
+     */
+    public void setPartialFieldName(String partial)
+    {
+        field.setString(COSName.T, partial);
+    }
+
+    /**
+     * This will get the value for the field. This will return type will either be <br />
+     * String : Checkboxes, Radio Button <br />
+     * java.util.List of strings: Choice Field PDTextStream: Textfields
+     *
+     * @return The value of the field.
+     * @throws IOException If there is an error getting the value.
+     */
+    public Object getValue() throws IOException
+    {
+        COSBase value = field.getDictionaryObject(COSName.V);
+        if (value instanceof COSName)
+        {
+            return ((COSName) value).getName();
+        }
+        else if (value instanceof COSArray)
+        {
+            return COSArrayList.convertCOSStringCOSArrayToList((COSArray) value);
+        }
+        else if (value instanceof COSString || value instanceof COSStream)
+        {
+            return value;
+        }
+        else if (value != null)
+        {
+            throw new IOException("Error:Unknown type for field import" + value);
+        }
+        else
+        {
             return null;
         }
     }
 
-    public RowId getRowId(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterName);
+    /**
+     * Returns the COS value of this field.
+     * 
+     * @return The COS value of the field.
+     * @throws IOException If there is an error getting the value.
+     */
+    public COSBase getCOSValue() throws IOException
+    {
+        COSBase value = field.getDictionaryObject(COSName.V);
+        if (value instanceof COSName)
+        {
+            return value;
         }
-        catch (SQLException e) {
-            handleException(e);
+        else if (value instanceof COSArray)
+        {
+            return value;
+        }
+        else if (value instanceof COSString || value instanceof COSStream)
+        {
+            return value;
+        }
+        else if (value != null)
+        {
+            throw new IOException("Error:Unknown type for field import" + value);
+        }
+        else
+        {
             return null;
         }
     }
 
-    public void setRowId(String parameterName, RowId value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setRowId(parameterName, value);
+    /**
+     * You should pass in a string, or a java.util.List of strings to set the value.
+     *
+     * @param value The value that should populate when imported.
+     *
+     * @throws IOException If there is an error setting the value.
+     */
+    public void setValue(Object value) throws IOException
+    {
+        COSBase cos = null;
+        if (value instanceof List)
+        {
+            cos = COSArrayList.convertStringListToCOSStringCOSArray((List) value);
         }
-        catch (SQLException e) {
-            handleException(e);
+        else if (value instanceof String)
+        {
+            cos = COSName.getPDFName((String) value);
         }
+        else if (value instanceof COSObjectable)
+        {
+            cos = ((COSObjectable) value).getCOSObject();
+        }
+        else if (value != null)
+        {
+            throw new IOException("Error:Unknown type for field import" + value);
+        }
+        field.setItem(COSName.V, cos);
     }
 
-    public void setNString(String parameterName, String value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNString(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    /**
+     * Sets the COS value of this field.
+     * 
+     * @param value COS value.
+     */
+    public void setValue(COSBase value)
+    {
+        field.setItem(COSName.V, value);
     }
 
-    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
+    /**
+     * This will get the Ff entry of the cos dictionary. If it it not present then this method will return null.
+     *
+     * @return The field flags.
+     */
+    public Integer getFieldFlags()
+    {
+        Integer retval = null;
+        COSNumber ff = (COSNumber) field.getDictionaryObject(COSName.FF);
+        if (ff != null)
+        {
+            retval = ff.intValue();
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+        return retval;
     }
 
-    public void setNClob(String parameterName, NClob value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, value);
+    /**
+     * This will get the field flags that are associated with this field. The Ff entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the field flags.
+     */
+    public void setFieldFlags(Integer ff)
+    {
+        COSInteger value = null;
+        if (ff != null)
+        {
+            value = COSInteger.get(ff);
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+        field.setItem(COSName.FF, value);
     }
 
-    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    /**
+     * This will get the field flags that are associated with this field. The Ff entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the field flags.
+     */
+    public void setFieldFlags(int ff)
+    {
+        field.setInt(COSName.FF, ff);
     }
 
-    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
+    /**
+     * This will get the SetFf entry of the cos dictionary. If it it not present then this method will return null.
+     *
+     * @return The field flags.
+     */
+    public Integer getSetFieldFlags()
+    {
+        Integer retval = null;
+        COSNumber ff = (COSNumber) field.getDictionaryObject(COSName.SET_FF);
+        if (ff != null)
+        {
+            retval = ff.intValue();
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+        return retval;
     }
 
-    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
+    /**
+     * This will get the field flags that are associated with this field. The SetFf entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the "set field flags".
+     */
+    public void setSetFieldFlags(Integer ff)
+    {
+        COSInteger value = null;
+        if (ff != null)
+        {
+            value = COSInteger.get(ff);
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+        field.setItem(COSName.SET_FF, value);
     }
 
-    public NClob getNClob(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterIndex);
+    /**
+     * This will get the field flags that are associated with this field. The SetFf entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the "set field flags".
+     */
+    public void setSetFieldFlags(int ff)
+    {
+        field.setInt(COSName.SET_FF, ff);
+    }
+
+    /**
+     * This will get the ClrFf entry of the cos dictionary. If it it not present then this method will return null.
+     *
+     * @return The field flags.
+     */
+    public Integer getClearFieldFlags()
+    {
+        Integer retval = null;
+        COSNumber ff = (COSNumber) field.getDictionaryObject(COSName.CLR_FF);
+        if (ff != null)
+        {
+            retval = ff.intValue();
         }
-        catch (SQLException e) {
-            handleException(e);
+        return retval;
+    }
+
+    /**
+     * This will get the field flags that are associated with this field. The ClrFf entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the "clear field flags".
+     */
+    public void setClearFieldFlags(Integer ff)
+    {
+        COSInteger value = null;
+        if (ff != null)
+        {
+            value = COSInteger.get(ff);
+        }
+        field.setItem(COSName.CLR_FF, value);
+    }
+
+    /**
+     * This will get the field flags that are associated with this field. The ClrFf entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the "clear field flags".
+     */
+    public void setClearFieldFlags(int ff)
+    {
+        field.setInt(COSName.CLR_FF, ff);
+    }
+
+    /**
+     * This will get the F entry of the cos dictionary. If it it not present then this method will return null.
+     *
+     * @return The widget field flags.
+     */
+    public Integer getWidgetFieldFlags()
+    {
+        Integer retval = null;
+        COSNumber f = (COSNumber) field.getDictionaryObject("F");
+        if (f != null)
+        {
+            retval = f.intValue();
+        }
+        return retval;
+    }
+
+    /**
+     * This will get the widget field flags that are associated with this field. The F entry in the FDF field
+     * dictionary.
+     *
+     * @param f The new value for the field flags.
+     */
+    public void setWidgetFieldFlags(Integer f)
+    {
+        COSInteger value = null;
+        if (f != null)
+        {
+            value = COSInteger.get(f);
+        }
+        field.setItem(COSName.F, value);
+    }
+
+    /**
+     * This will get the field flags that are associated with this field. The F entry in the FDF field dictionary.
+     *
+     * @param f The new value for the field flags.
+     */
+    public void setWidgetFieldFlags(int f)
+    {
+        field.setInt(COSName.F, f);
+    }
+
+    /**
+     * This will get the SetF entry of the cos dictionary. If it it not present then this method will return null.
+     *
+     * @return The field flags.
+     */
+    public Integer getSetWidgetFieldFlags()
+    {
+        Integer retval = null;
+        COSNumber ff = (COSNumber) field.getDictionaryObject(COSName.SET_F);
+        if (ff != null)
+        {
+            retval = ff.intValue();
+        }
+        return retval;
+    }
+
+    /**
+     * This will get the widget field flags that are associated with this field. The SetF entry in the FDF field
+     * dictionary.
+     *
+     * @param ff The new value for the "set widget field flags".
+     */
+    public void setSetWidgetFieldFlags(Integer ff)
+    {
+        COSInteger value = null;
+        if (ff != null)
+        {
+            value = COSInteger.get(ff);
+        }
+        field.setItem(COSName.SET_F, value);
+    }
+
+    /**
+     * This will get the widget field flags that are associated with this field. The SetF entry in the FDF field
+     * dictionary.
+     *
+     * @param ff The new value for the "set widget field flags".
+     */
+    public void setSetWidgetFieldFlags(int ff)
+    {
+        field.setInt(COSName.SET_F, ff);
+    }
+
+    /**
+     * This will get the ClrF entry of the cos dictionary. If it it not present then this method will return null.
+     *
+     * @return The widget field flags.
+     */
+    public Integer getClearWidgetFieldFlags()
+    {
+        Integer retval = null;
+        COSNumber ff = (COSNumber) field.getDictionaryObject(COSName.CLR_F);
+        if (ff != null)
+        {
+            retval = ff.intValue();
+        }
+        return retval;
+    }
+
+    /**
+     * This will get the field flags that are associated with this field. The ClrF entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the "clear widget field flags".
+     */
+    public void setClearWidgetFieldFlags(Integer ff)
+    {
+        COSInteger value = null;
+        if (ff != null)
+        {
+            value = COSInteger.get(ff);
+        }
+        field.setItem(COSName.CLR_F, value);
+    }
+
+    /**
+     * This will get the field flags that are associated with this field. The ClrF entry in the FDF field dictionary.
+     *
+     * @param ff The new value for the "clear field flags".
+     */
+    public void setClearWidgetFieldFlags(int ff)
+    {
+        field.setInt(COSName.CLR_F, ff);
+    }
+
+    /**
+     * This will get the appearance dictionary that specifies the appearance of a pushbutton field.
+     *
+     * @return The AP entry of this dictionary.
+     */
+    public PDAppearanceDictionary getAppearanceDictionary()
+    {
+        PDAppearanceDictionary retval = null;
+        COSDictionary dict = (COSDictionary) field.getDictionaryObject(COSName.AP);
+        if (dict != null)
+        {
+            retval = new PDAppearanceDictionary(dict);
+        }
+        return retval;
+    }
+
+    /**
+     * This will set the appearance dictionary.
+     *
+     * @param ap The apperance dictionary.
+     */
+    public void setAppearanceDictionary(PDAppearanceDictionary ap)
+    {
+        field.setItem(COSName.AP, ap);
+    }
+
+    /**
+     * This will get named page references..
+     *
+     * @return The named page references.
+     */
+    public FDFNamedPageReference getAppearanceStreamReference()
+    {
+        FDFNamedPageReference retval = null;
+        COSDictionary ref = (COSDictionary) field.getDictionaryObject(COSName.AP_REF);
+        if (ref != null)
+        {
+            retval = new FDFNamedPageReference(ref);
+        }
+        return retval;
+    }
+
+    /**
+     * This will set the named page references.
+     *
+     * @param ref The named page references.
+     */
+    public void setAppearanceStreamReference(FDFNamedPageReference ref)
+    {
+        field.setItem(COSName.AP_REF, ref);
+    }
+
+    /**
+     * This will get the icon fit that is associated with this field.
+     *
+     * @return The IF entry.
+     */
+    public FDFIconFit getIconFit()
+    {
+        FDFIconFit retval = null;
+        COSDictionary dic = (COSDictionary) field.getDictionaryObject(COSName.IF);
+        if (dic != null)
+        {
+            retval = new FDFIconFit(dic);
+        }
+        return retval;
+    }
+
+    /**
+     * This will set the icon fit entry.
+     *
+     * @param fit The icon fit object.
+     */
+    public void setIconFit(FDFIconFit fit)
+    {
+        field.setItem(COSName.IF, fit);
+    }
+
+    /**
+     * This will return a list of options for a choice field. The value in the list will be 1 of 2 types.
+     * java.lang.String or FDFOptionElement.
+     *
+     * @return A list of all options.
+     */
+    public List<Object> getOptions()
+    {
+        List<Object> retval = null;
+        COSArray array = (COSArray) field.getDictionaryObject(COSName.OPT);
+        if (array != null)
+        {
+            List<Object> objects = new ArrayList<Object>();
+            for (int i = 0; i < array.size(); i++)
+            {
+                COSBase next = array.getObject(i);
+                if (next instanceof COSString)
+                {
+                    objects.add(((COSString) next).getString());
+                }
+                else
+                {
+                    COSArray value = (COSArray) next;
+                    objects.add(new FDFOptionElement(value));
+                }
+            }
+            retval = new COSArrayList<Object>(objects, array);
+        }
+        return retval;
+    }
+
+    /**
+     * This will set the options for the choice field. The objects in the list should either be java.lang.String or
+     * FDFOptionElement.
+     *
+     * @param options The options to set.
+     */
+    public void setOptions(List<Object> options)
+    {
+        COSArray value = COSArrayList.converterToCOSArray(options);
+        field.setItem(COSName.OPT, value);
+    }
+
+    /**
+     * This will get the action that is associated with this field.
+     *
+     * @return The A entry in the field dictionary.
+     */
+    public PDAction getAction()
+    {
+        return PDActionFactory.createAction((COSDictionary) field.getDictionaryObject(COSName.A));
+    }
+
+    /**
+     * This will set the action that is associated with this field.
+     *
+     * @param a The new action.
+     */
+    public void setAction(PDAction a)
+    {
+        field.setItem(COSName.A, a);
+    }
+
+    /**
+     * This will get a list of additional actions that will get executed based on events.
+     *
+     * @return The AA entry in this field dictionary.
+     */
+    public PDAdditionalActions getAdditionalActions()
+    {
+        PDAdditionalActions retval = null;
+        COSDictionary dict = (COSDictionary) field.getDictionaryObject(COSName.AA);
+        if (dict != null)
+        {
+            retval = new PDAdditionalActions(dict);
+        }
+
+        return retval;
+    }
+
+    /**
+     * This will set the additional actions that are associated with this field.
+     *
+     * @param aa The additional actions.
+     */
+    public void setAdditionalActions(PDAdditionalActions aa)
+    {
+        field.setItem(COSName.AA, aa);
+    }
+
+    /**
+     * This will set the rich text that is associated with this field.
+     *
+     * @return The rich text XHTML stream.
+     */
+    public String getRichText()
+    {
+        COSBase rv = field.getDictionaryObject(COSName.RV);
+        if (rv == null)
+        {
             return null;
         }
-    }
-
-    public NClob getNClob(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterName);
+        else if (rv instanceof COSString)
+        {
+            return ((COSString) rv).getString();
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+        else
+        {
+            return ((COSStream) rv).toTextString();
         }
     }
 
-    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    /**
+     * This will set the rich text value.
+     *
+     * @param rv The rich text value for the stream.
+     */
+    public void setRichText(COSString rv)
+    {
+        field.setItem(COSName.RV, rv);
     }
 
-    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    /**
+     * This will set the rich text value.
+     *
+     * @param rv The rich text value for the stream.
+     */
+    public void setRichText(COSStream rv)
+    {
+        field.setItem(COSName.RV, rv);
     }
 
-    public SQLXML getSQLXML(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterName);
+    /**
+     * Escape special characters.
+     * 
+     * @param input the string to be escaped
+     * 
+     * @return the resulting string
+     */
+    private String escapeXML(String input)
+    {
+        StringBuilder escapedXML = new StringBuilder();
+        for (int i = 0; i < input.length(); i++)
+        {
+            char c = input.charAt(i);
+            switch (c)
+            {
+            case '<':
+                escapedXML.append("&lt;");
+                break;
+            case '>':
+                escapedXML.append("&gt;");
+                break;
+            case '\"':
+                escapedXML.append("&quot;");
+                break;
+            case '&':
+                escapedXML.append("&amp;");
+                break;
+            case '\'':
+                escapedXML.append("&apos;");
+                break;
+            default:
+                if (c > 0x7e)
+                {
+                    escapedXML.append("&#").append((int) c).append(";");
+                }
+                else
+                {
+                    escapedXML.append(c);
+                }
+            }
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+        return escapedXML.toString();
     }
-
-    public String getNString(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public String getNString(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getNCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void setBlob(String parameterName, Blob blob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, blob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setClob(String parameterName, Clob clob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, clob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setNClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-/* JDBC_4_ANT_KEY_END */
 }

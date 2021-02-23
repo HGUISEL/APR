@@ -153,6 +153,7 @@ public class Patcher {
 					} catch (RuntimeException e) {
 						return C_NOT_APPLIED;
 					}
+					//TE 여기서 instantiate를 통해 실제로 노드를 만들어서 삽입하는 듯
 					ASTNode astNode = cStrategy.instantiate(change, loc, info);
 					if (astNode == null)
 						return C_NOT_INST;

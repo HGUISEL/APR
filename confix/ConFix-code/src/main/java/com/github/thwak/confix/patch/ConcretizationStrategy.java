@@ -919,6 +919,8 @@ public class ConcretizationStrategy {
 		AST ast = loc.node.astNode.getAST();
 		ASTNode astNode = null;
 		astNode = TreeUtils.generateNode(copied, ast);
+
+
 		return astNode;
 	}
 

@@ -1,381 +1,2280 @@
 /*
- * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//dbcp/src/java/org/apache/commons/dbcp/DelegatingResultSet.java,v 1.8 2003/08/11 23:54:59 dirkv Exp $
- * $Revision: 1.8 $
- * $Date: 2003/08/11 23:54:59 $
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * ====================================================================
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
- * The Apache Software License, Version 1.1
- *
- * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
- * reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. The end-user documentation included with the redistribution, if
- *    any, must include the following acknowlegement:
- *       "This product includes software developed by the
- *        Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowlegement may appear in the software itself,
- *    if and wherever such third-party acknowlegements normally appear.
- *
- * 4. The names "The Jakarta Project", "Commons", and "Apache Software
- *    Foundation" must not be used to endorse or promote products derived
- *    from this software without prior written permission. For written
- *    permission, please contact apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache"
- *    nor may "Apache" appear in their names without prior written
- *    permission of the Apache Group.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation.  For more
- * information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
-package org.apache.commons.dbcp;
+package org.apache.myfaces.application;
 
-import java.sql.ResultSet;
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
-import java.io.InputStream;
-import java.sql.SQLWarning;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.io.Reader;
-import java.sql.Statement;
+import java.beans.BeanDescriptor;
+import java.beans.BeanInfo;
+import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.sql.Ref;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Array;
-import java.util.Calendar;
+import java.util.MissingResourceException;
+import java.util.TimeZone;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import javax.el.CompositeELResolver;
+import javax.el.ELContext;
+import javax.el.ELContextListener;
+import javax.el.ELException;
+import javax.el.ELResolver;
+import javax.el.ExpressionFactory;
+import javax.el.MethodExpression;
+import javax.el.ValueExpression;
+import javax.faces.FacesException;
+import javax.faces.application.Application;
+import javax.faces.application.NavigationHandler;
+import javax.faces.application.ProjectStage;
+import javax.faces.application.Resource;
+import javax.faces.application.ResourceDependencies;
+import javax.faces.application.ResourceDependency;
+import javax.faces.application.ResourceHandler;
+import javax.faces.application.StateManager;
+import javax.faces.application.ViewHandler;
+import javax.faces.component.UIComponent;
+import javax.faces.component.UINamingContainer;
+import javax.faces.component.UIOutput;
+import javax.faces.component.UIViewRoot;
+import javax.faces.component.behavior.Behavior;
+import javax.faces.component.behavior.ClientBehaviorBase;
+import javax.faces.context.FacesContext;
+import javax.faces.convert.Converter;
+import javax.faces.convert.DateTimeConverter;
+import javax.faces.el.MethodBinding;
+import javax.faces.el.PropertyResolver;
+import javax.faces.el.ReferenceSyntaxException;
+import javax.faces.el.ValueBinding;
+import javax.faces.el.VariableResolver;
+import javax.faces.event.AbortProcessingException;
+import javax.faces.event.ActionListener;
+import javax.faces.event.ComponentSystemEventListener;
+import javax.faces.event.ListenerFor;
+import javax.faces.event.ListenersFor;
+import javax.faces.event.SystemEvent;
+import javax.faces.event.SystemEventListener;
+import javax.faces.event.SystemEventListenerHolder;
+import javax.faces.render.ClientBehaviorRenderer;
+import javax.faces.render.Renderer;
+import javax.faces.validator.Validator;
+import javax.faces.view.ViewDeclarationLanguage;
+import javax.naming.Context;
+import javax.naming.InitialContext;
+import javax.naming.NamingException;
+
+import org.apache.commons.beanutils.BeanUtils;
+import org.apache.myfaces.application.jsp.JspStateManagerImpl;
+import org.apache.myfaces.buildtools.maven2.plugin.builder.annotation.JSFWebConfigParam;
+import org.apache.myfaces.config.RuntimeConfig;
+import org.apache.myfaces.config.impl.digester.elements.Property;
+import org.apache.myfaces.config.impl.digester.elements.ResourceBundle;
+import org.apache.myfaces.context.RequestViewContext;
+import org.apache.myfaces.el.PropertyResolverImpl;
+import org.apache.myfaces.el.VariableResolverToApplicationELResolverAdapter;
+import org.apache.myfaces.el.convert.MethodExpressionToMethodBinding;
+import org.apache.myfaces.el.convert.ValueBindingToValueExpression;
+import org.apache.myfaces.el.convert.ValueExpressionToValueBinding;
+import org.apache.myfaces.el.unified.ELResolverBuilder;
+import org.apache.myfaces.el.unified.ResolverBuilderForFaces;
+import org.apache.myfaces.el.unified.resolver.FacesCompositeELResolver;
+import org.apache.myfaces.el.unified.resolver.FacesCompositeELResolver.Scope;
+import org.apache.myfaces.lifecycle.LifecycleImpl;
+import org.apache.myfaces.shared_impl.util.ClassUtils;
+import org.apache.myfaces.view.facelets.el.ELText;
 
 /**
- * A base delegating implementation of {@link ResultSet}.
- * <p>
- * All of the methods from the {@link ResultSet} interface
- * simply call the corresponding method on the "delegate"
- * provided in my constructor.
- * <p>
- * Extends AbandonedTrace to implement result set tracking and
- * logging of code which created the ResultSet. Tracking the
- * ResultSet ensures that the Statment which created it can
- * close any open ResultSet's on Statement close.
- *
- * @author Glenn L. Nielsen
- * @author James House (<a href="mailto:james@interobjective.com">james@interobjective.com</a>)
+ * DOCUMENT ME!
+ * 
+ * @author Manfred Geiler (latest modification by $Author$)
+ * @author Anton Koinov
+ * @author Thomas Spiegl
+ * @author Stan Silvert
+ * @version $Revision$ $Date$
  */
-public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
+@SuppressWarnings("deprecation")
+public class ApplicationImpl extends Application
+{
+    //private static final Log log = LogFactory.getLog(ApplicationImpl.class);
+    private static final Logger log = Logger.getLogger(ApplicationImpl.class.getName());
 
-    /** My delegate. **/
-    private ResultSet _res;
+    private final static VariableResolver VARIABLERESOLVER = new VariableResolverToApplicationELResolverAdapter();
 
-    /** The Statement that created me, if any. **/
-    private Statement _stmt;
+    private final static PropertyResolver PROPERTYRESOLVER = new PropertyResolverImpl();
 
-    /**
-     * Create a wrapper for the ResultSet which traces this
-     * ResultSet to the Statement which created it and the
-     * code which created it.
-     *
-     * @param Statement stmt which create this ResultSet
-     * @param ResultSet to wrap
-     */
-    public DelegatingResultSet(Statement stmt, ResultSet res) {
-        super((AbandonedTrace)stmt);
-        this._stmt = stmt;
-        this._res = res;
-    }
+    // recives the runtime config instance during initializing
+    private final static ThreadLocal<RuntimeConfig> initializingRuntimeConfig = new ThreadLocal<RuntimeConfig>();
+
+    // the name for the system property which specifies the current ProjectStage (see MYFACES-2545 for details)
+    public final static String PROJECT_STAGE_SYSTEM_PROPERTY_NAME = "faces.PROJECT_STAGE";
     
-    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
-        if(null == rset) {
-            return null;
-        } else {
-            return new DelegatingResultSet(stmt,rset);
+    // MyFaces specific System Property to set the ProjectStage, if not present via the standard way
+    @Deprecated
+    public final static String MYFACES_PROJECT_STAGE_SYSTEM_PROPERTY_NAME = "org.apache.myfaces.PROJECT_STAGE";
+    
+    @JSFWebConfigParam(defaultValue="false", expectedValues="true, false", since="2.0")
+    public final static String DATETIMECONVERTER_DEFAULT_TIMEZONE_IS_SYSTEM_TIMEZONE_PARAM_NAME 
+        = "javax.faces.DATETIMECONVERTER_DEFAULT_TIMEZONE_IS_SYSTEM_TIMEZONE";
+    
+    @JSFWebConfigParam(defaultValue="Production",
+            expectedValues="Development, Production, SystemTest, UnitTest",
+            since="2.0")
+    private static final String PROJECT_STAGE_PARAM_NAME = "javax.faces.PROJECT_STAGE";
+
+    @JSFWebConfigParam(defaultValue="true",since="2.0")
+    private static final String LAZY_LOAD_CONFIG_OBJECTS_PARAM_NAME = "org.apache.myfaces.LAZY_LOAD_CONFIG_OBJECTS";
+    private static final boolean LAZY_LOAD_CONFIG_OBJECTS_DEFAULT_VALUE = true;
+    private Boolean _lazyLoadConfigObjects = null;
+    
+    // ~ Instance fields
+    // --------------------------------------------------------------------------
+    // --
+
+    private Collection<Locale> _supportedLocales = Collections.emptySet();
+    private Locale _defaultLocale;
+    private String _messageBundle;
+
+    private ViewHandler _viewHandler;
+    private NavigationHandler _navigationHandler;
+    private ActionListener _actionListener;
+    private String _defaultRenderKitId;
+    private ResourceHandler _resourceHandler;
+    private StateManager _stateManager;
+
+    private ArrayList<ELContextListener> _elContextListeners;
+
+    // components, converters, and validators can be added at runtime--must
+    // synchronize, uses ConcurrentHashMap to allow concurrent read of map
+    private final Map<String, Object> _converterIdToClassMap = new ConcurrentHashMap<String, Object>();
+
+    private final Map<Class<?>, String> _converterClassNameToClassMap = new ConcurrentHashMap<Class<?>, String>();
+
+    private final Map<String, Object> _componentClassMap = new ConcurrentHashMap<String, Object>();
+
+    private final Map<String, Object> _validatorClassMap = new ConcurrentHashMap<String, Object>();
+
+    private final Map<Class<? extends SystemEvent>, SystemListenerEntry> _systemEventListenerClassMap = new ConcurrentHashMap<Class<? extends SystemEvent>, SystemListenerEntry>();
+
+    private final Map<String, String> _defaultValidatorsIds = new HashMap<String, String>();
+    
+    private volatile Map<String, String> _cachedDefaultValidatorsIds = null;
+    
+    private final Map<String, Object> _behaviorClassMap = new ConcurrentHashMap<String, Object>();
+
+    private final RuntimeConfig _runtimeConfig;
+
+    private ELResolver elResolver;
+
+    private ELResolverBuilder resolverBuilderForFaces;
+
+    private ProjectStage _projectStage;
+
+    private volatile boolean _firstRequestProcessed = false;
+    
+    private final Map<Class<?>, List<ListenerFor>> _classToListenerForMap = new HashMap<Class<?>, List<ListenerFor>>() ;
+    private final Map<Class<?>, List<ResourceDependency>> _classToResourceDependencyMap = new HashMap<Class<?>, List<ResourceDependency>>() ;
+    
+    private List<Class<? extends Converter>> _noArgConstructorConverterClasses 
+            = new ArrayList<Class<? extends Converter>>();
+    
+    // ~ Constructors
+    // --------------------------------------------------------------------------
+    // -----
+
+    public ApplicationImpl()
+    {
+        this(internalGetRuntimeConfig());
+    }
+
+    private static RuntimeConfig internalGetRuntimeConfig()
+    {
+        if (initializingRuntimeConfig.get() == null)
+        {
+            // It may happen that the current thread value
+            // for initializingRuntimeConfig is not set
+            // (note that this value is final, so it just
+            // allow set only once per thread).
+            // So the better for this case is try to get
+            // the value using RuntimeConfig.getCurrentInstance()
+            // instead throw an IllegalStateException (only fails if
+            // the constructor is called before setInitializingRuntimeConfig).
+            // From other point of view, AbstractFacesInitializer do
+            // the same as below, so there is not problem if
+            // we do this here and this is the best place to do
+            // this.
+            // log.info(
+            // "initializingRuntimeConfig.get() == null, so loading from ExternalContext"
+            // );
+            ApplicationImpl.setInitializingRuntimeConfig(RuntimeConfig.getCurrentInstance(FacesContext
+                    .getCurrentInstance().getExternalContext()));
+
+            // throw new IllegalStateException(
+            // "The runtime config instance which is created while initialize myfaces "
+            // +
+            // "must be set through ApplicationImpl.setInitializingRuntimeConfig"
+            // );
+        }
+        return initializingRuntimeConfig.get();
+    }
+
+    ApplicationImpl(final RuntimeConfig runtimeConfig)
+    {
+        if (runtimeConfig == null)
+        {
+            throw new IllegalArgumentException("runtimeConfig must mot be null");
+        }
+        // set default implementation in constructor
+        // pragmatic approach, no syncronizing will be needed in get methods
+        _viewHandler = new ViewHandlerImpl();
+        _navigationHandler = new NavigationHandlerImpl();
+        _actionListener = new ActionListenerImpl();
+        _defaultRenderKitId = "HTML_BASIC";
+        _stateManager = new JspStateManagerImpl();
+        _elContextListeners = new ArrayList<ELContextListener>();
+        _resourceHandler = new ResourceHandlerImpl();
+        _runtimeConfig = runtimeConfig;
+
+        if (log.isLoggable(Level.FINEST))
+            log.finest("New Application instance created");
+    }
+
+    public static void setInitializingRuntimeConfig(RuntimeConfig config)
+    {
+        initializingRuntimeConfig.set(config);
+    }
+
+    // ~ Methods
+    // --------------------------------------------------------------------------
+    // ----------
+
+    @Override
+    public final void addELResolver(final ELResolver resolver)
+    {
+        if (isFirstRequestProcessed())
+        {
+            throw new IllegalStateException("It is illegal to add a resolver after the first request is processed");
+        }
+        if (resolver != null)
+        {
+            _runtimeConfig.addApplicationElResolver(resolver);
         }
     }
 
-    public ResultSet getDelegate() {
-        return _res;
-    }
-
-    public boolean equals(Object obj) {
-        ResultSet delegate = getInnermostDelegate();
-        if (delegate == null) {
-            return false;
-        }
-        if (obj instanceof DelegatingResultSet) {
-            DelegatingResultSet s = (DelegatingResultSet) obj;
-            return delegate.equals(s.getInnermostDelegate());
-        }
-        else {
-            return delegate.equals(obj);
-        }
-    }
-
-    public int hashCode() {
-        Object obj = getInnermostDelegate();
-        if (obj == null) {
-            return 0;
-        }
-        return obj.hashCode();
-    }
-
-    /**
-     * If my underlying {@link ResultSet} is not a
-     * <tt>DelegatingResultSet</tt>, returns it,
-     * otherwise recursively invokes this method on
-     * my delegate.
-     * <p>
-     * Hence this method will return the first
-     * delegate that is not a <tt>DelegatingResultSet</tt>,
-     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
-     * delegate can be found by transversing this chain.
-     * <p>
-     * This method is useful when you may have nested
-     * <tt>DelegatingResultSet</tt>s, and you want to make
-     * sure to obtain a "genuine" {@link ResultSet}.
-     */
-    public ResultSet getInnermostDelegate() {
-        ResultSet r = _res;
-        while(r != null && r instanceof DelegatingResultSet) {
-            r = ((DelegatingResultSet)r).getDelegate();
-            if(this == r) {
-                return null;
+    @Override
+    public void addDefaultValidatorId(String validatorId)
+    {
+        if (_validatorClassMap.containsKey(validatorId))
+        {
+            Object validatorClass = getObjectFromClassMap(validatorId, _validatorClassMap);
+            String className;
+            if(validatorClass instanceof String)
+                className = (String)validatorClass;
+            
+            //otherwise validatorClass is an object of type Class<?>
+            className = ((Class<?>)validatorClass).getName();
+            
+            // Ensure atomicity between _defaultValidatorsIds and _cachedDefaultValidatorsIds
+            synchronized(_defaultValidatorsIds)
+            {
+                _defaultValidatorsIds.put(validatorId, className);
+                _cachedDefaultValidatorsIds = null;
             }
         }
-        return r;
     }
-    
-    public Statement getStatement() throws SQLException {
-        return _stmt;
+
+    @Override
+    public Map<String, String> getDefaultValidatorInfo()
+    {
+        // cachedMap ensures we will not return null if after the check for null
+        // _cachedDefaultValidatorsIds is set to null. In theory the unmodifiable map
+        // always has a reference to _defaultValidatorsIds, so any instance set
+        // in _cachedDefaultValidatorsIds is always the same.
+        Map<String, String> cachedMap = _cachedDefaultValidatorsIds;
+        if (cachedMap == null)
+        {
+            synchronized(_defaultValidatorsIds)
+            {
+                if (_cachedDefaultValidatorsIds == null)
+                {
+                    _cachedDefaultValidatorsIds = Collections.unmodifiableMap(_defaultValidatorsIds);
+                }
+                cachedMap = _cachedDefaultValidatorsIds;
+            }
+        }
+        return cachedMap;
+    }
+
+    @Override
+    public final ELResolver getELResolver()
+    {
+        // we don't need synchronization here since it is ok to have multiple
+        // instances of the elresolver
+        if (elResolver == null)
+        {
+            elResolver = createFacesResolver();
+        }
+        return elResolver;
+    }
+
+    private ELResolver createFacesResolver()
+    {
+        final CompositeELResolver resolver = new FacesCompositeELResolver(Scope.Faces);
+        getResolverBuilderForFaces().build(resolver);
+        return resolver;
+    }
+
+    protected final ELResolverBuilder getResolverBuilderForFaces()
+    {
+        if (resolverBuilderForFaces == null)
+        {
+            resolverBuilderForFaces = new ResolverBuilderForFaces(_runtimeConfig);
+        }
+        return resolverBuilderForFaces;
+    }
+
+    public final void setResolverBuilderForFaces(final ELResolverBuilder factory)
+    {
+        resolverBuilderForFaces = factory;
+    }
+
+    @Override
+    public final java.util.ResourceBundle getResourceBundle(final FacesContext facesContext, final String name)
+            throws FacesException, NullPointerException
+    {
+
+        checkNull(facesContext, "facesContext");
+        checkNull(name, "name");
+
+        final String bundleName = getBundleName(facesContext, name);
+
+        if (bundleName == null)
+        {
+            return null;
+        }
+
+        Locale locale = Locale.getDefault();
+
+        final UIViewRoot viewRoot = facesContext.getViewRoot();
+        if (viewRoot != null && viewRoot.getLocale() != null)
+        {
+            locale = viewRoot.getLocale();
+        }
+
+        try
+        {
+            return getResourceBundle(bundleName, locale, getClassLoader());
+        }
+        catch (MissingResourceException e)
+        {
+            try
+            {
+                return getResourceBundle(bundleName, locale, this.getClass().getClassLoader());
+            }
+            catch (MissingResourceException e1)
+            {            
+                throw new FacesException("Could not load resource bundle for name '" + name + "': " + e.getMessage(), e1);
+            }
+        }
+    }
+
+    private ClassLoader getClassLoader()
+    {
+        return ClassUtils.getContextClassLoader();
+    }
+
+    String getBundleName(final FacesContext facesContext, final String name)
+    {
+        ResourceBundle bundle = getRuntimeConfig(facesContext).getResourceBundle(name);
+        return bundle != null ? bundle.getBaseName() : null;
+    }
+
+    java.util.ResourceBundle getResourceBundle(final String name, final Locale locale, final ClassLoader loader)
+            throws MissingResourceException
+    {
+        return java.util.ResourceBundle.getBundle(name, locale, loader);
+    }
+
+    final RuntimeConfig getRuntimeConfig(final FacesContext facesContext)
+    {
+        return RuntimeConfig.getCurrentInstance(facesContext.getExternalContext());
+    }
+
+    final FacesContext getFaceContext()
+    {
+        return FacesContext.getCurrentInstance();
+    }
+
+    @Override
+    public final UIComponent createComponent(final ValueExpression componentExpression,
+                                             final FacesContext facesContext, final String componentType)
+            throws FacesException, NullPointerException
+    {
+
+        /*
+         * Before the component instance is returned, it must be inspected for the presence of a ListenerFor (or
+         * ListenersFor) or ResourceDependency (or ResourceDependencies) annotation. If any of these annotations are
+         * present, the action listed in ListenerFor or ResourceDependency must be taken on the component, before it is
+         * returned from this method. This variant of createComponent must not inspect the Renderer for the component to
+         * be returned for any of the afore mentioned annotations. Such inspection is the province of
+         */
+
+        checkNull(componentExpression, "componentExpression");
+        checkNull(facesContext, "facesContext");
+        checkNull(componentType, "componentType");
+
+        ELContext elContext = facesContext.getELContext();
+
+        try
+        {
+            Object retVal = componentExpression.getValue(elContext);
+
+            UIComponent createdComponent;
+
+            if (retVal instanceof UIComponent)
+            {
+                createdComponent = (UIComponent) retVal;
+                _handleAnnotations(facesContext, createdComponent, createdComponent);
+            }
+            else
+            {
+                createdComponent = createComponent(componentType);
+                componentExpression.setValue(elContext, createdComponent);
+            }
+
+            return createdComponent;
+        }
+        catch (FacesException e)
+        {
+            throw e;
+        }
+        catch (Exception e)
+        {
+            throw new FacesException(e);
+        }
+    }
+
+    @Override
+    public UIComponent createComponent(ValueExpression componentExpression, FacesContext context, String componentType,
+                                       String rendererType)
+    {
+        // Like createComponent(ValueExpression, FacesContext, String)
+        UIComponent component = createComponent(componentExpression, context, componentType);
+
+        _inspectRenderer(context, component, componentType, rendererType);
+
+        return component;
+    }
+
+    @Override
+    public final ExpressionFactory getExpressionFactory()
+    {
+        return _runtimeConfig.getExpressionFactory();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public final <T> T evaluateExpressionGet(final FacesContext context, final String expression,
+                                             final Class<? extends T> expectedType) throws ELException
+    {
+        ELContext elContext = context.getELContext();
+
+        ExpressionFactory factory = getExpressionFactory();
+
+        return (T) factory.createValueExpression(elContext, expression, expectedType).getValue(elContext);
+    }
+
+    @Override
+    public final void addELContextListener(final ELContextListener listener)
+    {
+        synchronized (_elContextListeners)
+        {
+            _elContextListeners.add(listener);
+        }
+    }
+
+    @Override
+    public void publishEvent(FacesContext facesContext, Class<? extends SystemEvent> systemEventClass, Class<?> sourceBaseType, Object source)
+    {
+        checkNull(systemEventClass, "systemEventClass");
+        checkNull(source, "source");
+        
+        //Call events only if event processing is enabled.
+        if (!facesContext.isProcessingEvents())
+        {
+            return;
+        }
+        
+        try
+        {
+            SystemEvent event = null;
+            if (source instanceof SystemEventListenerHolder)
+            {
+                SystemEventListenerHolder holder = (SystemEventListenerHolder) source;
+
+                // If the source argument implements SystemEventListenerHolder, call
+                // SystemEventListenerHolder.getListenersForEventClass(java.lang.Class) on it, passing the
+                // systemEventClass
+                // argument. If the list is not empty, perform algorithm traverseListenerList on the list.
+                event = _traverseListenerList(holder.getListenersForEventClass(systemEventClass), systemEventClass,
+                                              source, event);
+            }
+            
+            UIViewRoot uiViewRoot = facesContext.getViewRoot();
+            if (uiViewRoot != null)
+            {
+                //Call listeners on view level
+                event = _traverseListenerList(uiViewRoot.getViewListenersForEventClass(systemEventClass), 
+                        systemEventClass, source, event);
+            }
+
+            SystemListenerEntry systemListenerEntry = _systemEventListenerClassMap.get(systemEventClass);
+            if (systemListenerEntry != null)
+            {
+                systemListenerEntry.publish(systemEventClass, sourceBaseType, source, event);
+            }
+        }
+        catch (AbortProcessingException e)
+        {
+            // If the act of invoking the processListener method causes an AbortProcessingException to be thrown,
+            // processing of the listeners must be aborted, no further processing of the listeners for this event must
+            // take place, and the exception must be logged with Level.SEVERE.
+            log.log(Level.SEVERE, "Event processing was aborted", e);
+        }
+    }
+
+    @Override
+    public void publishEvent(FacesContext facesContext, Class<? extends SystemEvent> systemEventClass, Object source)
+    {
+        publishEvent(facesContext, systemEventClass, source.getClass(), source);
+    }
+
+    @Override
+    public final void removeELContextListener(final ELContextListener listener)
+    {
+        synchronized (_elContextListeners)
+        {
+            _elContextListeners.remove(listener);
+        }
+    }
+
+    @Override
+    public final ELContextListener[] getELContextListeners()
+    {
+        // this gets called on every request, so I can't afford to synchronize
+        // I just have to trust that toArray() with do the right thing if the
+        // list is changing (not likely)
+        return _elContextListeners.toArray(new ELContextListener[_elContextListeners.size()]);
+    }
+
+    @Override
+    public final void setActionListener(final ActionListener actionListener)
+    {
+        checkNull(actionListener, "actionListener");
+
+        _actionListener = actionListener;
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set actionListener = " + actionListener.getClass().getName());
+    }
+
+    @Override
+    public final ActionListener getActionListener()
+    {
+        return _actionListener;
+    }
+
+    @Override
+    public Iterator<String> getBehaviorIds()
+    {
+        return _behaviorClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final Iterator<String> getComponentTypes()
+    {
+        return _componentClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final Iterator<String> getConverterIds()
+    {
+        return _converterIdToClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final Iterator<Class<?>> getConverterTypes()
+    {
+        return _converterClassNameToClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final void setDefaultLocale(final Locale locale)
+    {
+        checkNull(locale, "locale");
+
+        _defaultLocale = locale;
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set defaultLocale = " + locale.getCountry() + " " + locale.getLanguage());
+    }
+
+    @Override
+    public final Locale getDefaultLocale()
+    {
+        return _defaultLocale;
+    }
+
+    @Override
+    public final void setMessageBundle(final String messageBundle)
+    {
+        checkNull(messageBundle, "messageBundle");
+
+        _messageBundle = messageBundle;
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set MessageBundle = " + messageBundle);
+    }
+
+    @Override
+    public final String getMessageBundle()
+    {
+        return _messageBundle;
+    }
+
+    @Override
+    public final void setNavigationHandler(final NavigationHandler navigationHandler)
+    {
+        checkNull(navigationHandler, "navigationHandler");
+
+        _navigationHandler = navigationHandler;
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set NavigationHandler = " + navigationHandler.getClass().getName());
+    }
+
+    @Override
+    public final NavigationHandler getNavigationHandler()
+    {
+        return _navigationHandler;
     }
 
     /**
-     * Wrapper for close of ResultSet which removes this
-     * result set from being traced then calls close on
-     * the original ResultSet.
+     * @deprecated
      */
-    public void close() throws SQLException {
-        if(_stmt != null) {
-            ((AbandonedTrace)_stmt).removeTrace(this);
-            _stmt = null;
+    @Deprecated
+    @Override
+    public final void setPropertyResolver(final PropertyResolver propertyResolver)
+    {
+        checkNull(propertyResolver, "propertyResolver");
+
+        if (getFaceContext() != null)
+        {
+            throw new IllegalStateException("propertyResolver must be defined before request processing");
         }
-        _res.close();
+
+        _runtimeConfig.setPropertyResolver(propertyResolver);
+
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set PropertyResolver = " + propertyResolver.getClass().getName());
     }
 
-    public boolean next() throws SQLException { return _res.next();  }
-    public boolean wasNull() throws SQLException { return _res.wasNull();  }
-    public String getString(int columnIndex) throws SQLException { return _res.getString(columnIndex);  }
-    public boolean getBoolean(int columnIndex) throws SQLException { return _res.getBoolean(columnIndex);  }
-    public byte getByte(int columnIndex) throws SQLException { return _res.getByte(columnIndex); }
-    public short getShort(int columnIndex) throws SQLException { return _res.getShort(columnIndex); }
-    public int getInt(int columnIndex) throws SQLException { return _res.getInt(columnIndex); }
-    public long getLong(int columnIndex) throws SQLException { return _res.getLong(columnIndex); }
-    public float getFloat(int columnIndex) throws SQLException { return _res.getFloat(columnIndex); }
-    public double getDouble(int columnIndex) throws SQLException { return _res.getDouble(columnIndex); }
-    /** @deprecated */
-    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException { return _res.getBigDecimal(columnIndex); }
-    public byte[] getBytes(int columnIndex) throws SQLException { return _res.getBytes(columnIndex); }
-    public Date getDate(int columnIndex) throws SQLException { return _res.getDate(columnIndex); }
-    public Time getTime(int columnIndex) throws SQLException { return _res.getTime(columnIndex); }
-    public Timestamp getTimestamp(int columnIndex) throws SQLException { return _res.getTimestamp(columnIndex); }
-    public InputStream getAsciiStream(int columnIndex) throws SQLException { return _res.getAsciiStream(columnIndex); }
-    /** @deprecated */
-    public InputStream getUnicodeStream(int columnIndex) throws SQLException { return _res.getUnicodeStream(columnIndex); }
-    public InputStream getBinaryStream(int columnIndex) throws SQLException { return _res.getBinaryStream(columnIndex); }
-    public String getString(String columnName) throws SQLException { return _res.getString(columnName); }
-    public boolean getBoolean(String columnName) throws SQLException { return _res.getBoolean(columnName); }
-    public byte getByte(String columnName) throws SQLException { return _res.getByte(columnName); }
-    public short getShort(String columnName) throws SQLException { return _res.getShort(columnName); }
-    public int getInt(String columnName) throws SQLException { return _res.getInt(columnName); }
-    public long getLong(String columnName) throws SQLException { return _res.getLong(columnName); }
-    public float getFloat(String columnName) throws SQLException { return _res.getFloat(columnName); }
-    public double getDouble(String columnName) throws SQLException { return _res.getDouble(columnName); }
-    /** @deprecated */
-    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException { return _res.getBigDecimal(columnName); }
-    public byte[] getBytes(String columnName) throws SQLException { return _res.getBytes(columnName); }
-    public Date getDate(String columnName) throws SQLException { return _res.getDate(columnName); }
-    public Time getTime(String columnName) throws SQLException { return _res.getTime(columnName); }
-    public Timestamp getTimestamp(String columnName) throws SQLException { return _res.getTimestamp(columnName); }
-    public InputStream getAsciiStream(String columnName) throws SQLException { return _res.getAsciiStream(columnName); }
-    /** @deprecated */
-    public InputStream getUnicodeStream(String columnName) throws SQLException { return _res.getUnicodeStream(columnName); }
-    public InputStream getBinaryStream(String columnName) throws SQLException { return _res.getBinaryStream(columnName); }
-    public SQLWarning getWarnings() throws SQLException { return _res.getWarnings();  }
-    public void clearWarnings() throws SQLException { _res.clearWarnings();  }
-    public String getCursorName() throws SQLException { return _res.getCursorName();  }
-    public ResultSetMetaData getMetaData() throws SQLException { return _res.getMetaData();  }
-    public Object getObject(int columnIndex) throws SQLException { return _res.getObject(columnIndex);  }
-    public Object getObject(String columnName) throws SQLException { return _res.getObject(columnName);  }
-    public int findColumn(String columnName) throws SQLException { return _res.findColumn(columnName);  }
-    public Reader getCharacterStream(int columnIndex) throws SQLException { return _res.getCharacterStream(columnIndex);  }
-    public Reader getCharacterStream(String columnName) throws SQLException { return _res.getCharacterStream(columnName);  }
-    public BigDecimal getBigDecimal(int columnIndex) throws SQLException { return _res.getBigDecimal(columnIndex);  }
-    public BigDecimal getBigDecimal(String columnName) throws SQLException { return _res.getBigDecimal(columnName);  }
-    public boolean isBeforeFirst() throws SQLException { return _res.isBeforeFirst();  }
-    public boolean isAfterLast() throws SQLException { return _res.isAfterLast();  }
-    public boolean isFirst() throws SQLException { return _res.isFirst();  }
-    public boolean isLast() throws SQLException { return _res.isLast();  }
-    public void beforeFirst() throws SQLException { _res.beforeFirst();  }
-    public void afterLast() throws SQLException { _res.afterLast();  }
-    public boolean first() throws SQLException { return _res.first();  }
-    public boolean last() throws SQLException { return _res.last();  }
-    public int getRow() throws SQLException { return _res.getRow();  }
-    public boolean absolute(int row) throws SQLException { return _res.absolute(row);  }
-    public boolean relative(int rows) throws SQLException { return _res.relative(rows);  }
-    public boolean previous() throws SQLException { return _res.previous();  }
-    public void setFetchDirection(int direction) throws SQLException { _res.setFetchDirection(direction);  }
-    public int getFetchDirection() throws SQLException { return _res.getFetchDirection();  }
-    public void setFetchSize(int rows) throws SQLException { _res.setFetchSize(rows); }
-    public int getFetchSize() throws SQLException { return _res.getFetchSize();  }
-    public int getType() throws SQLException { return _res.getType();  }
-    public int getConcurrency() throws SQLException { return _res.getConcurrency();  }
-    public boolean rowUpdated() throws SQLException { return _res.rowUpdated();  }
-    public boolean rowInserted() throws SQLException { return _res.rowInserted();  }
-    public boolean rowDeleted() throws SQLException { return _res.rowDeleted();  }
-    public void updateNull(int columnIndex) throws SQLException {  _res.updateNull(columnIndex);  }
-    public void updateBoolean(int columnIndex, boolean x) throws SQLException {  _res.updateBoolean(columnIndex, x);  }
-    public void updateByte(int columnIndex, byte x) throws SQLException {  _res.updateByte(columnIndex, x);  }
-    public void updateShort(int columnIndex, short x) throws SQLException {  _res.updateShort(columnIndex, x);  }
-    public void updateInt(int columnIndex, int x) throws SQLException {  _res.updateInt(columnIndex, x);  }
-    public void updateLong(int columnIndex, long x) throws SQLException {  _res.updateLong(columnIndex, x); }
-    public void updateFloat(int columnIndex, float x) throws SQLException {  _res.updateFloat(columnIndex, x);  }
-    public void updateDouble(int columnIndex, double x) throws SQLException {  _res.updateDouble(columnIndex, x);  }
-    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnIndex, x);  }
-    public void updateString(int columnIndex, String x) throws SQLException {  _res.updateString(columnIndex, x);  }
-    public void updateBytes(int columnIndex, byte[] x) throws SQLException {  _res.updateBytes(columnIndex, x); }
-    public void updateDate(int columnIndex, Date x) throws SQLException {  _res.updateDate(columnIndex, x);  }
-    public void updateTime(int columnIndex, Time x) throws SQLException {  _res.updateTime(columnIndex, x); }
-    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException {  _res.updateTimestamp(columnIndex, x);  }
-    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnIndex, x, length);  }
-    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnIndex, x, length); }
-    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException {  _res.updateCharacterStream(columnIndex, x, length); }
-    public void updateObject(int columnIndex, Object x, int scale) throws SQLException {  _res.updateObject(columnIndex, x);  }
-    public void updateObject(int columnIndex, Object x) throws SQLException {  _res.updateObject(columnIndex, x);  }
-    public void updateNull(String columnName) throws SQLException {  _res.updateNull(columnName);  }
-    public void updateBoolean(String columnName, boolean x) throws SQLException {  _res.updateBoolean(columnName, x);  }
-    public void updateByte(String columnName, byte x) throws SQLException {  _res.updateByte(columnName, x);  }
-    public void updateShort(String columnName, short x) throws SQLException {  _res.updateShort(columnName, x);  }
-    public void updateInt(String columnName, int x) throws SQLException {  _res.updateInt(columnName, x);  }
-    public void updateLong(String columnName, long x) throws SQLException {  _res.updateLong(columnName, x);  }
-    public void updateFloat(String columnName, float x) throws SQLException {  _res.updateFloat(columnName, x);  }
-    public void updateDouble(String columnName, double x) throws SQLException { _res.updateDouble(columnName, x);  }
-    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException {  _res.updateBigDecimal(columnName, x);  }
-    public void updateString(String columnName, String x) throws SQLException {  _res.updateString(columnName, x);  }
-    public void updateBytes(String columnName, byte[] x) throws SQLException {  _res.updateBytes(columnName, x);  }
-    public void updateDate(String columnName, Date x) throws SQLException {  _res.updateDate(columnName, x);  }
-    public void updateTime(String columnName, Time x) throws SQLException {  _res.updateTime(columnName, x);  }
-    public void updateTimestamp(String columnName, Timestamp x) throws SQLException {  _res.updateTimestamp(columnName, x);  }
-    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateAsciiStream(columnName, x, length);  }
-    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException {  _res.updateBinaryStream(columnName, x, length);  }
-    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException {  _res.updateCharacterStream(columnName, reader, length);  }
-    public void updateObject(String columnName, Object x, int scale) throws SQLException {  _res.updateObject(columnName, x);  }
-    public void updateObject(String columnName, Object x) throws SQLException {  _res.updateObject(columnName, x);  }
-    public void insertRow() throws SQLException {  _res.insertRow();  }
-    public void updateRow() throws SQLException {  _res.updateRow();  }
-    public void deleteRow() throws SQLException {  _res.deleteRow();  }
-    public void refreshRow() throws SQLException {  _res.refreshRow();  }
-    public void cancelRowUpdates() throws SQLException {  _res.cancelRowUpdates();  }
-    public void moveToInsertRow() throws SQLException {  _res.moveToInsertRow();  }
-    public void moveToCurrentRow() throws SQLException {  _res.moveToCurrentRow();  }
-    public Object getObject(int i, Map map) throws SQLException { return _res.getObject(i, map);  }
-    public Ref getRef(int i) throws SQLException { return _res.getRef(i);  }
-    public Blob getBlob(int i) throws SQLException { return _res.getBlob(i);  }
-    public Clob getClob(int i) throws SQLException { return _res.getClob(i);  }
-    public Array getArray(int i) throws SQLException { return _res.getArray(i);  }
-    public Object getObject(String colName, Map map) throws SQLException { return _res.getObject(colName, map);  }
-    public Ref getRef(String colName) throws SQLException { return _res.getRef(colName);  }
-    public Blob getBlob(String colName) throws SQLException { return _res.getBlob(colName);  }
-    public Clob getClob(String colName) throws SQLException { return _res.getClob(colName);  }
-    public Array getArray(String colName) throws SQLException { return _res.getArray(colName);  }
-    public Date getDate(int columnIndex, Calendar cal) throws SQLException { return _res.getDate(columnIndex, cal);  }
-    public Date getDate(String columnName, Calendar cal) throws SQLException { return _res.getDate(columnName, cal);  }
-    public Time getTime(int columnIndex, Calendar cal) throws SQLException { return _res.getTime(columnIndex, cal);  }
-    public Time getTime(String columnName, Calendar cal) throws SQLException { return _res.getTime(columnName, cal);  }
-    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException { return _res.getTimestamp(columnIndex, cal);  }
-    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException { return _res.getTimestamp(columnName, cal);  }
+    @Override
+    public ProjectStage getProjectStage()
+    {
+        // If the value has already been determined by a previous call to this
+        // method, simply return that value.
+        if (_projectStage == null)
+        {
+            String stageName = null;
+            
+            // try to obtain the ProjectStage from the system property
+            // faces.PROJECT_STAGE as proposed by Ed Burns
+            stageName = System.getProperty(PROJECT_STAGE_SYSTEM_PROPERTY_NAME);
+            
+            if (stageName == null)
+            {
+                // if not found check for the "old" System Property
+                // and print a warning message to the log (just to be 
+                // sure that everyone recognizes the change in the name).
+                stageName = System.getProperty(MYFACES_PROJECT_STAGE_SYSTEM_PROPERTY_NAME);
+                if (stageName != null)
+                {
+                    log.log(Level.WARNING, "The system property " + MYFACES_PROJECT_STAGE_SYSTEM_PROPERTY_NAME
+                            + " has been replaced by " + PROJECT_STAGE_SYSTEM_PROPERTY_NAME + "!"
+                            + " Please change your settings.");
+                }
+            }
+            
+            if (stageName == null)
+            {
+                // Look for a JNDI environment entry under the key given by the
+                // value of ProjectStage.PROJECT_STAGE_JNDI_NAME (return type of
+                // java.lang.String).
+                try
+                {
+                    Context ctx = new InitialContext();
+                    Object temp = ctx.lookup(ProjectStage.PROJECT_STAGE_JNDI_NAME);
+                    if (temp != null)
+                    {
+                        if (temp instanceof String)
+                        {
+                            stageName = (String) temp;
+                        }
+                        else
+                        {
+                            log.severe("JNDI lookup for key " + ProjectStage.PROJECT_STAGE_JNDI_NAME
+                                    + " should return a java.lang.String value");
+                        }
+                    }
+                }
+                catch (NamingException e)
+                {
+                    // no-op
+                }
+                catch (NoClassDefFoundError er)
+                {
+                    //On Google App Engine, javax.naming.Context is a restricted class.
+                    //In that case, NoClassDefFoundError is thrown. stageName needs to be configured
+                    //below by context parameter.
+                    //It can be done with changing the order to look first at context param, but it is defined in the spec.
+                    //http://java.sun.com/javaee/6/docs/api/javax/faces/application/Application.html#getProjectStage()
+                    //no-op
+                }
+            }
 
-    // ------------------- JDBC 3.0 -----------------------------------------
-    // Will be commented by the build process on a JDBC 2.0 system
+            /*
+             * If found, continue with the algorithm below, otherwise, look for an entry in the initParamMap of the
+             * ExternalContext from the current FacesContext with the key ProjectStage.PROJECT_STAGE_PARAM_NAME
+             */
+            if (stageName == null)
+            {
+                FacesContext context = FacesContext.getCurrentInstance();
+                stageName = context.getExternalContext().getInitParameter(ProjectStage.PROJECT_STAGE_PARAM_NAME);
+            }
 
-/* JDBC_3_ANT_KEY_BEGIN */
+            // If a value is found
+            if (stageName != null)
+            {
+                /*
+                 * see if an enum constant can be obtained by calling ProjectStage.valueOf(), passing the value from the
+                 * initParamMap. If this succeeds without exception, save the value and return it.
+                 */
+                try
+                {
+                    _projectStage = ProjectStage.valueOf(stageName);
+                    return _projectStage;
+                }
+                catch (IllegalArgumentException e)
+                {
+                    log.log(Level.SEVERE, "Couldn't discover the current project stage", e);
+                }
+            }
+            else
+            {
+                if (log.isLoggable(Level.INFO))
+                {
+                    log.info("Couldn't discover the current project stage, using " + ProjectStage.Production);
+                }
+            }
 
-    public java.net.URL getURL(int columnIndex) throws SQLException {
-        return _res.getURL(columnIndex);
+            /*
+             * If not found, or any of the previous attempts to discover the enum constant value have failed, log a
+             * descriptive error message, assign the value as ProjectStage.Production and return it.
+             */
+            
+            _projectStage = ProjectStage.Production;
+        }
+
+        return _projectStage;
     }
 
-    public java.net.URL getURL(String columnName) throws SQLException {
-        return _res.getURL(columnName);
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final PropertyResolver getPropertyResolver()
+    {
+        return PROPERTYRESOLVER;
     }
 
-    public void updateRef(int columnIndex, java.sql.Ref x)
-        throws SQLException {
-        _res.updateRef(columnIndex, x);
+    @Override
+    public final void setResourceHandler(ResourceHandler resourceHandler)
+    {
+        checkNull(resourceHandler, "resourceHandler");
+
+        if(isFirstRequestProcessed())
+        {
+            throw new IllegalStateException("setResourceHandler may not be executed after a lifecycle request has been completed");
+        }
+        _resourceHandler = resourceHandler;
     }
 
-    public void updateRef(String columnName, java.sql.Ref x)
-        throws SQLException {
-        _res.updateRef(columnName, x);
+    @Override
+    public final ResourceHandler getResourceHandler()
+    {
+        return _resourceHandler;
     }
 
-    public void updateBlob(int columnIndex, java.sql.Blob x)
-        throws SQLException {
-        _res.updateBlob(columnIndex, x);
+    @Override
+    public final void setSupportedLocales(final Collection<Locale> locales)
+    {
+        checkNull(locales, "locales");
+
+        _supportedLocales = locales;
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set SupportedLocales");
     }
 
-    public void updateBlob(String columnName, java.sql.Blob x)
-        throws SQLException {
-        _res.updateBlob(columnName, x);
+    @Override
+    public final Iterator<Locale> getSupportedLocales()
+    {
+        return _supportedLocales.iterator();
     }
 
-    public void updateClob(int columnIndex, java.sql.Clob x)
-        throws SQLException {
-        _res.updateClob(columnIndex, x);
+    @Override
+    public final Iterator<String> getValidatorIds()
+    {
+        return _validatorClassMap.keySet().iterator();
     }
 
-    public void updateClob(String columnName, java.sql.Clob x)
-        throws SQLException {
-        _res.updateClob(columnName, x);
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final void setVariableResolver(final VariableResolver variableResolver)
+    {
+        checkNull(variableResolver, "variableResolver");
+
+        if (isFirstRequestProcessed())
+        {
+            throw new IllegalStateException("variableResolver must be defined before request processing");
+        }
+
+        _runtimeConfig.setVariableResolver(variableResolver);
+
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set VariableResolver = " + variableResolver.getClass().getName());
     }
 
-    public void updateArray(int columnIndex, java.sql.Array x)
-        throws SQLException {
-        _res.updateArray(columnIndex, x);
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final VariableResolver getVariableResolver()
+    {
+        return VARIABLERESOLVER;
     }
 
-    public void updateArray(String columnName, java.sql.Array x)
-        throws SQLException {
-        _res.updateArray(columnName, x);
+    @Override
+    public final void setViewHandler(final ViewHandler viewHandler)
+    {
+        checkNull(viewHandler, "viewHandler");
+
+        if(isFirstRequestProcessed())
+        {
+            throw new IllegalStateException("setViewHandler may not be executed after a lifecycle request has been completed");
+        }
+        _viewHandler = viewHandler;
+        if (log.isLoggable(Level.FINEST))
+            log.finest("set ViewHandler = " + viewHandler.getClass().getName());
+    }
+    
+    @Override
+    public void subscribeToEvent(Class<? extends SystemEvent> systemEventClass, SystemEventListener listener)
+    {
+        subscribeToEvent(systemEventClass, null, listener);
     }
 
-/* JDBC_3_ANT_KEY_END */
+    @Override
+    public void subscribeToEvent(Class<? extends SystemEvent> systemEventClass, Class<?> sourceClass,
+                                 SystemEventListener listener)
+    {
+        checkNull(systemEventClass, "systemEventClass");
+        checkNull(listener, "listener");
+
+        SystemListenerEntry systemListenerEntry;
+        synchronized (_systemEventListenerClassMap)
+        {
+            systemListenerEntry = _systemEventListenerClassMap.get(systemEventClass);
+            if (systemListenerEntry == null)
+            {
+                systemListenerEntry = new SystemListenerEntry();
+                _systemEventListenerClassMap.put(systemEventClass, systemListenerEntry);
+            }
+        }
+
+        systemListenerEntry.addListener(listener, sourceClass);
+    }
+    
+    @Override
+    public void unsubscribeFromEvent(Class<? extends SystemEvent> systemEventClass, SystemEventListener listener)
+    {
+        unsubscribeFromEvent(systemEventClass, null, listener);
+    }
+
+    @Override
+    public void unsubscribeFromEvent(Class<? extends SystemEvent> systemEventClass, Class<?> sourceClass,
+                                     SystemEventListener listener)
+    {
+        checkNull(systemEventClass, "systemEventClass");
+        checkNull(listener, "listener");
+
+        SystemListenerEntry systemListenerEntry = _systemEventListenerClassMap.get(systemEventClass);
+        if (systemListenerEntry != null)
+        {
+            systemListenerEntry.removeListener(listener, sourceClass);
+        }
+    }
+
+    @Override
+    public final ViewHandler getViewHandler()
+    {
+        return _viewHandler;
+    }
+
+    @Override
+    public void addBehavior(String behaviorId, String behaviorClass)
+    {
+        checkNull(behaviorId, "behaviorId");
+        checkEmpty(behaviorId, "behaviorId");
+        checkNull(behaviorClass, "behaviorClass");
+        checkEmpty(behaviorClass, "behaviorClass");
+
+        try
+        {
+            if(isLazyLoadConfigObjects())
+                _behaviorClassMap.put(behaviorId, behaviorClass);
+            else
+                _behaviorClassMap.put(behaviorId, ClassUtils.simpleClassForName(behaviorClass));
+            
+            if (log.isLoggable(Level.FINEST))
+                log.finest("add Behavior class = " + behaviorClass + " for id = " + behaviorId);
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Behavior class " + behaviorClass + " not found", e);
+        }
+
+    }
+
+    @Override
+    public final void addComponent(final String componentType, final String componentClassName)
+    {
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+        checkNull(componentClassName, "componentClassName");
+        checkEmpty(componentClassName, "componentClassName");
+
+        try
+        {
+            if(isLazyLoadConfigObjects())
+                _componentClassMap.put(componentType, componentClassName);
+            else
+                _componentClassMap.put(componentType, ClassUtils.simpleClassForName(componentClassName));
+            
+            if (log.isLoggable(Level.FINEST))
+                log.finest("add Component class = " + componentClassName + " for type = " + componentType);
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Component class " + componentClassName + " not found", e);
+        }
+    }
+
+    @Override
+    public final void addConverter(final String converterId, final String converterClass)
+    {
+        checkNull(converterId, "converterId");
+        checkEmpty(converterId, "converterId");
+        checkNull(converterClass, "converterClass");
+        checkEmpty(converterClass, "converterClass");
+
+        try
+        {
+            if(isLazyLoadConfigObjects())
+                _converterIdToClassMap.put(converterId, converterClass);
+            else
+                _converterIdToClassMap.put(converterId, ClassUtils.simpleClassForName(converterClass));
+            if (log.isLoggable(Level.FINEST))
+                log.finest("add Converter id = " + converterId + " converterClass = " + converterClass);
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Converter class " + converterClass + " not found", e);
+        }
+    }
+
+    @Override
+    public final void addConverter(final Class<?> targetClass, final String converterClass)
+    {
+        checkNull(targetClass, "targetClass");
+        checkNull(converterClass, "converterClass");
+        checkEmpty(converterClass, "converterClass");
+
+        try
+        {
+            _converterClassNameToClassMap.put(targetClass, converterClass);
+            if (log.isLoggable(Level.FINEST))
+                log.finest("add Converter for class = " + targetClass + " converterClass = " + converterClass);
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Converter class " + converterClass + " not found", e);
+        }
+    }
+
+    @Override
+    public final void addValidator(final String validatorId, final String validatorClass)
+    {
+        checkNull(validatorId, "validatorId");
+        checkEmpty(validatorId, "validatorId");
+        checkNull(validatorClass, "validatorClass");
+        checkEmpty(validatorClass, "validatorClass");
+
+        try
+        {
+            if(isLazyLoadConfigObjects())
+                _validatorClassMap.put(validatorId, validatorClass);
+            else
+                _validatorClassMap.put(validatorId, ClassUtils.simpleClassForName(validatorClass));
+            
+            if (log.isLoggable(Level.FINEST))
+                log.finest("add Validator id = " + validatorId + " class = " + validatorClass);
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Validator class " + validatorClass + " not found", e);
+        }
+    }
+
+    @Override
+    public Behavior createBehavior(String behaviorId) throws FacesException
+    {
+        checkNull(behaviorId, "behaviorId");
+        checkEmpty(behaviorId, "behaviorId");
+
+        final Class<?> behaviorClass = getObjectFromClassMap(behaviorId, _behaviorClassMap);
+        
+        if (behaviorClass == null)
+        {
+            throw new FacesException("Could not find any registered behavior-class for behaviorId : " + behaviorId);
+        }
+        
+        try
+        {
+            Behavior behavior = (Behavior)behaviorClass.newInstance();
+
+            _handleAttachedResourceDependencyAnnotations(FacesContext.getCurrentInstance(), behavior);
+
+            if (behavior instanceof ClientBehaviorBase)
+            {
+              ClientBehaviorBase clientBehavior = (ClientBehaviorBase) behavior;
+              String renderType = clientBehavior.getRendererType();
+              if (renderType != null)
+              {
+                FacesContext ctx = FacesContext.getCurrentInstance();
+                ClientBehaviorRenderer cbr = ctx.getRenderKit().getClientBehaviorRenderer(renderType);
+                _handleAttachedResourceDependencyAnnotations(FacesContext.getCurrentInstance(), cbr);
+              }
+            }
+
+            return behavior;
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Could not instantiate behavior " + behaviorClass, e);
+            throw new FacesException("Could not instantiate behavior: " + behaviorClass, e);
+        }
+    }
+
+    @Override
+    public UIComponent createComponent(FacesContext context, Resource componentResource)
+    {
+        checkNull(context, "context");
+        checkNull(componentResource, "componentResource");
+        
+        UIComponent component = null;
+        Resource resource;
+        String fqcn;
+        Class<? extends UIComponent> componentClass = null;
+
+        /*
+         * Obtain a reference to the ViewDeclarationLanguage for this Application instance by calling
+         * ViewHandler.getViewDeclarationLanguage(javax.faces.context.FacesContext, java.lang.String), passing the
+         * viewId found by calling UIViewRoot.getViewId() on the UIViewRoot in the argument FacesContext.
+         */
+        UIViewRoot view = context.getViewRoot();
+        Application application = context.getApplication();
+        ViewDeclarationLanguage vdl = application.getViewHandler().getViewDeclarationLanguage(context, view.getViewId());
+
+        /*
+         * Obtain a reference to the composite component metadata for this composite component by calling
+         * ViewDeclarationLanguage.getComponentMetadata(javax.faces.context.FacesContext,
+         * javax.faces.application.Resource), passing the facesContext and componentResource arguments to this method.
+         * This version of JSF specification uses JavaBeans as the API to the component metadata.
+         */
+        BeanInfo metadata = vdl.getComponentMetadata(context, componentResource);
+        if (metadata == null)
+        {
+            throw new FacesException("Could not get component metadata for " 
+                    + componentResource.getResourceName()
+                    + ". Did you forget to specify <composite:interface>?");
+        }
+
+        /*
+         * Determine if the component author declared a component-type for this component instance by obtaining the
+         * BeanDescriptor from the component metadata and calling its getValue() method, passing
+         * UIComponent.COMPOSITE_COMPONENT_TYPE_KEY as the argument. If non-null, the result must be a ValueExpression
+         * whose value is the component-type of the UIComponent to be created for this Resource component. Call through
+         * to createComponent(java.lang.String) to create the component.
+         */
+        BeanDescriptor descriptor = metadata.getBeanDescriptor();
+        ValueExpression componentType = (ValueExpression) descriptor.getValue(UIComponent.COMPOSITE_COMPONENT_TYPE_KEY);
+        boolean annotationsApplied = false;
+        if (componentType != null)
+        {
+            component = application.createComponent((String) componentType.getValue(context.getELContext()));
+            annotationsApplied = true;
+        }
+        else
+        {
+            /*
+             * Otherwise, determine if a script based component for this Resource can be found by calling
+             * ViewDeclarationLanguage.getScriptComponentResource(javax.faces.context.FacesContext,
+             * javax.faces.application.Resource). If the result is non-null, and is a script written in one of the
+             * languages listed in JSF 4.3 of the specification prose document, create a UIComponent instance from the
+             * script resource.
+             */
+            resource = vdl.getScriptComponentResource(context, componentResource);
+            if (resource != null)
+            {
+                String name = resource.getResourceName();
+                String className = name.substring(0, name.lastIndexOf('.'));
+
+                component = (UIComponent)ClassUtils.newInstance(className);
+            }
+            else
+            {
+                /*
+                 * Otherwise, let library-name be the return from calling Resource.getLibraryName() on the argument
+                 * componentResource and resource-name be the return from calling Resource.getResourceName() on the
+                 * argument componentResource. Create a fully qualified Java class name by removing any file extension
+                 * from resource-name and let fqcn be library-name + "." + resource-name. If a class with the name of
+                 * fqcn cannot be found, take no action and continue to the next step. If any of InstantiationException,
+                 * IllegalAccessException, or ClassCastException are thrown, wrap the exception in a FacesException and
+                 * re-throw it. If any other exception is thrown, log the exception and continue to the next step.
+                 */
+
+                String name = componentResource.getResourceName();
+                String className = name.substring(0, name.lastIndexOf('.'));
+                fqcn = componentResource.getLibraryName() + "." + className;
+
+                try
+                {
+                    componentClass = ClassUtils.classForName(fqcn);
+                }
+                catch (ClassNotFoundException e)
+                {
+                }
+
+                if (componentClass != null)
+                {
+                    try
+                    {
+                        component = componentClass.newInstance();
+                    }
+                    catch (InstantiationException e)
+                    {
+                        log.log(Level.SEVERE, "Could not instantiate component class name = " + fqcn, e);
+                        throw new FacesException("Could not instantiate component class name = " + fqcn, e);
+                    }
+                    catch (IllegalAccessException e)
+                    {
+                        log.log(Level.SEVERE, "Could not instantiate component class name = " + fqcn, e);
+                        throw new FacesException("Could not instantiate component class name = " + fqcn, e);
+                    }
+                    catch (Exception e)
+                    {
+                        log.log(Level.SEVERE, "Could not instantiate component class name = " + fqcn, e);
+                    }
+                }
+
+                /*
+                 * If none of the previous steps have yielded a UIComponent instance, call
+                 * createComponent(java.lang.String) passing "javax.faces.NamingContainer" as the argument.
+                 */
+                if (component == null)
+                {
+                    component = application.createComponent(UINamingContainer.COMPONENT_TYPE);
+                    annotationsApplied = true;
+                }
+            }
+        }
+
+        /*
+         * Call UIComponent.setRendererType(java.lang.String) on the UIComponent instance, passing
+         * "javax.faces.Composite" as the argument.
+         */
+        component.setRendererType("javax.faces.Composite");
+
+        /*
+         * Store the argument Resource in the attributes Map of the UIComponent under the key,
+         * Resource.COMPONENT_RESOURCE_KEY.
+         */
+        component.getAttributes().put(Resource.COMPONENT_RESOURCE_KEY, componentResource);
+
+        /*
+         * Store composite component metadata in the attributes Map of the UIComponent under the key,
+         * UIComponent.BEANINFO_KEY.
+         */
+        component.getAttributes().put(UIComponent.BEANINFO_KEY, metadata);
+
+        /*
+         * Before the component instance is returned, it must be inspected for the presence of a ListenerFor annotation.
+         * If this annotation is present, the action listed in ListenerFor must be taken on the component, before it is
+         * returned from this method.
+         */
+        if (!annotationsApplied)
+        {
+            _handleAnnotations(context, component, component);
+        }
+
+        return component;
+    }
+
+    @Override
+    public UIComponent createComponent(FacesContext context, String componentType, String rendererType)
+    {
+        checkNull(context, "context");
+        checkNull(componentType, "componentType");
+
+        // Like createComponent(String)
+        UIComponent component = createComponent(componentType);
+
+        _inspectRenderer(context, component, componentType, rendererType);
+
+        return component;
+    }
+
+    @Override
+    public final UIComponent createComponent(final String componentType) throws FacesException
+    {
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+
+        final Class<?> componentClass = getObjectFromClassMap(componentType, _componentClassMap);
+        if (componentClass == null)
+        {
+            log.log(Level.SEVERE, "Undefined component type " + componentType);
+            throw new FacesException("Undefined component type " + componentType);
+        }
+
+        try
+        {
+            UIComponent component = (UIComponent)componentClass.newInstance();            
+            _handleAnnotations(FacesContext.getCurrentInstance(), component, component);
+            return component;
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Could not instantiate component componentType = " + componentType, e);
+            throw new FacesException("Could not instantiate component componentType = " + componentType, e);
+        }
+    }
+
+    /**
+     * @deprecated Use createComponent(ValueExpression, FacesContext, String) instead.
+     */
+    @Deprecated
+    @Override
+    public final UIComponent createComponent(final ValueBinding valueBinding, final FacesContext facesContext,
+                                             final String componentType) throws FacesException
+    {
+
+        checkNull(valueBinding, "valueBinding");
+        checkNull(facesContext, "facesContext");
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+
+        final ValueExpression valExpression = new ValueBindingToValueExpression(valueBinding);
+
+        return createComponent(valExpression, facesContext, componentType);
+    }
+
+    /**
+     * Return an instance of the converter class that has been registered under the specified id.
+     * <p>
+     * Converters are registered via faces-config.xml files, and can also be registered via the addConverter(String id,
+     * Class converterClass) method on this class. Here the the appropriate Class definition is found, then an instance
+     * is created and returned.
+     * <p>
+     * A converter registered via a config file can have any number of nested attribute or property tags. The JSF
+     * specification is very vague about what effect these nested tags have. This method ignores nested attribute
+     * definitions, but for each nested property tag the corresponding setter is invoked on the new Converter instance
+     * passing the property's defaultValuer. Basic typeconversion is done so the target properties on the Converter
+     * instance can be String, int, boolean, etc. Note that:
+     * <ol>
+     * <li>the Sun Mojarra JSF implemenation ignores nested property tags completely, so this behaviour cannot be relied
+     * on across implementations.
+     * <li>there is no equivalent functionality for converter classes registered via the Application.addConverter api
+     * method.
+     * </ol>
+     * <p>
+     * Note that this method is most commonly called from the standard f:attribute tag. As an alternative, most
+     * components provide a "converter" attribute which uses an EL expression to create a Converter instance, in which
+     * case this method is not invoked at all. The converter attribute allows the returned Converter instance to be
+     * configured via normal dependency-injection, and is generally a better choice than using this method.
+     */
+    @Override
+    public final Converter createConverter(final String converterId)
+    {
+        checkNull(converterId, "converterId");
+        checkEmpty(converterId, "converterId");
+
+        final Class<?> converterClass = getObjectFromClassMap(converterId, _converterIdToClassMap);
+        if (converterClass == null)
+        {
+            throw new FacesException("Could not find any registered converter-class by converterId : " + converterId);
+        }
+
+        try
+        {
+            final Converter converter = (Converter)converterClass.newInstance();
+
+            setConverterProperties(converterClass, converter);
+            
+            _handleAttachedResourceDependencyAnnotations(FacesContext.getCurrentInstance(), converter);
+
+            return converter;
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Could not instantiate converter " + converterClass, e);
+            throw new FacesException("Could not instantiate converter: " + converterClass, e);
+        }
+    }
+
+    @Override
+    public final Converter createConverter(final Class<?> targetClass)
+    {
+        checkNull(targetClass, "targetClass");
+
+        return internalCreateConverter(targetClass);
+    }
+
+    private Converter internalCreateConverter(final Class<?> targetClass)
+    {
+        // Locate a Converter registered for the target class itself.
+        String converterClassName = _converterClassNameToClassMap.get(targetClass);
+
+        // Locate a Converter registered for interfaces that are
+        // implemented by the target class (directly or indirectly).
+        if (converterClassName == null)
+        {
+            final Class<?> interfaces[] = targetClass.getInterfaces();
+            if (interfaces != null)
+            {
+                for (int i = 0, len = interfaces.length; i < len; i++)
+                {
+                    // search all superinterfaces for a matching converter,
+                    // create it
+                    final Converter converter = internalCreateConverter(interfaces[i]);
+                    if (converter != null)
+                    {
+                        return converter;
+                    }
+                }
+            }
+        }
+
+        // Get EnumConverter for enum classes with no special converter, check
+        // here as recursive call with java.lang.Enum will not work
+        if (converterClassName == null && targetClass.isEnum()) {
+            converterClassName = _converterClassNameToClassMap.get(Enum.class);
+        }
+
+        if (converterClassName != null)
+        {
+            try
+            {
+                Class<? extends Converter> converterClass = ClassUtils.simpleClassForName(converterClassName);
+                Converter converter = null;
+                
+                // check cached constructor information
+                if (!_noArgConstructorConverterClasses.contains(converterClass))
+                {
+                    // the converter class either supports the one-arg constructor
+                    // or has never been processed before
+                    try
+                    {
+                        // look for a constructor that takes a single Class object
+                        // See JSF 1.2 javadoc for Converter
+                        Constructor<? extends Converter> constructor = converterClass
+                                .getConstructor(new Class[] { Class.class });
+
+                        converter = constructor.newInstance(new Object[] { targetClass });
+                    }
+                    catch (Exception e)
+                    {
+                        // the constructor does not exist
+                        // add the class to the no-arg constructor classes cache
+                        _noArgConstructorConverterClasses.add(converterClass);
+                        
+                        // use no-arg constructor
+                        converter = converterClass.newInstance();
+                    }
+                }
+                else
+                {
+                    // use no-arg constructor
+                    converter = converterClass.newInstance();
+                }
+
+                setConverterProperties(converterClass, converter);
+
+                return converter;
+            }
+            catch (Exception e)
+            {
+                log.log(Level.SEVERE, "Could not instantiate converter " + converterClassName, e);
+                throw new FacesException("Could not instantiate converter: " + converterClassName, e);
+            }
+        }
+
+        // locate converter for primitive types
+        if (targetClass == Long.TYPE)
+        {
+            return internalCreateConverter(Long.class);
+        }
+        else if (targetClass == Boolean.TYPE)
+        {
+            return internalCreateConverter(Boolean.class);
+        }
+        else if (targetClass == Double.TYPE)
+        {
+            return internalCreateConverter(Double.class);
+        }
+        else if (targetClass == Byte.TYPE)
+        {
+            return internalCreateConverter(Byte.class);
+        }
+        else if (targetClass == Short.TYPE)
+        {
+            return internalCreateConverter(Short.class);
+        }
+        else if (targetClass == Integer.TYPE)
+        {
+            return internalCreateConverter(Integer.class);
+        }
+        else if (targetClass == Float.TYPE)
+        {
+            return internalCreateConverter(Float.class);
+        }
+        else if (targetClass == Character.TYPE)
+        {
+            return internalCreateConverter(Character.class);
+        }
+
+        // Locate a Converter registered for the superclass (if any) of the
+        // target class,
+        // recursively working up the inheritance hierarchy.
+        Class<?> superClazz = targetClass.getSuperclass();
+
+        return superClazz != null ? internalCreateConverter(superClazz) : null;
+
+    }
+
+    private void setConverterProperties(final Class<?> converterClass, final Converter converter)
+    {
+        final org.apache.myfaces.config.impl.digester.elements.Converter converterConfig = _runtimeConfig
+                .getConverterConfiguration(converterClass.getName());
+        
+        // if the converter is a DataTimeConverter, check the init param for the default timezone (since 2.0)
+        if (converter instanceof DateTimeConverter)
+        {    
+            String configParam = getFaceContext().getExternalContext()
+                    .getInitParameter(DATETIMECONVERTER_DEFAULT_TIMEZONE_IS_SYSTEM_TIMEZONE_PARAM_NAME);
+            if (configParam != null && configParam.toLowerCase().equals("true"))
+            {
+                ((DateTimeConverter) converter).setTimeZone(TimeZone.getDefault());
+            }
+        }
+
+        if (converterConfig != null)
+        {
+            for (Property property : converterConfig.getProperties())
+            {
+                try
+                {
+                    BeanUtils.setProperty(converter, property.getPropertyName(), property.getDefaultValue());
+                }
+                catch (Throwable th)
+                {
+                    log.log(Level.SEVERE, "Initializing converter : " + converterClass.getName() + " with property : "
+                            + property.getPropertyName() + " and value : " + property.getDefaultValue() + " failed.");
+                }
+            }
+        }
+    }
+    
+    private void _handleAttachedResourceDependencyAnnotations(FacesContext context, Object inspected)
+    {
+        if (inspected == null) {
+            return;
+        }
+        
+        ResourceDependency annotation = inspected.getClass().getAnnotation(ResourceDependency.class);
+        
+        if (annotation == null)
+        {
+            // If the ResourceDependency annotation is not present, the argument must be inspected for the presence 
+            // of the ResourceDependencies annotation. 
+            ResourceDependencies dependencies = inspected.getClass().getAnnotation(ResourceDependencies.class);
+            if (dependencies != null)
+            {
+                // If the ResourceDependencies annotation is present, the action described in ResourceDependencies 
+                // must be taken.
+                for (ResourceDependency dependency : dependencies.value())
+                {
+                    _handleAttachedResourceDependency(context, dependency);
+                }
+            }
+        }
+        else
+        {
+            // If the ResourceDependency annotation is present, the action described in ResourceDependency must be 
+            // taken. 
+            _handleAttachedResourceDependency(context, annotation);
+        }
+    }
+    
+    private void _handleAttachedResourceDependency(FacesContext context, ResourceDependency annotation)
+    {
+        // If this annotation is not present on the class in question, no action must be taken. 
+        if (annotation != null)
+        {
+            Application application = context.getApplication();
+            
+            // Create a UIOutput instance by passing javax.faces.Output. to 
+            // Application.createComponent(java.lang.String).
+            UIOutput output = (UIOutput) application.createComponent(UIOutput.COMPONENT_TYPE);
+            
+            // Get the annotation instance from the class and obtain the values of the name, library, and 
+            // target attributes.
+            String name = annotation.name();
+            if (name != null && name.length() > 0)
+            {
+                name = ELText.parse(getExpressionFactory(), context.getELContext(), name).toString(context.getELContext());
+            }
+            
+            // Obtain the renderer-type for the resource name by passing name to 
+            // ResourceHandler.getRendererTypeForResourceName(java.lang.String).
+            String rendererType = application.getResourceHandler().getRendererTypeForResourceName(name);
+            
+            // Call setRendererType on the UIOutput instance, passing the renderer-type.
+            output.setRendererType(rendererType);
+            
+            // Obtain the Map of attributes from the UIOutput component by calling UIComponent.getAttributes().
+            Map<String, Object> attributes = output.getAttributes();
+            
+            // Store the name into the attributes Map under the key "name".
+            attributes.put("name", name);
+            
+            // If library is the empty string, let library be null.
+            String library = annotation.library();
+            if (library != null && library.length() > 0)
+            {
+                library = ELText.parse(getExpressionFactory(), context.getELContext(), library).toString(context.getELContext());
+                // If library is non-null, store it under the key "library".
+                attributes.put("library", library);
+            }
+            
+            // If target is the empty string, let target be null.
+            String target = annotation.target();
+            if (target != null && target.length() > 0)
+            {
+                target = ELText.parse(getExpressionFactory(), context.getELContext(), target).toString(context.getELContext());
+                // If target is non-null, store it under the key "target".
+                attributes.put("target", target);
+                context.getViewRoot().addComponentResource(context, output, target);
+            }
+            else
+            {
+                // Otherwise, if target is null, call UIViewRoot.addComponentResource(javax.faces.context.FacesContext, 
+                // javax.faces.component.UIComponent), passing the UIOutput instance as the second argument.
+                context.getViewRoot().addComponentResource(context, output);
+            }
+        }
+    }
+
+    // Note: this method used to be synchronized in the JSF 1.1 version. Why?
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final MethodBinding createMethodBinding(final String reference, Class<?>[] params)
+            throws ReferenceSyntaxException
+    {
+        checkNull(reference, "reference");
+        checkEmpty(reference, "reference");
+
+        // TODO: this check should be performed by the expression factory. It is
+        // a requirement of the TCK
+        if (!(reference.startsWith("#{") && reference.endsWith("}")))
+        {
+            throw new ReferenceSyntaxException("Invalid method reference: '" + reference + "'");
+        }
+
+        if (params == null)
+            params = new Class[0];
+
+        MethodExpression methodExpression;
+
+        try
+        {
+            methodExpression = getExpressionFactory().createMethodExpression(threadELContext(), reference,
+                                                                             Object.class, params);
+        }
+        catch (ELException e)
+        {
+            throw new ReferenceSyntaxException(e);
+        }
+
+        return new MethodExpressionToMethodBinding(methodExpression);
+    }
+
+    @Override
+    public final Validator createValidator(final String validatorId) throws FacesException
+    {
+        checkNull(validatorId, "validatorId");
+        checkEmpty(validatorId, "validatorId");
+
+        Class<?> validatorClass = getObjectFromClassMap(validatorId, _validatorClassMap);
+        if (validatorClass == null)
+        {
+            String message = "Unknown validator id '" + validatorId + "'.";
+            log.severe(message);
+            throw new FacesException(message);
+        }
+
+        try
+        {
+            Validator validator = (Validator) validatorClass.newInstance();
+            
+            _handleAttachedResourceDependencyAnnotations(FacesContext.getCurrentInstance(), validator);
+            
+            return validator;
+        }
+        catch (Exception e)
+        {
+            log.log(Level.SEVERE, "Could not instantiate validator " + validatorClass, e);
+            throw new FacesException("Could not instantiate validator: " + validatorClass, e);
+        }
+    }
+
+    /**
+     * @deprecated
+     */
+    @Override
+    public final ValueBinding createValueBinding(final String reference) throws ReferenceSyntaxException
+    {
+        checkNull(reference, "reference");
+        checkEmpty(reference, "reference");
+
+        ValueExpression valueExpression;
+
+        try
+        {
+            valueExpression = getExpressionFactory().createValueExpression(threadELContext(), reference, Object.class);
+        }
+        catch (ELException e)
+        {
+            throw new ReferenceSyntaxException(e);
+        }
+
+        return new ValueExpressionToValueBinding(valueExpression);
+    }
+
+    // gets the elContext from the current FacesContext()
+    private final ELContext threadELContext()
+    {
+        return getFaceContext().getELContext();
+    }
+
+    @Override
+    public final String getDefaultRenderKitId()
+    {
+        return _defaultRenderKitId;
+    }
+
+    @Override
+    public final void setDefaultRenderKitId(final String defaultRenderKitId)
+    {
+        _defaultRenderKitId = defaultRenderKitId;
+    }
+
+    @Override
+    public final StateManager getStateManager()
+    {
+        return _stateManager;
+    }
+
+    @Override
+    public final void setStateManager(final StateManager stateManager)
+    {
+        checkNull(stateManager, "stateManager");
+
+        if(isFirstRequestProcessed())
+        {
+            throw new IllegalStateException("setStateManager may not be executed after a lifecycle request has been completed");
+        }
+        
+        _stateManager = stateManager;
+    }
+
+    private void checkNull(final Object param, final String paramName)
+    {
+        if (param == null)
+        {
+            throw new NullPointerException(paramName + " cannot be null.");
+        }
+    }
+
+    private void checkEmpty(final String param, final String paramName)
+    {
+        if (param.length() == 0)
+        {
+            throw new NullPointerException("String " + paramName + " cannot be empty.");
+        }
+    }
+
+    private static SystemEvent _createEvent(Class<? extends SystemEvent> systemEventClass, Object source,
+                                            SystemEvent event)
+    {
+        if (event == null)
+        {
+            try
+            {
+                Constructor<?>[] constructors = systemEventClass.getConstructors();
+                Constructor<? extends SystemEvent> constructor = null;
+                for (Constructor<?> c : constructors)
+                {
+                    if (c.getParameterTypes().length == 1)
+                    {
+                        // Safe cast, since the constructor belongs
+                        // to a class of type SystemEvent
+                        constructor = (Constructor<? extends SystemEvent>) c;
+                        break;
+                    }
+                }
+                if (constructor != null)
+                {
+                    event = constructor.newInstance(source);
+                }
+
+            }
+            catch (Exception e)
+            {
+                throw new FacesException("Couldn't instanciate system event of type " + systemEventClass.getName(), e);
+            }
+        }
+
+        return event;
+    }
+
+    private void _handleAnnotations(FacesContext context, Object inspected, UIComponent component)
+    {   
+        // determine the ProjectStage setting via the given FacesContext
+        // note that a local getProjectStage() could cause problems in wrapped environments
+        boolean isProduction = context.isProjectStage(ProjectStage.Production);
+        
+        Class<?> inspectedClass = inspected.getClass();
+        _handleListenerForAnnotations(context, inspected, inspectedClass, component, isProduction);
+
+        _handleResourceDependencyAnnotations(context, inspectedClass, component, isProduction);
+    }
+    
+    private void _handleListenerForAnnotations(FacesContext context, Object inspected, Class<?> inspectedClass, UIComponent component, boolean isProduction)
+    {
+        List<ListenerFor> listenerForList = null;
+        boolean isCachedList = false;
+        
+        if(isProduction && _classToListenerForMap.containsKey(inspectedClass))
+        {
+            listenerForList = _classToListenerForMap.get(inspectedClass);
+            if(listenerForList == null)
+                return; //class has been inspected and did not contain any listener annotations
+            
+            isCachedList = true;    // else annotations were found in the cache
+        }
+
+        if(listenerForList == null) //not in production or the class hasn't been inspected yet
+        {
+            ListenerFor listener = inspectedClass.getAnnotation(ListenerFor.class);
+            ListenersFor listeners = inspectedClass.getAnnotation(ListenersFor.class);
+            if(listener != null || listeners != null)
+            {
+                //listeners were found using one or both annotations, create and build a new list
+                listenerForList = new ArrayList<ListenerFor>();
+                
+                if(listener != null)
+                    listenerForList.add(listener);
+                
+                if(listeners != null)
+                    listenerForList.addAll(Arrays.asList(listeners.value()));
+            }
+        }        
+ 
+        if (listenerForList != null) //listeners were found through inspection or from cache, handle them
+        {
+            for (ListenerFor listenerFor : listenerForList)
+            {
+                _handleListenerFor(context, inspected, component, listenerFor);
+            }
+        }
+        
+        if(isProduction && !isCachedList) //if we're in production and the list is not yet cached, store it
+            _classToListenerForMap.put(inspectedClass, listenerForList); //null value stored for listenerForList means no annotations were found
+    }
+
+    private void _handleListenerFor(FacesContext context, Object inspected, UIComponent component,
+                                    ListenerFor annotation)
+    {
+        // If this annotation is not present on the class in question, no action must be taken.
+        if (annotation != null)
+        {
+            // Determine the "target" on which to call subscribeToEvent.
+            // If the class to which this annotation is attached implements ComponentSystemEventListener
+            if (inspected instanceof ComponentSystemEventListener)
+            {
+                // If the class to which this annotation is attached is a UIComponent instance, "target" is the
+                // UIComponent instance.
+
+                // If the class to which this annotation is attached is a Renderer instance, "target" is the
+                // UIComponent instance.
+
+                /*
+                 * If "target" is a UIComponent call UIComponent.subscribeToEvent(Class, ComponentSystemEventListener)
+                 * passing the systemEventClass() of the annotation as the first argument and the instance of the class
+                 * to which this annotation is attached (which must implement ComponentSystemEventListener) as the
+                 * second argument.
+                 */
+                component.subscribeToEvent(annotation.systemEventClass(), (ComponentSystemEventListener) inspected);
+            }
+            // If the class to which this annotation is attached implements SystemEventListener and does not implement
+            // ComponentSystemEventListener, "target" is the Application instance.
+            else if (component instanceof SystemEventListener)
+            {
+                // use the Application object from the FacesContext (note that a
+                // direct use of subscribeToEvent() could cause problems if the
+                // Application is wrapped)
+                Application application = context.getApplication();
+                
+                // If "target" is the Application instance, inspect the value of the sourceClass() annotation attribute
+                // value.
+                if (Void.class.equals(annotation.sourceClass()))
+                {
+                    /*
+                     * If the value is Void.class, call Application.subscribeToEvent(Class, SystemEventListener),
+                     * passing the value of systemEventClass() as the first argument and the instance of the class to
+                     * which this annotation is attached (which must implement SystemEventListener) as the second
+                     * argument.
+                     */
+                    application.subscribeToEvent(annotation.systemEventClass(), (SystemEventListener) inspected);
+                }
+                else
+                {
+                    /*
+                     * Otherwise, call Application.subscribeToEvent(Class, Class, SystemEventListener), passing the
+                     * value of systemEventClass() as the first argument, the value of sourceClass() as the second
+                     * argument, and the instance of the class to which this annotation is attached (which must
+                     * implement SystemEventListener) as the third argument.
+                     */
+                    application.subscribeToEvent(annotation.systemEventClass(), annotation.sourceClass(),
+                                     (SystemEventListener) inspected);
+                }
+            }
+
+            /*
+             * If the class to which this annotation is attached implements ComponentSystemEventListener and is neither
+             * an instance of Renderer nor UIComponent, the action taken is unspecified. This case must not trigger any
+             * kind of error.
+             */
+        }
+    }
+
+    private void _handleResourceDependencyAnnotations(FacesContext context, Class<?> inspectedClass, UIComponent component, boolean isProduction)
+    {
+        List<ResourceDependency> dependencyList = null;
+        boolean isCachedList = false;
+        
+        if(isProduction && _classToResourceDependencyMap.containsKey(inspectedClass))
+        {
+            dependencyList = _classToResourceDependencyMap.get(inspectedClass);
+            if(dependencyList == null)
+                return; //class has been inspected and did not contain any resource dependency annotations
+            
+            isCachedList = true;    // else annotations were found in the cache
+        }
+        
+        if(dependencyList == null)  //not in production or the class hasn't been inspected yet
+        {   
+            ResourceDependency dependency = inspectedClass.getAnnotation(ResourceDependency.class);
+            ResourceDependencies dependencies = inspectedClass.getAnnotation(ResourceDependencies.class);
+            if(dependency != null || dependencies != null)
+            {
+                //resource dependencies were found using one or both annotations, create and build a new list
+                dependencyList = new ArrayList<ResourceDependency>();
+                
+                if(dependency != null)
+                    dependencyList.add(dependency);
+                
+                if(dependencies != null)
+                    dependencyList.addAll(Arrays.asList(dependencies.value()));
+            }
+        }        
+ 
+        if (dependencyList != null) //resource dependencies were found through inspection or from cache, handle them
+        {
+            for (ResourceDependency dependency : dependencyList)
+            {
+                RequestViewContext rvc = RequestViewContext.getCurrentInstance(context);
+                if (!rvc.isResourceDependencyAlreadyProcessed(dependency))
+                {
+                    _handleResourceDependency(context, component, dependency);
+                    rvc.setResourceDependencyAsProcessed(dependency);
+                }
+            }
+        }
+        
+        if(isProduction && !isCachedList)   //if we're in production and the list is not yet cached, store it
+            _classToResourceDependencyMap.put(inspectedClass, dependencyList);  //null value stored for dependencyList means no annotations were found
+    }
+    
+    private void _handleResourceDependency(FacesContext context, UIComponent component, ResourceDependency annotation)
+    {
+        // If this annotation is not present on the class in question, no action must be taken.
+        if (annotation != null)
+        {
+            // Create a UIOutput instance by passing javax.faces.Output. to
+            // Application.createComponent(java.lang.String).
+            UIOutput output = (UIOutput) createComponent(UIOutput.COMPONENT_TYPE);
+
+            // Get the annotation instance from the class and obtain the values of the name, library, and
+            // target attributes.
+            String name = annotation.name();
+            if (name != null && name.length() > 0)
+            {
+                name = ELText.parse(getExpressionFactory(), context.getELContext(), name).toString(context.getELContext());
+            }
+
+            // Obtain the renderer-type for the resource name by passing name to
+            // ResourceHandler.getRendererTypeForResourceName(java.lang.String).
+            // (note that we can not use this.getResourceHandler(), because the Application might be wrapped)
+            String rendererType = context.getApplication().getResourceHandler().getRendererTypeForResourceName(name);
+
+            // Call setRendererType on the UIOutput instance, passing the renderer-type.
+            output.setRendererType(rendererType);
+
+            // Obtain the Map of attributes from the UIOutput component by calling UIComponent.getAttributes().
+            Map<String, Object> attributes = output.getAttributes();
+
+            // Store the name into the attributes Map under the key "name".
+            attributes.put("name", name);
+
+            // If library is the empty string, let library be null.
+            String library = annotation.library();
+            if (library != null && library.length() > 0)
+            {
+                library = ELText.parse(getExpressionFactory(), context.getELContext(), library).toString(context.getELContext());
+                // If library is non-null, store it under the key "library".
+                if ("this".equals(library))
+                {
+                    // Special "this" behavior
+                    Resource resource = (Resource)component.getAttributes().get(Resource.COMPONENT_RESOURCE_KEY);
+                    if (resource != null)
+                    {
+                        attributes.put("library", resource.getLibraryName());
+                    }
+                }
+                else
+                {
+                    attributes.put("library", library);
+                }
+            }
+
+            // If target is the empty string, let target be null.
+            String target = annotation.target();
+            if (target != null && target.length() > 0)
+            {
+                target = ELText.parse(getExpressionFactory(), context.getELContext(), target).toString(context.getELContext());
+                // If target is non-null, store it under the key "target".
+                attributes.put("target", target);
+                context.getViewRoot().addComponentResource(context, output, target);
+            }
+            else
+            {
+                // Otherwise, if target is null, call UIViewRoot.addComponentResource(javax.faces.context.FacesContext,
+                // javax.faces.component.UIComponent), passing the UIOutput instance as the second argument.
+                context.getViewRoot().addComponentResource(context, output);
+            }
+        }
+    }
+    
+    private void _inspectRenderer(FacesContext context, UIComponent component, String componentType, String rendererType)
+    {
+        /*
+         * The Renderer instance to inspect must be obtained by calling FacesContext.getRenderKit() and calling
+         * RenderKit.getRenderer(java.lang.String, java.lang.String) on the result, passing the argument componentFamily
+         * of the newly created component as the first argument and the argument rendererType as the second argument.
+         */
+        Renderer renderer = context.getRenderKit().getRenderer(component.getFamily(), rendererType);
+        if (renderer == null)
+        {
+            // If no such Renderer can be found, a message must be logged with a helpful error message.
+            log.severe("renderer cannot be found for component type " + componentType + " and renderer type "
+                    + rendererType);
+        }
+        else
+        {
+            // Otherwise, UIComponent.setRendererType(java.lang.String) must be called on the newly created
+            // UIComponent instance, passing the argument rendererType as the argument.
+            component.setRendererType(rendererType);
+
+            /*
+             * except the Renderer for the component to be returned must be inspected for the annotations mentioned in
+             * createComponent(ValueExpression, FacesContext, String) as specified in the documentation for that method.
+             */
+            _handleAnnotations(context, renderer, component);
+        }
+    }
+
+    private static SystemEvent _traverseListenerList(List<? extends SystemEventListener> listeners,
+                                                     Class<? extends SystemEvent> systemEventClass, Object source,
+                                                     SystemEvent event)
+    {
+        if (listeners != null && !listeners.isEmpty())
+        {
+            for (SystemEventListener listener : listeners)
+            {
+                // Call SystemEventListener.isListenerForSource(java.lang.Object), passing the source argument.
+                // If this returns false, take no action on the listener.
+                if (listener.isListenerForSource(source))
+                {
+                    // Otherwise, if the event to be passed to the listener instances has not yet been constructed,
+                    // construct the event, passing source as the argument to the one-argument constructor that takes
+                    // an Object. This same event instance must be passed to all listener instances.
+                    event = _createEvent(systemEventClass, source, event);
+
+                    // Call SystemEvent.isAppropriateListener(javax.faces.event.FacesListener), passing the listener
+                    // instance as the argument. If this returns false, take no action on the listener.
+                    if (event.isAppropriateListener(listener))
+                    {
+                        // Call SystemEvent.processListener(javax.faces.event.FacesListener), passing the listener
+                        // instance.
+                        event.processListener(listener);
+                    }
+                }
+            }
+        }
+
+        return event;
+    }
+
+    /**
+     * Method to handle determining if the first request has 
+     * been handled by the associated LifecycleImpl.
+     * @return true if the first request has already been processed, false otherwise
+     */
+    private boolean isFirstRequestProcessed()
+    {
+        FacesContext context = FacesContext.getCurrentInstance();
+        
+        //if firstRequestProcessed is not set, check the application map
+        if(!_firstRequestProcessed && context != null 
+                && Boolean.TRUE.equals(context.getExternalContext().getApplicationMap()
+                        .containsKey(LifecycleImpl.FIRST_REQUEST_PROCESSED_PARAM)))
+        {
+            _firstRequestProcessed = true;
+        }
+        return _firstRequestProcessed;
+    }
+    
+    private static class SystemListenerEntry
+    {
+        private List<SystemEventListener> _lstSystemEventListener;
+        private Map<Class<?>, List<SystemEventListener>> _sourceClassMap;
+
+        public SystemListenerEntry()
+        {
+        }
+
+        public void addListener(SystemEventListener listener)
+        {
+            assert listener != null;
+
+            addListenerNoDuplicate(getAnySourceListenersNotNull(), listener);
+        }
+
+        public void addListener(SystemEventListener listener, Class<?> source)
+        {
+            assert listener != null;
+
+            if (source == null)
+            {
+                addListener(listener);
+            }
+            else
+            {
+                addListenerNoDuplicate(getSpecificSourceListenersNotNull(source), listener);
+            }
+        }
+
+        public void removeListener(SystemEventListener listener)
+        {
+            assert listener != null;
+
+            if (_lstSystemEventListener != null)
+            {
+                _lstSystemEventListener.remove(listener);
+            }
+        }
+
+        public void removeListener(SystemEventListener listener, Class<?> sourceClass)
+        {
+            assert listener != null;
+
+            if (sourceClass == null)
+            {
+                removeListener(listener);
+            }
+            else
+            {
+                if (_sourceClassMap != null)
+                {
+                    List<SystemEventListener> listeners = _sourceClassMap.get(sourceClass);
+                    if (listeners != null)
+                    {
+                        listeners.remove(listener);
+                    }
+                }
+            }
+        }
+
+        public void publish(Class<? extends SystemEvent> systemEventClass, Class<?> classSource, Object source,
+                            SystemEvent event)
+        {
+            if (source != null && _sourceClassMap != null)
+            {
+                event = _traverseListenerList(_sourceClassMap.get(classSource), systemEventClass, source, event);
+            }
+
+            _traverseListenerList(_lstSystemEventListener, systemEventClass, source, event);
+        }
+
+        private void addListenerNoDuplicate(List<SystemEventListener> listeners, SystemEventListener listener)
+        {
+            if (!listeners.contains(listener))
+            {
+                listeners.add(listener);
+            }
+        }
+
+        private synchronized List<SystemEventListener> getAnySourceListenersNotNull()
+        {
+            if (_lstSystemEventListener == null)
+            {
+                /*
+                 * TODO: Check if modification occurs often or not, might have to use a synchronized list instead.
+                 * 
+                 * Registrations found:
+                 */
+                _lstSystemEventListener = new CopyOnWriteArrayList<SystemEventListener>();
+            }
+
+            return _lstSystemEventListener;
+        }
+
+        private synchronized List<SystemEventListener> getSpecificSourceListenersNotNull(Class<?> sourceClass)
+        {
+            if (_sourceClassMap == null)
+            {
+                _sourceClassMap = new ConcurrentHashMap<Class<?>, List<SystemEventListener>>();
+            }
+
+            List<SystemEventListener> list = _sourceClassMap.get(sourceClass);
+            if (list == null)
+            {
+                /*
+                 * TODO: Check if modification occurs often or not, might have to use a synchronized list instead.
+                 * 
+                 * Registrations found:
+                 */
+                list = new CopyOnWriteArrayList<SystemEventListener>();
+                _sourceClassMap.put(sourceClass, list);
+            }
+
+            return list;
+        }
+    }
+    
+    /*
+     * private method to look for config objects on a classmap.  The objects can be either a type string
+     * or a Class<?> object.  This is done to facilitate lazy loading of config objects.   
+     * @param id 
+     * @param classMap 
+     * @return
+     */
+    private Class<?> getObjectFromClassMap(String id, Map<String, Object> classMap)
+    {
+        Object obj = classMap.get(id);
+        
+        if(obj == null){
+            return null;    //object for this id wasn't found on the map
+        }
+        
+        if(obj instanceof Class<?>)
+        {
+            return (Class<?>)obj;
+        }else if (obj instanceof String ){
+            Class<?> clazz = ClassUtils.simpleClassForName((String)obj);
+            classMap.put(id, clazz);
+            return clazz;
+        }
+        
+        //object stored in the map for this id is an invalid type.  remove it and return null
+        classMap.remove(id);
+        return null;        
+    }
+    
+    private boolean isLazyLoadConfigObjects(){
+        if (_lazyLoadConfigObjects == null)
+        {
+            String configParam = getFaceContext().getExternalContext().getInitParameter(LAZY_LOAD_CONFIG_OBJECTS_PARAM_NAME);
+            _lazyLoadConfigObjects =  configParam == null ? LAZY_LOAD_CONFIG_OBJECTS_DEFAULT_VALUE : Boolean.parseBoolean(configParam);
+        }
+        return _lazyLoadConfigObjects;
+    }
 }

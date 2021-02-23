@@ -1,114 +1,198 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License") +  you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-package org.apache.openmeetings.web.common.menu;
+package com.fasterxml.jackson.databind.ser.std;
 
-import static org.apache.openmeetings.util.OpenmeetingsVariables.ATTR_CLASS;
-import static org.apache.openmeetings.util.OpenmeetingsVariables.ATTR_TITLE;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.TimeZone;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
+import com.fasterxml.jackson.annotation.JsonFormat;
 
-import org.apache.wicket.AttributeModifier;
-import org.apache.wicket.ajax.AjaxRequestTarget;
-import org.apache.wicket.markup.html.link.AbstractLink;
-import org.apache.wicket.model.Model;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
 
-import de.agilecoders.wicket.core.markup.html.bootstrap.image.IconType;
-import de.agilecoders.wicket.core.markup.html.bootstrap.navbar.INavbarComponent;
-import de.agilecoders.wicket.core.markup.html.bootstrap.navbar.Navbar.ComponentPosition;
-import de.agilecoders.wicket.core.markup.html.bootstrap.navbar.NavbarAjaxLink;
-import de.agilecoders.wicket.core.markup.html.bootstrap.navbar.NavbarDropDownButton;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.*;
+import com.fasterxml.jackson.databind.ser.ContextualSerializer;
+import com.fasterxml.jackson.databind.util.StdDateFormat;
 
-public class OmMenuItem implements INavbarComponent {
-	private static final long serialVersionUID = 1L;
+@SuppressWarnings("serial")
+public abstract class DateTimeSerializerBase<T>
+    extends StdScalarSerializer<T>
+    implements ContextualSerializer
+{
+    /**
+     * Flag that indicates that serialization must be done as the
+     * Java timestamp, regardless of other settings.
+     */
+    protected final Boolean _useTimestamp;
 
-	private String title;
-	private String desc;
-	private IconType icon;
-	private List<INavbarComponent> items = new ArrayList<>(0);
-	private boolean visible = true;
+    /**
+     * Specific format to use, if not default format: non null value
+     * also indicates that serialization is to be done as JSON String,
+     * not numeric timestamp, unless {@link #_useTimestamp} is true.
+     */
+    protected final DateFormat _customFormat;
 
-	public OmMenuItem(String title, List<INavbarComponent> items) {
-		this.title = title;
-		this.items = items;
-	}
+    protected DateTimeSerializerBase(Class<T> type,
+            Boolean useTimestamp, DateFormat customFormat)
+    {
+        super(type);
+        _useTimestamp = useTimestamp;
+        _customFormat = customFormat;
+    }
 
-	public OmMenuItem(String title, String desc) {
-		this.title = title;
-		this.desc = desc;
-	}
+    public abstract DateTimeSerializerBase<T> withFormat(Boolean timestamp, DateFormat customFormat);
 
-	public OmMenuItem add(INavbarComponent item) {
-		items.add(item);
-		return this;
-	}
+    @Override
+    public JsonSerializer<?> createContextual(SerializerProvider serializers,
+            BeanProperty property) throws JsonMappingException
+    {
+        if (property == null) {
+            return this;
+        }
+        JsonFormat.Value format = findFormatOverrides(serializers, property, handledType());
+        if (format == null) {
+            return this;
+        }
+        // Simple case first: serialize as numeric timestamp?
+        JsonFormat.Shape shape = format.getShape();
+        if (shape.isNumeric()) {
+            return withFormat(Boolean.TRUE, null);
+        }
 
-	public String getDesc() {
-		return desc;
-	}
+        // 08-Jun-2017, tatu: With [databind#1648], this gets bit tricky..
+        // First: custom pattern will override things
+        if (format.hasPattern()) {
+            final Locale loc = format.hasLocale()
+                            ? format.getLocale()
+                            : serializers.getLocale();
+            SimpleDateFormat df = new SimpleDateFormat(format.getPattern(), loc);
+            TimeZone tz = format.hasTimeZone() ? format.getTimeZone()
+                    : serializers.getTimeZone();
+            df.setTimeZone(tz);
+            return withFormat(Boolean.FALSE, df);
+        }
 
-	public void setDesc(String desc) {
-		this.desc = desc;
-	}
+        // Otherwise, need one of these changes:
+        final boolean hasLocale = format.hasLocale();
+        final boolean hasTZ = format.hasTimeZone();
+        final boolean asString = (shape == JsonFormat.Shape.STRING);
 
-	public void setIcon(IconType icon) {
-		this.icon = icon;
-	}
+        if (!hasLocale && !hasTZ && !asString) {
+            return this;
+        }
 
-	public void setVisible(boolean visible) {
-		this.visible = visible;
-	}
+        DateFormat df0 = serializers.getConfig().getDateFormat();
+        // Jackson's own `StdDateFormat` is quite easy to deal with...
+        if (df0 instanceof StdDateFormat) {
+            StdDateFormat std = (StdDateFormat) df0;
+            if (format.hasLocale()) {
+                std = std.withLocale(format.getLocale());
+            }
+            if (format.hasTimeZone()) {
+                std = std.withTimeZone(format.getTimeZone());
+            }
+            return withFormat(Boolean.FALSE, std);
+        }
 
-	@Override
-	public AbstractLink create(String markupId) {
-		AbstractLink item;
-		if (items.isEmpty()) {
-			item = new NavbarAjaxLink<String>(markupId, Model.of(title)) {
-				private static final long serialVersionUID = 1L;
+        // 08-Jun-2017, tatu: Unfortunately there's no generally usable
+        //    mechanism for changing `DateFormat` instances (or even clone()ing)
+        //    So: require it be `SimpleDateFormat`; can't config other types
+        if (!(df0 instanceof SimpleDateFormat)) {
+//            serializers.reportBadDefinition(handledType(), String.format(
+            serializers.reportMappingProblem(
+"Configured `DateFormat` (%s) not a `SimpleDateFormat`; can not configure `Locale` or `TimeZone`",
+df0.getClass().getName());
+        }
+        SimpleDateFormat df = (SimpleDateFormat) df0;
+        if (hasLocale) {
+            // Ugh. No way to change `Locale`, create copy; must re-crete completely:
+            df = new SimpleDateFormat(df.toPattern(), format.getLocale());
+        } else {
+            df = (SimpleDateFormat) df.clone();
+        }
+        TimeZone newTz = format.getTimeZone();
+        boolean changeTZ = (newTz != null) && !newTz.equals(df.getTimeZone());
+        if (changeTZ) {
+            df.setTimeZone(newTz);
+        }
+        return withFormat(Boolean.FALSE, df);
+    }
 
-				@Override
-				public void onClick(AjaxRequestTarget target) {
-					OmMenuItem.this.onClick(target);
-				}
-			}.setIconType(icon);
-			item.add(AttributeModifier.append(ATTR_CLASS, "nav-link"));
-		} else {
-			item = new NavbarDropDownButton(Model.of(title), Model.of(icon)) {
-				private static final long serialVersionUID = 1L;
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
+     */
 
-				@Override
-				protected List<AbstractLink> newSubMenuButtons(String markupId) {
-					return items.stream().map(mItem -> ((OmMenuItem)mItem).create(markupId)).collect(Collectors.toList());
-				}
-			};
-		}
-		item.add(AttributeModifier.append(ATTR_TITLE, desc));
-		item.setVisible(visible);
-		return item;
-	}
+    @Deprecated
+    @Override
+    public boolean isEmpty(T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
+    }
 
-	@Override
-	public ComponentPosition getPosition() {
-		return ComponentPosition.LEFT; //FIXME TODO
-	}
+    @Override
+    public boolean isEmpty(SerializerProvider serializers, T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
+    }
+    
+    protected abstract long _timestamp(T value);
+    
+    @Override
+    public JsonNode getSchema(SerializerProvider serializers, Type typeHint) {
+        //todo: (ryan) add a format for the date in the schema?
+        return createSchemaNode(_asTimestamp(serializers) ? "number" : "string", true);
+    }
 
-	public void onClick(AjaxRequestTarget target) {
-	}
+    @Override
+    public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws JsonMappingException
+    {
+        _acceptJsonFormatVisitor(visitor, typeHint, _asTimestamp(visitor.getProvider()));
+    }
+
+    /*
+    /**********************************************************
+    /* Actual serialization
+    /**********************************************************
+     */
+
+    @Override
+    public abstract void serialize(T value, JsonGenerator gen, SerializerProvider serializers)
+        throws IOException;
+
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
+    
+    protected boolean _asTimestamp(SerializerProvider serializers)
+    {
+        if (_useTimestamp != null) {
+            return _useTimestamp.booleanValue();
+        }
+        if (_customFormat == null) {
+            if (serializers != null) {
+                return serializers.isEnabled(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            }
+            // 12-Jun-2014, tatu: Is it legal not to have provider? Was NPE:ing earlier so leave a check
+            throw new IllegalArgumentException("Null SerializerProvider passed for "+handledType().getName());
+        }
+        return false;
+    }
+
+    protected void _acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint,
+		boolean asNumber) throws JsonMappingException
+    {
+        if (asNumber) {
+            visitIntFormat(visitor, typeHint,
+                    JsonParser.NumberType.LONG, JsonValueFormat.UTC_MILLISEC);
+        } else {
+            visitStringFormat(visitor, typeHint, JsonValueFormat.DATE_TIME);
+        }
+    }
 }

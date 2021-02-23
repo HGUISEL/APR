@@ -640,8 +640,8 @@ public class DateUtils {
         int millisecs = val.get(Calendar.MILLISECOND);
         if (!round || millisecs < 500) {
             time = time - millisecs;
-            if (field == Calendar.SECOND) {
-                done = true;
+        if (field == Calendar.SECOND) {
+            done = true;
             }
         }
 
@@ -649,8 +649,8 @@ public class DateUtils {
         int seconds = val.get(Calendar.SECOND);
         if (!done && (!round || seconds < 30)) {
             time = time - (seconds * 1000L);
-            if (field == Calendar.MINUTE) {
-                done = true;
+        if (field == Calendar.MINUTE) {
+            done = true;
             }
         }
 

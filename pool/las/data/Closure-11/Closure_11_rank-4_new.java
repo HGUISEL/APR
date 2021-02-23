@@ -1,289 +1,206 @@
 package org.jsoup.nodes;
 
+import org.jsoup.SerializationException;
 import org.jsoup.helper.Validate;
-import org.jsoup.parser.Tag;
 
-import java.nio.charset.Charset;
-import java.nio.charset.CharsetEncoder;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.Map;
 
 /**
- A HTML Document.
+ A single key + value attribute. (Only used for presentation.)
+ */
+public class Attribute implements Map.Entry<String, String>, Cloneable  {
+    private static final String[] booleanAttributes = {
+            "allowfullscreen", "async", "autofocus", "checked", "compact", "declare", "default", "defer", "disabled",
+            "formnovalidate", "hidden", "inert", "ismap", "itemscope", "multiple", "muted", "nohref", "noresize",
+            "noshade", "novalidate", "nowrap", "open", "readonly", "required", "reversed", "seamless", "selected",
+            "sortable", "truespeed", "typemustmatch"
+    };
 
- @author Jonathan Hedley, jonathan@hedley.net */
-public class Document extends Element {
-    private OutputSettings outputSettings = new OutputSettings();
+    private String key;
+    private String val;
+    Attributes parent; // used to update the holding Attributes when the key / value is changed via this interface
 
     /**
-     Create a new, empty Document.
-     @param baseUri base URI of document
-     @see org.jsoup.Jsoup#parse
-     @see #createShell
+     * Create a new attribute from unencoded (raw) key and value.
+     * @param key attribute key; case is preserved.
+     * @param value attribute value
+     * @see #createFromEncoded
      */
-    public Document(String baseUri) {
-        super(Tag.valueOf("#root"), baseUri);
+    public Attribute(String key, String value) {
+        this(key, value, null);
     }
 
     /**
-     Create a valid, empty shell of a document, suitable for adding more elements to.
-     @param baseUri baseUri of document
-     @return document with html, head, and body elements.
-     */
-    static public Document createShell(String baseUri) {
-        Validate.notNull(baseUri);
-
-        Document doc = new Document(baseUri);
-        Element html = doc.appendElement("html");
-        html.appendElement("head");
-        html.appendElement("body");
-
-        return doc;
+     * Create a new attribute from unencoded (raw) key and value.
+     * @param key attribute key; case is preserved.
+     * @param val attribute value
+     * @param parent the containing Attributes (this Attribute is not automatically added to said Attributes)
+     * @see #createFromEncoded*/
+    public Attribute(String key, String val, Attributes parent) {
+        Validate.notNull(key);
+        this.key = key.trim();
+        Validate.notEmpty(key); // trimming could potentially make empty, so validate here
+        this.val = val;
+        this.parent = parent;
     }
 
     /**
-     Accessor to the document's {@code head} element.
-     @return {@code head}
+     Get the attribute key.
+     @return the attribute key
      */
-    public Element head() {
-        return findFirstElementByTagName("head", this);
+    public String getKey() {
+        return key;
     }
 
     /**
-     Accessor to the document's {@code body} element.
-     @return {@code body}
+     Set the attribute key; case is preserved.
+     @param key the new key; must not be null
      */
-    public Element body() {
-        return findFirstElementByTagName("body", this);
+    public void setKey(String key) {
+        Validate.notNull(key);
+        key = key.trim();
+        Validate.notEmpty(key); // trimming could potentially make empty, so validate here
+        if (parent != null) {
+            int i = parent.indexOfKey(this.key);
+            if (i != Attributes.NotFound)
+                parent.keys[i] = key;
+        }
+        this.key = key;
     }
 
     /**
-     Get the string contents of the document's {@code title} element.
-     @return Trimed title, or empty string if none set.
+     Get the attribute value.
+     @return the attribute value
      */
-    public String title() {
-        Element titleEl = getElementsByTag("title").first();
-        return titleEl != null ? titleEl.text().trim() : "";
+    public String getValue() {
+        return val;
     }
 
     /**
-     Set the document's {@code title} element. Updates the existing element, or adds {@code title} to {@code head} if
-     not present
-     @param title string to set as title
+     Set the attribute value.
+     @param val the new attribute value; must not be null
      */
-    public void title(String title) {
-        Validate.notNull(title);
-        Element titleEl = getElementsByTag("title").first();
-        if (titleEl == null) { // add to head
-            head().appendElement("title").text(title);
-        } else {
-            titleEl.text(title);
+    public String setValue(String val) {
+        String oldVal = parent.get(this.key);
+        if (parent != null) {
+            int i = parent.indexOfKey(this.key);
+            if (i != Attributes.NotFound)
+                parent.vals[i] = val;
+        }
+        this.val = val;
+        return oldVal;
+    }
+
+    /**
+     Get the HTML representation of this attribute; e.g. {@code href="index.html"}.
+     @return HTML
+     */
+    public String html() {
+        StringBuilder accum = new StringBuilder();
+        
+        try {
+        	html(accum, (new Document("")).outputSettings());
+        } catch(IOException exception) {
+        	throw new SerializationException(exception);
+        }
+        return accum.toString();
+    }
+
+    protected static void html(String key, String val, Appendable accum, Document.OutputSettings out) throws IOException {
+        accum.append(key);
+        if (!shouldCollapseAttribute(key, val, out)) {
+            accum.append("=\"");
+            Entities.escape(accum, Attributes.checkNotNull(val) , out, true, false, false);
+            accum.append('"');
         }
     }
-
-    /**
-     Create a new Element, with this document's base uri. Does not make the new element a child of this document.
-     @param tagName element tag name (e.g. {@code a})
-     @return new element
-     */
-    public Element createElement(String tagName) {
-        return new Element(Tag.valueOf(tagName), this.baseUri());
+    
+    protected void html(Appendable accum, Document.OutputSettings out) throws IOException {
+        html(key, val, accum, out);
     }
 
     /**
-     Normalise the document. This happens after the parse phase so generally does not need to be called.
-     Moves any text content that is not in the body element into the body.
-     @return this document after normalisation
+     Get the string representation of this attribute, implemented as {@link #html()}.
+     @return string
      */
-    public Document normalise() {
-        Element htmlEl = findFirstElementByTagName("html", this);
-        if (htmlEl == null)
-            htmlEl = appendElement("html");
-        if (head() == null)
-            htmlEl.prependElement("head");
-        if (body() == null)
-            htmlEl.appendElement("body");
-
-        // pull text nodes out of root, html, and head els, and push into body. non-text nodes are already taken care
-        // of. do in inverse order to maintain text order.
-        normalise(head());
-        normalise(htmlEl);
-        normalise(this);        
-
-        return this;
+    @Override
+    public String toString() {
+        return html();
     }
 
-    // does not recurse.
-    private void normalise(Element element) {
-        List<Node> toMove = new ArrayList<Node>();
-        for (Node node: element.childNodes) {
-            if (node instanceof TextNode) {
-                TextNode tn = (TextNode) node;
-                if (!tn.isBlank())
-                    toMove.add(tn);
-            }
-        }
-
-        for (int i = toMove.size()-1; i >= 0; i--) {
-            Node node = toMove.get(i);
-            element.removeChild(node);
-            body().prependChild(new TextNode(" ", ""));
-            body().prependChild(node);
-        }
+    /**
+     * Create a new Attribute from an unencoded key and a HTML attribute encoded value.
+     * @param unencodedKey assumes the key is not encoded, as can be only run of simple \w chars.
+     * @param encodedValue HTML attribute encoded value
+     * @return attribute
+     */
+    public static Attribute createFromEncoded(String unencodedKey, String encodedValue) {
+        String value = Entities.unescape(encodedValue, true);
+        return new Attribute(unencodedKey, value, null); // parent will get set when Put
     }
 
-    // fast method to get first by tag name, used for html, head, body finders
-    private Element findFirstElementByTagName(String tag, Node node) {
-        if (node.nodeName().equals(tag))
-            return (Element) node;
-        else {
-            for (Node child: node.childNodes) {
-                Element found = findFirstElementByTagName(tag, child);
-                if (found != null)
-                    return found;
-            }
-        }
-        return null;
+    protected boolean isDataAttribute() {
+        return isDataAttribute(key);
+    }
+
+    protected static boolean isDataAttribute(String key) {
+        return key.startsWith(Attributes.dataPrefix) && key.length() > Attributes.dataPrefix.length();
+    }
+
+    /**
+     * Collapsible if it's a boolean attribute and value is empty or same as name
+     * 
+     * @param out output settings
+     * @return  Returns whether collapsible or not
+     */
+    protected final boolean shouldCollapseAttribute(Document.OutputSettings out) {
+        return shouldCollapseAttribute(key, val, out);
+    }
+
+    protected static boolean shouldCollapseAttribute(final String key, final String val, final Document.OutputSettings out) {
+        return (
+            out.syntax() == Document.OutputSettings.Syntax.html &&
+                (val == null || ("".equals(val) || val.equalsIgnoreCase(key)) && Attribute.isBooleanAttribute(key)));
+    }
+
+    /**
+     * @deprecated
+     */
+    protected boolean isBooleanAttribute() {
+        return Arrays.binarySearch(booleanAttributes, key) >= 0 || val == null;
+    }
+
+    /**
+     * Checks if this attribute name is defined as a boolean attribute in HTML5
+     */
+    protected static boolean isBooleanAttribute(final String key) {
+        return Arrays.binarySearch(booleanAttributes, key) >= 0;
     }
 
     @Override
-    public String outerHtml() {
-        return super.html(); // no outer wrapper tag
-    }
-
-    /**
-     Set the text of the {@code body} of this document. Any existing nodes within the body will be cleared.
-     @param text unencoded text
-     @return this document
-     */
-    @Override
-    public Element text(String text) {
-        body().text(text); // overridden to not nuke doc structure
-        return this;
+    public boolean equals(Object o) { // note parent not considered
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Attribute attribute = (Attribute) o;
+        if (key != null ? !key.equals(attribute.key) : attribute.key != null) return false;
+        return val != null ? val.equals(attribute.val) : attribute.val == null;
     }
 
     @Override
-    public String nodeName() {
-        return "#document";
+    public int hashCode() { // note parent not considered
+        int result = key != null ? key.hashCode() : 0;
+        result = 31 * result + (val != null ? val.hashCode() : 0);
+        return result;
     }
 
-    /**
-     * A Document's output settings control the form of the text() and html() methods.
-     */
-    public class OutputSettings {
-        private Entities.EscapeMode escapeMode = Entities.EscapeMode.base;
-        private Charset charset = Charset.forName("UTF-8");
-        private CharsetEncoder charsetEncoder = charset.newEncoder();
-        private boolean prettyPrint = true;
-        private int indentAmount = 1;
-
-        public OutputSettings() {}
-
-        /**
-         * Get the document's current HTML escape mode: <code>base</code>, which provides a limited set of named HTML
-         * entities and escapes other characters as numbered entities for maximum compatibility; or <code>extended</code>,
-         * which uses the complete set of HTML named entities.
-         * <p>
-         * The default escape mode is <code>base</code>.
-         * @return the document's current escape mode
-         */
-        public Entities.EscapeMode escapeMode() {
-            return escapeMode;
+    @Override
+    public Attribute clone() {
+        try {
+            return (Attribute) super.clone();
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
         }
-
-        /**
-         * Set the document's escape mode
-         * @param escapeMode the new escape mode to use
-         * @return the document's output settings, for chaining
-         */
-        public OutputSettings escapeMode(Entities.EscapeMode escapeMode) {
-            this.escapeMode = escapeMode;
-            return this;
-        }
-
-        /**
-         * Get the document's current output charset, which is used to control which characters are escaped when
-         * generating HTML (via the <code>html()</code> methods), and which are kept intact.
-         * <p>
-         * Where possible (when parsing from a URL or File), the document's output charset is automatically set to the
-         * input charset. Otherwise, it defaults to UTF-8.
-         * @return the document's current charset.
-         */
-        public Charset charset() {
-            return charset;
-        }
-
-        /**
-         * Update the document's output charset.
-         * @param charset the new charset to use.
-         * @return the document's output settings, for chaining
-         */
-        public OutputSettings charset(Charset charset) {
-            // todo: this should probably update the doc's meta charset
-            this.charset = charset;
-            charsetEncoder = charset.newEncoder();
-            return this;
-        }
-
-        /**
-         * Update the document's output charset.
-         * @param charset the new charset (by name) to use.
-         * @return the document's output settings, for chaining
-         */
-        public OutputSettings charset(String charset) {
-            charset(Charset.forName(charset));
-            return this;
-        }
-
-        CharsetEncoder encoder() {
-            return charsetEncoder;
-        }
-
-        /**
-         * Get if pretty printing is enabled. Default is true. If disabled, the HTML output methods will not re-format
-         * the output, and the output will generally look like the input.
-         * @return if pretty printing is enabled.
-         */
-        public boolean prettyPrint() {
-            return prettyPrint;
-        }
-
-        /**
-         * Enable or disable pretty printing.
-         * @param pretty new pretty print setting
-         * @return this, for chaining
-         */
-        public OutputSettings prettyPrint(boolean pretty) {
-            prettyPrint = pretty;
-            return this;
-        }
-
-        /**
-         * Get the current tag indent amount, used when pretty printing.
-         * @return the current indent amount
-         */
-        public int indentAmount() {
-            return indentAmount;
-        }
-
-        /**
-         * Set the indent amount for pretty printing
-         * @param indentAmount number of spaces to use for indenting each level. Must be >= 0.
-         * @return this, for chaining
-         */
-        public OutputSettings indentAmount(int indentAmount) {
-            Validate.isTrue(indentAmount >= 0);
-            this.indentAmount = indentAmount;
-            return this;
-        }
-    }
-
-    /**
-     * Get the document's current output settings.
-     * @return the document's current output settings.
-     */
-    public OutputSettings outputSettings() {
-        return outputSettings;
     }
 }
-

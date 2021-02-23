@@ -1,112 +1,73 @@
-package com.fasterxml.jackson.databind.type;
+package com.fasterxml.jackson.core.exc;
 
-import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.core.*;
+import com.fasterxml.jackson.core.util.RequestPayload;
 
 /**
- * Type that represents Java Collection types (Lists, Sets).
+ * Exception type for read-side problems that are not direct decoding ("parsing")
+ * problems (those would be reported as {@link com.fasterxml.jackson.core.JsonParseException}s),
+ * but rather result from failed attempts to convert specific Java value out of valid
+ * but incompatible input value. One example is numeric coercions where target number type's
+ * range does not allow mapping of too large/too small input value.
+ *
+ * @since 2.10
  */
-public final class CollectionType
-    extends CollectionLikeType
-{
+public class InputCoercionException extends JsonReadException {
     private static final long serialVersionUID = 1L;
 
-    /*
-    /**********************************************************
-    /* Life-cycle
-    /**********************************************************
+    /**
+     * Input token that represents input value that failed to coerce.
      */
+    protected final JsonToken _inputType;
 
-    private CollectionType(Class<?> collT, JavaType elemT,
-            Object valueHandler, Object typeHandler, boolean asStatic)
-    {
-        super(collT,  elemT, valueHandler, typeHandler, asStatic);
-    }
-
-    @Override
-    protected JavaType _narrow(Class<?> subclass) {
-        return new CollectionType(subclass, _elementType, null, null, _asStatic);
-    }
-
-    @Override
-    public JavaType narrowContentsBy(Class<?> contentClass)
-    {
-        // Can do a quick check first:
-        if (contentClass == _elementType.getRawClass()) {
-            return this;
-        }
-        return new CollectionType(_class, _elementType.narrowBy(contentClass),
-                _valueHandler, _typeHandler, _asStatic);
-    }
-
-    @Override
-    public JavaType widenContentsBy(Class<?> contentClass)
-    {
-        // Can do a quick check first:
-        if (contentClass == _elementType.getRawClass()) {
-            return this;
-        }
-        return new CollectionType(_class, _elementType.widenBy(contentClass),
-                _valueHandler, _typeHandler, _asStatic);
-    }
-    
-    public static CollectionType construct(Class<?> rawType, JavaType elemT)
-    {
-        // nominally component types will be just Object.class
-        return new CollectionType(rawType, elemT, null, null, false);
-    }
-
-    @Override
-    public CollectionType withTypeHandler(Object h) {
-        return new CollectionType(_class, _elementType, _valueHandler, h, _asStatic);
-    }
-
-    @Override
-    public CollectionType withContentTypeHandler(Object h)
-    {
-        return new CollectionType(_class, _elementType.withTypeHandler(h),
-                _valueHandler, _typeHandler, _asStatic);
-    }
-
-    @Override
-    public CollectionType withValueHandler(Object h) {
-        return new CollectionType(_class, _elementType, h, _typeHandler, _asStatic);
-    }
-
-    @Override
-    public  CollectionType withContentValueHandler(Object h) {
-        return new CollectionType(_class, _elementType.withValueHandler(h),
-                _valueHandler, _typeHandler, _asStatic);
-    }
-
-    @Override
-    public CollectionType withStaticTyping() {
-        if (_asStatic) {
-            return this;
-        }
-        return new CollectionType(_class, _elementType.withStaticTyping(),
-                _valueHandler, _typeHandler, true);
-    }
-
-    /*
-    /**********************************************************
-    /* Overridden accessors
-    /**********************************************************
+    /**
+     * Target type that input value failed to coerce to.
      */
+    protected final Class<?> _targetType;
     
-    @Override
-    public Class<?> getParameterSource() {
-        return java.util.Collection.class;
-    }
-    
-    /*
-    /**********************************************************
-    /* Standard methods
-    /**********************************************************
+    /**
+     * Constructor that uses current parsing location as location, and
+     * sets processor (accessible via {@link #getProcessor()}) to
+     * specified parser.
      */
+    public InputCoercionException(JsonParser p, JsonToken inputType, Class<?> targetType,
+            String msg) {
+        super(p, msg);
+        _inputType = inputType;
+        _targetType = targetType;
+    }
+
+    /**
+     * Fluent method that may be used to assign originating {@link JsonParser},
+     * to be accessed using {@link #getProcessor()}.
+     *<p>
+     * NOTE: `this` instance is modified and no new instance is constructed.
+     */
+    @Override
+    public InputCoercionException withParser(JsonParser p) {
+        _processor = p;
+        return this;
+    }
 
     @Override
-    public String toString()
-    {
-        return "[collection type; class "+_class.getName()+", contains "+_elementType+"]";
+    public InputCoercionException withRequestPayload(RequestPayload p) {
+        _requestPayload = p;
+        return this;
+    }
+
+    /**
+     * Accessor for getting information about input type (in form of token, giving "shape"
+     * of input) for which coercion failed.
+     */
+    public JsonToken getInputType() {
+        return _inputType;
+    }
+
+    /**
+     * Accessor for getting information about target type (in form of Java {@link java.lang.Class})
+     * for which coercion failed.
+     */
+    public Class<?> getTargetType() {
+        return _targetType;
     }
 }

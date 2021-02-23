@@ -1,329 +1,602 @@
-package com.fasterxml.jackson.databind.ser;
+package org.apache.maven.archiva.web.repository;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import com.fasterxml.jackson.databind.introspect.*;
-import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
-import com.fasterxml.jackson.databind.util.*;
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *  http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import org.apache.maven.archiva.common.utils.PathUtil;
+import org.apache.maven.archiva.model.ArtifactReference;
+import org.apache.maven.archiva.model.ProjectReference;
+import org.apache.maven.archiva.model.VersionedReference;
+import org.apache.maven.archiva.policies.ProxyDownloadException;
+import org.apache.maven.archiva.proxy.RepositoryProxyConnectors;
+import org.apache.maven.archiva.repository.ManagedRepositoryContent;
+import org.apache.maven.archiva.repository.RepositoryContentFactory;
+import org.apache.maven.archiva.repository.RepositoryException;
+import org.apache.maven.archiva.repository.RepositoryNotFoundException;
+import org.apache.maven.archiva.repository.audit.AuditEvent;
+import org.apache.maven.archiva.repository.audit.AuditListener;
+import org.apache.maven.archiva.repository.audit.Auditable;
+import org.apache.maven.archiva.repository.content.RepositoryRequest;
+import org.apache.maven.archiva.repository.layout.LayoutException;
+import org.apache.maven.archiva.repository.metadata.MetadataTools;
+import org.apache.maven.archiva.repository.metadata.RepositoryMetadataException;
+import org.apache.maven.archiva.security.ArchivaUser;
+import org.apache.maven.model.DistributionManagement;
+import org.apache.maven.model.Model;
+import org.apache.maven.model.Relocation;
+import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
+import org.codehaus.plexus.webdav.AbstractDavServerComponent;
+import org.codehaus.plexus.webdav.DavServerComponent;
+import org.codehaus.plexus.webdav.DavServerException;
+import org.codehaus.plexus.webdav.DavServerListener;
+import org.codehaus.plexus.webdav.servlet.DavServerRequest;
+import org.codehaus.plexus.webdav.util.WebdavMethodUtil;
+
+import javax.servlet.ServletConfig;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletResponse;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Helper class for {@link BeanSerializerFactory} that is used to
- * construct {@link BeanPropertyWriter} instances. Can be sub-classed
- * to change behavior.
+ * ProxiedDavServer
+ * 
+ * @author <a href="mailto:joakime@apache.org">Joakim Erdfelt</a>
+ * @version $Id$
+ * @plexus.component role="org.codehaus.plexus.webdav.DavServerComponent"
+ * role-hint="proxied" instantiation-strategy="per-lookup"
  */
-public class PropertyBuilder
+public class ProxiedDavServer
+    extends AbstractDavServerComponent
+    implements Auditable
 {
-    // @since 2.7
-    private final static Object NO_DEFAULT_MARKER = Boolean.FALSE;
-    
-    final protected SerializationConfig _config;
-    final protected BeanDescription _beanDesc;
+    /**
+     * @plexus.requirement role-hint="simple"
+     */
+    private DavServerComponent davServer;
 
     /**
-     * Default inclusion mode for properties of the POJO for which
-     * properties are collected; possibly overridden on
-     * per-property basis.
+     * @plexus.requirement role="org.apache.maven.archiva.repository.audit.AuditListener"
      */
-    final protected JsonInclude.Value _defaultInclusion;
-
-    final protected AnnotationIntrospector _annotationIntrospector;
+    private List<AuditListener> auditListeners = new ArrayList<AuditListener>();
 
     /**
-     * If a property has serialization inclusion value of
-     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT},
-     * we may need to know the default value of the bean, to know if property value
-     * equals default one.
-     *<p>
-     * NOTE: only used if enclosing class defines NON_DEFAULT, but NOT if it is the
-     * global default OR per-property override.
+     * @plexus.requirement
      */
-    protected Object _defaultBean;
+    private RepositoryContentFactory repositoryFactory;
 
-    public PropertyBuilder(SerializationConfig config, BeanDescription beanDesc)
+    /**
+     * @plexus.requirement
+     */
+    private RepositoryRequest repositoryRequest;
+
+    /**
+     * @plexus.requirement role-hint="default"
+     */
+    private RepositoryProxyConnectors connectors;
+
+    /**
+     * @plexus.requirement
+     */
+    private MetadataTools metadataTools;
+
+    /**
+     * @plexus.requirement role-hint="xwork"
+     */
+    private ArchivaUser archivaUser;
+
+    private ManagedRepositoryContent managedRepository;
+
+    public String getPrefix()
     {
-        _config = config;
-        _beanDesc = beanDesc;
-        _defaultInclusion = beanDesc.findPropertyInclusion(
-                config.getDefaultPropertyInclusion(beanDesc.getBeanClass()));
-        _annotationIntrospector = _config.getAnnotationIntrospector();
+        return davServer.getPrefix();
     }
 
-    /*
-    /**********************************************************
-    /* Public API
-    /**********************************************************
-     */
-
-    public Annotations getClassAnnotations() {
-        return _beanDesc.getClassAnnotations();
+    public File getRootDirectory()
+    {
+        return davServer.getRootDirectory();
     }
 
-    /**
-     * @param contentTypeSer Optional explicit type information serializer
-     *    to use for contained values (only used for properties that are
-     *    of container type)
-     */
-    @SuppressWarnings("deprecation")
-    protected BeanPropertyWriter buildWriter(SerializerProvider prov,
-            BeanPropertyDefinition propDef, JavaType declaredType, JsonSerializer<?> ser,
-            TypeSerializer typeSer, TypeSerializer contentTypeSer,
-            AnnotatedMember am, boolean defaultUseStaticTyping)
-        throws JsonMappingException
+    public void setPrefix( String prefix )
     {
-        // do we have annotation that forces type to use (to declared type or its super type)?
-        JavaType serializationType = findSerializationType(am, defaultUseStaticTyping, declaredType);
+        davServer.setPrefix( prefix );
+    }
 
-        // Container types can have separate type serializers for content (value / element) type
-        if (contentTypeSer != null) {
-            /* 04-Feb-2010, tatu: Let's force static typing for collection, if there is
-             *    type information for contents. Should work well (for JAXB case); can be
-             *    revisited if this causes problems.
+    public void setRootDirectory( File rootDirectory )
+    {
+        davServer.setRootDirectory( rootDirectory );
+    }
+
+    public void init( ServletConfig servletConfig )
+        throws DavServerException
+    {
+        davServer.init( servletConfig );
+
+        try
+        {
+            managedRepository = repositoryFactory.getManagedRepositoryContent( getPrefix() );
+        }
+        catch ( RepositoryNotFoundException e )
+        {
+            throw new DavServerException( e.getMessage(), e );
+        }
+        catch ( RepositoryException e )
+        {
+            throw new DavServerException( e.getMessage(), e );
+        }
+    }
+
+    public void process( DavServerRequest request, HttpServletResponse response )
+        throws DavServerException, ServletException, IOException
+    {
+        boolean isGet = WebdavMethodUtil.isReadMethod( request.getRequest().getMethod() );
+        boolean isPut = WebdavMethodUtil.isWriteMethod( request.getRequest().getMethod() );
+        String resource = request.getLogicalResource();
+
+        if ( isGet )
+        {
+            // Default behaviour is to treat the resource natively.
+            File resourceFile = new File( managedRepository.getRepoRoot(), resource );
+
+            // If this a directory resource, then we are likely browsing.
+            if ( resourceFile.exists() && resourceFile.isDirectory() )
+            {
+                String requestURL = request.getRequest().getRequestURL().toString();
+
+                // [MRM-440] - If webdav URL lacks a trailing /, navigating to
+                // all links in the listing return 404.
+                if ( !requestURL.endsWith( "/" ) )
+                {
+                    String redirectToLocation = requestURL + "/";
+                    response.sendRedirect( redirectToLocation );
+                    return;
+                }
+
+                // Process the request.
+                davServer.process( request, response );
+
+                // All done.
+                return;
+            }
+
+            // At this point the incoming request can either be in default or
+            // legacy layout format.
+            try
+            {
+                boolean fromProxy = fetchContentFromProxies( request, resource );
+
+                // Perform an adjustment of the resource to the managed
+                // repository expected path.
+                resource =
+                    repositoryRequest
+                        .toNativePath( request.getLogicalResource(), managedRepository );
+                resourceFile = new File( managedRepository.getRepoRoot(), resource );                
+
+                // Adjust the pathInfo resource to be in the format that the dav
+                // server impl expects.
+                request.setLogicalResource( resource );
+
+                boolean previouslyExisted = resourceFile.exists();
+
+                // Attempt to fetch the resource from any defined proxy.
+                if ( fromProxy )
+                {
+                    processAuditEvents( request, resource, previouslyExisted, resourceFile,
+                        " (proxied)" );
+                }
+            }
+            catch ( LayoutException e )
+            {
+                // Invalid resource, pass it on.
+                respondResourceMissing( request, response, e );
+
+                // All done.
+                return;
+            }
+
+            if ( resourceFile.exists() )
+            {
+                // [MRM-503] - Metadata file need Pragma:no-cache response
+                // header.
+                if ( request.getLogicalResource().endsWith( "/maven-metadata.xml" ) )
+                {
+                    response.addHeader( "Pragma", "no-cache" );
+                    response.addHeader( "Cache-Control", "no-cache" );
+                }
+
+                // TODO: [MRM-524] determine http caching options for other
+                // types of files (artifacts, sha1, md5, snapshots)
+
+                davServer.process( request, response );
+            }
+            else
+            {
+                respondResourceMissing( request, response, null );
+            }
+        }
+
+        if ( isPut )
+        {
+            /*
+             * Create parent directories that don't exist when writing a file
+             * This actually makes this implementation not compliant to the
+             * WebDAV RFC - but we have enough knowledge about how the
+             * collection is being used to do this reasonably and some versions
+             * of Maven's WebDAV don't correctly create the collections
+             * themselves.
              */
-            if (serializationType == null) {
-//                serializationType = TypeFactory.type(am.getGenericType(), _beanDesc.getType());
-                serializationType = declaredType;
-            }
-            JavaType ct = serializationType.getContentType();
-            // Not exactly sure why, but this used to occur; better check explicitly:
-            if (ct == null) {
-                throw new IllegalStateException("Problem trying to create BeanPropertyWriter for property '"
-                        +propDef.getName()+"' (of type "+_beanDesc.getType()+"); serialization type "+serializationType+" has no content");
-            }
-            serializationType = serializationType.withContentTypeHandler(contentTypeSer);
-            ct = serializationType.getContentType();
-        }
-        
-        Object valueToSuppress = null;
-        boolean suppressNulls = false;
 
-        JsonInclude.Value inclV = _defaultInclusion.withOverrides(propDef.findInclusion());
-        JsonInclude.Include inclusion = inclV.getValueInclusion();
-        if (inclusion == JsonInclude.Include.USE_DEFAULTS) { // should not occur but...
-            inclusion = JsonInclude.Include.ALWAYS;
-        }
-
-        switch (inclusion) {
-        case NON_DEFAULT:
-            // 11-Nov-2015, tatu: This is tricky because semantics differ between cases,
-            //    so that if enclosing class has this, we may need to values of property,
-            //    whereas for global defaults OR per-property overrides, we have more
-            //    static definition. Sigh.
-            // First: case of class specifying it; try to find POJO property defaults
-            JavaType t = (serializationType == null) ? declaredType : serializationType;
-            if (_defaultInclusion.getValueInclusion() == JsonInclude.Include.NON_DEFAULT) {
-                valueToSuppress = getPropertyDefaultValue(propDef.getName(), am, t);
-            } else {
-                valueToSuppress = getDefaultValue(t);
-            }
-            if (valueToSuppress == null) {
-                suppressNulls = true;
-            } else {
-                if (valueToSuppress.getClass().isArray()) {
-                    valueToSuppress = ArrayBuilders.getArrayComparator(valueToSuppress);
+            File rootDirectory = getRootDirectory();
+            if ( rootDirectory != null )
+            {
+                File destDir = new File( rootDirectory, resource ).getParentFile();
+                if ( !destDir.exists() )
+                {
+                    destDir.mkdirs();
+                    String relPath =
+                        PathUtil.getRelative( rootDirectory.getAbsolutePath(), destDir );
+                    triggerAuditEvent( request, relPath, AuditEvent.CREATE_DIR );
                 }
             }
 
-            break;
-        case NON_ABSENT: // new with 2.6, to support Guava/JDK8 Optionals
-            // always suppress nulls
-            suppressNulls = true;
-            // and for referential types, also "empty", which in their case means "absent"
-            if (declaredType.isReferenceType()) {
-                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
-            }
-            break;
-        case NON_EMPTY:
-            // always suppress nulls
-            suppressNulls = true;
-            // but possibly also 'empty' values:
-            valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
-            break;
-        case NON_NULL:
-            suppressNulls = true;
-            // fall through
-        case ALWAYS: // default
-        default:
-            // we may still want to suppress empty collections, as per [JACKSON-254]:
-            if (declaredType.isContainerType()
-                    && !_config.isEnabled(SerializationFeature.WRITE_EMPTY_JSON_ARRAYS)) {
-                valueToSuppress = BeanPropertyWriter.MARKER_FOR_EMPTY;
-            }
-            break;
-        }
-        BeanPropertyWriter bpw = new BeanPropertyWriter(propDef,
-                am, _beanDesc.getClassAnnotations(), declaredType,
-                ser, typeSer, serializationType, suppressNulls, valueToSuppress);
+            File resourceFile = new File( managedRepository.getRepoRoot(), resource );
 
-        // How about custom null serializer?
-        Object serDef = _annotationIntrospector.findNullSerializer(am);
-        if (serDef != null) {
-            bpw.assignNullSerializer(prov.serializerInstance(am, serDef));
+            boolean previouslyExisted = resourceFile.exists();
+
+            // Allow the dav server to process the put request.
+            davServer.process( request, response );
+
+            processAuditEvents( request, resource, previouslyExisted, resourceFile, null );
+
+            // All done.
+            return;
         }
-        // And then, handling of unwrapping
-        NameTransformer unwrapper = _annotationIntrospector.findUnwrappingNameTransformer(am);
-        if (unwrapper != null) {
-            bpw = bpw.unwrappingWriter(unwrapper);
-        }
-        return bpw;
     }
 
-    /*
-    /**********************************************************
-    /* Helper methods; annotation access
-    /**********************************************************
-     */
+    private void respondResourceMissing( DavServerRequest request, HttpServletResponse response,
+                                         Throwable t )
+    {
+        response.setStatus( HttpServletResponse.SC_NOT_FOUND );
+
+        try
+        {
+            StringBuffer missingUrl = new StringBuffer();
+            missingUrl.append( request.getRequest().getScheme() ).append( "://" );
+            missingUrl.append( request.getRequest().getServerName() ).append( ":" );
+            missingUrl.append( request.getRequest().getServerPort() );
+            missingUrl.append( request.getRequest().getServletPath() );
+
+            String message = "Error 404 Not Found";
+
+            PrintWriter out = new PrintWriter( response.getOutputStream() );
+
+            response.setContentType( "text/html; charset=\"UTF-8\"" );
+
+            out.println( "<html>" );
+            out.println( "<head><title>" + message + "</title></head>" );
+            out.println( "<body>" );
+
+            out.print( "<p><h1>" );
+            out.print( message );
+            out.println( "</h1></p>" );
+
+            out.print( "<p>The following resource does not exist: <a href=\"" );
+            out.print( missingUrl.toString() );
+            out.println( "\">" );
+            out.print( missingUrl.toString() );
+            out.println( "</a></p>" );
+
+            if ( t != null )
+            {
+                out.println( "<pre>" );
+                t.printStackTrace( out );
+                out.println( "</pre>" );
+            }
+
+            out.println( "</body></html>" );
+
+            out.flush();
+        }
+        catch ( IOException e )
+        {
+            e.printStackTrace();
+        }
+    }
+
+    private boolean fetchContentFromProxies( DavServerRequest request, String resource )
+        throws ServletException
+    {
+        if ( repositoryRequest.isSupportFile( resource ) )
+        {
+            // Checksums are fetched with artifact / metadata.
+
+            // Need to adjust the path for the checksum resource.
+            return false;
+        }
+
+        // Is it a Metadata resource?
+        if ( repositoryRequest.isDefault( resource ) && repositoryRequest.isMetadata( resource ) )
+        {
+            return fetchMetadataFromProxies( request, resource );
+        }
+
+        // Not any of the above? Then it's gotta be an artifact reference.
+        try
+        {
+            // Get the artifact reference in a layout neutral way.
+            ArtifactReference artifact = repositoryRequest.toArtifactReference( resource );
+
+            if ( artifact != null )
+            {
+                applyServerSideRelocation( artifact );
+
+                File proxiedFile = connectors.fetchFromProxies( managedRepository, artifact );
+
+                // Set the path to the resource using managed repository
+                // specific layout format.
+                request.setLogicalResource( managedRepository.toPath( artifact ) );
+                return ( proxiedFile != null );
+            }
+        }
+        catch ( LayoutException e )
+        {
+            /* eat it */
+        }
+        catch ( ProxyDownloadException e )
+        {
+            throw new ServletException( "Unable to fetch artifact resource.", e );
+        }
+        return false;
+    }
+
+    private boolean fetchMetadataFromProxies( DavServerRequest request, String resource )
+        throws ServletException
+    {
+        ProjectReference project;
+        VersionedReference versioned;
+
+        try
+        {
+
+            versioned = metadataTools.toVersionedReference( resource );
+            if ( versioned != null )
+            {
+                connectors.fetchFromProxies( managedRepository, versioned );
+                return true;
+            }
+        }
+        catch ( RepositoryMetadataException e )
+        {
+            /* eat it */
+        }
+
+        try
+        {
+            project = metadataTools.toProjectReference( resource );
+            if ( project != null )
+            {
+                connectors.fetchFromProxies( managedRepository, project );
+                return true;
+            }
+        }
+        catch ( RepositoryMetadataException e )
+        {
+            /* eat it */
+        }
+
+        return false;
+    }
 
     /**
-     * Method that will try to determine statically defined type of property
-     * being serialized, based on annotations (for overrides), and alternatively
-     * declared type (if static typing for serialization is enabled).
-     * If neither can be used (no annotations, dynamic typing), returns null.
+     * A relocation capable client will request the POM prior to the artifact,
+     * and will then read meta-data and do client side relocation. A simplier
+     * client (like maven 1) will only request the artifact and not use the
+     * metadatas.
+     * <p>
+     * For such clients, archiva does server-side relocation by reading itself
+     * the &lt;relocation&gt; element in metadatas and serving the expected
+     * artifact.
      */
-    protected JavaType findSerializationType(Annotated a, boolean useStaticTyping, JavaType declaredType)
-        throws JsonMappingException
+    protected void applyServerSideRelocation( ArtifactReference artifact )
+        throws ProxyDownloadException
     {
-        JavaType secondary = _annotationIntrospector.refineSerializationType(_config, a, declaredType);
-        // 11-Oct-2015, tatu: As of 2.7, not 100% sure following checks are needed. But keeping
-        //    for now, just in case
-        if (secondary != declaredType) {
-            Class<?> serClass = secondary.getRawClass();
-            // Must be a super type to be usable
-            Class<?> rawDeclared = declaredType.getRawClass();
-            if (serClass.isAssignableFrom(rawDeclared)) {
-                ; // fine as is
-            } else {
-                /* 18-Nov-2010, tatu: Related to fixing [JACKSON-416], an issue with such
-                 *   check is that for deserialization more specific type makes sense;
-                 *   and for serialization more generic. But alas JAXB uses but a single
-                 *   annotation to do both... Hence, we must just discard type, as long as
-                 *   types are related
-                 */
-                if (!rawDeclared.isAssignableFrom(serClass)) {
-                    throw new IllegalArgumentException("Illegal concrete-type annotation for method '"+a.getName()+"': class "+serClass.getName()+" not a super-type of (declared) class "+rawDeclared.getName());
+        if ( "pom".equals( artifact.getType() ) )
+        {
+            return;
+        }
+
+        // Build the artifact POM reference
+        ArtifactReference pomReference = new ArtifactReference();
+        pomReference.setGroupId( artifact.getGroupId() );
+        pomReference.setArtifactId( artifact.getArtifactId() );
+        pomReference.setVersion( artifact.getVersion() );
+        pomReference.setType( "pom" );
+
+        // Get the artifact POM from proxied repositories if needed
+        connectors.fetchFromProxies( managedRepository, pomReference );
+
+        // Open and read the POM from the managed repo
+        File pom = managedRepository.toFile( pomReference );
+
+        if ( !pom.exists() )
+        {
+            return;
+        }
+
+        try
+        {
+            Model model = new MavenXpp3Reader().read( new FileReader( pom ) );
+            DistributionManagement dist = model.getDistributionManagement();
+            if ( dist != null )
+            {
+                Relocation relocation = dist.getRelocation();
+                if ( relocation != null )
+                {
+                    // artifact is relocated : update the repositoryPath
+                    if ( relocation.getGroupId() != null )
+                    {
+                        artifact.setGroupId( relocation.getGroupId() );
+                    }
+                    if ( relocation.getArtifactId() != null )
+                    {
+                        artifact.setArtifactId( relocation.getArtifactId() );
+                    }
+                    if ( relocation.getVersion() != null )
+                    {
+                        artifact.setVersion( relocation.getVersion() );
+                    }
                 }
-                /* 03-Dec-2010, tatu: Actually, ugh, we may need to further relax this
-                 *   and actually accept subtypes too for serialization. Bit dangerous in theory
-                 *   but need to trust user here...
-                 */
             }
-            useStaticTyping = true;
-            declaredType = secondary;
         }
-        // If using static typing, declared type is known to be the type...
-        JsonSerialize.Typing typing = _annotationIntrospector.findSerializationTyping(a);
-        if ((typing != null) && (typing != JsonSerialize.Typing.DEFAULT_TYPING)) {
-            useStaticTyping = (typing == JsonSerialize.Typing.STATIC);
+        catch ( FileNotFoundException e )
+        {
+            // Artifact has no POM in repo : ignore
         }
-        if (useStaticTyping) {
-            // 11-Oct-2015, tatu: Make sure JavaType also "knows" static-ness...
-            return declaredType.withStaticTyping();
-            
+        catch ( IOException e )
+        {
+            // Unable to read POM : ignore.
         }
-        return null;
+        catch ( XmlPullParserException e )
+        {
+            // Invalid POM : ignore
+        }
     }
 
-    /*
-    /**********************************************************
-    /* Helper methods for default value handling
-    /**********************************************************
-     */
-
-    protected Object getDefaultBean()
+    @Override
+    public void addListener( DavServerListener listener )
     {
-        Object def = _defaultBean;
-        if (def == null) {
-            /* If we can fix access rights, we should; otherwise non-public
-             * classes or default constructor will prevent instantiation
-             */
-            def = _beanDesc.instantiateBean(_config.canOverrideAccessModifiers());
-            if (def == null) {
-                // 06-Nov-2015, tatu: As per [databind#998], do not fail.
-                /*
-                Class<?> cls = _beanDesc.getClassInfo().getAnnotated();
-                throw new IllegalArgumentException("Class "+cls.getName()+" has no default constructor; can not instantiate default bean value to support 'properties=JsonSerialize.Inclusion.NON_DEFAULT' annotation");
-                 */
+        super.addListener( listener );
+        davServer.addListener( listener );
+    }
 
-                // And use a marker
-                def = NO_DEFAULT_MARKER;
+    @Override
+    public boolean isUseIndexHtml()
+    {
+        return davServer.isUseIndexHtml();
+    }
+
+    @Override
+    public boolean hasResource( String resource )
+    {
+        return davServer.hasResource( resource );
+    }
+
+    @Override
+    public void removeListener( DavServerListener listener )
+    {
+        davServer.removeListener( listener );
+    }
+
+    @Override
+    public void setUseIndexHtml( boolean useIndexHtml )
+    {
+        super.setUseIndexHtml( useIndexHtml );
+        davServer.setUseIndexHtml( useIndexHtml );
+    }
+
+    public ManagedRepositoryContent getRepository()
+    {
+        return managedRepository;
+    }
+
+    private void processAuditEvents( DavServerRequest request, String resource,
+                                     boolean previouslyExisted, File resourceFile, String suffix )
+    {
+        if ( suffix == null )
+        {
+            suffix = "";
+        }
+
+        // Process Create Audit Events.
+        if ( !previouslyExisted && resourceFile.exists() )
+        {
+            if ( resourceFile.isFile() )
+            {
+                triggerAuditEvent( request, resource, AuditEvent.CREATE_FILE + suffix );
             }
-            _defaultBean = def;
+            else if ( resourceFile.isDirectory() )
+            {
+                triggerAuditEvent( request, resource, AuditEvent.CREATE_DIR + suffix );
+            }
         }
-        return (def == NO_DEFAULT_MARKER) ? null : _defaultBean;
-    }
-
-    /**
-     * Accessor used to find out "default value" for given property, to use for
-     * comparing values to serialize, to determine whether to exclude value from serialization with
-     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_EMPTY}.
-     * This method is called when we specifically want to know default value within context
-     * of a POJO, when annotation is within containing class, and not for property or
-     * defined as global baseline.
-     *<p>
-     * Note that returning of pseudo-type 
-     *
-     * @since 2.7
-     */
-    protected Object getPropertyDefaultValue(String name, AnnotatedMember member,
-            JavaType type)
-    {
-        Object defaultBean = getDefaultBean();
-        if (defaultBean == null) {
-            return getDefaultValue(type);
+        // Process Remove Audit Events.
+        else if ( previouslyExisted && !resourceFile.exists() )
+        {
+            if ( resourceFile.isFile() )
+            {
+                triggerAuditEvent( request, resource, AuditEvent.REMOVE_FILE + suffix );
+            }
+            else if ( resourceFile.isDirectory() )
+            {
+                triggerAuditEvent( request, resource, AuditEvent.REMOVE_DIR + suffix );
+            }
         }
-        try {
-            return member.getValue(defaultBean);
-        } catch (Exception e) {
-            return _throwWrapped(e, name, defaultBean);
+        // Process modify events.
+        else
+        {
+            if ( resourceFile.isFile() )
+            {
+                triggerAuditEvent( request, resource, AuditEvent.MODIFY_FILE + suffix );
+            }
         }
     }
 
-    /**
-     * Accessor used to find out "default value" to use for comparing values to
-     * serialize, to determine whether to exclude value from serialization with
-     * inclusion type of {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}.
-     *<p>
-     * Default logic is such that for primitives and wrapper types for primitives, expected
-     * defaults (0 for `int` and `java.lang.Integer`) are returned; for Strings, empty String,
-     * and for structured (Maps, Collections, arrays) and reference types, criteria
-     * {@link com.fasterxml.jackson.annotation.JsonInclude.Include#NON_DEFAULT}
-     * is used.
-     *
-     * @since 2.7
-     */
-    protected Object getDefaultValue(JavaType type)
+    private void triggerAuditEvent( String user, String remoteIP, String resource, String action )
     {
-        // 06-Nov-2015, tatu: Returning null is fine for Object types; but need special
-        //   handling for primitives since they are never passed as nulls.
-        Class<?> cls = type.getRawClass();
+        AuditEvent event = new AuditEvent( this.getPrefix(), user, resource, action );
+        event.setRemoteIP( remoteIP );
 
-        Class<?> prim = ClassUtil.primitiveType(cls);
-        if (prim != null) {
-            return ClassUtil.defaultValue(prim);
+        for ( AuditListener listener : auditListeners )
+        {
+            listener.auditEvent( event );
         }
-        if (type.isContainerType() || type.isReferenceType()) {
-            return JsonInclude.Include.NON_EMPTY;
-        }
-        if (cls == String.class) {
-            return "";
-        }
-        return null;
     }
-    
-    /*
-    /**********************************************************
-    /* Helper methods for exception handling
-    /**********************************************************
-     */
-    
-    protected Object _throwWrapped(Exception e, String propName, Object defaultBean)
+
+    private void triggerAuditEvent( DavServerRequest request, String resource, String action )
     {
-        Throwable t = e;
-        while (t.getCause() != null) {
-            t = t.getCause();
-        }
-        if (t instanceof Error) throw (Error) t;
-        if (t instanceof RuntimeException) throw (RuntimeException) t;
-        throw new IllegalArgumentException("Failed to get property '"+propName+"' of default "+defaultBean.getClass().getName()+" instance");
+        triggerAuditEvent( archivaUser.getActivePrincipal(), getRemoteIP( request ), resource,
+            action );
+    }
+
+    private String getRemoteIP( DavServerRequest request )
+    {
+        return request.getRequest().getRemoteAddr();
+    }
+
+    public void addAuditListener( AuditListener listener )
+    {
+        this.auditListeners.add( listener );
+    }
+
+    public void clearAuditListeners()
+    {
+        this.auditListeners.clear();
+    }
+
+    public void removeAuditListener( AuditListener listener )
+    {
+        this.auditListeners.remove( listener );
     }
 }

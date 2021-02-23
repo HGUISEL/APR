@@ -1,195 +1,129 @@
-package org.jsoup.nodes;
+package org.jsoup.parser;
 
-import org.apache.commons.lang.NotImplementedException;
-import org.apache.commons.lang.Validate;
+import org.jsoup.Jsoup;
+import org.jsoup.helper.Validate;
+import org.jsoup.nodes.*;
 
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
- Base Node model.
-
- @author Jonathan Hedley, jonathan@hedley.net */
-public abstract class Node {
-    Node parentNode;
-    final List<Node> childNodes;
-    final Attributes attributes;
-    String baseUri;
-
-    /**
-     Create a new node.
-     */
-    protected Node(String baseUri, Attributes attributes) {
-        Validate.notNull(baseUri);
-        Validate.notNull(attributes);
-        
-        childNodes = new ArrayList<Node>();
-        this.baseUri = baseUri.trim();
-        this.attributes = attributes;
+ * Use the {@code XmlTreeBuilder} when you want to parse XML without any of the HTML DOM rules being applied to the
+ * document.
+ * <p>Usage example: {@code Document xmlDoc = Jsoup.parse(html, baseUrl, Parser.xmlParser());}</p>
+ *
+ * @author Jonathan Hedley
+ */
+public class XmlTreeBuilder extends TreeBuilder {
+    @Override
+    protected void initialiseParse(String input, String baseUri, ParseErrorList errors) {
+        super.initialiseParse(input, baseUri, errors);
+        stack.add(doc); // place the document onto the stack. differs from HtmlTreeBuilder (not on stack)
+        doc.outputSettings().syntax(Document.OutputSettings.Syntax.xml);
     }
 
-    protected Node(String baseUri) {
-        this(baseUri, new Attributes());
+    @Override
+    protected boolean process(Token token) {
+        // start tag, end tag, doctype, comment, character, eof
+        switch (token.type) {
+            case StartTag:
+                insert(token.asStartTag());
+                break;
+            case EndTag:
+                popStackToClose(token.asEndTag());
+                break;
+            case Comment:
+                insert(token.asComment());
+                break;
+            case Character:
+                insert(token.asCharacter());
+                break;
+            case Doctype:
+                insert(token.asDoctype());
+                break;
+            case EOF: // could put some normalisation here if desired
+                break;
+            default:
+                Validate.fail("Unexpected token type: " + token.type);
+        }
+        return true;
     }
 
-    public abstract String nodeName();
-
-    /**
-     * Get an attribute.
-     * @param attributeKey The attribute key.
-     * @return The attribute, or empty string if not present (to avoid nulls).
-     * @see #getAttributes()
-     * @see #hasAttr(String)
-     */
-    public String attr(String attributeKey) {
-        String value = attributes.get(attributeKey);
-        return value == null ? "" : value;
+    private void insertNode(Node node) {
+        currentElement().appendChild(node);
     }
 
-    /**
-     * Get all of the element's attributes.
-     * @return attributes (which implements iterable, in same order as presented in original HTML).
-     */
-    public Attributes getAttributes() {
-        return attributes;
-    }
-
-    /**
-     * Set an attribute (key=value). If the attribute already exists, it is replaced.
-     * @param attributeKey The attribute key.
-     * @param attributeValue The attribute value.
-     * @return this (for chaining)
-     */
-    public Node attr(String attributeKey, String attributeValue) {
-        attributes.put(attributeKey, attributeValue);
-        return this;
-    }
-
-    /**
-     * Test if this element has an attribute.
-     * @param attributeKey The attribute key to check.
-     * @return true if the attribute exists, false if not.
-     */
-    public boolean hasAttr(String attributeKey) {
-        Validate.notNull(attributeKey);
-        return attributes.hasKey(attributeKey);
-    }
-
-    /**
-     * Remove an attribute from this element.
-     * @param attributeKey The attribute to remove.
-     * @return this (for chaining)
-     */
-    public Node removeAttr(String attributeKey) {
-        Validate.notNull(attributeKey);
-        attributes.remove(attributeKey);
-        return this;
-    }
-
-    public String baseUri() {
-        return baseUri;
-    }
-
-    public void setBaseUri(String baseUri) {
-        Validate.notNull(baseUri);
-        this.baseUri = baseUri;
-    }
-
-    public String absUrl(String attribute) {
-        Validate.notEmpty(attribute);
-
-        String relUrl = attr(attribute);
-        if (baseUri.isEmpty()) {
-            return relUrl; // nothing to make absolute with
+    Element insert(Token.StartTag startTag) {
+        Tag tag = Tag.valueOf(startTag.name());
+        // todo: wonder if for xml parsing, should treat all tags as unknown? because it's not html.
+        Element el = new Element(tag, baseUri, startTag.attributes);
+        insertNode(el);
+        if (startTag.isSelfClosing()) {
+            tokeniser.acknowledgeSelfClosingFlag();
+            if (!tag.isKnownTag()) // unknown tag, remember this is self closing for output. see above.
+                tag.setSelfClosing();
         } else {
-            URL base;
-            try {
-                try {
-                    base = new URL(baseUri);
-                } catch (MalformedURLException e) {
-                    // the base is unsuitable, but the attribute may be abs, so try that
-                    URL abs = new URL(relUrl);
-                    return abs.toExternalForm();
-                }
-                URL abs = new URL(base, relUrl);
-                return abs.toExternalForm();
-            } catch (MalformedURLException e) {
-                return "";
+            stack.add(el);
+        }
+        return el;
+    }
+
+    void insert(Token.Comment commentToken) {
+        Comment comment = new Comment(commentToken.getData(), baseUri);
+        Node insert = comment;
+        if (commentToken.bogus) { // xml declarations are emitted as bogus comments (which is right for html, but not xml)
+            // so we do a bit of a hack and parse the data as an element to pull the attributes out
+            String data = comment.getData();
+            if (data.length() > 1 && (data.startsWith("!") || data.startsWith("?"))) {
+                Document doc = Jsoup.parse("<" + data.substring(1, data.length() -1) + ">", baseUri, Parser.xmlParser());
+                Element el = doc.child(0);
+                insert = new XmlDeclaration(el.tagName(), comment.baseUri(), data.startsWith("!"));
+                insert.attributes().addAll(el.attributes());
             }
         }
+        insertNode(insert);
     }
 
-    public Node childNode(int index) {
-        return childNodes.get(index);
+    void insert(Token.Character characterToken) {
+        Node node = new TextNode(characterToken.getData(), baseUri);
+        insertNode(node);
     }
 
-    public List<Node> childNodes() {
-        return Collections.unmodifiableList(childNodes);
+    void insert(Token.Doctype d) {
+        DocumentType doctypeNode = new DocumentType(d.getName(), d.getPublicIdentifier(), d.getSystemIdentifier(), baseUri);
+        insertNode(doctypeNode);
     }
 
-    public Node parent() {
-        return parentNode;
-    }
+    /**
+     * If the stack contains an element with this tag's name, pop up the stack to remove the first occurrence. If not
+     * found, skips.
+     *
+     * @param endTag
+     */
+    private void popStackToClose(Token.EndTag endTag) {
+        String elName = endTag.name();
+        Element firstFound = null;
 
-    protected void setParentNode(Node parentNode) {
-        if (this.parentNode != null)
-            throw new NotImplementedException("Cannot (yet) move nodes in tree"); // TODO: remove from prev node children
-        this.parentNode = parentNode;
-    }
-
-    public Node nextSibling() {
-        List<Node> siblings = parentNode.childNodes;
-        Integer index = indexInList(this, siblings);
-        Validate.notNull(index);
-        if (siblings.size() > index+1)
-            return siblings.get(index+1);
-        else
-            return null;
-    }
-
-    public Node previousSibling() {
-        List<Node> siblings = parentNode.childNodes;
-        Integer index = indexInList(this, siblings);
-        Validate.notNull(index);
-        if (index > 0)
-            return siblings.get(index-1);
-        else
-            return null;
-    }
-
-    protected static <N extends Node> Integer indexInList(N search, List<N> nodes) {
-        Validate.notNull(search);
-        Validate.notNull(nodes);
-
-        for (int i = 0; i < nodes.size(); i++) {
-            N node = nodes.get(i);
-            if (node.equals(search))
-                return i;
+        for (int pos = stack.size() -1; pos >= 0; pos--) {
+            Element next = stack.get(pos);
+            if (next.nodeName().equals(elName)) {
+                firstFound = next;
+                break;
+            }
         }
-        return null;
+        if (firstFound == null)
+            return; // not found, skip
+
+        for (int pos = stack.size() -1; pos >= 0; pos--) {
+            Element next = stack.get(pos);
+            stack.remove(pos);
+            if (next == firstFound)
+                break;
+        }
     }
 
-    public abstract String outerHtml();
-
-    public String toString() {
-        return outerHtml();
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        // todo: have nodes hold a child index, compare against that and parent (not children)
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        int result = parentNode != null ? parentNode.hashCode() : 0;
-        // not children, or will block stack as they go back up to parent)
-        result = 31 * result + (attributes != null ? attributes.hashCode() : 0);
-        return result;
+    List<Node> parseFragment(String inputFragment, String baseUri, ParseErrorList errors) {
+        initialiseParse(inputFragment, baseUri, errors);
+        runParser();
+        return doc.childNodes();
     }
 }

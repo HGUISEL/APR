@@ -149,7 +149,7 @@ public abstract class AbstractEstimator implements Estimator {
     }
 
     /**
-     * Get the covariance matrix of estimated parameters.
+     * Get the covariance matrix of unbound estimated parameters.
      * @param problem estimation problem
      * @return covariance matrix
      * @exception EstimationException if the covariance matrix
@@ -188,7 +188,7 @@ public abstract class AbstractEstimator implements Estimator {
     }
 
     /**
-     * Guess the errors in estimated parameters.
+     * Guess the errors in unbound estimated parameters.
      * <p>Guessing is covariance-based, it only gives rough order of magnitude.</p>
      * @param problem estimation problem
      * @return errors in estimated parameters

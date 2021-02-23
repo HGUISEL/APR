@@ -1,10 +1,9 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
+ *  contributor license agreements.  The ASF licenses this file to You
+ * under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -12,378 +11,377 @@
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
- * limitations under the License.
+ * limitations under the License.  For additional information regarding
+ * copyright in this work, please see the NOTICE file in the top level
+ * directory of this distribution.
  */
 
+package org.apache.roller.weblogger.ui.struts2.editor;
 
-package opennlp.tools.postag;
+import java.sql.Timestamp;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Locale;
+import java.util.Set;
+import java.util.TimeZone;
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.roller.weblogger.WebloggerException;
+import org.apache.roller.weblogger.business.RollerFactory;
+import org.apache.roller.weblogger.business.WeblogManager;
+import org.apache.roller.weblogger.pojos.WeblogEntryAttribute;
+import org.apache.roller.weblogger.pojos.WeblogCategory;
+import org.apache.roller.weblogger.pojos.WeblogEntry;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.StringTokenizer;
-
-import opennlp.model.AbstractModel;
-import opennlp.model.EventStream;
-import opennlp.model.TrainUtil;
-import opennlp.tools.dictionary.Dictionary;
-import opennlp.tools.ngram.NGramModel;
-import opennlp.tools.util.BeamSearch;
-import opennlp.tools.util.ObjectStream;
-import opennlp.tools.util.Sequence;
-import opennlp.tools.util.SequenceValidator;
-import opennlp.tools.util.StringList;
-import opennlp.tools.util.TrainingParameters;
-import opennlp.tools.util.model.ModelType;
 
 /**
- * A part-of-speech tagger that uses maximum entropy.  Tries to predict whether
- * words are nouns, verbs, or any of 70 other POS tags depending on their
- * surrounding context.
- *
+ * Bean for managing entry data.
  */
-public class POSTaggerME implements POSTagger {
-  
-  private static class PosSequenceValidator implements SequenceValidator<String> {
+public class EntryBean {
     
-    private POSDictionary tagDictionary;
+    private static Log log = LogFactory.getLog(EntryBean.class);
     
-    PosSequenceValidator(POSDictionary tagDictionary) {
-      this.tagDictionary = tagDictionary;
+    private String id = null;
+    private String title = null;
+    private String locale = null;
+    private String categoryId = null;
+    private String tagsString = null;
+    private String summary = null;
+    private String text = null;
+    private String status = null;
+    
+    private String[] plugins = null;
+    private String dateString = null;
+    private int hours = 0;
+    private int minutes = 0;
+    private int seconds = 0;
+    private boolean allowComments = true;
+    private Integer commentDays = new Integer(0);
+    private boolean rightToLeft = false;
+    private boolean pinnedToMain = false;
+    private String enclosureURL = null;
+    
+    
+    public String getId() {
+        return this.id;
     }
     
-    public boolean validSequence(int i, String[] inputSequence,
-        String[] outcomesSequence, String outcome) {
-      if (tagDictionary == null) {
-        return true;
-      }
-      else {
-        String[] tags = tagDictionary.getTags(inputSequence[i]);
-        if (tags == null) {
-          return true;
+    public void setId( String id ) {
+        this.id = id;
+    }
+    
+    public String getTitle() {
+        return this.title;
+    }
+    
+    public void setTitle( String title ) {
+        this.title = title;
+    }
+    
+    public String getSummary() {
+        return this.summary;
+    }
+    
+    public void setSummary( String summary ) {
+        this.summary = summary;
+    }
+    
+    public String getText() {
+        return this.text;
+    }
+    
+    public void setText( String text ) {
+        this.text = text;
+    }
+    
+    public String getStatus() {
+        return this.status;
+    }
+    
+    public void setStatus( String status ) {
+        this.status = status;
+    }
+    
+    public String getLocale() {
+        return this.locale;
+    }
+    
+    public void setLocale( String locale ) {
+        this.locale = locale;
+    }
+    
+    public String getTagsAsString() {
+        return this.tagsString;
+    }
+    
+    public void setTagsAsString( String tagsAsString ) {
+        this.tagsString = tagsAsString;
+    }
+    
+    public String getCategoryId() {
+        return categoryId;
+    }
+    
+    public void setCategoryId(String categoryId) {
+        this.categoryId = categoryId;
+    }
+    
+    
+    public String[] getPlugins() {
+        return this.plugins;
+    }
+    
+    public void setPlugins(String[] plugins ) {
+        this.plugins = plugins;
+    }
+    
+    public String getDateString() {
+        return dateString;
+    }
+    
+    public void setDateString(String date) {
+        this.dateString = date;
+    }
+    
+    public int getHours() {
+        return hours;
+    }
+    
+    public void setHours(int hours) {
+        this.hours = hours;
+    }
+    
+    public int getMinutes() {
+        return minutes;
+    }
+    
+    public void setMinutes(int minutes) {
+        this.minutes = minutes;
+    }
+    
+    public int getSeconds() {
+        return seconds;
+    }
+    
+    public void setSeconds(int seconds) {
+        this.seconds = seconds;
+    }
+    
+    public boolean getAllowComments() {
+        return this.allowComments;
+    }
+    
+    public void setAllowComments( boolean allowComments ) {
+        this.allowComments = allowComments;
+    }
+    
+    public Integer getCommentDays() {
+        return this.commentDays;
+    }
+    
+    public void setCommentDays(Integer commentDays) {
+        this.commentDays = commentDays;
+    }
+    
+    public boolean getRightToLeft() {
+        return this.rightToLeft;
+    }
+    
+    public void setRightToLeft( boolean rightToLeft ) {
+        this.rightToLeft = rightToLeft;
+    }
+    
+    public boolean getPinnedToMain() {
+        return this.pinnedToMain;
+    }
+    
+    public void setPinnedToMain( boolean pinnedToMain ) {
+        this.pinnedToMain = pinnedToMain;
+    }
+    
+    public String getEnclosureURL() {
+        return enclosureURL;
+    }
+    
+    public void setEnclosureURL(String trackbackUrl) {
+        this.enclosureURL = trackbackUrl;
+    }
+    
+    
+    // a convenient way to get the final pubtime of the entry
+    public Timestamp getPubTime(Locale locale, TimeZone timezone) {
+        
+        Timestamp pubtime = null;
+        
+        if(!StringUtils.isEmpty(getDateString())) try {
+            log.debug("pubtime vals are "+getDateString()+", "+getHours()+", "+getMinutes()+", "+getSeconds());
+            
+            // first convert the specified date string into an actual Date obj
+            // TODO: at some point this date conversion should be locale sensitive,
+            // however at this point our calendar widget does not take into account
+            // locales and only operates in the standard English US locale.
+            DateFormat df = DateFormat.getDateInstance(DateFormat.SHORT);
+            Date newDate = df.parse(getDateString());
+            
+            log.debug("dateString yields date - "+newDate);
+            
+            // Now handle the time from the hour, minute and second combos
+            Calendar cal = Calendar.getInstance(locale);
+            cal.setTime(newDate);
+            cal.setTimeZone(timezone);
+            cal.set(Calendar.HOUR_OF_DAY, getHours());
+            cal.set(Calendar.MINUTE, getMinutes());
+            cal.set(Calendar.SECOND, getSeconds());
+            pubtime = new Timestamp(cal.getTimeInMillis());
+            
+            log.debug("pubtime is "+pubtime);
+        } catch(Exception e) {
+            log.error("Error calculating pubtime", e);
         }
-        else {
-          return Arrays.asList(tags).contains(outcome);
+        
+        return pubtime;
+    }
+    
+    public boolean isDraft() {
+        return status.equals(WeblogEntry.DRAFT);
+    }
+    
+    public boolean isPending() {
+        return status.equals(WeblogEntry.PENDING);
+    }
+    
+    public boolean isPublished() {
+        return status.equals(WeblogEntry.PUBLISHED);
+    }
+    
+    public boolean isScheduled() {
+        return status.equals(WeblogEntry.SCHEDULED);
+    }
+    
+    public void copyTo(WeblogEntry entry) throws WebloggerException {
+        
+        entry.setTitle(getTitle());
+        entry.setStatus(getStatus());
+        entry.setLocale(getLocale());
+        entry.setSummary(getSummary());
+        entry.setText(getText());
+        entry.setTagsAsString(getTagsAsString());
+        
+        // figure out the category selected
+        if (getCategoryId() != null) {
+            WeblogCategory cat = null;
+            try {
+                WeblogManager wmgr = RollerFactory.getRoller().getWeblogManager();
+                cat = wmgr.getWeblogCategory(getCategoryId());
+            } catch (WebloggerException ex) {
+                log.error("Error getting category by id", ex);
+            }
+            
+            if(cat == null) {
+                throw new WebloggerException("Category could not be found - "+getCategoryId());
+            } else if(!entry.getWebsite().equals(cat.getWebsite())) {
+                throw new WebloggerException("Illegal category, not owned by action weblog");
+            } else {
+                entry.setCategory(cat);
+            }
+        } else {
+            throw new WebloggerException("No category specified");
         }
-      }
+        
+        // join values from all plugins into a single string
+        entry.setPlugins(StringUtils.join(getPlugins(),","));
+        
+        // comment settings & right-to-left option
+        entry.setAllowComments(getAllowComments());
+        entry.setCommentDays(getCommentDays());
+        entry.setRightToLeft(getRightToLeft());
+        
+        // NOTE: pubtime and pinned to main attributes are set in action
     }
-  }
-  
-  /**
-   * The maximum entropy model to use to evaluate contexts.
-   */
-  protected AbstractModel posModel;
-
-  /**
-   * The feature context generator.
-   */
-  protected POSContextGenerator contextGen;
-
-  /**
-   * Tag dictionary used for restricting words to a fixed set of tags.
-   */
-  protected TagDictionary tagDictionary;
-
-  protected Dictionary ngramDictionary;
-
-  /**
-   * Says whether a filter should be used to check whether a tag assignment
-   * is to a word outside of a closed class.
-   */
-  protected boolean useClosedClassTagsFilter = false;
-
-  public static final int DEFAULT_BEAM_SIZE = 3;
-
-  /**
-   * The size of the beam to be used in determining the best sequence of pos tags.
-   */
-  protected int size;
-
-  private Sequence bestSequence;
-
-  /**
-   * The search object used for search multiple sequences of tags.
-   */
-  protected BeamSearch<String> beam;
-
-  public POSTaggerME(POSModel model, int beamSize, int cacheSize, SequenceValidator<String> sequenceValidator) {
-    posModel = model.getPosModel();
-    contextGen = new DefaultPOSContextGenerator(beamSize, model.getNgramDictionary());
-    tagDictionary = model.getTagDictionary();
-    size = beamSize;
-    beam = new BeamSearch<String>(size, contextGen, posModel, sequenceValidator, cacheSize);
-  }
-  
-  /**
-   * Initializes the current instance with the provided
-   * model and provided beam size.
-   *
-   * @param model
-   * @param beamSize
-   */
-  public POSTaggerME(POSModel model, int beamSize, int cacheSize) {
-    this(model, beamSize, cacheSize, new PosSequenceValidator(model.getTagDictionary()));
-  }
-  
-  /**
-   * Initializes the current instance with the provided model
-   * and the default beam size of 3.
-   *
-   * @param model
-   */
-  public POSTaggerME(POSModel model) {
-    this(model, DEFAULT_BEAM_SIZE, 0);
-  }
-
-  /**
-   * Creates a new tagger with the specified model and tag dictionary.
-   *
-   * @param model The model used for tagging.
-   * @param tagdict The tag dictionary used for specifying a set of valid tags.
-   */
-  @Deprecated
-  public POSTaggerME(AbstractModel model, TagDictionary tagdict) {
-    this(model, new DefaultPOSContextGenerator(null),tagdict);
-  }
-
-  /**
-   * Creates a new tagger with the specified model and n-gram dictionary.
-   *
-   * @param model The model used for tagging.
-   * @param dict The n-gram dictionary used for feature generation.
-   */
-  @Deprecated
-  public POSTaggerME(AbstractModel model, Dictionary dict) {
-    this(model, new DefaultPOSContextGenerator(dict));
-  }
-
-  /**
-   * Creates a new tagger with the specified model, n-gram dictionary, and tag dictionary.
-   *
-   * @param model The model used for tagging.
-   * @param dict The n-gram dictionary used for feature generation.
-   * @param tagdict The dictionary which specifies the valid set of tags for some words.
-   */
-  @Deprecated
-  public POSTaggerME(AbstractModel model, Dictionary dict, TagDictionary tagdict) {
-      this(DEFAULT_BEAM_SIZE,model, new DefaultPOSContextGenerator(dict),tagdict);
-    }
-
-  /**
-   * Creates a new tagger with the specified model and context generator.
-   *
-   * @param model The model used for tagging.
-   * @param cg The context generator used for feature creation.
-   */
-  @Deprecated
-  public POSTaggerME(AbstractModel model, POSContextGenerator cg) {
-    this(DEFAULT_BEAM_SIZE, model, cg, null);
-  }
-
-  /**
-   * Creates a new tagger with the specified model, context generator, and tag dictionary.
-   *
-   * @param model The model used for tagging.
-   * @param cg The context generator used for feature creation.
-   * @param tagdict The dictionary which specifies the valid set of tags for some words.
-   */
-  @Deprecated
-  public POSTaggerME(AbstractModel model, POSContextGenerator cg, TagDictionary tagdict) {
-      this(DEFAULT_BEAM_SIZE, model, cg, tagdict);
-    }
-
-  /**
-   * Creates a new tagger with the specified beam size, model, context generator, and tag dictionary.
-   *
-   * @param beamSize The number of alternate tagging considered when tagging.
-   * @param model The model used for tagging.
-   * @param cg The context generator used for feature creation.
-   * @param tagdict The dictionary which specifies the valid set of tags for some words.
-   */
-  @Deprecated
-  public POSTaggerME(int beamSize, AbstractModel model, POSContextGenerator cg, TagDictionary tagdict) {
-    size = beamSize;
-    posModel = model;
-    contextGen = cg;
-    beam = new BeamSearch<String>(size, cg, model);
-    tagDictionary = tagdict;
-  }
-
-  /**
-   * Returns the number of different tags predicted by this model.
-   *
-   * @return the number of different tags predicted by this model.
-   */
-  public int getNumTags() {
-    return posModel.getNumOutcomes();
-  }
-
-  @Deprecated
-  public List<String> tag(List<String> sentence) {
-    bestSequence = beam.bestSequence(sentence.toArray(new String[sentence.size()]), null);
-    return bestSequence.getOutcomes();
-  }
-
-  public String[] tag(String[] sentence) {
-    bestSequence = beam.bestSequence(sentence, null);
-    List<String> t = bestSequence.getOutcomes();
-    return t.toArray(new String[t.size()]);
-  }
-
-  /**
-   * Returns at most the specified number of taggings for the specified sentence.
-   *
-   * @param numTaggings The number of tagging to be returned.
-   * @param sentence An array of tokens which make up a sentence.
-   *
-   * @return At most the specified number of taggings for the specified sentence.
-   */
-  public String[][] tag(int numTaggings, String[] sentence) {
-    Sequence[] bestSequences = beam.bestSequences(numTaggings, sentence,null);
-    String[][] tags = new String[bestSequences.length][];
-    for (int si=0;si<tags.length;si++) {
-      List<String> t = bestSequences[si].getOutcomes();
-      tags[si] = t.toArray(new String[t.size()]);
-    }
-    return tags;
-  }
-
-  @Deprecated
-  public Sequence[] topKSequences(List<String> sentence) {
-    return beam.bestSequences(size, sentence.toArray(new String[sentence.size()]), null);
-  }
-
-  public Sequence[] topKSequences(String[] sentence) {
-    return beam.bestSequences(size, sentence, null);
-  }
-
-  /**
-   * Populates the specified array with the probabilities for each tag of the last tagged sentence.
-   *
-   * @param probs An array to put the probabilities into.
-   */
-  public void probs(double[] probs) {
-    bestSequence.getProbs(probs);
-  }
-
-  /**
-   * Returns an array with the probabilities for each tag of the last tagged sentence.
-   *
-   * @return an array with the probabilities for each tag of the last tagged sentence.
-   */
-  public double[] probs() {
-    return bestSequence.getProbs();
-  }
-
-  @Deprecated
-  public String tag(String sentence) {
-    List<String> toks = new ArrayList<String>();
-    StringTokenizer st = new StringTokenizer(sentence);
-    while (st.hasMoreTokens())
-      toks.add(st.nextToken());
-    List<String> tags = tag(toks);
-    StringBuilder sb = new StringBuilder();
-    for (int i = 0; i < tags.size(); i++)
-      sb.append(toks.get(i) + "/" + tags.get(i) + " ");
-    return sb.toString().trim();
-  }
-
-  public String[] getOrderedTags(List<String> words, List<String> tags, int index) {
-    return getOrderedTags(words,tags,index,null);
-  }
-
-  public String[] getOrderedTags(List<String> words, List<String> tags, int index,double[] tprobs) {
-    double[] probs = posModel.eval(contextGen.getContext(index,
-        words.toArray(new String[words.size()]),
-        tags.toArray(new String[tags.size()]),null));
-
-    String[] orderedTags = new String[probs.length];
-    for (int i = 0; i < probs.length; i++) {
-      int max = 0;
-      for (int ti = 1; ti < probs.length; ti++) {
-        if (probs[ti] > probs[max]) {
-          max = ti;
+    
+    
+    /**
+     * Copy values from WeblogEntryData to this Form.
+     */
+    public void copyFrom(WeblogEntry entry, Locale locale) {
+        
+        setId(entry.getId());
+        setTitle(entry.getTitle());
+        setLocale(entry.getLocale());
+        setStatus(entry.getStatus());
+        setSummary(entry.getSummary());
+        setText(entry.getText());
+        setCategoryId(entry.getCategory().getId());
+        setTagsAsString(entry.getTagsAsString());
+        
+        // init plugins values
+        if(entry.getPlugins() != null) {
+            setPlugins(StringUtils.split(entry.getPlugins(), ","));
         }
-      }
-      orderedTags[i] = posModel.getOutcome(max);
-      if (tprobs != null){
-        tprobs[i]=probs[max];
-      }
-      probs[max] = 0;
-    }
-    return orderedTags;
-    
-    
-  }
-  public static POSModel train(String languageCode,
-      ObjectStream<POSSample> samples, TrainingParameters trainParams,
-      POSTaggerFactory posFactory, POSDictionary tagDictionary,
-      Dictionary ngramDictionary) throws IOException {
-    
-    POSContextGenerator contextGenerator = posFactory.getPOSContextGenerator();
-    
-    Map<String, String> manifestInfoEntries = new HashMap<String, String>();
-    
-    AbstractModel posModel;
-    
-    if (!TrainUtil.isSequenceTraining(trainParams.getSettings())) {
-      
-      EventStream es = new POSSampleEventStream(samples, contextGenerator);
-      
-      posModel = TrainUtil.train(es, trainParams.getSettings(), manifestInfoEntries);
-    }
-    else {
-      POSSampleSequenceStream ss = new POSSampleSequenceStream(samples, contextGenerator);
-
-      posModel = TrainUtil.train(ss, trainParams.getSettings(), manifestInfoEntries);
-    }
-    
-    return new POSModel(languageCode, posModel, tagDictionary,
-        ngramDictionary, manifestInfoEntries, posFactory);
-  }
-
-  public static POSModel train(String languageCode, ObjectStream<POSSample> samples, TrainingParameters trainParams, 
-      POSDictionary tagDictionary, Dictionary ngramDictionary) throws IOException {
-    
-    return train(languageCode, samples, trainParams, new POSTaggerFactory(
-        ngramDictionary, tagDictionary), tagDictionary, ngramDictionary);
-  }
-  
-  /**
-   * @deprecated use {@link #train(String, ObjectStream, TrainingParameters, POSDictionary, Dictionary)}
-   * instead and pass in a TrainingParameters object.
-   */
-  @Deprecated
-  public static POSModel train(String languageCode, ObjectStream<POSSample> samples, ModelType modelType, POSDictionary tagDictionary,
-      Dictionary ngramDictionary, int cutoff, int iterations) throws IOException {
-
-    TrainingParameters params = new TrainingParameters(); 
-    
-    params.put(TrainingParameters.ALGORITHM_PARAM, modelType.toString());
-    params.put(TrainingParameters.ITERATIONS_PARAM, Integer.toString(iterations));
-    params.put(TrainingParameters.CUTOFF_PARAM, Integer.toString(cutoff));
-    
-    return train(languageCode, samples, params, tagDictionary, ngramDictionary);
-  }
-  
-  public static Dictionary buildNGramDictionary(ObjectStream<POSSample> samples, int cutoff)
-      throws IOException {
-    
-    NGramModel ngramModel = new NGramModel();
-    
-    POSSample sample;
-    while((sample = samples.read()) != null) {
-      String[] words = sample.getSentence();
-      
-      if (words.length > 0)
-        ngramModel.add(new StringList(words), 1, 1);
+        
+        // init pubtime values
+        if(entry.getPubTime() != null) {
+            log.debug("entry pubtime is "+entry.getPubTime());
+            
+            //Calendar cal = Calendar.getInstance(locale);
+            Calendar cal = Calendar.getInstance();
+            cal.setTime(entry.getPubTime());
+            cal.setTimeZone(entry.getWebsite().getTimeZoneInstance());
+            
+            setHours(cal.get(Calendar.HOUR_OF_DAY));
+            setMinutes(cal.get(Calendar.MINUTE));
+            setSeconds(cal.get(Calendar.SECOND));
+            
+            // TODO: at some point this date conversion should be locale sensitive,
+            // however at this point our calendar widget does not take into account
+            // locales and only operates in the standard English US locale.
+            DateFormat df = DateFormat.getDateInstance(DateFormat.SHORT);
+            df.setTimeZone(entry.getWebsite().getTimeZoneInstance());
+            setDateString(df.format(entry.getPubTime()));
+            
+            log.debug("pubtime vals are "+getDateString()+", "+getHours()+", "+getMinutes()+", "+getSeconds());
+        }
+        
+        setAllowComments(entry.getAllowComments());
+        setCommentDays(entry.getCommentDays());
+        setRightToLeft(entry.getRightToLeft());
+        setPinnedToMain(entry.getPinnedToMain());
+        
+        // enclosure url, if it exists
+        Set<WeblogEntryAttribute> attrs = entry.getEntryAttributes();
+        if(attrs != null && attrs.size() > 0) {
+            for(WeblogEntryAttribute attr : attrs) {
+                if("att_mediacast_url".equals(attr.getName())) {
+                    setEnclosureURL(attr.getValue());
+                }
+            }
+        }
     }
     
-    ngramModel.cutoff(cutoff, Integer.MAX_VALUE);
     
-    return ngramModel.toDictionary(true);
-  }
+    public String toString() {
+        StringBuffer buf = new StringBuffer();
+        
+        //title,locale,catId,tags,text,summary,dateString,status,comments,plugins
+        buf.append("title = ").append(getTitle()).append("\n");
+        buf.append("locale = ").append(getLocale()).append("\n");
+        buf.append("status = ").append(getStatus()).append("\n");
+        buf.append("catId = ").append(getCategoryId()).append("\n");
+        buf.append("tags = ").append(getTagsAsString()).append("\n");
+        buf.append("date = ").append(getDateString()).append("\n");
+        buf.append("hours = ").append(getHours()).append("\n");
+        buf.append("minutes = ").append(getMinutes()).append("\n");
+        buf.append("seconds = ").append(getSeconds()).append("\n");
+        buf.append("txt size = ").append(getText()).append("\n");
+        buf.append("summary size = ").append(getSummary()).append("\n");
+        buf.append("comments = ").append(getAllowComments()).append("\n");
+        buf.append("commentDays = ").append(getCommentDays()).append("\n");
+        buf.append("plugins = ").append(getPlugins()).append("\n");
+        
+        return buf.toString();
+    }
+    
 }

@@ -1,10 +1,11 @@
-/**
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -15,298 +16,143 @@
  * limitations under the License.
  */
 
-package org.apache.commons.cli;
+package org.apache.beam.runners.direct;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Supplier;
+import com.google.common.base.Suppliers;
+import java.io.IOException;
+import java.io.Serializable;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+import org.apache.beam.runners.core.construction.PTransformReplacements;
+import org.apache.beam.runners.core.construction.ReplacementOutputs;
+import org.apache.beam.runners.core.construction.WriteFilesTranslation;
+import org.apache.beam.sdk.io.WriteFiles;
+import org.apache.beam.sdk.io.WriteFilesResult;
+import org.apache.beam.sdk.runners.AppliedPTransform;
+import org.apache.beam.sdk.runners.PTransformOverrideFactory;
+import org.apache.beam.sdk.transforms.Count;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.View;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
+import org.apache.beam.sdk.transforms.windowing.Window;
+import org.apache.beam.sdk.values.PCollection;
+import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.sdk.values.PValue;
+import org.apache.beam.sdk.values.TupleTag;
 
 /**
- * The class PosixParser provides an implementation of the 
- * {@link Parser#flatten(Options,String[],boolean) flatten} method.
- *
- * @author John Keyes (john at integralsource.com)
- * @see Parser
- * @version $Revision$
+ * A {@link PTransformOverrideFactory} that overrides {@link WriteFiles} {@link PTransform
+ * PTransforms} with an unspecified number of shards with a write with a specified number of shards.
+ * The number of shards is the log base 10 of the number of input records, with up to 2 additional
+ * shards.
  */
-public class PosixParser extends Parser {
+class WriteWithShardingFactory<InputT, DestinationT>
+    implements PTransformOverrideFactory<
+        PCollection<InputT>, WriteFilesResult<DestinationT>,
+        PTransform<PCollection<InputT>, WriteFilesResult<DestinationT>>> {
+  static final int MAX_RANDOM_EXTRA_SHARDS = 3;
+  @VisibleForTesting static final int MIN_SHARDS_FOR_LOG = 3;
 
-    /** holder for flattened tokens */
-    private List tokens = new ArrayList();
+  @Override
+  public PTransformReplacement<PCollection<InputT>, WriteFilesResult<DestinationT>>
+      getReplacementTransform(
+          AppliedPTransform<
+                  PCollection<InputT>, WriteFilesResult<DestinationT>,
+                  PTransform<PCollection<InputT>, WriteFilesResult<DestinationT>>>
+              transform) {
+    try {
+      WriteFiles<InputT, DestinationT, ?> replacement =
+          WriteFiles.to(WriteFilesTranslation.getSink(transform))
+              .withSideInputs(WriteFilesTranslation.getDynamicDestinationSideInputs(transform))
+              .withSharding(new LogElementShardsWithDrift<InputT>());
+      if (WriteFilesTranslation.isWindowedWrites(transform)) {
+        replacement = replacement.withWindowedWrites();
+      }
+      return PTransformReplacement.of(
+          PTransformReplacements.getSingletonMainInput(transform), replacement);
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
 
-    /** specifies if bursting should continue */
-    private boolean eatTheRest;
+  @Override
+  public Map<PValue, ReplacementOutput> mapOutputs(
+      Map<TupleTag<?>, PValue> outputs, WriteFilesResult<DestinationT> newOutput) {
+    // We must connect the new output from WriteFilesResult to the outputs provided by the original
+    // transform.
+    return ReplacementOutputs.tagged(outputs, newOutput);
+  }
 
-    /** holder for the current option */
-    private Option currentOption;
+  private static class LogElementShardsWithDrift<T>
+      extends PTransform<PCollection<T>, PCollectionView<Integer>> {
 
-    /** the command line Options */
-    private Options options;
+    @Override
+    public PCollectionView<Integer> expand(PCollection<T> records) {
+      return records
+          .apply(Window.<T>into(new GlobalWindows()))
+          .apply("CountRecords", Count.<T>globally())
+          .apply("GenerateShardCount", ParDo.of(new CalculateShardsFn()))
+          .apply(View.<Integer>asSingleton());
+    }
+  }
 
-    /**
-     * Resets the members to their original state i.e. remove
-     * all of <code>tokens</code> entries, set <code>eatTheRest</code>
-     * to false and set <code>currentOption</code> to null.
-     */
-    private void init()
-    {
-        eatTheRest = false;
-        tokens.clear();
-        currentOption = null;
+  @VisibleForTesting
+  static class CalculateShardsFn extends DoFn<Long, Integer> {
+    private final Supplier<Integer> extraShardsSupplier;
+
+    public CalculateShardsFn() {
+      this(new BoundedRandomIntSupplier(MAX_RANDOM_EXTRA_SHARDS));
     }
 
     /**
-     * <p>An implementation of {@link Parser}'s abstract
-     * {@link Parser#flatten(Options,String[],boolean) flatten} method.</p>
-     *
-     * <p>The following are the rules used by this flatten method.
-     * <ol>
-     *  <li>if <code>stopAtNonOption</code> is <b>true</b> then do not
-     *  burst anymore of <code>arguments</code> entries, just add each
-     *  successive entry without further processing.  Otherwise, ignore
-     *  <code>stopAtNonOption</code>.</li>
-     *  <li>if the current <code>arguments</code> entry is "<b>--</b>"
-     *  just add the entry to the list of processed tokens</li>
-     *  <li>if the current <code>arguments</code> entry is "<b>-</b>"
-     *  just add the entry to the list of processed tokens</li>
-     *  <li>if the current <code>arguments</code> entry is two characters
-     *  in length and the first character is "<b>-</b>" then check if this
-     *  is a valid {@link Option} id.  If it is a valid id, then add the
-     *  entry to the list of processed tokens and set the current {@link Option}
-     *  member.  If it is not a valid id and <code>stopAtNonOption</code>
-     *  is true, then the remaining entries are copied to the list of 
-     *  processed tokens.  Otherwise, the current entry is ignored.</li>
-     *  <li>if the current <code>arguments</code> entry is more than two
-     *  characters in length and the first character is "<b>-</b>" then
-     *  we need to burst the entry to determine its constituents.  For more
-     *  information on the bursting algorithm see 
-     *  {@link PosixParser#burstToken(String, boolean) burstToken}.</li>
-     *  <li>if the current <code>arguments</code> entry is not handled 
-     *  by any of the previous rules, then the entry is added to the list
-     *  of processed tokens.</li>
-     * </ol>
-     * </p>
-     *
-     * @param options The command line {@link Options}
-     * @param arguments The command line arguments to be parsed
-     * @param stopAtNonOption Specifies whether to stop flattening
-     * when an non option is found.
-     * @return The flattened <code>arguments</code> String array.
+     * Construct a {@link CalculateShardsFn} that always uses a constant number of specified extra
+     * shards.
      */
-    protected String[] flatten(Options options, String[] arguments, boolean stopAtNonOption)
-    {
-        init();
-        this.options = options;
-
-        // an iterator for the command line tokens
-        Iterator iter = Arrays.asList(arguments).iterator();
-
-        // process each command line token
-        while (iter.hasNext())
-        {
-            // get the next command line token
-            String token = (String) iter.next();
-
-            // handle SPECIAL TOKEN
-            if (token.startsWith("--"))
-            {
-                if (token.indexOf('=') != -1)
-                {
-                    tokens.add(token.substring(0, token.indexOf('=')));
-                    tokens.add(token.substring(token.indexOf('=') + 1, token.length()));
-                }
-                else
-                {
-                    tokens.add(token);
-                }
-            }
-
-            // single hyphen
-            else if ("-".equals(token))
-            {
-                processSingleHyphen(token);
-            }
-            else if (token.startsWith("-"))
-            {
-                int tokenLength = token.length();
-
-                if (tokenLength == 2)
-                {
-                    processOptionToken(token, stopAtNonOption);
-                }
-                else if (options.hasOption(token))
-                {
-                    tokens.add(token);
-                }
-                // requires bursting
-                else
-                {
-                    burstToken(token, stopAtNonOption);
-                }
-            }
-            else
-            {
-                if (stopAtNonOption)
-                {
-                    process(token);
-                }
-                else
-                {
-                    tokens.add(token);
-                }
-            }
-
-            gobble(iter);
-        }
-
-        return (String[]) tokens.toArray(new String[tokens.size()]);
+    @VisibleForTesting
+    CalculateShardsFn(int constantExtraShards) {
+      this(Suppliers.ofInstance(constantExtraShards));
     }
 
-    /**
-     * Adds the remaining tokens to the processed tokens list.
-     *
-     * @param iter An iterator over the remaining tokens
-     */
-    private void gobble(Iterator iter)
-    {
-        if (eatTheRest)
-        {
-            while (iter.hasNext())
-            {
-                tokens.add(iter.next());
-            }
-        }
+    private CalculateShardsFn(Supplier<Integer> extraShardsSupplier) {
+      this.extraShardsSupplier = extraShardsSupplier;
     }
 
-    /**
-     * <p>If there is a current option and it can have an argument
-     * value then add the token to the processed tokens list and 
-     * set the current option to null.</p>
-     *
-     * <p>If there is a current option and it can have argument
-     * values then add the token to the processed tokens list.</p>
-     *
-     * <p>If there is not a current option add the special token
-     * "<b>--</b>" and the current <code>value</code> to the processed
-     * tokens list.  The add all the remaining <code>argument</code>
-     * values to the processed tokens list.</p>
-     *
-     * @param value The current token
-     */
-    private void process(String value)
-    {
-        if (currentOption != null && currentOption.hasArg())
-        {
-            if (currentOption.hasArg())
-            {
-                tokens.add(value);
-                currentOption = null;
-            }
-            else if (currentOption.hasArgs())
-            {
-                tokens.add(value);
-            }
-        }
-        else
-        {
-            eatTheRest = true;
-            tokens.add("--");
-            tokens.add(value);
-        }
+    @ProcessElement
+    public void process(ProcessContext ctxt) {
+      ctxt.output(calculateShards(ctxt.element()));
     }
 
-    /**
-     * If it is a hyphen then add the hyphen directly to
-     * the processed tokens list.
-     *
-     * @param hyphen The hyphen token
-     */
-    private void processSingleHyphen(String hyphen)
-    {
-        tokens.add(hyphen);
+    private int calculateShards(long totalRecords) {
+      if (totalRecords == 0) {
+        // WriteFiles out at least one shard, even if there is no input.
+        return 1;
+      }
+      // Windows get their own number of random extra shards. This is stored in a side input, so
+      // writers use a consistent number of keys.
+      int extraShards = extraShardsSupplier.get();
+      if (totalRecords < MIN_SHARDS_FOR_LOG + extraShards) {
+        return (int) totalRecords;
+      }
+      // 100mil records before >7 output files
+      int floorLogRecs = Double.valueOf(Math.log10(totalRecords)).intValue();
+      return Math.max(floorLogRecs, MIN_SHARDS_FOR_LOG) + extraShards;
+    }
+  }
+
+  private static class BoundedRandomIntSupplier implements Supplier<Integer>, Serializable {
+    private final int upperBound;
+
+    private BoundedRandomIntSupplier(int upperBound) {
+      this.upperBound = upperBound;
     }
 
-    /**
-     * <p>If an {@link Option} exists for <code>token</code> then
-     * set the current option and add the token to the processed 
-     * list.</p>
-     *
-     * <p>If an {@link Option} does not exist and <code>stopAtNonOption</code>
-     * is set then ignore the current token and add the remaining tokens
-     * to the processed tokens list directly.</p>
-     *
-     * @param token The current option token
-     * @param stopAtNonOption Specifies whether flattening should halt
-     * at the first non option.
-     */
-    private void processOptionToken(String token, boolean stopAtNonOption)
-    {
-        if (this.options.hasOption(token))
-        {
-            currentOption = this.options.getOption(token);
-            tokens.add(token);
-        }
-        else if (stopAtNonOption)
-        {
-            eatTheRest = true;
-        }
+    @Override
+    public Integer get() {
+      return ThreadLocalRandom.current().nextInt(0, upperBound);
     }
-
-    /**
-     * <p>Breaks <code>token</code> into its constituent parts
-     * using the following algorithm.
-     * <ul>
-     *  <li>ignore the first character ("<b>-</b>")</li>
-     *  <li>foreach remaining character check if an {@link Option}
-     *  exists with that id.</li>
-     *  <li>if an {@link Option} does exist then add that character
-     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
-     *  <li>if the {@link Option} can have an argument value and there 
-     *  are remaining characters in the token then add the remaining 
-     *  characters as a token to the list of processed tokens.</li>
-     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b> 
-     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
-     *  "<b>--</b>" followed by the remaining characters and also 
-     *  the remaining tokens directly to the processed tokens list.</li>
-     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
-     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
-     *  character prepended with "<b>-</b>".</li>
-     * </ul>
-     * </p>
-     *
-     * @param token The current token to be <b>burst</b>
-     * @param stopAtNonOption Specifies whether to stop processing
-     * at the first non-Option encountered.
-     */
-    protected void burstToken(String token, boolean stopAtNonOption)
-    {
-        for (int i = 1; i < token.length(); i++)
-        {
-            String ch = String.valueOf(token.charAt(i));
-
-            if (options.hasOption(ch))
-            {
-                tokens.add("-" + ch);
-                currentOption = options.getOption(ch);
-
-                if (currentOption.hasArg() && (token.length() != (i + 1)))
-                {
-                    tokens.add(token.substring(i + 1));
-
-                    break;
-                }
-            }
-            else if (stopAtNonOption)
-            {
-                process(token.substring(i));
-                break;
-            }
-            else
-            {
-                tokens.add(token);
-                break;
-            }
-        }
-    }
+  }
 }

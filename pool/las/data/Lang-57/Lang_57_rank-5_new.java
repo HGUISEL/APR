@@ -1,1646 +1,1026 @@
 /*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.chemistry.opencmis.inmemory.server;
 
-   Derby - Class org.apache.derby.client.am.Connection
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-   Copyright (c) 2001, 2005 The Apache Software Foundation or its licensors, where applicable.
+import org.apache.chemistry.opencmis.commons.PropertyIds;
+import org.apache.chemistry.opencmis.commons.data.Acl;
+import org.apache.chemistry.opencmis.commons.data.AllowableActions;
+import org.apache.chemistry.opencmis.commons.data.CmisExtensionElement;
+import org.apache.chemistry.opencmis.commons.data.ContentStream;
+import org.apache.chemistry.opencmis.commons.data.ExtensionsData;
+import org.apache.chemistry.opencmis.commons.data.FailedToDeleteData;
+import org.apache.chemistry.opencmis.commons.data.ObjectData;
+import org.apache.chemistry.opencmis.commons.data.Properties;
+import org.apache.chemistry.opencmis.commons.data.PropertyData;
+import org.apache.chemistry.opencmis.commons.data.RenditionData;
+import org.apache.chemistry.opencmis.commons.definitions.DocumentTypeDefinition;
+import org.apache.chemistry.opencmis.commons.definitions.PropertyDefinition;
+import org.apache.chemistry.opencmis.commons.definitions.RelationshipTypeDefinition;
+import org.apache.chemistry.opencmis.commons.definitions.TypeDefinition;
+import org.apache.chemistry.opencmis.commons.definitions.TypeDefinitionContainer;
+import org.apache.chemistry.opencmis.commons.enums.BaseTypeId;
+import org.apache.chemistry.opencmis.commons.enums.Cardinality;
+import org.apache.chemistry.opencmis.commons.enums.IncludeRelationships;
+import org.apache.chemistry.opencmis.commons.enums.PropertyType;
+import org.apache.chemistry.opencmis.commons.enums.UnfileObject;
+import org.apache.chemistry.opencmis.commons.enums.Updatability;
+import org.apache.chemistry.opencmis.commons.enums.VersioningState;
+import org.apache.chemistry.opencmis.commons.exceptions.CmisConstraintException;
+import org.apache.chemistry.opencmis.commons.exceptions.CmisContentAlreadyExistsException;
+import org.apache.chemistry.opencmis.commons.exceptions.CmisInvalidArgumentException;
+import org.apache.chemistry.opencmis.commons.exceptions.CmisNotSupportedException;
+import org.apache.chemistry.opencmis.commons.exceptions.CmisObjectNotFoundException;
+import org.apache.chemistry.opencmis.commons.exceptions.CmisUpdateConflictException;
+import org.apache.chemistry.opencmis.commons.impl.dataobjects.CmisExtensionElementImpl;
+import org.apache.chemistry.opencmis.commons.impl.dataobjects.ContentStreamImpl;
+import org.apache.chemistry.opencmis.commons.impl.dataobjects.FailedToDeleteDataImpl;
+import org.apache.chemistry.opencmis.commons.impl.dataobjects.PropertiesImpl;
+import org.apache.chemistry.opencmis.commons.impl.server.ObjectInfoImpl;
+import org.apache.chemistry.opencmis.commons.server.CallContext;
+import org.apache.chemistry.opencmis.commons.server.ObjectInfoHandler;
+import org.apache.chemistry.opencmis.commons.spi.Holder;
+import org.apache.chemistry.opencmis.inmemory.FilterParser;
+import org.apache.chemistry.opencmis.inmemory.NameValidator;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.Content;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.Document;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.DocumentVersion;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.Filing;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.Folder;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.ObjectStore;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.StoreManager;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.StoredObject;
+import org.apache.chemistry.opencmis.inmemory.storedobj.api.VersionedDocument;
+import org.apache.chemistry.opencmis.inmemory.types.InMemoryDocumentTypeDefinition;
+import org.apache.chemistry.opencmis.inmemory.types.InMemoryFolderTypeDefinition;
+import org.apache.chemistry.opencmis.inmemory.types.InMemoryPolicyTypeDefinition;
+import org.apache.chemistry.opencmis.inmemory.types.InMemoryRelationshipTypeDefinition;
+import org.apache.chemistry.opencmis.inmemory.types.PropertyCreationHelper;
+import org.apache.chemistry.opencmis.server.support.TypeValidator;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+public class InMemoryObjectServiceImpl extends InMemoryAbstractServiceImpl {
+    private static final Log LOG = LogFactory.getLog(InMemoryServiceFactoryImpl.class.getName());
 
-      http://www.apache.org/licenses/LICENSE-2.0
+    final AtomLinkInfoProvider fAtomLinkProvider;
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-
-*/
-
-package org.apache.derby.client.am;
-
-import org.apache.derby.jdbc.ClientDataSource;
-
-public abstract class Connection implements java.sql.Connection,
-        ConnectionCallbackInterface {
-    //---------------------navigational members-----------------------------------
-
-
-    public Agent agent_;
-
-    public DatabaseMetaData databaseMetaData_;
-    // Since DERBY prepared statements must be re-prepared after a commit,
-    // then we must traverse this list after a commit and notify statements
-    // that they are now in an un-prepared state.
-    final java.util.LinkedList openStatements_ = new java.util.LinkedList();
-
-    // Some statuses of DERBY objects may be invalid on server either after only rollback
-    // or after both commit and rollback. For example,
-    // (1) prepared statements need to be re-prepared
-    //     after both commit and rollback
-    // (2) result set will be unpositioned on server after both commit and rollback.
-    // If they only depend on rollback, they need to get on RollbackOnlyListeners_.
-    // If they depend on both commit and rollback, they need to get on CommitAndRollbackListeners_.
-    final java.util.LinkedList RollbackOnlyListeners_ = new java.util.LinkedList();
-    final java.util.LinkedList CommitAndRollbackListeners_ = new java.util.LinkedList();
-    private SqlWarning warnings_ = null;
-
-    // ------------------------properties set for life of connection--------------
-
-    // See ClientDataSource pre-connect settings
-    public transient String user_;
-    public boolean retrieveMessageText_;
-    protected boolean jdbcReadOnly_;
-    public int resultSetHoldability_;
-    public String databaseName_;
-
-    // Holds the Product-Specific Identifier which specifies
-    // the product release level of a DDM Server.
-    // The max length is 8.
-    public String productID_;
-
-    // Used to get the public key and encrypt password and/or userid
-    protected EncryptionManager encryptionManager_;
-
-    // used to set transaction isolation level
-    private Statement setTransactionIsolationStmt = null;
-    // ------------------------dynamic properties---------------------------------
-
-    protected boolean open_ = true;
-    protected boolean availableForReuse_ = false;
-
-    public int isolation_ = Configuration.defaultIsolation;
-    public boolean autoCommit_ = true;
-    protected boolean inUnitOfWork_ = false; // This means a transaction is in progress.
-
-    private boolean accumulated440ForMessageProcFailure_ = false;
-    private boolean accumulated444ForMessageProcFailure_ = false;
-    private boolean accumulatedSetReadOnlyWarning_ = false;
-
-
-
-    //---------------------XA-----------------------------------------------------
-
-    protected boolean isXAConnection_ = false; // Indicates an XA connection
-
-    // XA States
-    // The client needs to keep track of the connection's transaction branch association
-    // per table 2.6 in the XA+ specification in order to determine if commits should flow in
-    // autocommit mode.  There is no need to keep track of suspended transactions separately from
-    // XA_TO_NOT_ASSOCIATED.
-    // 
-    /**
-     * <code>XA_T0_NOT_ASSOCIATED</code>
-     * This connection is not currently associated with an XA transaction
-     * In this state commits will flow in autocommit mode.
-     */
-    public static final int XA_T0_NOT_ASSOCIATED = 0;   
-    
-    /**
-     * <code>XA_T1_ASSOCIATED</code>
-     * In this state commits will not flow in autocommit mode.
-     */
-    public static final int XA_T1_ASSOCIATED = 1;  
-    
-    //TODO: Remove XA_RECOVER entirely once indoubtlist is gone.  
-    //public static final int XA_RECOVER = 14;
-
-
-    protected int xaState_ = XA_T0_NOT_ASSOCIATED;
-
-    // XA Host Type
-    public int xaHostVersion_ = 0;
-
-    public int loginTimeout_;
-    public org.apache.derby.jdbc.ClientDataSource dataSource_;
-    public String serverNameIP_;
-    public int portNumber_;
-
-    public java.util.Hashtable clientCursorNameCache_ = new java.util.Hashtable();
-    public boolean canUseCachedConnectBytes_ = false;
-    public int commBufferSize_ = 32767;
-
-    // indicates if a deferred reset connection is required
-    public boolean resetConnectionAtFirstSql_ = false;
-
-    //---------------------constructors/finalizer---------------------------------
-
-    // For jdbc 2 connections
-    protected Connection(org.apache.derby.client.am.LogWriter logWriter,
-                         String user,
-                         String password,
-                         org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException {
-        initConnection(logWriter, user, dataSource);
+    public InMemoryObjectServiceImpl(StoreManager storeManager) {
+        super(storeManager);
+        fAtomLinkProvider = new AtomLinkInfoProvider(fStoreManager);
     }
 
-    protected Connection(org.apache.derby.client.am.LogWriter logWriter,
-                         String user,
-                         String password,
-                         boolean isXAConn,
-                         org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException {
-        isXAConnection_ = isXAConn;
-        initConnection(logWriter, user, dataSource);
+    public String createDocument(CallContext context, String repositoryId, Properties properties, String folderId,
+            ContentStream contentStream, VersioningState versioningState, List<String> policies, Acl addAces,
+            Acl removeAces, ExtensionsData extension) {
+
+        LOG.debug("start createDocument()");
+        // Attach the CallContext to a thread local context that can be
+        // accessed from everywhere
+
+        StoredObject so = createDocumentIntern(context, repositoryId, properties, folderId, contentStream, versioningState,
+                policies, addAces, removeAces, extension);
+        LOG.debug("stop createDocument()");
+        return so.getId();
     }
 
-    // For jdbc 2 connections
-    protected void initConnection(org.apache.derby.client.am.LogWriter logWriter,
-                                  String user,
-                                  org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException {
-        if (logWriter != null) {
-            logWriter.traceConnectEntry(dataSource);
-        }
-        org.apache.derby.client.am.Configuration.checkForExceptionsFromLoadConfiguration(logWriter);
+    public String createDocumentFromSource(CallContext context, String repositoryId, String sourceId,
+            Properties properties, String folderId, VersioningState versioningState, List<String> policies,
+            Acl addAces, Acl removeAces, ExtensionsData extension) {
 
-        user_ = user;
-
-        // Extract common properties.
-        // Derby-409 fix
-        if (dataSource.getConnectionAttributes() != null) {
-            databaseName_ = dataSource.getDatabaseName() + ";" + dataSource.getConnectionAttributes();
-        } else {
-            databaseName_ = dataSource.getDatabaseName();
-        }
-        retrieveMessageText_ = dataSource.getRetrieveMessageText();
-
-        loginTimeout_ = dataSource.getLoginTimeout();
-        dataSource_ = dataSource;
-
-        serverNameIP_ = dataSource.getServerName();
-        portNumber_ = dataSource.getPortNumber();
-
-
-        agent_ = newAgent_(logWriter,
-                loginTimeout_,
-                serverNameIP_,
-                portNumber_);
-    }
-
-    // For jdbc 2 connections
-    protected Connection(org.apache.derby.client.am.LogWriter logWriter,
-                         boolean isXAConn,
-                         org.apache.derby.jdbc.ClientDataSource dataSource) throws SqlException {
-        if (logWriter != null) {
-            logWriter.traceConnectEntry(dataSource);
-        }
-        isXAConnection_ = isXAConn;
-        org.apache.derby.client.am.Configuration.checkForExceptionsFromLoadConfiguration(logWriter);
-
-        user_ = ClientDataSource.propertyDefault_user;
-
-        // Extract common properties.
-        databaseName_ = dataSource.getDatabaseName();
-        retrieveMessageText_ = dataSource.getRetrieveMessageText();
-
-        loginTimeout_ = dataSource.getLoginTimeout();
-        dataSource_ = dataSource;
-
-        serverNameIP_ = dataSource.getServerName();
-        portNumber_ = dataSource.getPortNumber();
-
-
-        agent_ = newAgent_(logWriter,
-                loginTimeout_,
-                serverNameIP_,
-                portNumber_);
-    }
-
-    // This is a callback method, called by subsystem - NetConnection
-    protected void resetConnection(LogWriter logWriter,
-                                   String user,
-                                   ClientDataSource ds,
-                                   boolean recomputeFromDataSource) throws SqlException {
-        // clearWarningsX() will re-initialize the following properties
-        clearWarningsX();
-
-        user_ = (user != null) ? user : user_;
-
-        if (ds != null && recomputeFromDataSource) { // no need to reinitialize connection state if ds hasn't changed
-            user_ = (user != null) ? user : ds.getUser();
-            ;
-
-            retrieveMessageText_ = ds.getRetrieveMessageText();
-
-
-            // property encryptionManager_
-            // if needed this will later be initialized by NET calls to initializePublicKeyForEncryption()
-            encryptionManager_ = null;
-
-            // property: open_
-            // this should already be true
-
-            isolation_ = Configuration.defaultIsolation;
-            autoCommit_ = true;
-            inUnitOfWork_ = false;
-
-            loginTimeout_ = ds.getLoginTimeout();
-            dataSource_ = ds;
-        }
-
+        LOG.debug("start createDocumentFromSource()");
+        StoredObject so = validator.createDocumentFromSource(context, repositoryId, sourceId, folderId, extension);
+        TypeDefinition td = getTypeDefinition(repositoryId, so);  // typedefinition may be copied from source object
         
-        if (recomputeFromDataSource) {
-            this.agent_.resetAgent(this, logWriter, loginTimeout_, serverNameIP_, portNumber_);
+        ContentStream content = getContentStream(context, repositoryId, sourceId, null, BigInteger.valueOf(-1),
+                BigInteger.valueOf(-1), null);
+
+        if (so == null) {
+            throw new CmisObjectNotFoundException("Unknown object id: " + sourceId);
         }
+
+        // build properties collection
+        List<String> requestedIds = FilterParser.getRequestedIdsFromFilter("*");
+        
+        Properties existingProps = PropertyCreationHelper.getPropertiesFromObject(so, td, requestedIds, true);
+
+        PropertiesImpl newPD = PropertyCreationHelper.copyProperties(existingProps.getProperties(),
+                properties.getProperties());
+
+        String res = createDocument(context, repositoryId, newPD, folderId, content, versioningState, policies,
+                addAces, removeAces, null);
+        LOG.debug("stop createDocumentFromSource()");
+        return res;
     }
 
-    protected void resetConnection(LogWriter logWriter,
-                                   String databaseName,
-                                   java.util.Properties properties) throws SqlException {
-        // clearWarningsX() will re-initialize the following properties
-        // warnings_, accumulated440ForMessageProcFailure_,
-        // accumulated444ForMessageProcFailure_, and accumulatedSetReadOnlyWarning_
-        clearWarningsX();
+    public String createFolder(CallContext context, String repositoryId, Properties properties, String folderId,
+            List<String> policies, Acl addAces, Acl removeAces, ExtensionsData extension) {
+        LOG.debug("start createFolder()");
 
-        databaseName_ = databaseName;
-        user_ = ClientDataSource.getUser(properties);
-
-        retrieveMessageText_ = ClientDataSource.getRetrieveMessageText(properties);
-
-
-        // property encryptionManager_
-        // if needed this will later be initialized by NET calls to initializePublicKeyForEncryption()
-        encryptionManager_ = null;
-
-        // property: open_
-        // this should already be true
-
-        isolation_ = Configuration.defaultIsolation;
-        autoCommit_ = true;
-        inUnitOfWork_ = false;
-
-        this.agent_.resetAgent(this, logWriter, loginTimeout_, serverNameIP_, portNumber_);
-
+        Folder folder = createFolderIntern(context, repositoryId, properties, folderId, policies, addAces, removeAces,
+                extension);
+        LOG.debug("stop createFolder()");
+        return folder.getId();
     }
 
+    public String createPolicy(CallContext context, String repositoryId, Properties properties, String folderId,
+            List<String> policies, Acl addAces, Acl removeAces, ExtensionsData extension) {
 
-    // For jdbc 1 connections
-    protected Connection(LogWriter logWriter,
-                         int driverManagerLoginTimeout,
-                         String serverName,
-                         int portNumber,
-                         String databaseName,
-                         java.util.Properties properties) throws SqlException {
-        if (logWriter != null) {
-            logWriter.traceConnectEntry(serverName, portNumber, databaseName, properties);
-        }
-        org.apache.derby.client.am.Configuration.checkForExceptionsFromLoadConfiguration(logWriter);
-
-        databaseName_ = databaseName;
-
-        // Extract common properties.
-        user_ = ClientDataSource.getUser(properties);
-        retrieveMessageText_ = ClientDataSource.getRetrieveMessageText(properties);
-
-        loginTimeout_ = driverManagerLoginTimeout;
-        serverNameIP_ = serverName;
-        portNumber_ = portNumber;
-
-        agent_ = newAgent_(logWriter,
-                loginTimeout_,
-                serverNameIP_,
-                portNumber_);
+        // TODO to be completed if ACLs are implemented
+        LOG.debug("start createPolicy()");
+        StoredObject so = createPolicyIntern(context, repositoryId, properties, folderId, policies, addAces, removeAces,
+                extension);
+        LOG.debug("stop createPolicy()");
+        return so == null ? null : so.getId();
     }
 
-    // Users are advised to call the method close() on Statement and Connection objects when they are done with them.
-    // However, some users will forget, and some code may get killed before it can close these objects.
-    // Therefore, if JDBC drivers have state associated with JDBC objects that need to get
-    // explicitly cleared up, they should provide finalize methods to take care of them.
-    // The garbage collector will call these finalize methods when the objects are found to be garbage,
-    // and this will give the driver a chance to close (or otherwise clean up) the objects.
-    // Note, however, that there is no guarantee that the garbage collector will ever run.
-    // If that is the case, the finalizers will not be called.
-    protected void finalize() throws java.lang.Throwable {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "finalize");
-        }
+    public String createRelationship(CallContext context, String repositoryId, Properties properties,
+            List<String> policies, Acl addAces, Acl removeAces, ExtensionsData extension) {
 
-        // finalize() differs from close() in that it will not throw an
-        // exception if a transaction is in progress.
-        // finalize() also differs from close() in that it will not drive
-        // an auto-commit before disconnecting.
-        //
-        // If a transaction is in progress, a close() request will throw an SqlException.
-        // However, if a connection with an incomplete transaction is finalized,
-        // or is abruptly terminated by application exit,
-        // the normal rollback semantics imposed by the DERBY server are adopted.
-        // So we just pull the plug and let the server handle this default semantic.
-
-        if (!open_) {
-            return;
-        }
-        agent_.disconnectEvent();
-        super.finalize();
+        // TODO to be completed if relationships are implemented
+        LOG.debug("start createRelationship()");
+        StoredObject so = createRelationshipIntern(context, repositoryId, properties, policies, addAces, removeAces, extension);
+        LOG.debug("stop createRelationship()");
+        return so == null ? null : so.getId();
     }
 
-    // ---------------------------jdbc 1------------------------------------------
+    @SuppressWarnings("unchecked")
+    public String create(CallContext context, String repositoryId, Properties properties, String folderId,
+            ContentStream contentStream, VersioningState versioningState, List<String> policies,
+            ExtensionsData extension, ObjectInfoHandler objectInfos) {
 
-    synchronized public java.sql.Statement createStatement() throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "createStatement");
+        if (null == properties || null == properties.getProperties()) {
+            throw new CmisInvalidArgumentException("Cannot create object, without properties.");
         }
-        Statement s = createStatementX(java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "createStatement", s);
+
+        // Find out what kind of object needs to be created
+        PropertyData<String> pd = (PropertyData<String>) properties.getProperties().get(PropertyIds.OBJECT_TYPE_ID);
+        String typeId = pd == null ? null : pd.getFirstValue();
+        if (null == typeId) {
+            throw new CmisInvalidArgumentException(
+                    "Cannot create object, without a type (no property with id CMIS_OBJECT_TYPE_ID).");
         }
-        return s;
+
+        TypeDefinitionContainer typeDefC = fStoreManager.getTypeById(repositoryId, typeId);
+        if (typeDefC == null) {
+            throw new CmisInvalidArgumentException("Cannot create object, a type with id " + typeId + " is unknown");
+        }
+
+        // check if the given type is a document type
+        BaseTypeId typeBaseId = typeDefC.getTypeDefinition().getBaseTypeId();
+        StoredObject so = null;
+        if (typeBaseId.equals(InMemoryDocumentTypeDefinition.getRootDocumentType().getBaseTypeId())) {
+            so = createDocumentIntern(context, repositoryId, properties, folderId, contentStream, versioningState, null, null,
+                    null, null);
+        } else if (typeBaseId.equals(InMemoryFolderTypeDefinition.getRootFolderType().getBaseTypeId())) {
+            so = createFolderIntern(context, repositoryId, properties, folderId, null, null, null, null);
+        } else if (typeBaseId.equals(InMemoryPolicyTypeDefinition.getRootPolicyType().getBaseTypeId())) {
+            so = createPolicyIntern(context, repositoryId, properties, folderId, null, null, null, null);
+        } else if (typeBaseId.equals(InMemoryRelationshipTypeDefinition.getRootRelationshipType().getBaseTypeId())) {
+            so = createRelationshipIntern(context, repositoryId, properties, null, null, null, null);
+        } else {
+            LOG.error("The type contains an unknown base object id, object can't be created");
+        }
+
+        // Make a call to getObject to convert the resulting id into an
+        // ObjectData
+        TypeDefinition td = typeDefC.getTypeDefinition();
+        ObjectData od = PropertyCreationHelper.getObjectData(td, so, null, context.getUsername(), false,
+                IncludeRelationships.NONE, null, false, false, extension);
+
+        if (context.isObjectInfoRequired()) {
+            ObjectInfoImpl objectInfo = new ObjectInfoImpl();
+            fAtomLinkProvider.fillInformationForAtomLinks(repositoryId, so, od, objectInfo);
+            objectInfos.addObjectInfo(objectInfo);
+        }
+        return so != null ? so.getId() : null;
     }
 
-    synchronized public java.sql.PreparedStatement prepareStatement(String sql) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareStatement", sql);
+    public void deleteContentStream(CallContext context, String repositoryId, Holder<String> objectId,
+            Holder<String> changeToken, ExtensionsData extension) {
+
+        LOG.debug("start deleteContentStream()");
+        StoredObject so = validator.deleteContentStream(context, repositoryId, objectId, extension);
+
+        if (so == null) {
+            throw new CmisObjectNotFoundException("Unknown object id: " + objectId);
         }
-        PreparedStatement ps = prepareStatementX(sql,
-                java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                java.sql.ResultSet.CONCUR_READ_ONLY,
-                resultSetHoldability_,
-                java.sql.Statement.NO_GENERATED_KEYS,
-                null);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareStatement", ps);
+
+        if (!(so instanceof Content)) {
+            throw new CmisObjectNotFoundException("Id" + objectId
+                    + " does not refer to a document, but only documents can have content");
         }
-        return ps;
+
+        ((Content) so).setContent(null, true);
+        LOG.debug("stop deleteContentStream()");
     }
 
-    // For internal use only.  Use by updatable result set code.
-    synchronized public PreparedStatement preparePositionedUpdateStatement(String sql, Section querySection) throws SqlException {
-        checkForClosedConnection();
-        // create a net material prepared statement.
-        PreparedStatement preparedStatement = newPositionedUpdatePreparedStatement_(sql, querySection);
-        preparedStatement.flowPrepareDescribeInputOutput();
-        // The positioned update statement is not added to the list of open statements,
-        // because this would cause a java.util.ConcurrentModificationException when
-        // iterating thru the list of open statements to call completeRollback().
-        // An updatable result set is marked closed on a call to completeRollback(),
-        // and would therefore need to close the positioned update statement associated with the result set which would cause
-        // it to be removed from the open statements list. Resulting in concurrent modification
-        // on the open statements list.
-        // Notice that ordinary Statement.closeX() is never called on the positioned update statement,
-        // rather markClosed() is called to avoid trying to remove the statement from the openStatements_ list.
-        return preparedStatement;
+    public void deleteObject(CallContext context, String repositoryId, String objectId,
+            Boolean allVersions, ExtensionsData extension) {
+
+        LOG.debug("start deleteObject()");
+        validator.deleteObject(context, repositoryId, objectId, allVersions, extension);
+        ObjectStore objectStore = fStoreManager.getObjectStore(repositoryId);
+        LOG.debug("delete object for id: " + objectId);
+
+        // check if it is the root folder
+        if (objectId.equals(objectStore.getRootFolder().getId())) {
+            throw new CmisNotSupportedException("You can't delete a root folder");
+        }
+
+        objectStore.deleteObject(objectId, allVersions, context.getUsername());
+        LOG.debug("stop deleteObject()");
     }
 
-    synchronized public java.sql.CallableStatement prepareCall(String sql) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareCall", sql);
+    public FailedToDeleteData deleteTree(CallContext context, String repositoryId, String folderId,
+            Boolean allVersions, UnfileObject unfileObjects, Boolean continueOnFailure, ExtensionsData extension) {
+
+        LOG.debug("start deleteTree()");
+        StoredObject so = validator.deleteTree(context, repositoryId, folderId, allVersions, unfileObjects, extension);
+        List<String> failedToDeleteIds = new ArrayList<String>();
+        FailedToDeleteDataImpl result = new FailedToDeleteDataImpl();
+
+        if (null == allVersions) {
+            allVersions = true;
         }
-        CallableStatement cs = prepareCallX(sql, java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareCall", cs);
+        if (null == unfileObjects) {
+            unfileObjects = UnfileObject.DELETE;
         }
-        return cs;
+        if (null == continueOnFailure) {
+            continueOnFailure = false;
+        }
+
+        ObjectStore objectStore = fStoreManager.getObjectStore(repositoryId);
+
+        if (null == so) {
+            throw new CmisInvalidArgumentException("Cannot delete object with id  " + folderId + ". Object does not exist.");
+        }
+
+        if (!(so instanceof Folder)) {
+            throw new CmisInvalidArgumentException("deleteTree can only be invoked on a folder, but id " + folderId
+                    + " does not refer to a folder");
+        }
+
+        if (unfileObjects == UnfileObject.UNFILE) {
+            throw new CmisNotSupportedException("This repository does not support unfile operations.");
+        }
+
+        // check if it is the root folder
+        if (folderId.equals(objectStore.getRootFolder().getId())) {
+            throw new CmisNotSupportedException("You can't delete a root folder");
+        }
+
+        // recursively delete folder
+        deleteRecursive(objectStore, (Folder) so, continueOnFailure, allVersions, failedToDeleteIds, context.getUsername());
+
+        result.setIds(failedToDeleteIds);
+        LOG.debug("stop deleteTree()");
+        return result;
     }
 
-    synchronized PreparedStatement prepareDynamicCatalogQuery(String sql) throws SqlException {
-        PreparedStatement ps = newPreparedStatement_(sql, java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_, java.sql.Statement.NO_GENERATED_KEYS, null);
-        ps.isCatalogQuery_ = true;
-        ps.prepare();
-        openStatements_.add(ps);
-        return ps;
+    public AllowableActions getAllowableActions(CallContext context, String repositoryId, String objectId,
+            ExtensionsData extension) {
+
+        LOG.debug("start getAllowableActions()");
+        StoredObject so = validator.getAllowableActions(context, repositoryId, objectId, extension);
+
+        fStoreManager.getObjectStore(repositoryId);
+
+        if (so == null) {
+            throw new CmisObjectNotFoundException("Unknown object id: " + objectId);
+        }
+
+        String user = context.getUsername();
+//      AllowableActions allowableActions = DataObjectCreator.fillAllowableActions(so, user);
+        AllowableActions allowableActions = so.getAllowableActions(user);
+        LOG.debug("stop getAllowableActions()");
+        return allowableActions;
     }
 
-    public String nativeSQL(String sql) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "nativeSQL", sql);
+    public ContentStream getContentStream(CallContext context, String repositoryId, String objectId, String streamId,
+            BigInteger offset, BigInteger length, ExtensionsData extension) {
+
+        LOG.debug("start getContentStream()");
+        StoredObject so = validator.getContentStream(context, repositoryId, objectId, streamId, extension);
+
+
+        if (so == null) {
+            throw new CmisObjectNotFoundException("Unknown object id: " + objectId);
         }
-        String nativeSql = nativeSQLX(sql);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "nativeSQL", nativeSql);
+
+        if (!(so instanceof Content)) {
+            throw new CmisConstraintException("Id" + objectId
+                    + " does not refer to a document or version, but only those can have content");
         }
-        return nativeSql;
+
+        ContentStream csd = getContentStream(so, streamId, offset, length);
+
+        if (null == csd) {
+            throw new CmisConstraintException("Object " + so.getId() + " does not have content.");
+        }
+
+        LOG.debug("stop getContentStream()");
+        return csd;
     }
 
-    synchronized public String nativeSQLX(String sql) throws SqlException {
-        checkForClosedConnection();
-        if (sql == null) {
-            throw new SqlException(agent_.logWriter_, "Null SQL string passed.");
+    public ObjectData getObject(CallContext context, String repositoryId, String objectId, String filter,
+            Boolean includeAllowableActions, IncludeRelationships includeRelationships, String renditionFilter,
+            Boolean includePolicyIds, Boolean includeAcl, ExtensionsData extension, ObjectInfoHandler objectInfos) {
+
+        LOG.debug("start getObject()");
+
+        StoredObject so = validator.getObject(context, repositoryId, objectId, extension);
+
+        if (so == null) {
+            throw new CmisObjectNotFoundException("Unknown object id: " + objectId);
         }
 
-        // Derby can handle the escape syntax directly so only needs escape
-        // processing for { ? = CALL  ....}
-        String trimSql = sql.trim();
-        if (trimSql.startsWith("{")) {
-            if (trimSql.lastIndexOf("}") >= 0) {
-                return trimSql.substring(1, trimSql.lastIndexOf("}"));
+        String user = context.getUsername();
+        TypeDefinition td = fStoreManager.getTypeById(repositoryId, so.getTypeId()).getTypeDefinition();
+        ObjectData od = PropertyCreationHelper.getObjectData(td, so, filter, user, includeAllowableActions,
+                includeRelationships, renditionFilter, includePolicyIds, includeAcl, extension);
+
+        if (context.isObjectInfoRequired()) {
+            ObjectInfoImpl objectInfo = new ObjectInfoImpl();
+            fAtomLinkProvider.fillInformationForAtomLinks(repositoryId, so, objectInfo);
+            objectInfos.addObjectInfo(objectInfo);
+        }
+
+        // fill an example extension
+        String ns = "http://apache.org/opencmis/inmemory";
+        List<CmisExtensionElement> extElements = new ArrayList<CmisExtensionElement>();
+
+        Map<String, String> attr = new HashMap<String, String>();
+        attr.put("type", so.getTypeId());
+
+        extElements.add(new CmisExtensionElementImpl(ns, "objectId", attr, objectId));
+        extElements.add(new CmisExtensionElementImpl(ns, "name", null, so.getName()));
+        od.setExtensions(Collections.singletonList(
+                (CmisExtensionElement) new CmisExtensionElementImpl(ns, "exampleExtension",null,  extElements)));
+
+        LOG.debug("stop getObject()");
+
+        return od;
+    }
+
+    public ObjectData getObjectByPath(CallContext context, String repositoryId, String path, String filter,
+            Boolean includeAllowableActions, IncludeRelationships includeRelationships, String renditionFilter,
+            Boolean includePolicyIds, Boolean includeAcl, ExtensionsData extension, ObjectInfoHandler objectInfos) {
+
+        LOG.debug("start getObjectByPath()");
+        validator.getObjectByPath(context, repositoryId, path, extension);
+        String user = context.getUsername();
+
+        ObjectStore objectStore = fStoreManager.getObjectStore(repositoryId);
+        StoredObject so = objectStore.getObjectByPath(path, user);
+
+        if (so == null) {
+            throw new CmisObjectNotFoundException("Unknown path: " + path);
+        }
+
+        TypeDefinition td = fStoreManager.getTypeById(repositoryId, so.getTypeId()).getTypeDefinition();
+        ObjectData od = PropertyCreationHelper.getObjectData(td, so, filter, user, includeAllowableActions,
+                includeRelationships, renditionFilter, includePolicyIds, includeAcl, extension);
+
+        LOG.debug("stop getObjectByPath()");
+
+        // To be able to provide all Atom links in the response we need
+        // additional information:
+        if (context.isObjectInfoRequired()) {
+            ObjectInfoImpl objectInfo = new ObjectInfoImpl();
+            fAtomLinkProvider.fillInformationForAtomLinks(repositoryId, so, objectInfo);
+            objectInfos.addObjectInfo(objectInfo);
+        }
+
+        return od;
+    }
+
+    public Properties getProperties(CallContext context, String repositoryId, String objectId, String filter,
+            ExtensionsData extension) {
+
+        LOG.debug("start getProperties()");
+        StoredObject so = validator.getProperties(context, repositoryId, objectId, extension);
+
+        if (so == null) {
+            throw new CmisObjectNotFoundException("Unknown object id: " + objectId);
+        }
+
+        // build properties collection
+        List<String> requestedIds = FilterParser.getRequestedIdsFromFilter(filter);
+        TypeDefinition td = fStoreManager.getTypeById(repositoryId, so.getTypeId()).getTypeDefinition();
+        Properties props = PropertyCreationHelper.getPropertiesFromObject(so, td, requestedIds, true);
+        LOG.debug("stop getProperties()");
+        return props;
+    }
+
+    public List<RenditionData> getRenditions(CallContext context, String repositoryId, String objectId,
+            String renditionFilter, BigInteger maxItems, BigInteger skipCount, ExtensionsData extension) {
+
+        // TODO to be completed if renditions are implemented
+        LOG.debug("start getRenditions()");
+        validator.getRenditions(context, repositoryId, objectId, extension);
+
+        LOG.debug("stop getRenditions()");
+        return null;
+    }
+
+    public ObjectData moveObject(CallContext context, String repositoryId, Holder<String> objectId,
+            String targetFolderId, String sourceFolderId, ExtensionsData extension, ObjectInfoHandler objectInfos) {
+
+        LOG.debug("start moveObject()");
+        StoredObject[] sos = validator.moveObject(context, repositoryId, objectId, targetFolderId, sourceFolderId, extension);
+        StoredObject so = sos[0];
+        Folder targetFolder = null;
+        Folder sourceFolder = null;
+        ObjectStore objectStore = fStoreManager.getObjectStore(repositoryId);
+        Filing spo = null;
+        String user = context.getUsername();
+
+        if (null == so) {
+            throw new CmisObjectNotFoundException("Unknown object: " + objectId.getValue());
+        } else if (so instanceof Filing) {
+            spo = (Filing) so;
+        } else {
+            throw new CmisInvalidArgumentException("Object must be folder or document: " + objectId.getValue());
+        }
+
+        StoredObject soTarget = objectStore.getObjectById(targetFolderId);
+        if (null == soTarget) {
+            throw new CmisObjectNotFoundException("Unknown target folder: " + targetFolderId);
+        } else if (soTarget instanceof Folder) {
+            targetFolder = (Folder) soTarget;
+        } else {
+            throw new CmisNotSupportedException("Destination " + targetFolderId
+                    + " of a move operation must be a folder");
+        }
+
+        StoredObject soSource = objectStore.getObjectById(sourceFolderId);
+        if (null == soSource) {
+            throw new CmisObjectNotFoundException("Unknown source folder: " + sourceFolderId);
+        } else if (soSource instanceof Folder) {
+            sourceFolder = (Folder) soSource;
+        } else {
+            throw new CmisNotSupportedException("Source " + sourceFolderId + " of a move operation must be a folder");
+        }
+
+        boolean foundOldParent = false;
+        for (Folder parent : spo.getParents(user)) {
+            if (parent.getId().equals(soSource.getId())) {
+                foundOldParent = true;
+                break;
+            }
+        }
+        if (!foundOldParent) {
+            throw new CmisNotSupportedException("Cannot move object, source folder " + sourceFolderId
+                    + "is not a parent of object " + objectId.getValue());
+        }
+
+        if (so instanceof Folder && hasDescendant((Folder) so, targetFolder)) {
+            throw new CmisNotSupportedException("Destination of a move cannot be a subfolder of the source");
+        }
+
+        spo.move(sourceFolder, targetFolder);
+        objectId.setValue(so.getId());
+        LOG.debug("stop moveObject()");
+
+        TypeDefinition td = fStoreManager.getTypeById(repositoryId, so.getTypeId()).getTypeDefinition();
+        ObjectData od = PropertyCreationHelper.getObjectData(td, so, null, user, false,
+                IncludeRelationships.NONE, null, false, false, extension);
+
+        // To be able to provide all Atom links in the response we need
+        // additional information:
+        if (context.isObjectInfoRequired()) {
+            ObjectInfoImpl objectInfo = new ObjectInfoImpl();
+            fAtomLinkProvider.fillInformationForAtomLinks(repositoryId, so, od, objectInfo);
+            objectInfos.addObjectInfo(objectInfo);
+        }
+
+        return od;
+    }
+
+    public void setContentStream(CallContext context, String repositoryId, Holder<String> objectId,
+            Boolean overwriteFlag, Holder<String> changeToken, ContentStream contentStream, ExtensionsData extension) {
+
+        LOG.debug("start setContentStream()");
+        Content content;
+
+        StoredObject so = validator.setContentStream(context, repositoryId, objectId, overwriteFlag, extension);
+
+        if (!(so instanceof Document || so instanceof VersionedDocument || so instanceof DocumentVersion)) {
+            throw new CmisObjectNotFoundException("Id" + objectId
+                    + " does not refer to a document, but only documents can have content");
+        }
+
+        if (so instanceof Document) {
+            content = ((Document) so);
+        } else if (so instanceof DocumentVersion) {
+            // something that is versionable check the proper status of the
+            // object
+            String user = context.getUsername();
+            testHasProperCheckedOutStatus(so, user);
+            content = (DocumentVersion) so;
+        } else {
+            throw new IllegalArgumentException("Content cannot be set on this object (must be document or version)");
+        }
+
+        if (!overwriteFlag && content.getContent(0, -1) != null) {
+            throw new CmisContentAlreadyExistsException("cannot overwrite existing content if overwrite flag is not set");
+        }
+
+        content.setContent(contentStream, true);
+        LOG.debug("stop setContentStream()");
+    }
+
+    public void updateProperties(CallContext context, String repositoryId, Holder<String> objectId,
+            Holder<String> changeToken, Properties properties, Acl acl, ExtensionsData extension,
+            ObjectInfoHandler objectInfos) {
+
+        LOG.debug("start updateProperties()");
+        StoredObject so = validator.updateProperties(context, repositoryId, objectId, extension);
+        String user = context.getUsername();
+
+        // Validation
+        TypeDefinition typeDef = getTypeDefinition(repositoryId, so);
+        boolean isCheckedOut = false;
+
+        // if the object is a versionable object it must be checked-out
+        if (so instanceof VersionedDocument || so instanceof DocumentVersion) {
+            // VersionedDocument verDoc =
+            // testIsNotCheckedOutBySomeoneElse(so, user);
+            testHasProperCheckedOutStatus(so, user);
+            isCheckedOut = true;
+        }
+
+        Map<String, PropertyData<?>> oldProperties = so.getProperties();
+
+        // check properties for validity
+        TypeValidator.validateProperties(typeDef, properties, false);
+
+        if (changeToken != null && changeToken.getValue() != null
+                && Long.valueOf(so.getChangeToken()) > Long.valueOf(changeToken.getValue())) {
+            throw new CmisUpdateConflictException(" updateProperties failed: outdated changeToken");
+        }
+
+        // update properties
+        boolean hasUpdatedName = false;
+        boolean hasUpdatedOtherProps = false;
+
+        hasUpdatedOtherProps = PropertyCreationHelper.updateProperties(oldProperties, properties.getProperties(),
+                typeDef, isCheckedOut);
+        
+
+        // get name from properties and perform special rename to check if
+        // path already exists
+        PropertyData<?> pd = properties.getProperties().get(PropertyIds.NAME);
+        if (pd != null && so instanceof Filing) {
+            String newName = (String) pd.getFirstValue();
+            List<Folder> parents = ((Filing) so).getParents(user);
+            if (so instanceof Folder && parents.isEmpty()) {
+                throw new CmisConstraintException("updateProperties failed, you cannot rename the root folder");
+            }
+            if (newName == null || newName.equals("")) {
+                throw new CmisConstraintException("updateProperties failed, name must not be empty.");
+            }
+
+            so.rename((String) pd.getFirstValue()); // note: this does persist
+            hasUpdatedName = true;
+        }
+
+        if (hasUpdatedOtherProps) {
+            // set user, creation date, etc.
+            if (user == null) {
+                user = "unknown";
+            }
+            so.updateSystemBasePropertiesWhenModified(properties.getProperties(), user);
+            // set changeToken
+            so.persist();
+        }
+
+        if (hasUpdatedName || hasUpdatedOtherProps) {
+            objectId.setValue(so.getId()); // might have a new id
+            if (null != changeToken) {
+                String changeTokenVal = so.getChangeToken();
+                LOG.debug("updateProperties(), new change token is: " + changeTokenVal);
+                changeToken.setValue(changeTokenVal);
             }
         }
 
-        return trimSql;
+        if (null != acl) {
+            LOG.warn("Setting ACLs is currently not supported by this implementation, acl is ignored");
+            // if implemented add this call:
+            // fAclService.appyAcl(context, repositoryId, acl, null,
+            // AclPropagation.OBJECTONLY,
+            // extension);
+        }
+
+        TypeDefinition td = fStoreManager.getTypeById(repositoryId, so.getTypeId()).getTypeDefinition();
+        ObjectData od = PropertyCreationHelper.getObjectData(td, so, null, user, false,
+                IncludeRelationships.NONE, null, false, false, extension);
+
+        // To be able to provide all Atom links in the response we need
+        // additional information:
+        if (context.isObjectInfoRequired()) {
+            ObjectInfoImpl objectInfo = new ObjectInfoImpl();
+            fAtomLinkProvider.fillInformationForAtomLinks(repositoryId, so, od, objectInfo);
+            objectInfos.addObjectInfo(objectInfo);
+        }
+
+        LOG.debug("stop updateProperties()");
     }
 
-    // Driver-specific determination if local COMMIT/ROLLBACK is allowed;
-    // primary usage is distinction between local and global trans. envs.;
-    protected abstract boolean allowLocalCommitRollback_() throws org.apache.derby.client.am.SqlException;
+    // ///////////////////////////////////////////////////////
+    // private helper methods
 
-    synchronized public void setAutoCommit(boolean autoCommit) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setAutoCommit", autoCommit);
-        }
-        checkForClosedConnection();
+    private StoredObject createDocumentIntern(CallContext context, String repositoryId, Properties properties, String folderId,
+            ContentStream contentStream, VersioningState versioningState, List<String> policies, Acl addACEs,
+            Acl removeACEs, ExtensionsData extension) {
 
-        if (! allowLocalCommitRollback_()) {
-            if (autoCommit) { // can't toggle to autocommit mode when between xars.start() and xars.end()
-                throw new SqlException(agent_.logWriter_,
-                        "setAutoCommit(true) invalid during global transaction",
-                        SqlState._2D521, // Spec'ed by PROTOCOL
-                        SqlCode.invalidSetAutoCommitUnderXA);
+        String user = context.getUsername();
+        TypeDefinition typeDef = getTypeDefinition(repositoryId, properties);
+        validator.createDocument(context, repositoryId, folderId, extension);
+
+        ObjectStore objectStore = fStoreManager.getObjectStore(repositoryId);
+        Map<String, PropertyData<?>> propMap = properties.getProperties();
+        // get name from properties
+        PropertyData<?> pd = propMap.get(PropertyIds.NAME);
+        String name = (String) pd.getFirstValue();
+
+        // Validation stuff
+        TypeValidator.validateRequiredSystemProperties(properties);
+    
+        Folder folder = null;
+        if (null != folderId) {
+            StoredObject so = objectStore.getObjectById(folderId);
+
+            if (null == so) {
+                throw new CmisInvalidArgumentException(" Cannot create document, folderId: " + folderId + " is invalid");
             }
-        } else {
-            if (autoCommit == autoCommit_) {
-                return; // don't flow a commit if nothing changed.
+
+            if (so instanceof Folder) {
+                folder = (Folder) so;
+            } else {
+                throw new CmisInvalidArgumentException("Can't creat document, folderId does not refer to a folder: "
+                        + folderId);
             }
-            if (inUnitOfWork_) {
-                flowCommit(); // we are not between xars.start() and xars.end(), can flow commit
+
+            TypeValidator.validateAllowedChildObjectTypes(typeDef, folder.getAllowedChildObjectTypeIds());
+        }
+
+        // check if the given type is a document type
+        if (!typeDef.getBaseTypeId().equals(BaseTypeId.CMIS_DOCUMENT)) {
+            throw new CmisInvalidArgumentException("Cannot create a document, with a non-document type: " + typeDef.getId());
+        }
+
+        // check name syntax
+        if (!NameValidator.isValidId(name)) {
+            throw new CmisInvalidArgumentException(NameValidator.ERROR_ILLEGAL_NAME);
+        }
+
+        TypeValidator.validateVersionStateForCreate((DocumentTypeDefinition) typeDef, versioningState);
+
+        // set properties that are not set but have a default:
+        Map<String, PropertyData<?>> propMapNew = setDefaultProperties(typeDef, propMap);
+        if (propMapNew != propMap) {
+            properties = new PropertiesImpl(propMapNew.values());
+            propMap = propMapNew;
+        }
+
+        TypeValidator.validateProperties(typeDef, properties, true);
+
+        // set user, creation date, etc.
+        if (user == null) {
+            user = "unknown";
+        }
+
+        StoredObject so = null;
+
+        // check if content stream parameters are set and if not set some defaults
+        if (null != contentStream && (contentStream.getFileName() == null || contentStream.getFileName().length() == 0 ||
+            contentStream.getMimeType() == null || contentStream.getMimeType().length() == 0)) {
+            ContentStreamImpl cs = new ContentStreamImpl();
+            cs.setStream(contentStream.getStream());
+            if (contentStream.getFileName() == null || contentStream.getFileName().length() == 0) {
+                cs.setFileName(name);
+            } else {
+                cs.setFileName(contentStream.getFileName());
             }
-        }
-        autoCommit_ = autoCommit;
-    }
-
-    public boolean getAutoCommit() throws SqlException {
-        checkForClosedConnection();
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "getAutoCommit", autoCommit_);
-        }
-        if (! allowLocalCommitRollback_()) { // autoCommit is always false between xars.start() and xars.end()
-            return false;
-        }
-        return autoCommit_;
-    }
-
-    synchronized public void commit() throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "commit");
-        }
-
-        // the following XA State check must be in commit instead of commitX since
-        // external application call commit, the SqlException should be thrown
-        // only if an external application calls commit during a Global Transaction,
-        // internal code will call commitX which will ignore the commit request
-        // while in a Global transaction
-        checkForInvalidXAStateOnCommitOrRollback();
-        checkForClosedConnection();
-        flowCommit();
-    }
-
-    private void checkForInvalidXAStateOnCommitOrRollback() throws SqlException {
-        if (! allowLocalCommitRollback_()) {
-            throw new SqlException(agent_.logWriter_,
-                    "COMMIT or ROLLBACK invalid for application execution environment",
-                    SqlState._2D521, // Spec'ed by PROTOCOL
-                    SqlCode.invalidCommitOrRollbackUnderXA);
-        }
-    }
-
-    public void flowCommit() throws SqlException {
-        // Per JDBC specification (see javadoc for Connection.commit()):
-        //   "This method should be used only when auto-commit mode has been disabled."
-        // However, some applications do this anyway, it is harmless, so
-        // if they ask to commit, we could go ahead and flow a commit.
-        // But note that rollback() is less harmless, rollback() shouldn't be used in auto-commit mode.
-        // This behavior is subject to further review.
-
-        //   if (!this.inUnitOfWork)
-        //     return;
-        // We won't try to be "too smart", if the user requests a commit, we'll flow a commit,
-        // regardless of whether or not we're in a unit of work or in auto-commit mode.
-        //
-        if (isXAConnection_) {
-            agent_.beginWriteChainOutsideUOW();
-            writeCommit();
-            agent_.flowOutsideUOW();
-            readCommit(); // This will invoke the commitEvent() callback from the material layer.
-            agent_.endReadChain();
-        } else {
-            agent_.beginWriteChain(null);
-            writeCommit();
-            agent_.flow(null);
-            readCommit(); // This will invoke the commitEvent() callback from the material layer.
-            agent_.endReadChain();
-        }
-
-    }
-
-    // precondition: autoCommit_ is true
-    public void flowAutoCommit() throws SqlException {
-        if (willAutoCommitGenerateFlow()) {
-            flowCommit();
-        }
-    }
-
-    public boolean willAutoCommitGenerateFlow() throws org.apache.derby.client.am.SqlException {
-        if (!autoCommit_) {
-            return false;
-        }
-        if (! allowLocalCommitRollback_()) {
-            return false;
-        }
-        return true;
-    }
-
-    // precondition: autoCommit_ is true
-    void writeAutoCommit() throws SqlException {
-        if (willAutoCommitGenerateFlow()) {
-            writeCommit();
-        }
-    }
-
-    public void writeCommit() throws SqlException {
-        if (isXAConnection_) {
-            if ((xaState_ == XA_T0_NOT_ASSOCIATED) ) {
-                writeLocalXACommit_();
+            cs.setLength(contentStream.getBigLength());
+            if (contentStream.getMimeType() == null || contentStream.getMimeType().length() == 0) {
+                cs.setMimeType("application/octet-stream");
+            } else {
+                cs.setMimeType(contentStream.getMimeType());
             }
+            cs.setExtensions(contentStream.getExtensions());
+            contentStream = cs;
+        }
+
+        // Now we are sure to have document type definition:
+        if (((DocumentTypeDefinition) typeDef).isVersionable()) {
+        	DocumentVersion version = objectStore.createVersionedDocument(name,  propMap, 
+            		user, folder, addACEs, removeACEs, contentStream, versioningState);
+            version.persist();
+            so = version; // return the version and not the version series to caller
         } else {
-            writeLocalCommit_();
+        	Document doc = objectStore.createDocument(name, propMap, user, folder, addACEs, removeACEs);
+        	doc.setContent(contentStream, false);
+            doc.persist();
+            so = doc;
         }
+
+        return so;
     }
 
-    // precondition: autoCommit_ is true
-    void readAutoCommit() throws SqlException {
-        if (willAutoCommitGenerateFlow()) {
-            readCommit();
-        }
-    }
+    private Folder createFolderIntern(CallContext context, String repositoryId, Properties properties, String folderId,
+            List<String> policies, Acl addACEs, Acl removeACEs, ExtensionsData extension) {
 
-    public void readCommit() throws SqlException {
-        if (isXAConnection_) {
-            if ((xaState_ == XA_T0_NOT_ASSOCIATED) ) {
-                readLocalXACommit_();               
-            }
-        } else {
-            readLocalCommit_();
-        }
-    }
+        // Attach the CallContext to a thread local context that can be accessed
+        // from everywhere
+        String user = context.getUsername();
+        validator.createFolder(context, repositoryId, folderId, extension);
 
-    synchronized public void rollback() throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "rollback");
-        }
-        checkForInvalidXAStateOnCommitOrRollback();
-        checkForClosedConnection();
-        flowRollback();
-    }
+        ObjectStore fs = fStoreManager.getObjectStore(repositoryId);
+        StoredObject so = null;
+        Folder parent = null;
 
-    // Even if we're not in a transaction, all open result sets will be closed.
-    // So we could probably just return if we're not in a transaction
-    // using the following code:
-    //     if (!this.inUnitOfWork)
-    //       return;
-    // But we'll just play it safe, and blindly flow the rollback.
-    // We won't try to be "too smart", if the user requests a rollback, we'll flow a rollback,
-    // regardless of whether or not we're in a unit of work or in auto-commit mode.
-    //
-    // Per JDBC specification (see javadoc for Connection.rollback()):
-    //   "This method should be used only when auto-commit mode has been disabled."
-    // However, rather than trying to be too smart, we'll just flow the rollback anyway
-    // before throwing an exception.
-    // As a side-effect of invoking rollback() in auto-commit mode,
-    // we'll close all open result sets on this connection in the rollbackEvent().
-    //
-    protected void flowRollback() throws SqlException {
-        if (isXAConnection_) {
-            agent_.beginWriteChainOutsideUOW();
-            writeRollback();
-            agent_.flowOutsideUOW();
-            readRollback(); // This method will invoke the rollbackEvent() callback from the material layer.
-            agent_.endReadChain();
-        } else {
-            agent_.beginWriteChain(null);
-            writeRollback();
-            agent_.flow(null);
-            readRollback(); // This method will invoke the rollbackEvent() callback from the material layer.
-            agent_.endReadChain();
+        // get required properties
+        PropertyData<?> pd = properties.getProperties().get(PropertyIds.NAME);
+        String folderName = (String) pd.getFirstValue();
+        if (null == folderName || folderName.length() == 0) {
+            throw new CmisInvalidArgumentException("Cannot create a folder without a name.");
         }
-    }
 
-    public void writeRollback() throws SqlException {
-        if (isXAConnection_) {
-            writeLocalXARollback_();
-        } else {
-            writeLocalRollback_();
+        // check name syntax
+        if (!NameValidator.isValidId(folderName)) {
+            throw new CmisInvalidArgumentException(NameValidator.ERROR_ILLEGAL_NAME);
         }
-    }
 
-    public void readRollback() throws SqlException {
-        if (isXAConnection_) {
-            readLocalXARollback_();
-        } else {
-            readLocalRollback_();
-        }
-    }
+        TypeValidator.validateRequiredSystemProperties(properties);
 
-    synchronized public void close() throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "close");
-        }
-        closeX();
-    }
+        TypeDefinition typeDef = getTypeDefinition(repositoryId, properties);
 
-    void checkForTransactionInProgress() throws SqlException {
-        // The following precondition matches CLI semantics, see SQLDisconnect()
-        if (!autoCommit_ && inUnitOfWork_ && !allowCloseInUOW_()) {
-            throw new SqlException(agent_.logWriter_,
-                    "java.sql.Connection.close() requested while a transaction is in progress on the connection." +
-                    "The transaction remains active, and the connection cannot be closed.");
+        // check if the given type is a folder type
+        if (!typeDef.getBaseTypeId().equals(BaseTypeId.CMIS_FOLDER)) {
+            throw new CmisInvalidArgumentException("Cannot create a folder, with a non-folder type: " + typeDef.getId());
         }
-    }
 
-    // This is a no-op if the connection is already closed.
-    synchronized public void closeX() throws SqlException {
-        if (!open_) {
-            return;
+        Map<String, PropertyData<?>> propMap = properties.getProperties();
+        Map<String, PropertyData<?>> propMapNew = setDefaultProperties(typeDef, propMap);
+        if (propMapNew != propMap) {
+            properties = new PropertiesImpl(propMapNew.values());
         }
-        closeResourcesX();
-    }
 
-    // Close physical socket or attachment even if connection is marked close.
-    // Used by ClientPooledConnection.close().
-    synchronized public void closeResources() throws SqlException {
-        if (open_ || (!open_ && availableForReuse_)) {
-            availableForReuse_ = false;
-            closeResourcesX();
-        }
-    }
+        TypeValidator.validateProperties(typeDef, properties, true);
 
-    private void closeResourcesX() throws SqlException {
-        checkForTransactionInProgress();
-        resetConnectionAtFirstSql_ = false; // unset indicator of deferred reset
-        SqlException accumulatedExceptions = null;
-        if (setTransactionIsolationStmt != null) {
-            try {
-                setTransactionIsolationStmt.close();
-            } catch (SqlException se) {
-                accumulatedExceptions = se;
-            }
-        }
+        // validate ACL
+        TypeValidator.validateAcl(typeDef, addACEs, removeACEs);
+        
+        // create folder
         try {
-            flowClose();
-        } catch (SqlException e) {
-            accumulatedExceptions =
-                    Utils.accumulateSQLException(e, accumulatedExceptions);
+            LOG.debug("get folder for id: " + folderId);
+            so = fs.getObjectById(folderId);
+        } catch (Exception e) {
+            throw new CmisObjectNotFoundException("Failed to retrieve folder.", e);
         }
 
-        markClosed();
-        try {
-            agent_.close();
-        } catch (SqlException e) {
-            throw Utils.accumulateSQLException(e, accumulatedExceptions);
+        if (so instanceof Folder) {
+            parent = (Folder) so;
+        } else {
+            throw new CmisInvalidArgumentException("Can't create folder, folderId does not refer to a folder: "
+                    + folderId);
         }
+
+        if (user == null) {
+            user = "unknown";
+        }
+
+        ObjectStore objStore = fStoreManager.getObjectStore(repositoryId);
+        Folder newFolder = objStore.createFolder(folderName, properties.getProperties(), user, parent,
+		addACEs,  removeACEs);
+        LOG.debug("stop createFolder()");
+        newFolder.persist();
+        return newFolder;
     }
 
-    protected abstract boolean isGlobalPending_();
+    private StoredObject createPolicyIntern(CallContext context, String repositoryId, Properties properties, String folderId,
+            List<String> policies, Acl addAces, Acl removeAces, ExtensionsData extension) {
 
-    // Just like closeX except the socket is not pulled.
-    // Physical resources are not closed.
-    synchronized public void closeForReuse() throws SqlException {
-        if (!open_) {
-            return;
-        }
-        resetConnectionAtFirstSql_ = false; // unset indicator of deferred reset
-        SqlException accumulatedExceptions = null;
-        try {
-            flowClose();
-        } catch (SqlException e) {
-            accumulatedExceptions = e;
-        }
-        if (open_) {
-            markClosedForReuse();
-        }
-        if (accumulatedExceptions != null) {
-            throw accumulatedExceptions;
-        }
+        validator.createPolicy(context, repositoryId, folderId, extension);
+        throw new CmisNotSupportedException("createPolicy is not supported.");
     }
 
-    private void flowClose() throws SqlException {
-        agent_.beginWriteChainOutsideUOW();
-        if (doCloseStatementsOnClose_()) {
-            writeCloseStatements();
-        }
-        if (autoCommit_) {
-            writeAutoCommit();
-        }
-        agent_.flowOutsideUOW();
-        if (doCloseStatementsOnClose_()) {
-            readCloseStatements();
-        }
-        if (autoCommit_) {
-            readAutoCommit();
-        }
-        agent_.endReadChain();
+    private StoredObject createRelationshipIntern(CallContext context, String repositoryId,
+    		Properties properties, List<String> policies,
+            Acl addACEs, Acl removeACEs, ExtensionsData extension) {
+    	
+    	 String user = context.getUsername();
+    	 
+    	  // get required properties
+        PropertyData<?> pd = properties.getProperties().get(PropertyIds.SOURCE_ID);
+        String sourceId = (String) pd.getFirstValue();
+        if (null == sourceId || sourceId.length() == 0)
+            throw new CmisInvalidArgumentException("Cannot create a relationship without a sourceId.");
+        
+        pd = properties.getProperties().get(PropertyIds.TARGET_ID);
+        String targetId = (String) pd.getFirstValue();
+        if (null == targetId || targetId.length() == 0)
+            throw new CmisInvalidArgumentException("Cannot create a relationship without a targetId.");
+
+        RelationshipTypeDefinition typeDef = (RelationshipTypeDefinition) getTypeDefinition(repositoryId, properties);
+
+        // check if the given type is a relationship type
+        if (!typeDef.getBaseTypeId().equals(BaseTypeId.CMIS_RELATIONSHIP))
+            throw new CmisInvalidArgumentException("Cannot create a relationship, with a non-relationship type: " + typeDef.getId());
+
+       StoredObject[] relationObjects = validator.createRelationship(context, repositoryId, sourceId, targetId, extension);
+     
+       TypeValidator.validateRequiredSystemProperties(properties);
+       
+       // set default properties
+       Map<String, PropertyData<?>> propMap = properties.getProperties();
+       Map<String, PropertyData<?>> propMapNew = setDefaultProperties(typeDef, propMap);
+       if (propMapNew != propMap) {
+           properties = new PropertiesImpl(propMapNew.values());
+       }
+
+       TypeValidator.validateProperties(typeDef, properties, true);
+
+       // validate ACL
+       TypeValidator.validateAcl(typeDef, addACEs, removeACEs);
+     
+       // validate the allowed types of the relationship
+       ObjectStore objStore = fStoreManager.getObjectStore(repositoryId);
+
+       TypeDefinition sourceTypeDef = fStoreManager.getTypeById(repositoryId, objStore.getObjectById(sourceId).getTypeId()).getTypeDefinition();
+       TypeDefinition targetTypeDef = fStoreManager.getTypeById(repositoryId, objStore.getObjectById(targetId).getTypeId()).getTypeDefinition();
+       TypeValidator.validateAllowedRelationshipTypes(typeDef,  sourceTypeDef, targetTypeDef);
+       
+        StoredObject storedObject = objStore.createRelationship( relationObjects[0], relationObjects[1],
+        		propMap, user, addACEs,  removeACEs);
+    	return storedObject;	
     }
 
-    protected abstract void markClosed_();
 
-    public void markClosed() // called by LogicalConnection.close()
-    {
-        open_ = false;
-        inUnitOfWork_ = false;
-        markStatementsClosed();
-        CommitAndRollbackListeners_.clear();
-        RollbackOnlyListeners_.clear();
-        markClosed_();
-    }
-
-
-    private void markClosedForReuse() {
-        availableForReuse_ = true;
-        markClosed();
-    }
-
-    private void markStatementsClosed() {
-        for (java.util.ListIterator i = openStatements_.listIterator(); i.hasNext();) {
-            Statement stmt = (Statement) i.next();
-            stmt.markClosed();
-            i.remove();
-        }
-    }
-
-    private void writeCloseStatements() throws SqlException {
-        for (java.util.ListIterator i = openStatements_.listIterator(); i.hasNext();) {
-            ((Statement) i.next()).writeClose(false);  // false means don't permit auto-commits
-        }
-    }
-
-    private void readCloseStatements() throws SqlException {
-        for (java.util.ListIterator i = openStatements_.listIterator(); i.hasNext();) {
-            ((Statement) i.next()).readClose(false);  // false means don't permit auto-commits
-        }
-    }
-
-   /**
-    * 	Return true if the physical connection is still open.
-    * 	Might be logically closed but available for reuse.
-    *   @return true if physical connection still open
-    */
-    public boolean isPhysicalConnClosed() {
-    return !open_ && !availableForReuse_; 
-   }
-
-   
-    public boolean isClosed() {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "isClosed", !open_);
-        }
-        return !open_;
-    }
-
-   
-    public boolean isClosedX() {
-        return !open_;
-    }
-
-    private static String DERBY_TRANSACTION_REPEATABLE_READ = "RS";
-    private static String DERBY_TRANSACTION_SERIALIZABLE = "RR";
-    private static String DERBY_TRANSACTION_READ_COMMITTED = "CS";
-    private static String DERBY_TRANSACTION_READ_UNCOMMITTED = "UR";
-
-    synchronized public void setTransactionIsolation(int level) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setTransactionIsolation", level);
-        }
-        // Per jdbc spec (see java.sql.Connection.close() javadoc).
-        checkForClosedConnection();
-
-        // Javadoc for this method:
-        //   If this method is called during a transaction, the result is implementation-defined.
-        //
-        //
-        // REPEATABLE_READ = JDBC: TRANSACTION_SERIALIZABLE, DERBY: RR, PROTOCOL: repeatable read
-        // READ_STABILITY = JDBC: TRANSACTION_REPEATABLE_READ, DERBY: RS, PROTOCOL: All
-        // CURSOR_STABILITY = JDBC: TRANSACTION_READ_COMMITTED, DERBY: CS, PROTOCOL: Cursor stability
-        // UNCOMMITTED_READ = JDBC: TRANSACTION_READ_UNCOMMITTED, DERBY: UR , PROTOCOL: Change
-        // NO_COMMIT = JDBC: TRANSACTION_NONE, DERBY: NC, PROTOCOL: No commit
-        //
-        String levelString = null;
-        switch (level) {
-        case java.sql.Connection.TRANSACTION_REPEATABLE_READ:
-            levelString = DERBY_TRANSACTION_REPEATABLE_READ;
-            break;
-        case java.sql.Connection.TRANSACTION_READ_COMMITTED:
-            levelString = DERBY_TRANSACTION_READ_COMMITTED;
-            break;
-        case java.sql.Connection.TRANSACTION_SERIALIZABLE:
-            levelString = DERBY_TRANSACTION_SERIALIZABLE;
-            break;
-        case java.sql.Connection.TRANSACTION_READ_UNCOMMITTED:
-            levelString = DERBY_TRANSACTION_READ_UNCOMMITTED;
-            break;
-            // Per javadoc:
-            //   Note that Connection.TRANSACTION_NONE cannot be used because it specifies that transactions are not supported.
-        case java.sql.Connection.TRANSACTION_NONE:
-        default:
-            throw new SqlException(agent_.logWriter_,
-                    "Transaction isolation level " + level + " is an invalid argument for java.sql.Connection.setTransactionIsolation()." +
-                    " See Javadoc specification for a list of valid arguments.", "XJ045");
-        }
-        if (setTransactionIsolationStmt == null) {
-            setTransactionIsolationStmt =
-                    createStatementX(java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                            java.sql.ResultSet.CONCUR_READ_ONLY,
-                            resultSetHoldability_);
-        }
-        setTransactionIsolationStmt.executeUpdate("SET CURRENT ISOLATION = " + levelString);
-
-        isolation_ = level;
-
-    }
-
-    public int getTransactionIsolation() throws SqlException {
-        checkForClosedConnection();
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "getTransactionIsolation", isolation_);
-        }
-        return isolation_;
-    }
-
-    public java.sql.SQLWarning getWarnings() {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "getWarnings", warnings_);
-        }
-        return warnings_;
-    }
-
-    synchronized public void clearWarnings() throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "clearWarnings");
-        }
-        clearWarningsX();
-    }
-
-    // An untraced version of clearWarnings()
-    public void clearWarningsX() throws SqlException {
-        warnings_ = null;
-        accumulated440ForMessageProcFailure_ = false;
-        accumulated444ForMessageProcFailure_ = false;
-        accumulatedSetReadOnlyWarning_ = false;
-    }
-
-    //======================================================================
-    // Advanced features:
-
-    public java.sql.DatabaseMetaData getMetaData() throws SqlException {
-        checkForClosedConnection();
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "getMetaData", databaseMetaData_);
-        }
-        return databaseMetaData_;
-    }
-
-    synchronized public void setReadOnly(boolean readOnly) throws SqlException {
-        // This is a hint to the driver only, so this request is silently ignored.
-        // PROTOCOL can only flow a set-read-only before the connection is established.
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setReadOnly", readOnly);
-        }
-        checkForClosedConnection();
-    }
-
-    public boolean isReadOnly() throws SqlException {
-        checkForClosedConnection();
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "isReadOnly", jdbcReadOnly_);
+    private static boolean hasDescendant(Folder sourceFolder, Folder targetFolder) {
+        String sourceId = sourceFolder.getId();
+        String targetId = targetFolder.getId();
+        while (targetId != null) {
+            // log.debug("comparing source id " + sourceId + " with predecessor "
+            // +
+            // targetId);
+            if (targetId.equals(sourceId)) {
+                return true;
+            }
+            targetFolder = targetFolder.getParent();
+            if (null != targetFolder) {
+                targetId = targetFolder.getId();
+            } else {
+                targetId = null;
+            }
         }
         return false;
     }
 
-    synchronized public void setCatalog(String catalog) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setCatalog", catalog);
-        }
-        checkForClosedConnection();
-        // Per jdbc spec: if the driver does not support catalogs, it will silently ignore this request.
-    }
+    /**
+     * Recursively delete a tree by traversing it and first deleting all
+     * children and then the object itself
+     *
+     * @param folderStore
+     * @param parentFolder
+     * @param continueOnFailure
+     * @param allVersions
+     * @param failedToDeleteIds
+     * @return returns true if operation should continue, false if it should
+     *         stop
+     */
+    private boolean deleteRecursive(ObjectStore folderStore, Folder parentFolder, boolean continueOnFailure,
+            boolean allVersions, List<String> failedToDeleteIds, String user) {
+        List<StoredObject> children = parentFolder.getChildren(-1, -1, "System");
 
-    public String getCatalog() throws SqlException {
-        checkForClosedConnection();
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "getCatalog", (String) null);
+        if (null == children) {
+            return true;
         }
-        return null;
-    }
 
-    //--------------------------JDBC 2.0-----------------------------
-
-    synchronized public java.sql.Statement createStatement(int resultSetType,
-                                                           int resultSetConcurrency) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "createStatement", resultSetType, resultSetConcurrency);
-        }
-        Statement s = createStatementX(resultSetType, resultSetConcurrency, resultSetHoldability_);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "createStatement", s);
-        }
-        return s;
-    }
-
-    synchronized public java.sql.PreparedStatement prepareStatement(String sql,
-                                                                    int resultSetType,
-                                                                    int resultSetConcurrency) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareStatement", sql, resultSetType, resultSetConcurrency);
-        }
-        PreparedStatement ps = prepareStatementX(sql,
-                resultSetType,
-                resultSetConcurrency,
-                resultSetHoldability_,
-                java.sql.Statement.NO_GENERATED_KEYS,
-                null);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareStatement", ps);
-        }
-        return ps;
-    }
-
-    synchronized public java.sql.CallableStatement prepareCall(String sql,
-                                                               int resultSetType,
-                                                               int resultSetConcurrency) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareCall", sql, resultSetType, resultSetConcurrency);
-        }
-        CallableStatement cs = prepareCallX(sql, resultSetType, resultSetConcurrency, resultSetHoldability_);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareCall", cs);
-        }
-        return cs;
-    }
-
-    synchronized public CallableStatement prepareMessageProc(String sql) throws SqlException {
-        checkForClosedConnection();
-
-        CallableStatement cs = prepareCallX(sql, java.sql.ResultSet.TYPE_FORWARD_ONLY, java.sql.ResultSet.CONCUR_READ_ONLY, resultSetHoldability_);
-        return cs;
-    }
-
-    // Per jdbc spec, when a result set type is unsupported, we downgrade and
-    // issue a warning rather than to throw an exception.
-    private int downgradeResultSetType(int resultSetType) {
-        if (resultSetType == java.sql.ResultSet.TYPE_SCROLL_SENSITIVE) {
-            accumulateWarning(new SqlWarning(agent_.logWriter_, "Scroll sensitive result sets are not supported by server; remapping to forward-only cursor"));
-            return java.sql.ResultSet.TYPE_SCROLL_INSENSITIVE;
-        }
-        return resultSetType;
-    }
-
-    // Per jdbc spec, when a result set concurrency is unsupported, we downgrade and
-    // issue a warning rather than to throw an exception.
-    private int downgradeResultSetConcurrency(int resultSetConcurrency, int resultSetType) {
-        if (resultSetConcurrency == java.sql.ResultSet.CONCUR_UPDATABLE &&
-                resultSetType == java.sql.ResultSet.TYPE_SCROLL_INSENSITIVE) {
-            accumulateWarning(new SqlWarning(agent_.logWriter_, "Insensitive updatable result sets are not supported by server; remapping to insensitive read-only cursor"));
-            return java.sql.ResultSet.CONCUR_READ_ONLY;
-        }
-        return resultSetConcurrency;
-    }
-
-    public java.util.Map getTypeMap() throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "getTypeMap");
-        }
-        checkForClosedConnection();
-        java.util.Map map = new java.util.HashMap();
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "getTypeMap", map);
-        }
-        return map;
-    }
-
-    synchronized public void setTypeMap(java.util.Map map) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setTypeMap", map);
-        }
-        checkForClosedConnection();
-        throw new SqlException(agent_.logWriter_, "Connection.setTypeMap is not supported");
-    }
-
-    //--------------------------JDBC 3.0-----------------------------
-
-    synchronized public void setHoldability(int holdability) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setHoldability", holdability);
-        }
-        checkForClosedConnection();
-        resultSetHoldability_ = holdability;
-    }
-
-    public int getHoldability() throws SqlException {
-        checkForClosedConnection();
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "getHoldability", resultSetHoldability_);
-        }
-        return resultSetHoldability_;
-    }
-
-    public int dncGeneratedSavepointId_;
-    // generated name used internally for unnamed savepoints
-    public static final String dncGeneratedSavepointNamePrefix__ = "DNC_GENENERATED_NAME_";
-
-    synchronized public java.sql.Savepoint setSavepoint() throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setSavepoint");
-        }
-        checkForClosedConnection();
-        if (autoCommit_) // Throw exception if auto-commit is on
-        {
-            throw new SqlException(agent_.logWriter_, "Cannot set savepoint when in auto-commit mode.");
-        } 
-        // create an un-named savepoint.
-        if ((++dncGeneratedSavepointId_) < 0) {
-            dncGeneratedSavepointId_ = 1; // restart from 1 when overflow.
-        }
-        Object s = setSavepointX(new Savepoint(agent_, dncGeneratedSavepointId_));
-        return (java.sql.Savepoint) s;
-    }
-
-    synchronized public java.sql.Savepoint setSavepoint(String name) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "setSavepoint", name);
-        }
-        checkForClosedConnection();
-        if (name == null) // Throw exception if savepoint name is null
-        {
-            throw new SqlException(agent_.logWriter_, "Named savepoint needs a none-null name.");
-        } else if (autoCommit_) // Throw exception if auto-commit is on
-        {
-            throw new SqlException(agent_.logWriter_, "Cannot set savepoint when in auto-commit mode.");
-        }
-        // create a named savepoint.
-        Object s = setSavepointX(new Savepoint(agent_, name));
-        return (java.sql.Savepoint) s;
-    }
-
-    private Savepoint setSavepointX(Savepoint savepoint) throws SqlException {
-        // Construct and flow a savepoint statement to server.
-        Statement stmt = null;
-        try {
-            stmt = (Statement) createStatementX(java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                    java.sql.ResultSet.CONCUR_READ_ONLY,
-                    resultSetHoldability_);
-            String savepointName;
-            try {
-                savepointName = savepoint.getSavepointName();
-            } catch (SqlException e) {
-                // generate the name for an un-named savepoint.
-                savepointName = dncGeneratedSavepointNamePrefix__ +
-                        savepoint.getSavepointId();
-            }
-            String sql = "SAVEPOINT \"" + savepointName + "\" ON ROLLBACK RETAIN CURSORS";
-            stmt.executeX(sql);
-        } finally {
-            if (stmt != null) {
+        for (StoredObject child : children) {
+            if (child instanceof Folder) {
+                boolean mustContinue = deleteRecursive(folderStore, (Folder) child, continueOnFailure, allVersions,
+                        failedToDeleteIds, user);
+                if (!mustContinue && !continueOnFailure)
+                 {
+                    return false; // stop further deletions
+                }
+            } else {
                 try {
-                    stmt.closeX();
-                } catch (SqlException doNothing) {
+                    folderStore.deleteObject(child.getId(), true, user);
+                } catch (Exception e) {
+                    failedToDeleteIds.add(child.getId());
                 }
             }
         }
-
-        return savepoint;
+        folderStore.deleteObject(parentFolder.getId(), true, user);
+        return true;
     }
 
-    synchronized public void rollback(java.sql.Savepoint savepoint) throws SqlException {
-        int saveXaState = xaState_;
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "rollback", savepoint);
+    private static ContentStream getContentStream(StoredObject so, String streamId, BigInteger offset, BigInteger length) {
+        if (streamId != null) {
+            return null;
         }
-        checkForClosedConnection();
-        if (savepoint == null) // Throw exception if savepoint is null
-        {
-            throw new SqlException(agent_.logWriter_, "Cannot rollback to a null savepoint.");
-        } else if (autoCommit_) // Throw exception if auto-commit is on
-        {
-            throw new SqlException(agent_.logWriter_, "Cannot rollback to a savepoint when in auto-commit mode.");
-        } 
-        // Only allow to rollback to a savepoint from the connection that create the savepoint.
-        try {
-            if (this != ((Savepoint) savepoint).agent_.connection_) {
-                throw new SqlException(agent_.logWriter_,
-                        "Rollback to a savepoint not created by this connection.");
-            }
-        } catch (java.lang.ClassCastException e) { // savepoint is not an instance of am.Savepoint
-            throw new SqlException(agent_.logWriter_,
-                    "Rollback to a savepoint not created by this connection.");
-        }
+        long lOffset = offset == null ? 0 : offset.longValue();
+        long lLength = length == null ? -1 : length.longValue();
+        ContentStream csd = ((Content) so).getContent(lOffset, lLength);
+        return csd;
+    }
 
-        // Construct and flow a savepoint rollback statement to server.
-        Statement stmt = null;
-        try {
-            stmt = createStatementX(java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                    java.sql.ResultSet.CONCUR_READ_ONLY,
-                    resultSetHoldability_);
-            String savepointName;
-            try {
-                savepointName = ((Savepoint) savepoint).getSavepointName();
-            } catch (SqlException e) {
-                // generate the name for an un-named savepoint.
-                savepointName = dncGeneratedSavepointNamePrefix__ +
-                        ((Savepoint) savepoint).getSavepointId();
-            }
-            String sql = "ROLLBACK TO SAVEPOINT \"" + savepointName + "\"";
-            stmt.executeX(sql);
-        } finally {
-            if (stmt != null) {
-                try {
-                    stmt.closeX();
-                } catch (SqlException doNothing) {
+    @SuppressWarnings("unchecked")
+    private Map<String, PropertyData<?>> setDefaultProperties(TypeDefinition typeDef, Map<String, PropertyData<?>> properties) {
+        Map<String, PropertyDefinition<?>> propDefs = typeDef.getPropertyDefinitions();
+        boolean hasCopied = false;
+
+        for ( PropertyDefinition<?> propDef : propDefs.values()) {
+            String propId = propDef.getId();
+            List<?> defaultVal = propDef.getDefaultValue();
+            PropertyData<?> pd = null;
+            if (defaultVal != null && null == properties.get(propId)) {
+                if (!hasCopied) {
+                    properties = new HashMap<String, PropertyData<?>>(properties); // copy because it is an unmodified collection
+                    hasCopied = true;
                 }
-            }
-            xaState_ = saveXaState;
-        }
-    }
-
-    synchronized public void releaseSavepoint(java.sql.Savepoint savepoint) throws SqlException {
-        int saveXaState = xaState_;
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "releaseSavepoint", savepoint);
-        }
-        checkForClosedConnection();
-        if (savepoint == null) // Throw exception if savepoint is null
-        {
-            throw new SqlException(agent_.logWriter_, "Cannot release a null savepoint.");
-        } else if (autoCommit_) // Throw exception if auto-commit is on
-        {
-            throw new SqlException(agent_.logWriter_, "Cannot release a savepoint when in auto-commit mode.");
-        } 
-        // Only allow to release a savepoint from the connection that create the savepoint.
-        try {
-            if (this != ((Savepoint) savepoint).agent_.connection_) {
-                throw new SqlException(agent_.logWriter_,
-                        "Cannot release a savepoint that was not created by this connection.");
-            }
-        } catch (java.lang.ClassCastException e) { // savepoint is not an instance of am.Savepoint
-            throw new SqlException(agent_.logWriter_,
-                    "Cannot release a savepoint that was not created by this connection.");
-        }
-
-        // Construct and flow a savepoint release statement to server.
-        Statement stmt = null;
-        try {
-            stmt = (Statement) createStatementX(java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                    java.sql.ResultSet.CONCUR_READ_ONLY,
-                    resultSetHoldability_);
-            String savepointName;
-            try {
-                savepointName = ((Savepoint) savepoint).getSavepointName();
-            } catch (SqlException e) {
-                // generate the name for an un-named savepoint.
-                savepointName = dncGeneratedSavepointNamePrefix__ +
-                        ((Savepoint) savepoint).getSavepointId();
-            }
-            String sql = "RELEASE SAVEPOINT \"" + savepointName + "\"";
-            stmt.executeX(sql);
-        } finally {
-            if (stmt != null) {
-                try {
-                    stmt.closeX();
-                } catch (SqlException doNothing) {
+                if (propDef.getPropertyType() == PropertyType.BOOLEAN) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyBooleanData(propId, (List<Boolean>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyBooleanData(propId, (Boolean)defaultVal.get(0));
+                    }
+                } else if (propDef.getPropertyType() == PropertyType.DATETIME) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyDateTimeData(propId, (List<GregorianCalendar>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyDateTimeData(propId, (GregorianCalendar)defaultVal.get(0));
+                    }
+                } else if (propDef.getPropertyType() == PropertyType.DECIMAL) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyDecimalData(propId, (List<BigDecimal>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyDecimalData(propId, (BigDecimal)defaultVal.get(0));
+                    }
+                } else if (propDef.getPropertyType() == PropertyType.HTML) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyHtmlData(propId, (List<String>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyHtmlData(propId, (String)defaultVal.get(0));
+                    }
+                } else if (propDef.getPropertyType() == PropertyType.ID) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyIdData(propId, (List<String>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyIdData(propId, (String)defaultVal.get(0));
+                    }
+                } else if (propDef.getPropertyType() == PropertyType.INTEGER) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyIntegerData(propId, (List<BigInteger>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyIntegerData(propId, (BigInteger)defaultVal.get(0));
+                    }
+                } else if (propDef.getPropertyType() == PropertyType.STRING) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyStringData(propId, (List<String>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyStringData(propId, (String)defaultVal.get(0));
+                    }
+                } else if (propDef.getPropertyType() == PropertyType.URI) {
+                    if (propDef.getCardinality() == Cardinality.MULTI) {
+                        pd = fStoreManager.getObjectFactory().createPropertyUriData(propId, (List<String>)defaultVal);
+                    } else {
+                        pd = fStoreManager.getObjectFactory().createPropertyUriData(propId, (String)defaultVal.get(0));
+                    }
                 }
+                // set property:
+                properties.put(propId, pd);
             }
-            xaState_ = saveXaState;
         }
+        return properties;
     }
-
-    synchronized public java.sql.Statement createStatement(int resultSetType,
-                                                           int resultSetConcurrency,
-                                                           int resultSetHoldability) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "createStatement", resultSetType, resultSetConcurrency, resultSetHoldability);
-        }
-        Statement s = createStatementX(resultSetType, resultSetConcurrency, resultSetHoldability);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "createStatement", s);
-        }
-        return s;
-    }
-
-    private Statement createStatementX(int resultSetType,
-                                       int resultSetConcurrency,
-                                       int resultSetHoldability) throws SqlException {
-        checkForClosedConnection();
-        resultSetType = downgradeResultSetType(resultSetType);
-        resultSetConcurrency = downgradeResultSetConcurrency(resultSetConcurrency, resultSetType);
-        Statement s = newStatement_(resultSetType, resultSetConcurrency, resultSetHoldability);
-        s.cursorAttributesToSendOnPrepare_ = s.cacheCursorAttributesToSendOnPrepare();
-        openStatements_.add(s);
-        return s;
-    }
-
-    // not sure if holding on to cursorAttributesToSendOnPrepare and restoring it is the
-    // right thing to do here... because if property on the dataSource changes, we may have
-    // to send different attributes, i.e. SENSITIVE DYNAMIC, instead of SENSITIVE STATIC.
-    protected void resetStatement(Statement s) throws SqlException {
-        String cursorAttributesToSendOnPrepare = s.cursorAttributesToSendOnPrepare_;
-        resetStatement_(s, s.resultSetType_, s.resultSetConcurrency_, s.resultSetHoldability_);
-        s.cursorAttributesToSendOnPrepare_ = cursorAttributesToSendOnPrepare;
-    }
-
-    synchronized public java.sql.PreparedStatement prepareStatement(String sql,
-                                                                    int resultSetType,
-                                                                    int resultSetConcurrency,
-                                                                    int resultSetHoldability) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareStatement", sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-        }
-        PreparedStatement ps = prepareStatementX(sql,
-                resultSetType,
-                resultSetConcurrency,
-                resultSetHoldability,
-                java.sql.Statement.NO_GENERATED_KEYS,
-                null);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareStatement", ps);
-        }
-        return ps;
-    }
-
-    // used by DBMD
-    PreparedStatement prepareStatementX(String sql,
-                                        int resultSetType,
-                                        int resultSetConcurrency,
-                                        int resultSetHoldability,
-                                        int autoGeneratedKeys,
-                                        String[] columnNames) throws SqlException {
-        checkForClosedConnection();
-        checkAutoGeneratedKeysParameters(autoGeneratedKeys, columnNames);
-        resultSetType = downgradeResultSetType(resultSetType);
-        resultSetConcurrency = downgradeResultSetConcurrency(resultSetConcurrency, resultSetType);
-        PreparedStatement ps = newPreparedStatement_(sql, resultSetType, resultSetConcurrency, resultSetHoldability, autoGeneratedKeys, columnNames);
-        ps.cursorAttributesToSendOnPrepare_ = ps.cacheCursorAttributesToSendOnPrepare();
-        ps.prepare();
-        openStatements_.add(ps);
-        return ps;
-    }
-
-    // not sure if holding on to cursorAttributesToSendOnPrepare and restoring it is the
-    // right thing to do here... because if property on the dataSource changes, we may have
-    // to send different attributes, i.e. SENSITIVE DYNAMIC, instead of SENSITIVE STATIC.
-    protected void resetPrepareStatement(PreparedStatement ps) throws SqlException {
-        String cursorAttributesToSendOnPrepare = ps.cursorAttributesToSendOnPrepare_;
-        resetPreparedStatement_(ps, ps.sql_, ps.resultSetType_, ps.resultSetConcurrency_, ps.resultSetHoldability_, ps.autoGeneratedKeys_, ps.generatedKeysColumnNames_);
-        ps.cursorAttributesToSendOnPrepare_ = cursorAttributesToSendOnPrepare;
-        ps.prepare();
-    }
-
-    synchronized public java.sql.CallableStatement prepareCall(String sql,
-                                                               int resultSetType,
-                                                               int resultSetConcurrency,
-                                                               int resultSetHoldability) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareCall", sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-        }
-        CallableStatement cs = prepareCallX(sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareCall", cs);
-        }
-        return cs;
-    }
-
-    private CallableStatement prepareCallX(String sql,
-                                           int resultSetType,
-                                           int resultSetConcurrency,
-                                           int resultSetHoldability) throws SqlException {
-        checkForClosedConnection();
-        resultSetType = downgradeResultSetType(resultSetType);
-        resultSetConcurrency = downgradeResultSetConcurrency(resultSetConcurrency, resultSetType);
-        CallableStatement cs = newCallableStatement_(sql, resultSetType, resultSetConcurrency, resultSetHoldability);
-        cs.cursorAttributesToSendOnPrepare_ = cs.cacheCursorAttributesToSendOnPrepare();
-        cs.prepare();
-        openStatements_.add(cs);
-        return cs;
-    }
-
-    protected void resetPrepareCall(CallableStatement cs) throws SqlException {
-        String cursorAttributesToSendOnPrepare = cs.cursorAttributesToSendOnPrepare_;
-        resetCallableStatement_(cs, cs.sql_, cs.resultSetType_, cs.resultSetConcurrency_, cs.resultSetHoldability_);
-        cs.cursorAttributesToSendOnPrepare_ = cursorAttributesToSendOnPrepare;
-        cs.prepare();
-    }
-
-    public java.sql.PreparedStatement prepareStatement(String sql, int autoGeneratedKeys) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareStatement", sql, autoGeneratedKeys);
-        }
-        PreparedStatement ps = prepareStatementX(sql,
-                java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                java.sql.ResultSet.CONCUR_READ_ONLY,
-                resultSetHoldability_,
-                autoGeneratedKeys,
-                null);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareStatement", ps);
-        }
-        return ps;
-    }
-
-    public java.sql.PreparedStatement prepareStatement(String sql, int columnIndexes[]) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareStatement", sql, columnIndexes);
-        }
-        checkForClosedConnection();
-        throw new SqlException(agent_.logWriter_, "Driver not capable");
-    }
-
-    public java.sql.PreparedStatement prepareStatement(String sql, String columnNames[]) throws SqlException {
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceEntry(this, "prepareStatement", sql, columnNames);
-        }
-        PreparedStatement ps = prepareStatementX(sql,
-                java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                java.sql.ResultSet.CONCUR_READ_ONLY,
-                resultSetHoldability_,
-                java.sql.Statement.RETURN_GENERATED_KEYS,
-                columnNames);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceExit(this, "prepareStatement", ps);
-        }
-        return ps;
-    }
-
-
-    // ---------------------------------------------------------------------------
-
-    protected abstract boolean allowCloseInUOW_();
-
-    protected abstract boolean doCloseStatementsOnClose_();
-
-    public abstract SectionManager newSectionManager(String collection,
-                                                     Agent agent,
-                                                     String databaseName);
-    //--------------------Abstract material factory methods-----------------
-
-    protected abstract Agent newAgent_(LogWriter logWriter, int loginTimeout, String serverName, int portNumber) throws SqlException;
-
-
-    protected abstract DatabaseMetaData newDatabaseMetaData_();
-
-    protected abstract Statement newStatement_(int type,
-                                               int concurrency,
-                                               int holdability) throws SqlException;
-
-    protected abstract void resetStatement_(Statement statement,
-                                            int type,
-                                            int concurrency,
-                                            int holdability) throws SqlException;
-
-
-    protected abstract PreparedStatement newPositionedUpdatePreparedStatement_(String sql, Section section) throws SqlException;
-
-    protected abstract PreparedStatement newPreparedStatement_(String sql,
-                                                               int type,
-                                                               int concurrency,
-                                                               int holdability,
-                                                               int autoGeneratedKeys,
-                                                               String[] columnNames) throws SqlException;
-
-    protected abstract void resetPreparedStatement_(PreparedStatement ps,
-                                                    String sql,
-                                                    int resultSetType,
-                                                    int resultSetConcurrency,
-                                                    int resultSetHoldability,
-                                                    int autoGeneratedKeys,
-                                                    String[] columnNames) throws SqlException;
-
-    protected abstract CallableStatement newCallableStatement_(String sql,
-                                                               int type,
-                                                               int concurrency,
-                                                               int holdability) throws SqlException;
-
-    protected abstract void resetCallableStatement_(CallableStatement cs,
-                                                    String sql,
-                                                    int resultSetType,
-                                                    int resultSetConcurrency,
-                                                    int resultSetHoldability) throws SqlException;
-
-    // ----------------------- abstract box car and callback methods ---------------------
-    // All callbacks must be client-side only operations.
-
-
-    public void completeConnect() throws SqlException {
-        open_ = true;
-        databaseMetaData_ = newDatabaseMetaData_();
-
-        agent_.sectionManager_ =
-                newSectionManager("NULLID",
-                        agent_,
-                        databaseName_);
-        if (agent_.loggingEnabled()) {
-            agent_.logWriter_.traceConnectExit(this);
-        }
-    }
-
-    public abstract void writeCommitSubstitute_() throws SqlException;
-
-    public abstract void readCommitSubstitute_() throws SqlException;
-
-    public abstract void writeLocalXAStart_() throws SqlException;
-
-    public abstract void readLocalXAStart_() throws SqlException;
-
-    public abstract void writeLocalXACommit_() throws SqlException;
-
-    public abstract void readLocalXACommit_() throws SqlException;
-
-    public abstract void writeLocalCommit_() throws SqlException;
-
-    public abstract void readLocalCommit_() throws SqlException;
-
-    public void completeLocalCommit() {
-        for (java.util.Iterator i = CommitAndRollbackListeners_.iterator(); i.hasNext();) {
-            UnitOfWorkListener listener = (UnitOfWorkListener) i.next();
-            listener.completeLocalCommit(i);
-        }
-        inUnitOfWork_ = false;
-    }
-
-    public abstract void writeLocalRollback_() throws SqlException;
-
-    public abstract void readLocalRollback_() throws SqlException;
-
-    // A callback for certain non-fatal exceptions that occur when parsing error replies.
-    // This is a client-side only operation.
-    // This method will only throw an exception on bug check.
-    public void completeLocalRollback() {
-        for (java.util.Iterator i = CommitAndRollbackListeners_.iterator(); i.hasNext();) {
-            UnitOfWorkListener listener = (UnitOfWorkListener) i.next();
-            listener.completeLocalRollback(i);
-        }
-        for (java.util.Iterator i = RollbackOnlyListeners_.iterator(); i.hasNext();) {
-            UnitOfWorkListener listener = (UnitOfWorkListener) i.next();
-            listener.completeLocalRollback(i);
-        }
-        inUnitOfWork_ = false;
-    }
-
-
-    public abstract void writeLocalXARollback_() throws SqlException;
-
-    public abstract void readLocalXARollback_() throws SqlException;
-
-    public void writeTransactionStart(Statement statement) throws SqlException {
-    }
-
-    public void readTransactionStart() throws SqlException {
-        completeTransactionStart();
-    }
-
-    void completeTransactionStart() {
-        inUnitOfWork_ = true;
-    }
-
-    // Occurs autonomously
-    public void completeAbnormalUnitOfWork() {
-        completeLocalRollback();
-    }
-
-    // Called by Connection.close(), NetConnection.errorRollbackDisconnect().
-    // The Agent's client-side resources associated with database connection are reclaimed (eg. socket).
-    // And this connection and all associated statements and result sets are marked closed.
-    // This is a client-side only operation.
-    // This method will only throw an exception if the agent cannot be closed.
-    public void completeChainBreakingDisconnect() {
-        open_ = false;
-        completeLocalRollback();
-        markStatementsClosed();
-    }
-
-    public void completeSqlca(Sqlca sqlca) {
-        if (sqlca == null) {
-        } else if (sqlca.getSqlCode() > 0) {
-            accumulateWarning(new SqlWarning(agent_.logWriter_, sqlca));
-        } else if (sqlca.getSqlCode() < 0) {
-            agent_.accumulateReadException(new SqlException(agent_.logWriter_, sqlca));
-        }
-    }
-
-    public abstract void addSpecialRegisters(String s);
-
-    // can this only be called by the PooledConnection
-    // can this be called on a closed connection
-    // can this be called in a unit of work
-    // can this be called from within a stored procedure
-    //
-    synchronized public void reset(LogWriter logWriter, String user, String password, ClientDataSource ds, boolean recomputeFromDataSource) throws SqlException {
-        if (logWriter != null) {
-            logWriter.traceConnectResetEntry(this, logWriter, user, (ds != null) ? ds : dataSource_);
-        }
-        try {
-            reset_(logWriter, user, password, ds, recomputeFromDataSource);
-        } catch (SqlException sqle) {
-            DisconnectException de = new DisconnectException(agent_, "An error occurred during connect reset and the connection has been terminated.  See chained exceptions for details.");
-            de.setNextException(sqle);
-            throw de;
-        }
-    }
-
-    synchronized public void reset(LogWriter logWriter, ClientDataSource ds, boolean recomputeFromDataSource) throws SqlException {
-        if (logWriter != null) {
-            logWriter.traceConnectResetEntry(this, logWriter, null, (ds != null) ? ds : dataSource_);
-        }
-        try {
-            reset_(logWriter, ds, recomputeFromDataSource);
-        } catch (SqlException sqle) {
-            DisconnectException de = new DisconnectException(agent_, "An error occurred during connect reset and the connection has been terminated.  See chained exceptions for details.");
-            de.setNextException(sqle);
-            throw de;
-        }
-    }
-
-    synchronized public void lightReset() throws SqlException {
-        if (!open_ && !availableForReuse_) {
-            return;
-        }
-        open_ = true;
-        availableForReuse_ = false;
-    }
-
-    abstract protected void reset_(LogWriter logWriter, String user, String password, ClientDataSource ds, boolean recomputerFromDataSource) throws SqlException;
-
-    abstract protected void reset_(LogWriter logWriter, ClientDataSource ds, boolean recomputerFromDataSource) throws SqlException;
-
-    protected void completeReset(boolean isDeferredReset, boolean recomputeFromDataSource) throws SqlException {
-        open_ = true;
-
-        completeLocalRollback(); // this will close the cursors if the physical connection hadn't been closed for reuse properly
-
-        // Reopen physical statement resources associated with previous uses of this physical connection.
-        // Notice that these physical statements may not belong to this logical connection.
-        // Iterate through the physical statements and re-enable them for reuse.
-
-        for (java.util.Iterator i = openStatements_.iterator(); i.hasNext();) {
-            Object o = i.next();
-            ((Statement) o).reset(recomputeFromDataSource);
-
-        }
-
-        if (!isDeferredReset && agent_.loggingEnabled()) {
-            agent_.logWriter_.traceConnectResetExit(this);
-        }
-    }
-
-
-    //-------------------------------helper methods-------------------------------
-
-    protected void checkForClosedConnection() throws SqlException {
-        if (!open_) {
-            agent_.checkForDeferredExceptions();
-            throw new SqlException(agent_.logWriter_, "invalid operation: connection closed");
-        } else {
-            agent_.checkForDeferredExceptions();
-        }
-    }
-
-    void checkAutoGeneratedKeysParameters(int autoGeneratedKeys, String[] columnNames) throws SqlException {
-        if (autoGeneratedKeys != java.sql.Statement.NO_GENERATED_KEYS &&
-                autoGeneratedKeys != java.sql.Statement.RETURN_GENERATED_KEYS) {
-            throw new SqlException(agent_.logWriter_, "Invalid argument: " +
-                    "Statement auto-generated keys value " + autoGeneratedKeys +
-                    " is invalid.");
-        }
-
-        if (columnNames != null) {
-            throw new SqlException(agent_.logWriter_, "Driver not capable");
-        }
-
-    }
-
-    public boolean isXAConnection() {
-        return isXAConnection_;
-    }
-
-    public int getXAState() {
-        return xaState_;
-    }
-
-    public void setXAState(int state) {
-        xaState_ = state;
-    }
-
-    public void accumulateWarning(SqlWarning e) {
-        if (warnings_ == null) {
-            warnings_ = e;
-        } else {
-            warnings_.setNextException(e);
-        }
-    }
-
-    public void accumulate440WarningForMessageProcFailure(SqlWarning e) {
-        if (!accumulated440ForMessageProcFailure_) {
-            accumulateWarning(e);
-            accumulated440ForMessageProcFailure_ = true;
-        }
-    }
-
-    public void accumulate444WarningForMessageProcFailure(SqlWarning e) {
-        if (!accumulated444ForMessageProcFailure_) {
-            accumulateWarning(e);
-            accumulated444ForMessageProcFailure_ = true;
-        }
-    }
-
-    // get the server version
-    public int getServerVersion() {
-        return databaseMetaData_.productLevel_.versionLevel_;
-    }
-
-    public void setInUnitOfWork(boolean inUnitOfWork) {
-        inUnitOfWork_ = inUnitOfWork;
-    }
-
 }

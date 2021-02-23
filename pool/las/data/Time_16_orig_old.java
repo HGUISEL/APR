@@ -21,6 +21,7 @@ import java.util.Locale;
 
 import org.joda.time.Chronology;
 import org.joda.time.DateTime;
+import org.joda.time.DateTimeFieldType;
 import org.joda.time.DateTimeUtils;
 import org.joda.time.DateTimeZone;
 import org.joda.time.LocalDate;
@@ -678,6 +679,9 @@ public class DateTimeFormatter {
      * If it fails, the return value is negative, but the instant may still be
      * modified. To determine the position where the parse failed, apply the
      * one's complement operator (~) on the return value.
+     * <p>
+     * This parse method ignores the {@link #getDefaultYear() default year} and
+     * parses using the year from the supplied instant as the default.
      * <p>
      * The parse will use the chronology of the instant.
      *

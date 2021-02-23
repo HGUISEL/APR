@@ -47,8 +47,6 @@ public class JavaASTNodeAnalyzer {
             e.printStackTrace();
         }
     }
-    public HashMap<String, Integer> nodeCountMap = new HashMap<String, Integer>();
-    public HashMap<String, Set<String>> parentCollectionMap = new HashMap<String, Set<String>>();
 
     public List<Double> patchPrioritizer(JavaASTParser buggyParser, List<LasOutputParser> LasParsers){
 

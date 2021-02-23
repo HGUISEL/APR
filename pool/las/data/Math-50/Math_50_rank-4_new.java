@@ -1,782 +1,578 @@
-package com.fasterxml.jackson.databind.ser;
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements. See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.kafka.common.record;
 
-import java.util.*;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.utils.ByteBufferOutputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import com.fasterxml.jackson.annotation.ObjectIdGenerator;
-import com.fasterxml.jackson.annotation.ObjectIdGenerators;
-import com.fasterxml.jackson.annotation.JsonTypeInfo.As;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.cfg.SerializerFactoryConfig;
-import com.fasterxml.jackson.databind.introspect.*;
-import com.fasterxml.jackson.databind.jsontype.NamedType;
-import com.fasterxml.jackson.databind.jsontype.TypeResolverBuilder;
-import com.fasterxml.jackson.databind.jsontype.TypeSerializer;
-import com.fasterxml.jackson.databind.ser.impl.FilteredBeanPropertyWriter;
-import com.fasterxml.jackson.databind.ser.impl.ObjectIdWriter;
-import com.fasterxml.jackson.databind.ser.impl.PropertyBasedObjectIdGenerator;
-import com.fasterxml.jackson.databind.ser.std.MapSerializer;
-import com.fasterxml.jackson.databind.ser.std.StdDelegatingSerializer;
-import com.fasterxml.jackson.databind.type.*;
-import com.fasterxml.jackson.databind.util.ArrayBuilders;
-import com.fasterxml.jackson.databind.util.ClassUtil;
-import com.fasterxml.jackson.databind.util.Converter;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.GatheringByteChannel;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Objects;
 
 /**
- * Factory class that can provide serializers for any regular Java beans
- * (as defined by "having at least one get method recognizable as bean
- * accessor" -- where {@link Object#getClass} does not count);
- * as well as for "standard" JDK types. Latter is achieved
- * by delegating calls to {@link BasicSerializerFactory} 
- * to find serializers both for "standard" JDK types (and in some cases,
- * sub-classes as is the case for collection classes like
- * {@link java.util.List}s and {@link java.util.Map}s) and bean (value)
- * classes.
- *<p>
- * Note about delegating calls to {@link BasicSerializerFactory}:
- * although it would be nicer to use linear delegation
- * for construction (to essentially dispatch all calls first to the
- * underlying {@link BasicSerializerFactory}; or alternatively after
- * failing to provide bean-based serializer}, there is a problem:
- * priority levels for detecting standard types are mixed. That is,
- * we want to check if a type is a bean after some of "standard" JDK
- * types, but before the rest.
- * As a result, "mixed" delegation used, and calls are NOT done using
- * regular {@link SerializerFactory} interface but rather via
- * direct calls to {@link BasicSerializerFactory}.
- *<p>
- * Finally, since all caching is handled by the serializer provider
- * (not factory) and there is no configurability, this
- * factory is stateless.
- * This means that a global singleton instance can be used.
+ * A {@link Records} implementation backed by a ByteBuffer. This is used only for reading or
+ * modifying in-place an existing buffer of record batches. To create a new buffer see {@link MemoryRecordsBuilder},
+ * or one of the {@link #builder(ByteBuffer, byte, CompressionType, TimestampType, long)} variants.
  */
-public class BeanSerializerFactory
-    extends BasicSerializerFactory
-    implements java.io.Serializable // since 2.1
-{
-    private static final long serialVersionUID = 1;
+public class MemoryRecords extends AbstractRecords {
+    private static final Logger log = LoggerFactory.getLogger(MemoryRecords.class);
+    public static final MemoryRecords EMPTY = MemoryRecords.readableRecords(ByteBuffer.allocate(0));
 
-    /**
-     * Like {@link BasicSerializerFactory}, this factory is stateless, and
-     * thus a single shared global (== singleton) instance can be used
-     * without thread-safety issues.
-     */
-    public final static BeanSerializerFactory instance = new BeanSerializerFactory(null);
+    private final ByteBuffer buffer;
 
-    /*
-    /**********************************************************
-    /* Life-cycle: creation, configuration
-    /**********************************************************
-     */
-
-    /**
-     * Constructor for creating instances with specified configuration.
-     */
-    protected BeanSerializerFactory(SerializerFactoryConfig config)
-    {
-        super(config);
-    }
-    
-    /**
-     * Method used by module registration functionality, to attach additional
-     * serializer providers into this serializer factory. This is typically
-     * handled by constructing a new instance with additional serializers,
-     * to ensure thread-safe access.
-     */
-    @Override
-    public SerializerFactory withConfig(SerializerFactoryConfig config)
-    {
-        if (_factoryConfig == config) {
-            return this;
+    private final Iterable<MutableRecordBatch> batches = new Iterable<MutableRecordBatch>() {
+        @Override
+        public Iterator<MutableRecordBatch> iterator() {
+            return new RecordBatchIterator<>(new ByteBufferLogInputStream(buffer.duplicate(), Integer.MAX_VALUE));
         }
-        /* 22-Nov-2010, tatu: Handling of subtypes is tricky if we do immutable-with-copy-ctor;
-         *    and we pretty much have to here either choose between losing subtype instance
-         *    when registering additional serializers, or losing serializers.
-         *    Instead, let's actually just throw an error if this method is called when subtype
-         *    has not properly overridden this method; this to indicate problem as soon as possible.
-         */
-        if (getClass() != BeanSerializerFactory.class) {
-            throw new IllegalStateException("Subtype of BeanSerializerFactory ("+getClass().getName()
-                    +") has not properly overridden method 'withAdditionalSerializers': can not instantiate subtype with "
-                    +"additional serializer definitions");
-        }
-        return new BeanSerializerFactory(config);
+    };
+
+    private int validBytes = -1;
+
+    // Construct a writable memory records
+    private MemoryRecords(ByteBuffer buffer) {
+        Objects.requireNonNull(buffer, "buffer should not be null");
+        this.buffer = buffer;
     }
 
     @Override
-    protected Iterable<Serializers> customSerializers() {
-        return _factoryConfig.serializers();
+    public int sizeInBytes() {
+        return buffer.limit();
     }
-    
-    /*
-    /**********************************************************
-    /* SerializerFactory impl
-    /**********************************************************
-     */
 
-    /**
-     * Main serializer constructor method. We will have to be careful
-     * with respect to ordering of various method calls: essentially
-     * we want to reliably figure out which classes are standard types,
-     * and which are beans. The problem is that some bean Classes may
-     * implement standard interfaces (say, {@link java.lang.Iterable}.
-     *<p>
-     * Note: sub-classes may choose to complete replace implementation,
-     * if they want to alter priority of serializer lookups.
-     */
     @Override
-    @SuppressWarnings("unchecked")
-    public JsonSerializer<Object> createSerializer(SerializerProvider prov,
-            JavaType origType)
-        throws JsonMappingException
-    {
-        // Very first thing, let's check if there is explicit serializer annotation:
-        final SerializationConfig config = prov.getConfig();
-        BeanDescription beanDesc = config.introspect(origType);
-        JsonSerializer<?> ser = findSerializerFromAnnotation(prov, beanDesc.getClassInfo());
-        if (ser != null) {
-            return (JsonSerializer<Object>) ser;
-        }
-        boolean staticTyping;
-        // Next: we may have annotations that further define types to use...
-        JavaType type = modifyTypeByAnnotation(config, beanDesc.getClassInfo(), origType);
-        if (type == origType) { // no changes, won't force static typing
-            staticTyping = false;
-        } else { // changes; assume static typing; plus, need to re-introspect if class differs
-            staticTyping = true;
-            if (!type.hasRawClass(origType.getRawClass())) {
-                beanDesc = config.introspect(type);
-            }
-        }
-        // Slight detour: do we have a Converter to consider?
-        Converter<Object,Object> conv = beanDesc.findSerializationConverter();
-        if (conv == null) { // no, simple
-            return (JsonSerializer<Object>) _createSerializer2(prov, type, beanDesc, staticTyping);
-        }
-        JavaType delegateType = conv.getOutputType(prov.getTypeFactory());
-        
-        // One more twist, as per [Issue#288]; probably need to get new BeanDesc
-        if (!delegateType.hasRawClass(type.getRawClass())) {
-            beanDesc = config.introspect(delegateType);
-            // [#359]: explicitly check (again) for @JsonSerializer...
-            ser = findSerializerFromAnnotation(prov, beanDesc.getClassInfo());
-        }
-        // [databind#731]: Should skip if nominally java.lang.Object
-        if (ser == null && !delegateType.isJavaLangObject()) {
-            ser = _createSerializer2(prov, delegateType, beanDesc, true);
-        }
-        return new StdDelegatingSerializer(conv, delegateType, ser);
-    }
+    public long writeTo(GatheringByteChannel channel, long position, int length) throws IOException {
+        if (position > Integer.MAX_VALUE)
+            throw new IllegalArgumentException("position should not be greater than Integer.MAX_VALUE: " + position);
+        if (position + length > buffer.limit())
+            throw new IllegalArgumentException("position+length should not be greater than buffer.limit(), position: "
+                    + position + ", length: " + length + ", buffer.limit(): " + buffer.limit());
 
-    protected JsonSerializer<?> _createSerializer2(SerializerProvider prov,
-            JavaType type, BeanDescription beanDesc, boolean staticTyping)
-        throws JsonMappingException
-    {
-        // Then JsonSerializable, @JsonValue etc:
-        JsonSerializer<?> ser = findSerializerByAnnotations(prov, type, beanDesc);
-        if (ser != null) {
-            return ser;
-        }
-        final SerializationConfig config = prov.getConfig();
-        
-        // Container types differ from non-container types
-        // (note: called method checks for module-provided serializers)
-        if (type.isContainerType()) {
-            if (!staticTyping) {
-                staticTyping = usesStaticTyping(config, beanDesc, null);
-                // [Issue#23]: Need to figure out how to force passed parameterization
-                //  to stick...
-                /*
-                if (property == null) {
-                    JavaType t = origType.getContentType();
-                    if (t != null && !t.hasRawClass(Object.class)) {
-                        staticTyping = true;
-                    }
-                }
-                */
-            }
-            // 03-Aug-2012, tatu: As per [Issue#40], may require POJO serializer...
-            ser =  buildContainerSerializer(prov, type, beanDesc, staticTyping);
-            // Will return right away, since called method does post-processing:
-            if (ser != null) {
-                return ser;
-            }
-        } else {
-            // Modules may provide serializers of POJO types:
-            for (Serializers serializers : customSerializers()) {
-                ser = serializers.findSerializer(config, type, beanDesc);
-                if (ser != null) {
-                    break;
-                }
-            }
-        }
-        
-        // Otherwise, we will check "primary types"; both marker types that
-        // indicate specific handling (JsonSerializable), or main types that have
-        // precedence over container types
-        if (ser == null) {
-            ser = findSerializerByLookup(type, config, beanDesc, staticTyping);
-            if (ser == null) {
-                ser = findSerializerByPrimaryType(prov, type, beanDesc, staticTyping);
-                if (ser == null) {
-                    // And this is where this class comes in: if type is not a
-                    // known "primary JDK type", perhaps it's a bean? We can still
-                    // get a null, if we can't find a single suitable bean property.
-                    ser = findBeanSerializer(prov, type, beanDesc);
-                    // Finally: maybe we can still deal with it as an implementation of some basic JDK interface?
-                    if (ser == null) {
-                        ser = findSerializerByAddonType(config, type, beanDesc, staticTyping);
-                        // 18-Sep-2014, tatu: Actually, as per [jackson-databind#539], need to get
-                        //   'unknown' serializer assigned earlier, here, so that it gets properly
-                        //   post-processed
-                        if (ser == null) {
-                            ser = prov.getUnknownTypeSerializer(beanDesc.getBeanClass());
-                        }
-                    }
-                }
-            }
-        }
-        if (ser != null) {
-            // [Issue#120]: Allow post-processing
-            if (_factoryConfig.hasSerializerModifiers()) {
-                for (BeanSerializerModifier mod : _factoryConfig.serializerModifiers()) {
-                    ser = mod.modifySerializer(config, beanDesc, ser);
-                }
-            }
-        }
-        return ser;
-    }
-    
-    /*
-    /**********************************************************
-    /* Other public methods that are not part of
-    /* JsonSerializerFactory API
-    /**********************************************************
-     */
-
-    /**
-     * Method that will try to construct a {@link BeanSerializer} for
-     * given class. Returns null if no properties are found.
-     */
-    public JsonSerializer<Object> findBeanSerializer(SerializerProvider prov, JavaType type, BeanDescription beanDesc)
-        throws JsonMappingException
-    {
-        // First things first: we know some types are not beans...
-        if (!isPotentialBeanType(type.getRawClass())) {
-            // 03-Aug-2012, tatu: Except we do need to allow serializers for Enums,
-            //   as per [Issue#24]
-            if (!type.isEnumType()) {
-                return null;
-            }
-        }
-        return constructBeanSerializer(prov, beanDesc);
+        int pos = (int) position;
+        ByteBuffer dup = buffer.duplicate();
+        dup.position(pos);
+        dup.limit(pos + length);
+        return channel.write(dup);
     }
 
     /**
-     * Method called to create a type information serializer for values of given
-     * non-container property
-     * if one is needed. If not needed (no polymorphic handling configured), should
-     * return null.
-     *
-     * @param baseType Declared type to use as the base type for type information serializer
-     * 
-     * @return Type serializer to use for property values, if one is needed; null if not.
+     * Write all records to the given channel (including partial records).
+     * @param channel The channel to write to
+     * @return The number of bytes written
+     * @throws IOException For any IO errors writing to the channel
      */
-    public TypeSerializer findPropertyTypeSerializer(JavaType baseType,
-            SerializationConfig config, AnnotatedMember accessor)
-        throws JsonMappingException
-    {
-        AnnotationIntrospector ai = config.getAnnotationIntrospector();
-        TypeResolverBuilder<?> b = ai.findPropertyTypeResolver(config, accessor, baseType);        
-        TypeSerializer typeSer;
-
-        // Defaulting: if no annotations on member, check value class
-        if (b == null) {
-            typeSer = createTypeSerializer(config, baseType);
-        } else {
-            Collection<NamedType> subtypes = config.getSubtypeResolver().collectAndResolveSubtypesByClass(
-                    config, accessor, baseType);
-            typeSer = b.buildTypeSerializer(config, baseType, subtypes);
-        }
-        return typeSer;
+    public int writeFullyTo(GatheringByteChannel channel) throws IOException {
+        buffer.mark();
+        int written = 0;
+        while (written < sizeInBytes())
+            written += channel.write(buffer);
+        buffer.reset();
+        return written;
     }
 
     /**
-     * Method called to create a type information serializer for values of given
-     * container property
-     * if one is needed. If not needed (no polymorphic handling configured), should
-     * return null.
-     *
-     * @param containerType Declared type of the container to use as the base type for type information serializer
-     * 
-     * @return Type serializer to use for property value contents, if one is needed; null if not.
-     */    
-    public TypeSerializer findPropertyContentTypeSerializer(JavaType containerType,
-            SerializationConfig config, AnnotatedMember accessor)
-        throws JsonMappingException
-    {
-        JavaType contentType = containerType.getContentType();
-        AnnotationIntrospector ai = config.getAnnotationIntrospector();
-        TypeResolverBuilder<?> b = ai.findPropertyContentTypeResolver(config, accessor, containerType);        
-        TypeSerializer typeSer;
+     * The total number of bytes in this message set not including any partial, trailing messages. This
+     * may be smaller than what is returned by {@link #sizeInBytes()}.
+     * @return The number of valid bytes
+     */
+    public int validBytes() {
+        if (validBytes >= 0)
+            return validBytes;
 
-        // Defaulting: if no annotations on member, check value class
-        if (b == null) {
-            typeSer = createTypeSerializer(config, contentType);
-        } else {
-            Collection<NamedType> subtypes = config.getSubtypeResolver().collectAndResolveSubtypesByClass(config,
-                    accessor, contentType);
-            typeSer = b.buildTypeSerializer(config, contentType, subtypes);
-        }
-        return typeSer;
+        int bytes = 0;
+        for (RecordBatch batch : batches())
+            bytes += batch.sizeInBytes();
+
+        this.validBytes = bytes;
+        return bytes;
     }
 
-    /*
-    /**********************************************************
-    /* Overridable non-public factory methods
-    /**********************************************************
-     */
+    @Override
+    public MemoryRecords downConvert(byte toMagic) {
+        return downConvert(batches(), toMagic);
+    }
 
     /**
-     * Method called to construct serializer for serializing specified bean type.
-     * 
-     * @since 2.1
+     * Filter the records into the provided ByteBuffer.
+     * @param partition The partition that is filtered (used only for logging)
+     * @param filter The filter function
+     * @param destinationBuffer The byte buffer to write the filtered records to
+     * @param maxRecordBatchSize The maximum record batch size. Note this is not a hard limit: if a batch
+     *                           exceeds this after filtering, we log a warning, but the batch will still be
+     *                           created.
+     * @return A FilterResult with a summary of the output (for metrics) and potentially an overflow buffer
      */
-    @SuppressWarnings("unchecked")
-    protected JsonSerializer<Object> constructBeanSerializer(SerializerProvider prov,
-            BeanDescription beanDesc)
-        throws JsonMappingException
-    {
-        // 13-Oct-2010, tatu: quick sanity check: never try to create bean serializer for plain Object
-        // 05-Jul-2012, tatu: ... but we should be able to just return "unknown type" serializer, right?
-        if (beanDesc.getBeanClass() == Object.class) {
-            return prov.getUnknownTypeSerializer(Object.class);
-//            throw new IllegalArgumentException("Can not create bean serializer for Object.class");
-        }
-        final SerializationConfig config = prov.getConfig();
-        BeanSerializerBuilder builder = constructBeanSerializerBuilder(beanDesc);
-        builder.setConfig(config);
+    public FilterResult filterTo(TopicPartition partition, RecordFilter filter, ByteBuffer destinationBuffer,
+                                 int maxRecordBatchSize) {
+        return filterTo(partition, batches(), filter, destinationBuffer, maxRecordBatchSize);
+    }
 
-        // First: any detectable (auto-detect, annotations) properties to serialize?
-        List<BeanPropertyWriter> props = findBeanProperties(prov, beanDesc, builder);
-        if (props == null) {
-            props = new ArrayList<BeanPropertyWriter>();
-        } else {
-            props = removeOverlappingTypeIds(prov, beanDesc, builder, props);
-        }
-        
-        // [databind#638]: Allow injection of "virtual" properties:
-        prov.getAnnotationIntrospector().findAndAddVirtualProperties(config, beanDesc.getClassInfo(), props);
+    private static FilterResult filterTo(TopicPartition partition, Iterable<MutableRecordBatch> batches,
+                                         RecordFilter filter, ByteBuffer destinationBuffer, int maxRecordBatchSize) {
+        long maxTimestamp = RecordBatch.NO_TIMESTAMP;
+        long maxOffset = -1L;
+        long shallowOffsetOfMaxTimestamp = -1L;
+        int messagesRead = 0;
+        int bytesRead = 0;
+        int messagesRetained = 0;
+        int bytesRetained = 0;
 
-        // [JACKSON-440] Need to allow modification bean properties to serialize:
-        if (_factoryConfig.hasSerializerModifiers()) {
-            for (BeanSerializerModifier mod : _factoryConfig.serializerModifiers()) {
-                props = mod.changeProperties(config, beanDesc, props);
+        ByteBufferOutputStream bufferOutputStream = new ByteBufferOutputStream(destinationBuffer);
+
+        for (MutableRecordBatch batch : batches) {
+            bytesRead += batch.sizeInBytes();
+
+            if (filter.shouldDiscard(batch))
+                continue;
+
+            // We use the absolute offset to decide whether to retain the message or not. Due to KAFKA-4298, we have to
+            // allow for the possibility that a previous version corrupted the log by writing a compressed record batch
+            // with a magic value not matching the magic of the records (magic < 2). This will be fixed as we
+            // recopy the messages to the destination buffer.
+
+            byte batchMagic = batch.magic();
+            boolean writeOriginalBatch = true;
+            List<Record> retainedRecords = new ArrayList<>();
+
+            for (Record record : batch) {
+                messagesRead += 1;
+
+                if (filter.shouldRetain(batch, record)) {
+                    // Check for log corruption due to KAFKA-4298. If we find it, make sure that we overwrite
+                    // the corrupted batch with correct data.
+                    if (!record.hasMagic(batchMagic))
+                        writeOriginalBatch = false;
+
+                    if (record.offset() > maxOffset)
+                        maxOffset = record.offset();
+
+                    retainedRecords.add(record);
+                } else {
+                    writeOriginalBatch = false;
+                }
             }
-        }
 
-        // Any properties to suppress?
-        props = filterBeanProperties(config, beanDesc, props);
+            if (writeOriginalBatch) {
+                batch.writeTo(bufferOutputStream);
+                messagesRetained += retainedRecords.size();
+                bytesRetained += batch.sizeInBytes();
+                if (batch.maxTimestamp() > maxTimestamp) {
+                    maxTimestamp = batch.maxTimestamp();
+                    shallowOffsetOfMaxTimestamp = batch.lastOffset();
+                }
+            } else if (!retainedRecords.isEmpty()) {
+                MemoryRecordsBuilder builder = buildRetainedRecordsInto(batch, retainedRecords, bufferOutputStream);
+                MemoryRecords records = builder.build();
+                int filteredBatchSize = records.sizeInBytes();
 
-        // [JACKSON-440] Need to allow reordering of properties to serialize
-        if (_factoryConfig.hasSerializerModifiers()) {
-            for (BeanSerializerModifier mod : _factoryConfig.serializerModifiers()) {
-                props = mod.orderProperties(config, beanDesc, props);
+                messagesRetained += retainedRecords.size();
+                bytesRetained += filteredBatchSize;
+
+                if (filteredBatchSize > batch.sizeInBytes() && filteredBatchSize > maxRecordBatchSize)
+                    log.warn("Record batch from {} with last offset {} exceeded max record batch size {} after cleaning " +
+                                    "(new size is {}). Consumers from version 0.10.1 and earlier may need to " +
+                                    "increase their fetch sizes.",
+                            partition, batch.lastOffset(), maxRecordBatchSize, filteredBatchSize);
+
+                MemoryRecordsBuilder.RecordsInfo info = builder.info();
+                if (info.maxTimestamp > maxTimestamp) {
+                    maxTimestamp = info.maxTimestamp;
+                    shallowOffsetOfMaxTimestamp = info.shallowOffsetOfMaxTimestamp;
+                }
             }
+
+            // If we had to allocate a new buffer to fit the filtered output (see KAFKA-5316), return early to
+            // avoid the need for additional allocations.
+            ByteBuffer outputBuffer = bufferOutputStream.buffer();
+            if (outputBuffer != destinationBuffer)
+                return new FilterResult(outputBuffer, messagesRead, bytesRead, messagesRetained, bytesRetained,
+                        maxOffset, maxTimestamp, shallowOffsetOfMaxTimestamp);
         }
 
-        /* And if Object Id is needed, some preparation for that as well: better
-         * do before view handling, mostly for the custom id case which needs
-         * access to a property
+        return new FilterResult(destinationBuffer, messagesRead, bytesRead, messagesRetained, bytesRetained,
+                maxOffset, maxTimestamp, shallowOffsetOfMaxTimestamp);
+    }
+
+    private static MemoryRecordsBuilder buildRetainedRecordsInto(RecordBatch originalBatch,
+                                                                 List<Record> retainedRecords,
+                                                                 ByteBufferOutputStream bufferOutputStream) {
+        byte magic = originalBatch.magic();
+        TimestampType timestampType = originalBatch.timestampType();
+        long logAppendTime = timestampType == TimestampType.LOG_APPEND_TIME ?
+                originalBatch.maxTimestamp() : RecordBatch.NO_TIMESTAMP;
+        long baseOffset = magic >= RecordBatch.MAGIC_VALUE_V2 ?
+                originalBatch.baseOffset() : retainedRecords.get(0).offset();
+
+        MemoryRecordsBuilder builder = new MemoryRecordsBuilder(bufferOutputStream, magic,
+                originalBatch.compressionType(), timestampType, baseOffset, logAppendTime, originalBatch.producerId(),
+                originalBatch.producerEpoch(), originalBatch.baseSequence(), originalBatch.isTransactional(),
+                originalBatch.isControlBatch(), originalBatch.partitionLeaderEpoch(), bufferOutputStream.limit());
+
+        for (Record record : retainedRecords)
+            builder.append(record);
+
+        if (magic >= RecordBatch.MAGIC_VALUE_V2)
+            // we must preserve the last offset from the initial batch in order to ensure that the
+            // last sequence number from the batch remains even after compaction. Otherwise, the producer
+            // could incorrectly see an out of sequence error.
+            builder.overrideLastOffset(originalBatch.lastOffset());
+
+        return builder;
+    }
+
+    /**
+     * Get the byte buffer that backs this instance for reading.
+     */
+    public ByteBuffer buffer() {
+        return buffer.duplicate();
+    }
+
+    @Override
+    public Iterable<MutableRecordBatch> batches() {
+        return batches;
+    }
+
+    @Override
+    public String toString() {
+        Iterator<Record> iter = records().iterator();
+        StringBuilder builder = new StringBuilder();
+        builder.append('[');
+        while (iter.hasNext()) {
+            Record record = iter.next();
+            builder.append('(');
+            builder.append("record=");
+            builder.append(record);
+            builder.append(")");
+            if (iter.hasNext())
+                builder.append(", ");
+        }
+        builder.append(']');
+        return builder.toString();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
+
+        MemoryRecords that = (MemoryRecords) o;
+
+        return buffer.equals(that.buffer);
+    }
+
+    @Override
+    public int hashCode() {
+        return buffer.hashCode();
+    }
+
+    public static abstract class RecordFilter {
+        /**
+         * Check whether the full batch can be discarded (i.e. whether we even need to
+         * check the records individually).
          */
-        builder.setObjectIdWriter(constructObjectIdHandler(prov, beanDesc, props));
-        
-        builder.setProperties(props);
-        builder.setFilterId(findFilterId(config, beanDesc));
-        
-        AnnotatedMember anyGetter = beanDesc.findAnyGetter();
-        if (anyGetter != null) {
-            if (config.canOverrideAccessModifiers()) {
-                anyGetter.fixAccess();
-            }
-            JavaType type = anyGetter.getType(beanDesc.bindingsForBeanType());
-            // copied from BasicSerializerFactory.buildMapSerializer():
-            boolean staticTyping = config.isEnabled(MapperFeature.USE_STATIC_TYPING);
-            JavaType valueType = type.getContentType();
-            TypeSerializer typeSer = createTypeSerializer(config, valueType);
-            // last 2 nulls; don't know key, value serializers (yet)
-            // 23-Feb-2015, tatu: As per [#705], need to support custom serializers
-            JsonSerializer<?> anySer = findSerializerFromAnnotation(prov, anyGetter);
-            if (anySer == null) {
-                // TODO: support '@JsonIgnoreProperties' with any setter?
-                anySer = MapSerializer.construct(/* ignored props*/ null, type, staticTyping,
-                        typeSer, null, null, /*filterId*/ null);
-            }
-            // TODO: can we find full PropertyName?
-            PropertyName name = PropertyName.construct(anyGetter.getName());
-            BeanProperty.Std anyProp = new BeanProperty.Std(name, valueType, null,
-                    beanDesc.getClassAnnotations(), anyGetter, PropertyMetadata.STD_OPTIONAL);
-            builder.setAnyGetter(new AnyGetterWriter(anyProp, anyGetter, anySer));
+        protected boolean shouldDiscard(RecordBatch batch) {
+            return false;
         }
-        // Next: need to gather view information, if any:
-        processViews(config, builder);
 
-        // Finally: let interested parties mess with the result bit more...
-        if (_factoryConfig.hasSerializerModifiers()) {
-            for (BeanSerializerModifier mod : _factoryConfig.serializerModifiers()) {
-                builder = mod.updateBuilder(config, beanDesc, builder);
-            }
-        }
-        
-        JsonSerializer<Object> ser = (JsonSerializer<Object>) builder.build();
-        
-        if (ser == null) {
-            // If we get this far, there were no properties found, so no regular BeanSerializer
-            // would be constructed. But, couple of exceptions.
-            // First: if there are known annotations, just create 'empty bean' serializer
-            if (beanDesc.hasKnownClassAnnotations()) {
-                return builder.createDummy();
-            }
-        }
-        return ser;
-    }
-
-    protected ObjectIdWriter constructObjectIdHandler(SerializerProvider prov,
-            BeanDescription beanDesc, List<BeanPropertyWriter> props)
-        throws JsonMappingException
-    {
-        ObjectIdInfo objectIdInfo = beanDesc.getObjectIdInfo();
-        if (objectIdInfo == null) {
-            return null;
-        }
-        ObjectIdGenerator<?> gen;
-        Class<?> implClass = objectIdInfo.getGeneratorType();
-
-        // Just one special case: Property-based generator is trickier
-        if (implClass == ObjectIdGenerators.PropertyGenerator.class) { // most special one, needs extra work
-            String propName = objectIdInfo.getPropertyName().getSimpleName();
-            BeanPropertyWriter idProp = null;
-
-            for (int i = 0, len = props.size() ;; ++i) {
-                if (i == len) {
-                    throw new IllegalArgumentException("Invalid Object Id definition for "+beanDesc.getBeanClass().getName()
-                            +": can not find property with name '"+propName+"'");
-                }
-                BeanPropertyWriter prop = props.get(i);
-                if (propName.equals(prop.getName())) {
-                    idProp = prop;
-                    /* Let's force it to be the first property to output
-                     * (although it may still get rearranged etc)
-                     */
-                    if (i > 0) {
-                        props.remove(i);
-                        props.add(0, idProp);
-                    }
-                    break;
-                }
-            }
-            JavaType idType = idProp.getType();
-            gen = new PropertyBasedObjectIdGenerator(objectIdInfo, idProp);
-            // one more thing: must ensure that ObjectIdWriter does not actually write the value:
-            return ObjectIdWriter.construct(idType, (PropertyName) null, gen, objectIdInfo.getAlwaysAsId());
-            
-        } 
-        // other types are simpler
-        JavaType type = prov.constructType(implClass);
-        // Could require type to be passed explicitly, but we should be able to find it too:
-        JavaType idType = prov.getTypeFactory().findTypeParameters(type, ObjectIdGenerator.class)[0];
-        gen = prov.objectIdGeneratorInstance(beanDesc.getClassInfo(), objectIdInfo);
-        return ObjectIdWriter.construct(idType, objectIdInfo.getPropertyName(), gen,
-                objectIdInfo.getAlwaysAsId());
-    }
-
-    /**
-     * Method called to construct a filtered writer, for given view
-     * definitions. Default implementation constructs filter that checks
-     * active view type to views property is to be included in.
-     */
-    protected BeanPropertyWriter constructFilteredBeanWriter(BeanPropertyWriter writer,
-            Class<?>[] inViews)
-    {
-        return FilteredBeanPropertyWriter.constructViewBased(writer, inViews);
-    }
-    
-    protected PropertyBuilder constructPropertyBuilder(SerializationConfig config,
-            BeanDescription beanDesc)
-    {
-        return new PropertyBuilder(config, beanDesc);
-    }
-
-    protected BeanSerializerBuilder constructBeanSerializerBuilder(BeanDescription beanDesc) {
-        return new BeanSerializerBuilder(beanDesc);
-    }
-    
-    /*
-    /**********************************************************
-    /* Overridable non-public introspection methods
-    /**********************************************************
-     */
-    
-    /**
-     * Helper method used to skip processing for types that we know
-     * can not be (i.e. are never consider to be) beans: 
-     * things like primitives, Arrays, Enums, and proxy types.
-     *<p>
-     * Note that usually we shouldn't really be getting these sort of
-     * types anyway; but better safe than sorry.
-     */
-    protected boolean isPotentialBeanType(Class<?> type)
-    {
-        return (ClassUtil.canBeABeanType(type) == null) && !ClassUtil.isProxyType(type);
-    }
-
-    /**
-     * Method used to collect all actual serializable properties.
-     * Can be overridden to implement custom detection schemes.
-     */
-    protected List<BeanPropertyWriter> findBeanProperties(SerializerProvider prov,
-            BeanDescription beanDesc, BeanSerializerBuilder builder)
-        throws JsonMappingException
-    {
-        List<BeanPropertyDefinition> properties = beanDesc.findProperties();
-        final SerializationConfig config = prov.getConfig();
-
-        // [JACKSON-429]: ignore specified types
-        removeIgnorableTypes(config, beanDesc, properties);
-        
-        // and possibly remove ones without matching mutator...
-        if (config.isEnabled(MapperFeature.REQUIRE_SETTERS_FOR_GETTERS)) {
-            removeSetterlessGetters(config, beanDesc, properties);
-        }
-        
-        // nothing? can't proceed (caller may or may not throw an exception)
-        if (properties.isEmpty()) {
-            return null;
-        }
-        // null is for value type serializer, which we don't have access to from here (ditto for bean prop)
-        boolean staticTyping = usesStaticTyping(config, beanDesc, null);
-        PropertyBuilder pb = constructPropertyBuilder(config, beanDesc);
-        
-        ArrayList<BeanPropertyWriter> result = new ArrayList<BeanPropertyWriter>(properties.size());
-        TypeBindings typeBind = beanDesc.bindingsForBeanType();
-        for (BeanPropertyDefinition property : properties) {
-            final AnnotatedMember accessor = property.getAccessor();
-            // [JACKSON-762]: type id? Requires special handling:
-            if (property.isTypeId()) {
-                if (accessor != null) { // only add if we can access... but otherwise?
-                    if (config.canOverrideAccessModifiers()) {
-                        accessor.fixAccess();
-                    }
-                    builder.setTypeId(accessor);
-                }
-                continue;
-            }
-            // [JACKSON-235]: suppress writing of back references
-            AnnotationIntrospector.ReferenceProperty refType = property.findReferenceType();
-            if (refType != null && refType.isBackReference()) {
-                continue;
-            }
-            if (accessor instanceof AnnotatedMethod) {
-                result.add(_constructWriter(prov, property, typeBind, pb, staticTyping, (AnnotatedMethod) accessor));
-            } else {
-                result.add(_constructWriter(prov, property, typeBind, pb, staticTyping, (AnnotatedField) accessor));
-            }
-        }
-        return result;
-    }
-
-    /*
-    /**********************************************************
-    /* Overridable non-public methods for manipulating bean properties
-    /**********************************************************
-     */
-    
-    /**
-     * Overridable method that can filter out properties. Default implementation
-     * checks annotations class may have.
-     */
-    protected List<BeanPropertyWriter> filterBeanProperties(SerializationConfig config,
-            BeanDescription beanDesc, List<BeanPropertyWriter> props)
-    {
-        AnnotationIntrospector intr = config.getAnnotationIntrospector();
-        AnnotatedClass ac = beanDesc.getClassInfo();
-        String[] ignored = intr.findPropertiesToIgnore(ac, true);
-        if (ignored != null && ignored.length > 0) {
-            HashSet<String> ignoredSet = ArrayBuilders.arrayToSet(ignored);
-            Iterator<BeanPropertyWriter> it = props.iterator();
-            while (it.hasNext()) {
-                if (ignoredSet.contains(it.next().getName())) {
-                    it.remove();
-                }
-            }
-        }
-        return props;
-    }
-
-    /**
-     * Method called to handle view information for constructed serializer,
-     * based on bean property writers.
-     *<p>
-     * Note that this method is designed to be overridden by sub-classes
-     * if they want to provide custom view handling. As such it is not
-     * considered an internal implementation detail, and will be supported
-     * as part of API going forward.
-     */
-    protected void processViews(SerializationConfig config, BeanSerializerBuilder builder)
-    {
-        // [JACKSON-232]: whether non-annotated fields are included by default or not is configurable
-        List<BeanPropertyWriter> props = builder.getProperties();
-        boolean includeByDefault = config.isEnabled(MapperFeature.DEFAULT_VIEW_INCLUSION);
-        final int propCount = props.size();
-        int viewsFound = 0;
-        BeanPropertyWriter[] filtered = new BeanPropertyWriter[propCount];
-        // Simple: view information is stored within individual writers, need to combine:
-        for (int i = 0; i < propCount; ++i) {
-            BeanPropertyWriter bpw = props.get(i);
-            Class<?>[] views = bpw.getViews();
-            if (views == null) { // no view info? include or exclude by default?
-                if (includeByDefault) {
-                    filtered[i] = bpw;
-                }
-            } else {
-                ++viewsFound;
-                filtered[i] = constructFilteredBeanWriter(bpw, views);
-            }
-        }
-        // minor optimization: if no view info, include-by-default, can leave out filtering info altogether:
-        if (includeByDefault && viewsFound == 0) {
-            return;
-        }
-        builder.setFilteredProperties(filtered);
-    }
-
-    /**
-     * Method that will apply by-type limitations (as per [JACKSON-429]);
-     * by default this is based on {@link com.fasterxml.jackson.annotation.JsonIgnoreType}
-     * annotation but can be supplied by module-provided introspectors too.
-     */
-    protected void removeIgnorableTypes(SerializationConfig config, BeanDescription beanDesc,
-            List<BeanPropertyDefinition> properties)
-    {
-        AnnotationIntrospector intr = config.getAnnotationIntrospector();
-        HashMap<Class<?>,Boolean> ignores = new HashMap<Class<?>,Boolean>();
-        Iterator<BeanPropertyDefinition> it = properties.iterator();
-        while (it.hasNext()) {
-            BeanPropertyDefinition property = it.next();
-            AnnotatedMember accessor = property.getAccessor();
-            if (accessor == null) {
-                it.remove();
-                continue;
-            }
-            Class<?> type = accessor.getRawType();
-            Boolean result = ignores.get(type);
-            if (result == null) {
-                BeanDescription desc = config.introspectClassAnnotations(type);
-                AnnotatedClass ac = desc.getClassInfo();
-                result = intr.isIgnorableType(ac);
-                // default to false, non-ignorable
-                if (result == null) {
-                    result = Boolean.FALSE;
-                }
-                ignores.put(type, result);
-            }
-            // lotsa work, and yes, it is ignorable type, so:
-            if (result.booleanValue()) {
-                it.remove();
-            }
-        }
-    }
-
-    /**
-     * Helper method that will remove all properties that do not have a mutator.
-     */
-    protected void removeSetterlessGetters(SerializationConfig config, BeanDescription beanDesc,
-            List<BeanPropertyDefinition> properties)
-    {
-        Iterator<BeanPropertyDefinition> it = properties.iterator();
-        while (it.hasNext()) {
-            BeanPropertyDefinition property = it.next();
-            // one caveat: as per [JACKSON-806], only remove implicit properties;
-            // explicitly annotated ones should remain
-            if (!property.couldDeserialize() && !property.isExplicitlyIncluded()) {
-                it.remove();
-            }
-        }
-    }
-
-    /**
-     * Helper method called to ensure that we do not have "duplicate" type ids.
-     * Added to resolve [databind#222]
-     *
-     * @since 2.6
-     */
-    protected List<BeanPropertyWriter> removeOverlappingTypeIds(SerializerProvider prov,
-            BeanDescription beanDesc, BeanSerializerBuilder builder,
-            List<BeanPropertyWriter> props)
-    {
-        for (int i = 0, end = props.size(); i < end; ++i) {
-            BeanPropertyWriter bpw = props.get(i);
-            TypeSerializer td = bpw.getTypeSerializer();
-            if ((td == null) || (td.getTypeInclusion() != As.EXTERNAL_PROPERTY)) {
-                continue;
-            }
-            String n = td.getPropertyName();
-            PropertyName typePropName = PropertyName.construct(n);
-
-            for (BeanPropertyWriter w2 : props) {
-                if ((w2 != bpw) && w2.wouldConflictWithName(typePropName)) {
-                    bpw.assignTypeSerializer(null);
-                    break;
-                }
-            }
-        }
-        return props;
-    }
-    
-    /*
-    /**********************************************************
-    /* Internal helper methods
-    /**********************************************************
-     */
-
-    /**
-     * Secondary helper method for constructing {@link BeanPropertyWriter} for
-     * given member (field or method).
-     */
-    protected BeanPropertyWriter _constructWriter(SerializerProvider prov,
-            BeanPropertyDefinition propDef, TypeBindings typeContext,
-            PropertyBuilder pb, boolean staticTyping, AnnotatedMember accessor)
-        throws JsonMappingException
-    {
-        final PropertyName name = propDef.getFullName();
-        if (prov.canOverrideAccessModifiers()) {
-            accessor.fixAccess();
-        }
-        JavaType type = accessor.getType(typeContext);
-        BeanProperty.Std property = new BeanProperty.Std(name, type, propDef.getWrapperName(),
-                pb.getClassAnnotations(), accessor, propDef.getMetadata());
-
-        // Does member specify a serializer? If so, let's use it.
-        JsonSerializer<?> annotatedSerializer = findSerializerFromAnnotation(prov,
-                accessor);
-        /* 02-Feb-2012, tatu: Unlike most other code paths, serializer produced
-         *  here will NOT be resolved or contextualized, unless done here, so:
+        /**
+         * Check whether a record should be retained in the log. Only records from
+         * batches which were not discarded with {@link #shouldDiscard(RecordBatch)}
+         * will be considered.
          */
-        if (annotatedSerializer instanceof ResolvableSerializer) {
-            ((ResolvableSerializer) annotatedSerializer).resolve(prov);
-        }
-        // 05-Sep-2013, tatu: should be primary property serializer so:
-        annotatedSerializer = prov.handlePrimaryContextualization(annotatedSerializer, property);
-        // And how about polymorphic typing? First special to cover JAXB per-field settings:
-        TypeSerializer contentTypeSer = null;
-        // 16-Feb-2014, cgc: contentType serializers for collection-like and map-like types
-        if (ClassUtil.isCollectionMapOrArray(type.getRawClass())
-                || type.isCollectionLikeType() || type.isMapLikeType()) {
-            contentTypeSer = findPropertyContentTypeSerializer(type, prov.getConfig(), accessor);
-        }
-        // and if not JAXB collection/array with annotations, maybe regular type info?
-        TypeSerializer typeSer = findPropertyTypeSerializer(type, prov.getConfig(), accessor);
-        BeanPropertyWriter pbw = pb.buildWriter(prov, propDef, type, annotatedSerializer,
-                        typeSer, contentTypeSer, accessor, staticTyping);
-        return pbw;
+        protected abstract boolean shouldRetain(RecordBatch recordBatch, Record record);
     }
+
+    public static class FilterResult {
+        public final ByteBuffer output;
+        public final int messagesRead;
+        public final int bytesRead;
+        public final int messagesRetained;
+        public final int bytesRetained;
+        public final long maxOffset;
+        public final long maxTimestamp;
+        public final long shallowOffsetOfMaxTimestamp;
+
+        public FilterResult(ByteBuffer output,
+                            int messagesRead,
+                            int bytesRead,
+                            int messagesRetained,
+                            int bytesRetained,
+                            long maxOffset,
+                            long maxTimestamp,
+                            long shallowOffsetOfMaxTimestamp) {
+            this.output = output;
+            this.messagesRead = messagesRead;
+            this.bytesRead = bytesRead;
+            this.messagesRetained = messagesRetained;
+            this.bytesRetained = bytesRetained;
+            this.maxOffset = maxOffset;
+            this.maxTimestamp = maxTimestamp;
+            this.shallowOffsetOfMaxTimestamp = shallowOffsetOfMaxTimestamp;
+        }
+    }
+
+    public static MemoryRecords readableRecords(ByteBuffer buffer) {
+        return new MemoryRecords(buffer);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset) {
+        return builder(buffer, RecordBatch.CURRENT_MAGIC_VALUE, compressionType, timestampType, baseOffset);
+    }
+
+    public static MemoryRecordsBuilder idempotentBuilder(ByteBuffer buffer,
+                                                         CompressionType compressionType,
+                                                         long baseOffset,
+                                                         long producerId,
+                                                         short producerEpoch,
+                                                         int baseSequence) {
+        return builder(buffer, RecordBatch.CURRENT_MAGIC_VALUE, compressionType, TimestampType.CREATE_TIME,
+                baseOffset, System.currentTimeMillis(), producerId, producerEpoch, baseSequence);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               byte magic,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset) {
+        return builder(buffer, magic, compressionType, timestampType, baseOffset, false);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               byte magic,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset,
+                                               long logAppendTime) {
+        return builder(buffer, magic, compressionType, timestampType, baseOffset, logAppendTime,
+                RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH, RecordBatch.NO_SEQUENCE, false,
+                RecordBatch.NO_PARTITION_LEADER_EPOCH);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               byte magic,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset,
+                                               boolean isTransactional) {
+        long logAppendTime = RecordBatch.NO_TIMESTAMP;
+        if (timestampType == TimestampType.LOG_APPEND_TIME)
+            logAppendTime = System.currentTimeMillis();
+        return builder(buffer, magic, compressionType, timestampType, baseOffset, logAppendTime,
+                RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH, RecordBatch.NO_SEQUENCE, isTransactional,
+                RecordBatch.NO_PARTITION_LEADER_EPOCH);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               byte magic,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset,
+                                               long logAppendTime,
+                                               int partitionLeaderEpoch) {
+        return builder(buffer, magic, compressionType, timestampType, baseOffset, logAppendTime,
+                RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH, RecordBatch.NO_SEQUENCE, false, partitionLeaderEpoch);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               CompressionType compressionType,
+                                               long baseOffset,
+                                               long producerId,
+                                               short producerEpoch,
+                                               int baseSequence,
+                                               boolean isTransactional) {
+        return builder(buffer, RecordBatch.CURRENT_MAGIC_VALUE, compressionType, TimestampType.CREATE_TIME, baseOffset,
+                RecordBatch.NO_TIMESTAMP, producerId, producerEpoch, baseSequence, isTransactional,
+                RecordBatch.NO_PARTITION_LEADER_EPOCH);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               byte magic,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset,
+                                               long logAppendTime,
+                                               long producerId,
+                                               short producerEpoch,
+                                               int baseSequence) {
+        return builder(buffer, magic, compressionType, timestampType, baseOffset, logAppendTime,
+                producerId, producerEpoch, baseSequence, false, RecordBatch.NO_PARTITION_LEADER_EPOCH);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               byte magic,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset,
+                                               long logAppendTime,
+                                               long producerId,
+                                               short producerEpoch,
+                                               int baseSequence,
+                                               boolean isTransactional,
+                                               int partitionLeaderEpoch) {
+        return builder(buffer, magic, compressionType, timestampType, baseOffset,
+                logAppendTime, producerId, producerEpoch, baseSequence, isTransactional, false, partitionLeaderEpoch);
+    }
+
+    public static MemoryRecordsBuilder builder(ByteBuffer buffer,
+                                               byte magic,
+                                               CompressionType compressionType,
+                                               TimestampType timestampType,
+                                               long baseOffset,
+                                               long logAppendTime,
+                                               long producerId,
+                                               short producerEpoch,
+                                               int baseSequence,
+                                               boolean isTransactional,
+                                               boolean isControlBatch,
+                                               int partitionLeaderEpoch) {
+        return new MemoryRecordsBuilder(buffer, magic, compressionType, timestampType, baseOffset,
+                logAppendTime, producerId, producerEpoch, baseSequence, isTransactional, isControlBatch, partitionLeaderEpoch,
+                buffer.remaining());
+    }
+
+    public static MemoryRecords withRecords(CompressionType compressionType, SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, compressionType, records);
+    }
+
+    public static MemoryRecords withRecords(CompressionType compressionType, int partitionLeaderEpoch, SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, 0L, compressionType, TimestampType.CREATE_TIME,
+                RecordBatch.NO_PRODUCER_ID, RecordBatch.NO_PRODUCER_EPOCH, RecordBatch.NO_SEQUENCE,
+                partitionLeaderEpoch, false, records);
+    }
+
+    public static MemoryRecords withRecords(byte magic, CompressionType compressionType, SimpleRecord... records) {
+        return withRecords(magic, 0L, compressionType, TimestampType.CREATE_TIME, records);
+    }
+
+    public static MemoryRecords withRecords(long initialOffset, CompressionType compressionType, SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, initialOffset, compressionType, TimestampType.CREATE_TIME,
+                records);
+    }
+
+    public static MemoryRecords withRecords(long initialOffset, CompressionType compressionType, Integer partitionLeaderEpoch, SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, initialOffset, compressionType, TimestampType.CREATE_TIME, RecordBatch.NO_PRODUCER_ID,
+                RecordBatch.NO_PRODUCER_EPOCH, RecordBatch.NO_SEQUENCE, partitionLeaderEpoch, false, records);
+    }
+
+    public static MemoryRecords withIdempotentRecords(CompressionType compressionType, long producerId,
+                                                      short producerEpoch, int baseSequence, SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, 0L, compressionType, TimestampType.CREATE_TIME, producerId, producerEpoch,
+                baseSequence, RecordBatch.NO_PARTITION_LEADER_EPOCH, false, records);
+    }
+
+    public static MemoryRecords withIdempotentRecords(byte magic, long initialOffset, CompressionType compressionType,
+                                                      long producerId, short producerEpoch, int baseSequence,
+                                                      int partitionLeaderEpoch, SimpleRecord... records) {
+        return withRecords(magic, initialOffset, compressionType, TimestampType.CREATE_TIME, producerId, producerEpoch,
+                baseSequence, partitionLeaderEpoch, false, records);
+    }
+
+    public static MemoryRecords withIdempotentRecords(long initialOffset, CompressionType compressionType, long producerId,
+                                                      short producerEpoch, int baseSequence, int partitionLeaderEpoch,
+                                                      SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, initialOffset, compressionType, TimestampType.CREATE_TIME,
+                producerId, producerEpoch, baseSequence, partitionLeaderEpoch, false, records);
+    }
+
+    public static MemoryRecords withTransactionalRecords(CompressionType compressionType, long producerId,
+                                                         short producerEpoch, int baseSequence, SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, 0L, compressionType, TimestampType.CREATE_TIME,
+                producerId, producerEpoch, baseSequence, RecordBatch.NO_PARTITION_LEADER_EPOCH, true, records);
+    }
+
+    public static MemoryRecords withTransactionalRecords(long initialOffset, CompressionType compressionType, long producerId,
+                                                         short producerEpoch, int baseSequence, int partitionLeaderEpoch,
+                                                         SimpleRecord... records) {
+        return withRecords(RecordBatch.CURRENT_MAGIC_VALUE, initialOffset, compressionType, TimestampType.CREATE_TIME,
+                producerId, producerEpoch, baseSequence, partitionLeaderEpoch, true, records);
+    }
+
+    public static MemoryRecords withRecords(byte magic, long initialOffset, CompressionType compressionType,
+                                            TimestampType timestampType, SimpleRecord... records) {
+        return withRecords(magic, initialOffset, compressionType, timestampType, RecordBatch.NO_PRODUCER_ID,
+                RecordBatch.NO_PRODUCER_EPOCH, RecordBatch.NO_SEQUENCE, RecordBatch.NO_PARTITION_LEADER_EPOCH,
+                false, records);
+    }
+
+    public static MemoryRecords withRecords(byte magic, long initialOffset, CompressionType compressionType,
+                                            TimestampType timestampType, long producerId, short producerEpoch,
+                                            int baseSequence, int partitionLeaderEpoch, boolean isTransactional,
+                                            SimpleRecord ... records) {
+        if (records.length == 0)
+            return MemoryRecords.EMPTY;
+        int sizeEstimate = AbstractRecords.estimateSizeInBytes(magic, compressionType, Arrays.asList(records));
+        ByteBuffer buffer = ByteBuffer.allocate(sizeEstimate);
+        long logAppendTime = RecordBatch.NO_TIMESTAMP;
+        if (timestampType == TimestampType.LOG_APPEND_TIME)
+            logAppendTime = System.currentTimeMillis();
+        MemoryRecordsBuilder builder = new MemoryRecordsBuilder(buffer, magic, compressionType, timestampType,
+                initialOffset, logAppendTime, producerId, producerEpoch, baseSequence, isTransactional, false,
+                partitionLeaderEpoch, buffer.capacity());
+        for (SimpleRecord record : records)
+            builder.append(record);
+        return builder.build();
+    }
+
+    public static MemoryRecords withEndTransactionMarker(long producerId, short producerEpoch, EndTransactionMarker marker) {
+        return withEndTransactionMarker(0L, System.currentTimeMillis(), RecordBatch.NO_PARTITION_LEADER_EPOCH,
+                producerId, producerEpoch, marker);
+    }
+
+    public static MemoryRecords withEndTransactionMarker(long timestamp, long producerId, short producerEpoch,
+                                                         EndTransactionMarker marker) {
+        return withEndTransactionMarker(0L, timestamp, RecordBatch.NO_PARTITION_LEADER_EPOCH, producerId,
+                producerEpoch, marker);
+    }
+
+    public static MemoryRecords withEndTransactionMarker(long initialOffset, long timestamp, int partitionLeaderEpoch,
+                                                         long producerId, short producerEpoch,
+                                                         EndTransactionMarker marker) {
+        int endTxnMarkerBatchSize = DefaultRecordBatch.RECORD_BATCH_OVERHEAD +
+                EndTransactionMarker.CURRENT_END_TXN_SCHEMA_RECORD_SIZE;
+        ByteBuffer buffer = ByteBuffer.allocate(endTxnMarkerBatchSize);
+        writeEndTransactionalMarker(buffer, initialOffset, timestamp, partitionLeaderEpoch, producerId,
+                producerEpoch, marker);
+        buffer.flip();
+        return MemoryRecords.readableRecords(buffer);
+    }
+
+    public static void writeEndTransactionalMarker(ByteBuffer buffer, long initialOffset, long timestamp,
+                                                   int partitionLeaderEpoch, long producerId, short producerEpoch,
+                                                   EndTransactionMarker marker) {
+        boolean isTransactional = true;
+        boolean isControlBatch = true;
+        MemoryRecordsBuilder builder = new MemoryRecordsBuilder(buffer, RecordBatch.CURRENT_MAGIC_VALUE, CompressionType.NONE,
+                TimestampType.CREATE_TIME, initialOffset, timestamp, producerId, producerEpoch,
+                RecordBatch.NO_SEQUENCE, isTransactional, isControlBatch, partitionLeaderEpoch,
+                buffer.capacity());
+        builder.appendEndTxnMarker(timestamp, marker);
+        builder.close();
+    }
+
 }

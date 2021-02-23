@@ -24,7 +24,7 @@ public class ChangePoolGenerator {
 	}
 
 	public void collect(Script script) {
-		System.out.println(script.toString()) ;
+		// System.out.println(script.toString()) ;
 
 		for (Change c : script.changes.keySet()) {
 			ContextIdentifier identifier = pool.getIdentifier();
@@ -37,8 +37,8 @@ public class ChangePoolGenerator {
 					pool.add(context, revChange);
 
 					System.out.println("Added Change type: " + revChange.type);
-					System.out.println("Added Change node: " + revChange.node.value);
-					System.out.println("Added Change location: " + revChange.location.value);
+					System.out.println("Added Change node: " + revChange.node.label);
+					System.out.println("Added Change location: " + revChange.location.label);
 					System.out.println("Added Change Context: " + context.toString()+"\n");
 				}
 				if (c.type.compareTo(Change.DELETE) == 0) {
@@ -46,14 +46,14 @@ public class ChangePoolGenerator {
 					pool.add(context, revChange);
 
 					System.out.println("Added Change type: " + revChange.type);
-					System.out.println("Added Change node: " + revChange.node.value);
-					System.out.println("Added Change location: " + revChange.location.value);
+					System.out.println("Added Change node: " + revChange.node.label);
+					System.out.println("Added Change location: " + revChange.location.label);
 					System.out.println("Added Change Context: " + context.toString()+"\n");
 				}
 				pool.add(context, c);
 				System.out.println("Added Change type: " + c.type);
-				System.out.println("Added Change node: " + c.node.value);
-				System.out.println("Added Change location: " + c.location.value);
+				System.out.println("Added Change node: " + c.node.label);
+				System.out.println("Added Change location: " + c.location.label);
 				System.out.println("Added Change Context: " + context.toString()+"\n");
 			}
 			
@@ -85,12 +85,19 @@ public class ChangePoolGenerator {
 		System.out.println("cleanFiles size: "+cleanFiles.size());
 		try {
 			for (int i = 0; i < bugFiles.size(); i++) {
+
+				if(bugFiles.get(i) == null || cleanFiles.get(i) == null)
+					continue;
+
+				System.out.println("buggy file : "+bugFiles.get(i).getName());
+				System.out.println("clean file : "+cleanFiles.get(i).getName());
+
 				// Generate EditScript from before and after.
 				String oldCode = IOUtils.readFile(bugFiles.get(i));
 				String newCode = IOUtils.readFile(cleanFiles.get(i));
 
-				System.out.println("First letter of old code: "+oldCode.charAt(0));
-				System.out.println("First letter of new code: "+newCode.charAt(0));
+				// System.out.println("First letter of old code: "+oldCode.charAt(0));
+				// System.out.println("First letter of new code: "+newCode.charAt(0));
 
 				Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i));
 				Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i));

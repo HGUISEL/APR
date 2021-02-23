@@ -1,314 +1,124 @@
 /*
- * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//cli/src/java/org/apache/commons/cli/PosixParser.java,v 1.11 2002/09/19 22:59:43 jkeyes Exp $
- * $Revision: 1.11 $
- * $Date: 2002/09/19 22:59:43 $
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * ====================================================================
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * The Apache Software License, Version 1.1
- *
- * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
- * reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. The end-user documentation included with the redistribution, if
- *    any, must include the following acknowlegement:
- *       "This product includes software developed by the
- *        Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowlegement may appear in the software itself,
- *    if and wherever such third-party acknowlegements normally appear.
- *
- * 4. The names "The Jakarta Project", "Commons", and "Apache Software
- *    Foundation" must not be used to endorse or promote products derived
- *    from this software without prior written permission. For written
- *    permission, please contact apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache"
- *    nor may "Apache" appear in their names without prior written
- *    permission of the Apache Group.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation.  For more
- * information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.commons.cli;
+package org.jclouds.aws.s3.blobstore;
 
-import java.util.Arrays;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.Map;
+import static org.jclouds.s3.domain.ObjectMetadata.StorageClass.REDUCED_REDUNDANCY;
+
+import java.util.Set;
+
+import javax.inject.Inject;
+import javax.inject.Provider;
+
+import org.jclouds.aws.domain.Region;
+import org.jclouds.aws.s3.AWSS3Client;
+import org.jclouds.aws.s3.blobstore.options.AWSS3PutObjectOptions;
+import org.jclouds.aws.s3.blobstore.options.AWSS3PutOptions;
+import org.jclouds.blobstore.BlobStoreContext;
+import org.jclouds.blobstore.domain.Blob;
+import org.jclouds.blobstore.domain.PageSet;
+import org.jclouds.blobstore.domain.StorageMetadata;
+import org.jclouds.blobstore.functions.BlobToHttpGetOptions;
+import org.jclouds.blobstore.options.CreateContainerOptions;
+import org.jclouds.blobstore.options.PutOptions;
+import org.jclouds.blobstore.strategy.internal.FetchBlobMetadata;
+import org.jclouds.blobstore.util.BlobUtils;
+import org.jclouds.collect.Memoized;
+import org.jclouds.domain.Location;
+import org.jclouds.io.PayloadSlicer;
+import org.jclouds.s3.blobstore.S3BlobStore;
+import org.jclouds.s3.blobstore.functions.BlobToObject;
+import org.jclouds.s3.blobstore.functions.BlobToObjectMetadata;
+import org.jclouds.s3.blobstore.functions.BucketToResourceList;
+import org.jclouds.s3.blobstore.functions.ContainerToBucketListOptions;
+import org.jclouds.s3.blobstore.functions.ObjectToBlob;
+import org.jclouds.s3.blobstore.functions.ObjectToBlobMetadata;
+import org.jclouds.s3.domain.AccessControlList;
+import org.jclouds.s3.domain.BucketMetadata;
+import org.jclouds.s3.domain.CannedAccessPolicy;
+import org.jclouds.s3.domain.ObjectMetadata;
+
+import com.google.common.base.Function;
+import com.google.common.base.Supplier;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 
 /**
- * The class PosixParser provides an implementation of the 
- * {@link Parser#flatten(Options,String[],boolean) flatten} method.
- *
- * @author John Keyes (john at integralsource.com)
- * @see Parser
- * @version $Revision: 1.11 $
+ * Provide AWS S3 specific extensions.
  */
-public class PosixParser extends Parser {
+public class AWSS3BlobStore extends S3BlobStore {
 
-    /** holder for flattened tokens */
-    private ArrayList tokens = new ArrayList();
-    /** specifies if bursting should continue */
-    private boolean eatTheRest;
-    /** holder for the current option */
-    private Option currentOption;
-    /** the command line Options */
-    private Options options;
+   private final LoadingCache<String, AccessControlList> bucketAcls;
+   private final BlobToObject blob2Object;
 
-    /**
-     * <p>Resets the members to their original state i.e. remove
-     * all of <code>tokens</code> entries, set <code>eatTheRest</code>
-     * to false and set <code>currentOption</code> to null.</p>
-     */
-    private void init() {
-        eatTheRest = false;
-        tokens.clear();
-        currentOption = null;
-    }
+   @Inject
+   AWSS3BlobStore(BlobStoreContext context, BlobUtils blobUtils, Supplier<Location> defaultLocation,
+            @Memoized Supplier<Set<? extends Location>> locations, PayloadSlicer slicer, AWSS3Client sync,
+            Function<Set<BucketMetadata>, PageSet<? extends StorageMetadata>> convertBucketsToStorageMetadata,
+            ContainerToBucketListOptions container2BucketListOptions, BucketToResourceList bucket2ResourceList,
+            ObjectToBlob object2Blob, BlobToHttpGetOptions blob2ObjectGetOptions, BlobToObject blob2Object,
+            BlobToObjectMetadata blob2ObjectMetadata,
+            ObjectToBlobMetadata object2BlobMd, Provider<FetchBlobMetadata> fetchBlobMetadataProvider,
+            LoadingCache<String, AccessControlList> bucketAcls) {
+      super(context, blobUtils, defaultLocation, locations, slicer, sync, convertBucketsToStorageMetadata,
+               container2BucketListOptions, bucket2ResourceList, object2Blob, blob2ObjectGetOptions, blob2Object,
+               blob2ObjectMetadata, object2BlobMd, fetchBlobMetadataProvider, bucketAcls);
+      this.bucketAcls = bucketAcls;
+      this.blob2Object = blob2Object;
+   }
 
-    /**
-     * <p>An implementation of {@link Parser}'s abstract
-     * {@link Parser#flatten(Options,String[],boolean) flatten} method.</p>
-     *
-     * <p>The following are the rules used by this flatten method.
-     * <ol>
-     *  <li>if <code>stopAtNonOption</code> is <b>true</b> then do not
-     *  burst anymore of <code>arguments</code> entries, just add each
-     *  successive entry without further processing.  Otherwise, ignore
-     *  <code>stopAtNonOption</code>.</li>
-     *  <li>if the current <code>arguments</code> entry is "<b>--</b>"
-     *  just add the entry to the list of processed tokens</li>
-     *  <li>if the current <code>arguments</code> entry is "<b>-</b>"
-     *  just add the entry to the list of processed tokens</li>
-     *  <li>if the current <code>arguments</code> entry is two characters
-     *  in length and the first character is "<b>-</b>" then check if this
-     *  is a valid {@link Option} id.  If it is a valid id, then add the
-     *  entry to the list of processed tokens and set the current {@link Option}
-     *  member.  If it is not a valid id and <code>stopAtNonOption</code>
-     *  is true, then the remaining entries are copied to the list of 
-     *  processed tokens.  Otherwise, the current entry is ignored.</li>
-     *  <li>if the current <code>arguments</code> entry is more than two
-     *  characters in length and the first character is "<b>-</b>" then
-     *  we need to burst the entry to determine its constituents.  For more
-     *  information on the bursting algorithm see 
-     *  {@link PosixParser#burstToken( String, boolean) burstToken}.</li>
-     *  <li>if the current <code>arguments</code> entry is not handled 
-     *  by any of the previous rules, then the entry is added to the list
-     *  of processed tokens.</li>
-     * </ol>
-     * </p>
-     *
-     * @param options The command line {@link Options}
-     * @param arguments The command line arguments to be parsed
-     * @param stopAtNonOption Specifies whether to stop flattening
-     * when an non option is found.
-     * @return The flattened <code>arguments</code> String array.
-     */
-    protected String[] flatten( Options options, 
-                                String[] arguments, 
-                                boolean stopAtNonOption )
-    {
-        init();
-        this.options = options;
+   @Override
+   public String putBlob(String container, Blob blob, PutOptions options) {
+      if (options.isMultipart()) {
+         return putMultipartBlob(container, blob, options);
+      } else if ((options instanceof AWSS3PutOptions) &&
+         (((AWSS3PutOptions) options).getStorageClass() == REDUCED_REDUNDANCY)) {
+         return putBlobWithReducedRedundancy(container, blob);
 
-        // an iterator for the command line tokens
-        Iterator iter = Arrays.asList( arguments ).iterator();
-        String token = null;
-        
-        // process each command line token
-        while ( iter.hasNext() ) {
+      } else {
+         return super.putBlob(container, blob, options);
+      }
+   }
 
-            // get the next command line token
-            token = (String) iter.next();
+   private String putBlobWithReducedRedundancy(String container, Blob blob) {
+      AWSS3PutObjectOptions options = new AWSS3PutObjectOptions();
+      try {
+         AccessControlList acl = bucketAcls.getUnchecked(container);
+         if (acl != null && acl.hasPermission(AccessControlList.GroupGranteeURI.ALL_USERS,
+                                              AccessControlList.Permission.READ)) {
+            options.withAcl(CannedAccessPolicy.PUBLIC_READ);
+         }
+         options.storageClass(ObjectMetadata.StorageClass.REDUCED_REDUNDANCY);
 
-            // handle SPECIAL TOKEN
-            if( token.startsWith( "--" ) ) {
-                if( token.indexOf( '=' ) != -1 ) {
-                    tokens.add( token.substring( 0, token.indexOf( '=' ) ) );
-                    tokens.add( token.substring( token.indexOf( '=' ) + 1,
-                                                 token.length() ) );
-                }
-                else {
-                    tokens.add( token );
-                }	
-            }
-            // single hyphen
-            else if( "-".equals( token ) ) {
-                processSingleHyphen( token );
-            }
-            else if( token.startsWith( "-" ) ) {
-                int tokenLength = token.length();
-                if( tokenLength == 2 ) {
-                    processOptionToken( token, stopAtNonOption );
-                }
-                // requires bursting
-                else {
-                    burstToken( token, stopAtNonOption );
-                }
-            }
-            else {
-                if( stopAtNonOption ) {
-                    process( token );
-                }
-                else {
-                    tokens.add( token );
-                }
-            }
+      } catch (CacheLoader.InvalidCacheLoadException e) {
+         // nulls not permitted from cache loader
+      }
+      return getContext().unwrapApi(AWSS3Client.class).putObject(container, blob2Object.apply(blob), options);
+   }
 
-            gobble( iter );
-        }
-
-        return (String[])tokens.toArray( new String[] {} );
-    }
-
-    /**
-     * <p>Adds the remaining tokens to the processed tokens list.</p>
-     *
-     * @param iter An iterator over the remaining tokens
-     */
-    private void gobble( Iterator iter ) {
-        if( eatTheRest ) {
-            while( iter.hasNext() ) {
-                tokens.add( iter.next() );
-            }
-        }
-    }
-
-    /**
-     * <p>If there is a current option and it can have an argument
-     * value then add the token to the processed tokens list and 
-     * set the current option to null.</p>
-     * <p>If there is a current option and it can have argument
-     * values then add the token to the processed tokens list.</p>
-     * <p>If there is not a current option add the special token
-     * "<b>--</b>" and the current <code>value</code> to the processed
-     * tokens list.  The add all the remaining <code>argument</code>
-     * values to the processed tokens list.</p>
-     *
-     * @param value The current token
-     */
-    private void process( String value ) {
-        if( currentOption != null && currentOption.hasArg() ) {
-            if( currentOption.hasArg() ) {
-                tokens.add( value );
-                currentOption = null;
-            }
-            else if (currentOption.hasArgs() ) {
-                tokens.add( value );
-            }
-        }
-        else {
-            eatTheRest = true;
-            tokens.add( "--" );
-            tokens.add( value );
-        }
-    }
-
-    /**
-     * <p>If it is a hyphen then add the hyphen directly to
-     * the processed tokens list.</p>
-     *
-     * @param hyphen The hyphen token
-     */
-    private void processSingleHyphen( String hyphen ) {
-        tokens.add( hyphen );
-    }
-
-    /**
-     * <p>If an {@link Option} exists for <code>token</code> then
-     * set the current option and add the token to the processed 
-     * list.</p>
-     * <p>If an {@link Option} does not exist and <code>stopAtNonOption</code>
-     * is set then ignore the current token and add the remaining tokens
-     * to the processed tokens list directly.</p>
-     *
-     * @param token The current option token
-     * @param stopAtNonOption Specifies whether flattening should halt
-     * at the first non option.
-     */
-    private void processOptionToken( String token, boolean stopAtNonOption ) {
-        if( this.options.hasOption( token ) ) {
-            currentOption = this.options.getOption( token );
-            tokens.add( token );
-        }
-        else if( stopAtNonOption ) {
-            eatTheRest = true;
-        }
-    }
-
-    /**
-     * <p>Breaks <code>token</code> into its constituent parts
-     * using the following algorithm.
-     * <ul>
-     *  <li>ignore the first character ("<b>-</b>" )</li>
-     *  <li>foreach remaining character check if an {@link Option}
-     *  exists with that id.</li>
-     *  <li>if an {@link Option} does exist then add that character
-     *  prepended with "<b>-</b>" to the list of processed tokens.</li>
-     *  <li>if the {@link Option} can have an argument value and there 
-     *  are remaining characters in the token then add the remaining 
-     *  characters as a token to the list of processed tokens.</li>
-     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b> 
-     *  <code>stopAtNonOption</code> <b>IS</b> set then add the special token
-     *  "<b>--</b>" followed by the remaining characters and also 
-     *  the remaining tokens directly to the processed tokens list.</li>
-     *  <li>if an {@link Option} does <b>NOT</b> exist <b>AND</b>
-     *  <code>stopAtNonOption</code> <b>IS NOT</b> set then add that
-     *  character prepended with "<b>-</b>".</li>
-     * </ul>
-     * </p>
-     */
-    protected void burstToken( String token, boolean stopAtNonOption ) {
-        int tokenLength = token.length();
-
-        for( int i = 1; i < tokenLength; i++) {
-            String ch = String.valueOf( token.charAt( i ) );
-            boolean hasOption = options.hasOption( ch );
-
-            if( hasOption ) {
-                tokens.add( "-" + ch );
-                currentOption = options.getOption( ch );
-                if( currentOption.hasArg() && token.length()!=i+1 ) {
-                    tokens.add( token.substring( i+1 ) );
-                    break;
-                }
-            }
-            else if( stopAtNonOption ) {
-                process( token.substring( i ) );
-            }
-            else {
-                tokens.add( "-" + ch );
-            }
-        }
-    }
+   @Override
+   public boolean createContainerInLocation(Location location, String container,
+                                            CreateContainerOptions options) {
+      if ((location == null || location.getId().equals(Region.US_STANDARD)) &&
+           containerExists(container)) {
+         // AWS-S3 returns the incorrect creation status when a container
+         // already exists in the us-standard (or default) region.  See
+         // JCLOUDS-334 for details.
+         return false;
+      }
+      return super.createContainerInLocation(location, container, options);
+   }
 }

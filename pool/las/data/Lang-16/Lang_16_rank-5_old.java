@@ -1,339 +1,227 @@
-/*
- * $Header: /home/cvs/jakarta-commons-sandbox/cli/src/java/org/apache/commons/cli/CommandLine.java,v 1.4 2002/06/06 22:32:37 bayard Exp $
- * $Revision: 1.4 $
- * $Date: 2002/06/06 22:32:37 $
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * ====================================================================
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * The Apache Software License, Version 1.1
- *
- * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
- * reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. The end-user documentation included with the redistribution, if
- *    any, must include the following acknowlegement:
- *       "This product includes software developed by the
- *        Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowlegement may appear in the software itself,
- *    if and wherever such third-party acknowlegements normally appear.
- *
- * 4. The names "The Jakarta Project", "Commons", and "Apache Software
- *    Foundation" must not be used to endorse or promote products derived
- *    from this software without prior written permission. For written
- *    permission, please contact apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache"
- *    nor may "Apache" appear in their names without prior written
- *    permission of the Apache Group.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation.  For more
- * information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.commons.cli;
+package org.apache.drill.exec.server.options;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.LinkedList;
-import java.util.Map;
+import java.math.BigDecimal;
+import java.util.HashSet;
+import java.util.Set;
 
-/** 
- * <p>Represents list of arguments parsed against
- * a {@link Options} descriptor.<p>
- *
- * <p>It allows querying of a boolean {@link #hasOption(String opt)},
- * in addition to retrieving the {@link #getOptionValue(String opt)}
- * for options requiring arguments.</p>
- *
- * <p>Additionally, any left-over or unrecognized arguments,
- * are available for further processing.</p>
- *
- * @author bob mcwhirter (bob @ werken.com)
- * @author <a href="mailto:jstrachan@apache.org">James Strachan</a>
- * @author John Keyes (john at integralsource.com)
- */
-public class CommandLine {
-    
-    /** the unrecognised options/arguments */
-    private List args    = new LinkedList();
+import org.apache.drill.common.exceptions.ExpressionParsingException;
+import org.apache.drill.exec.server.options.OptionValue.Kind;
+import org.apache.drill.exec.server.options.OptionValue.OptionType;
+import org.eigenbase.sql.SqlLiteral;
+import org.eigenbase.sql.type.SqlTypeName;
+import org.eigenbase.util.NlsString;
 
-    /** the processed options */
-    private Map options = new HashMap();
+public class TypeValidators {
+//  private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(TypeValidators.class);
 
-    /** the option name map */
-    private Map names   = new HashMap();
+  public static class PositiveLongValidator extends LongValidator {
+    private final long max;
 
-    /** Map of unique options for ease to get complete list of options */
-    private Map hashcodeMap = new HashMap();
-
-    /** the processed options */
-    private Option[] optionsArray;
-
-    /**
-     * <p>Creates a command line.</p>
-     */
-    CommandLine() {
-    }
-    
-    /** 
-     * <p>Query to see if an option has been set.</p>
-     *
-     * @param opt Short name of the option
-     * @return true if set, false if not
-     */
-    public boolean hasOption(String opt) {
-        return options.containsKey( opt );
+    public PositiveLongValidator(String name, long max, long def) {
+      super(name, def);
+      this.max = max;
     }
 
-    /** 
-     * <p>Query to see if an option has been set.</p>
-     *
-     * @param opt character name of the option
-     * @return true if set, false if not
-     */
-    public boolean hasOption( char opt ) {
-        return hasOption( String.valueOf( opt ) );
+    @Override
+    public void validate(OptionValue v) throws ExpressionParsingException {
+      super.validate(v);
+      if (v.num_val > max || v.num_val < 0) {
+        throw new ExpressionParsingException(String.format("Option %s must be between %d and %d.", getOptionName(), 0,
+            max));
+      }
+    }
+  }
+
+  public static class PowerOfTwoLongValidator extends PositiveLongValidator {
+
+    public PowerOfTwoLongValidator(String name, long max, long def) {
+      super(name, max, def);
     }
 
-    /**
-     * <p>Return the <code>Object</code> type of this <code>Option</code>.</p>
-     *
-     * @param opt the name of the option
-     * @return the type of this <code>Option</code>
-     */
-    public Object getOptionObject( String opt ) {
-        String res = getOptionValue( opt );
-        
-        Object type = ((Option)((List)options.get(opt)).iterator().next()).getType();
-        return res == null ? null : TypeHandler.createValue(res, type);
+    @Override
+    public void validate(OptionValue v) throws ExpressionParsingException {
+      super.validate(v);
+      if (!isPowerOfTwo(v.num_val)) {
+        throw new ExpressionParsingException(String.format("Option %s must be a power of two.", getOptionName()));
+      }
     }
 
-    /**
-     * <p>Return the <code>Object</code> type of this <code>Option</code>.</p>
-     *
-     * @param opt the name of the option
-     * @return the type of opt
-     */
-    public Object getOptionObject( char opt ) {
-        return getOptionObject( String.valueOf( opt ) );
+    private boolean isPowerOfTwo(long num) {
+      return (num & (num - 1)) == 0;
+    }
+  }
+
+  public static class RangeDoubleValidator extends DoubleValidator {
+    private final double min;
+    private final double max;
+
+    public RangeDoubleValidator(String name, double min, double max, double def) {
+      super(name, def);
+      this.min = min;
+      this.max = max;
     }
 
-    /** 
-     * <p>Retrieve the argument, if any, of this option.</p>
-     *
-     * @param opt the name of the option
-     * @return Value of the argument if option is set, and has an argument,
-     * otherwise null.
-     */
-    public String getOptionValue( String opt ) {
-        String[] values = getOptionValues(opt);
-        return (values == null) ? null : values[0];
+    @Override
+    public void validate(OptionValue v) throws ExpressionParsingException {
+      super.validate(v);
+      if (v.float_val > max || v.float_val < min) {
+        throw new ExpressionParsingException(String.format("Option %s must be between %f and %f.",
+            getOptionName(), min, max));
+      }
     }
 
-    /** 
-     * <p>Retrieve the argument, if any, of this option.</p>
-     *
-     * @param opt the character name of the option
-     * @return Value of the argument if option is set, and has an argument,
-     * otherwise null.
-     */
-    public String getOptionValue( char opt ) {
-        return getOptionValue( String.valueOf( opt ) );
+  }
+
+  public static class BooleanValidator extends TypeValidator {
+    public BooleanValidator(String name, boolean def) {
+      super(name, Kind.BOOLEAN, OptionValue.createBoolean(OptionType.SYSTEM, name, def));
+    }
+  }
+
+  public static class StringValidator extends TypeValidator {
+    public StringValidator(String name, String def) {
+      super(name, Kind.STRING, OptionValue.createString(OptionType.SYSTEM, name, def));
+    }
+  }
+
+  public static class LongValidator extends TypeValidator {
+    public LongValidator(String name, long def) {
+      super(name, Kind.LONG, OptionValue.createLong(OptionType.SYSTEM, name, def));
+    }
+  }
+
+  public static class DoubleValidator extends TypeValidator {
+    public DoubleValidator(String name, double def) {
+      super(name, Kind.DOUBLE, OptionValue.createDouble(OptionType.SYSTEM, name, def));
+    }
+  }
+
+  public static class RangeLongValidator extends LongValidator {
+    private final long min;
+    private final long max;
+
+    public RangeLongValidator(String name, long min, long max, long def) {
+      super(name, def);
+      this.min = min;
+      this.max = max;
     }
 
-    /** 
-     * <p>Retrieves the array of values, if any, of an option.</p>
-     *
-     * @param opt string name of the option
-     * @return Values of the argument if option is set, and has an argument,
-     * otherwise null.
-     */
-    public String[] getOptionValues( String opt ) {
-        List values = new java.util.ArrayList();
+    @Override
+    public void validate(OptionValue v) throws ExpressionParsingException {
+      super.validate(v);
+      if (v.num_val > max || v.num_val < min) {
+        throw new ExpressionParsingException(String.format("Option %s must be between %d and %d.",
+            getOptionName(), min, max));
+      }
+    }
+  }
 
-        String key = opt;
-        if( names.containsKey( opt ) ) {
-            key = (String)names.get( opt );
-        }
+  /**
+   * Validator that checks if the given value is included in a list of acceptable values. Case insensitive.
+   */
+  public static class EnumeratedStringValidator extends StringValidator {
+    private final Set<String> valuesSet = new HashSet<>();
 
-        if( options.containsKey( key ) ) {
-            List opts = (List)options.get( key );
-            Iterator iter = opts.iterator();
-
-            while( iter.hasNext() ) {
-                Option optt = (Option)iter.next();
-                values.addAll( optt.getValuesList() );
-            }
-        }
-        return (values.size() == 0) ? null : (String[])values.toArray(new String[]{});
+    public EnumeratedStringValidator(String name, String def, String... values) {
+      super(name, def);
+      for (String value : values) {
+        valuesSet.add(value.toLowerCase());
+      }
     }
 
-    /** 
-     * <p>Retrieves the array of values, if any, of an option.</p>
-     *
-     * @param opt character name of the option
-     * @return Values of the argument if option is set, and has an argument,
-     * otherwise null.
-     */
-    public String[] getOptionValues( char opt ) {
-        return getOptionValues( String.valueOf( opt ) );
+    @Override
+    public void validate(final OptionValue v) throws ExpressionParsingException {
+      super.validate(v);
+      if (!valuesSet.contains(v.string_val.toLowerCase())) {
+        throw new ExpressionParsingException(String.format("Option %s must be one of: %s", getOptionName(), valuesSet));
+      }
     }
-    
-    /** 
-     * <p>Retrieve the argument, if any, of an option.</p>
-     *
-     * @param opt name of the option
-     * @param defaultValue is the default value to be returned if the option is not specified
-     * @return Value of the argument if option is set, and has an argument,
-     * otherwise <code>defaultValue</code>.
-     */
-    public String getOptionValue( String opt, String defaultValue ) {
-        String answer = getOptionValue( opt );
-        return ( answer != null ) ? answer : defaultValue;
-    }
-    
-    /** 
-     * <p>Retrieve the argument, if any, of an option.</p>
-     *
-     * @param opt character name of the option
-     * @param defaultValue is the default value to be returned if the option is not specified
-     * @return Value of the argument if option is set, and has an argument,
-     * otherwise <code>defaultValue</code>.
-     */
-    public String getOptionValue( char opt, String defaultValue ) {
-        return getOptionValue( String.valueOf( opt ), defaultValue );
+  }
+
+  public static abstract class TypeValidator extends OptionValidator {
+    private final Kind kind;
+    private final OptionValue defaultValue;
+
+    public TypeValidator(final String name, final Kind kind, final OptionValue defValue) {
+      super(name);
+      this.kind = kind;
+      this.defaultValue = defValue;
     }
 
-    /** 
-     * <p>Retrieve any left-over non-recognized options and arguments</p>
-     *
-     * @return remaining items passed in but not parsed as an array
-     */
-    public String[] getArgs() {
-        String[] answer = new String[ args.size() ];
-        args.toArray( answer );
-        return answer;
-    }
-    
-    /** 
-     * <p>Retrieve any left-over non-recognized options and arguments</p>
-     *
-     * @return remaining items passed in but not parsed as a <code>List</code>.
-     */
-    public List getArgList() {
-        return args;
-    }
-    
-    /** 
-     * jkeyes
-     * - commented out until it is implemented properly
-     * <p>Dump state, suitable for debugging.</p>
-     *
-     * @return Stringified form of this object
-     */
-    /*
-    public String toString() {
-        StringBuffer buf = new StringBuffer();
-        
-        buf.append( "[ CommandLine: [ options: " );
-        buf.append( options.toString() );
-        buf.append( " ] [ args: ");
-        buf.append( args.toString() );
-        buf.append( " ] ]" );
-        
-        return buf.toString();
-    }
-    */
-
-    /**
-     * <p>Add left-over unrecognized option/argument.</p>
-     *
-     * @param arg the unrecognised option/argument.
-     */
-    void addArg(String arg) {
-        args.add( arg );
-    }
-        
-    /**
-     * <p>Add an option to the command line.  The values of 
-     * the option are stored.</p>
-     *
-     * @param opt the processed option
-     */
-    void addOption( Option opt ) {
-        hashcodeMap.put( new Integer( opt.hashCode() ), opt );
-
-        String key = opt.getOpt();
-        if( " ".equals(key) ) {
-            key = opt.getLongOpt();
-        }
-        else {
-            names.put( opt.getLongOpt(), key );
-        }
-
-        if( options.get( key ) != null ) {
-            ((java.util.List)options.get( key )).add( opt );
-        }
-        else {
-            options.put( key, new java.util.ArrayList() );
-            ((java.util.List)options.get( key ) ).add( opt );
-        }
+    @Override
+    public OptionValue getDefault() {
+      return defaultValue;
     }
 
-    /**
-     * <p>Returns an iterator over the Option members of CommandLine.</p>
-     *
-     * @return an <code>Iterator</code> over the processed {@link Option} 
-     * members of this {@link CommandLine}
-     */
-    public Iterator iterator( ) {
-        return hashcodeMap.values().iterator();
+    @Override
+    public OptionValue validate(final SqlLiteral value, final OptionType optionType)
+        throws ExpressionParsingException {
+      final OptionValue op = getPartialValue(getOptionName(), optionType, value);
+      validate(op);
+      return op;
     }
 
-    /**
-     * <p>Returns an array of the processed {@link Option}s.</p>
-     *
-     * @return an array of the processed {@link Option}s.
-     */
-    public Option[] getOptions( ) {
-        Collection processed = hashcodeMap.values();
+    @Override
+    public void validate(final OptionValue v) throws ExpressionParsingException {
+      if (v.kind != kind) {
+        throw new ExpressionParsingException(String.format(
+            "Option %s must be of type %s but you tried to set to %s.",
+            getOptionName(), kind.name(), v.kind.name()));
+      }
+    }
+  }
 
-        // reinitialise array
-        optionsArray = new Option[ processed.size() ];
-
-        // return the array
-        return (Option[]) processed.toArray( optionsArray );
+  private static OptionValue getPartialValue(final String name, final OptionType type, final SqlLiteral literal) {
+    final Object object = literal.getValue();
+    final SqlTypeName typeName = literal.getTypeName();
+    switch (typeName) {
+    case DECIMAL: {
+      final BigDecimal bigDecimal = (BigDecimal) object;
+      if (bigDecimal.scale() == 0) {
+        return OptionValue.createLong(type, name, bigDecimal.longValue());
+      } else {
+        return OptionValue.createDouble(type, name, bigDecimal.doubleValue());
+      }
     }
 
+    case DOUBLE:
+    case FLOAT:
+      return OptionValue.createDouble(type, name, ((BigDecimal) object).doubleValue());
+
+    case SMALLINT:
+    case TINYINT:
+    case BIGINT:
+    case INTEGER:
+      return OptionValue.createLong(type, name, ((BigDecimal) object).longValue());
+
+    case VARBINARY:
+    case VARCHAR:
+    case CHAR:
+      return OptionValue.createString(type, name, ((NlsString) object).getValue());
+
+    case BOOLEAN:
+      return OptionValue.createBoolean(type, name, (Boolean) object);
+
+    default:
+      throw new ExpressionParsingException(String.format(
+          "Drill doesn't support set option expressions with literals of type %s.", typeName));
+    }
+  }
 }

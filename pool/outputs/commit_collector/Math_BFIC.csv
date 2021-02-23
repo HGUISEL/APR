@@ -1,12 +1,9 @@
 Project,D4J ID,Faulty file path,faulty line,FIC_sha,BFIC_sha
 Math,2,src/main/java/org/apache/commons/math/distribution/HypergeometricDistribution.java,268,af3fffb74b6e2e35548a9519732077652fe89bb4,1ae0a97fb9bc80229d7777dd4a8b33067bacd7e6
 Math,5,src/main/java/org/apache/commons/math/complex/Complex.java,305,60d96e0ee72180da2c9b89e1acc66033253f0237,222516425d6be0f2df1c1ebdbe4c9c5dfbbb180a
-Math,6,src/main/java/org/apache/commons/math3/optim/BaseOptimizer.java,51,a3a1f9a217c2ac49927aa3364ecd2eee4079a29f,67017f3679660f547d50eee807d43583d3ee0b07
-Math,8,src/main/java/org/apache/commons/math3/distribution/DiscreteDistribution.java,101,bfb0859514bc4f8412653c9e418c5cc9820d0d44,d5a5da054f43b1ae8aa056f6069532de889c83d3
 Math,9,src/main/java/org/apache/commons/math3/geometry/euclidean/threed/Line.java,87,c422db8ac25e93712db663f1e9701d44458a90e1,e4ed959be81916b9a1aa6cf68d80fdccf71bd7c8
 Math,11,src/main/java/org/apache/commons/math3/distribution/MultivariateNormalDistribution.java,183,019a0421f3a6bfb34faccb9c579dbc6c32f5d3a0,23beda6ef46c374b90d712e801ed71f07d90fed8
 Math,24,src/main/java/org/apache/commons/math3/optimization/univariate/BrentOptimizer.java,230,36d811b2d4cfe1b867823bd60ccca25abbc80b46,b5839871867024885927edc2b087e0c718fb73b3
-Math,26,src/java/org/apache/commons/math/fraction/Fraction.java,181,c7b489f1e9cf9ceaff0f5844fdcf6630224ebf16,ececa46fe81ebd38c07e487a5e3368fb3aa16e25
 Math,27,src/main/java/org/apache/commons/math/fraction/Fraction.java,597,c263976f221d9b8aabb712f6c2b729ef19abead0,a4a9dbb5d12b4264de88b929202627097f55872a
 Math,30,src/main/java/org/apache/commons/math/stat/inference/MannWhitneyUTest.java,173,6961b425200662ff28b494ca836650ea0ea8e7a0,222c76544750905e3f638f567a8d6dc186c36d23
 Math,32,src/main/java/org/apache/commons/math/geometry/euclidean/twoD/PolygonsSet.java,136,da58a6460a83ce78df0832a5481c6d0a50a7675d,0b135be427b6f5a9ab6a9772abe868fa3d326fc9
@@ -14,14 +11,12 @@ Math,33,src/main/java/org/apache/commons/math/optimization/linear/SimplexTableau
 Math,34,src/java/org/apache/commons/math/genetics/ListPopulation.java,209,602e3fec32294ab720a30c11b743cd04140f3ff7,62bed05b1491a68d1416392e3e4cb2665f995010
 Math,35,src/java/org/apache/commons/math/genetics/ElitisticListPopulation.java,51,602e3fec32294ab720a30c11b743cd04140f3ff7,62bed05b1491a68d1416392e3e4cb2665f995010
 Math,41,src/main/java/org/apache/commons/math/stat/descriptive/moment/Variance.java,520,900592f22b9a1c0b12334b1a78902699d7a75c8b,96287d3103a142a4200e4027876a62939a3e322c
-Math,46,src/java/org/apache/commons/math/complex/Complex.java,260,6ef3b2932f4ca9219e41784bb0cd229dcabcdb11,bb22a04fd7e1ee5af3c8ec715cc4c1952d4bbeb7
+Math,46,src/main/java/org/apache/commons/math/complex/Complex.java,260,330f3fe17d132bd4e2a91ff812ccf489e77f390f,bbb5e1e198f995eddb393f820ed059aa774871c3
 Math,50,src/main/java/org/apache/commons/math/analysis/solvers/BaseSecantSolver.java,187,2f066a5b2d2fe8a00a251a3220b0d52446fe392d,34fef656d03a5ba75047a55a894f6f72cbe59f2e
-Math,56,src/main/java/org/apache/commons/math/util/MultidimensionalCounter.java,243,512526d572d8abe9379d98be50aa1d2e7d128217,cb50fe991de0296fc781a10ba0e28e19016e52a8
 Math,57,src/java/org/apache/commons/math/stat/clustering/KMeansPlusPlusClusterer.java,175,189717fd10f468e2d0a40bc94369fca5b3d1ec41,dfd9f0676b690fe8c0928316b656ffb87d44cd31
 Math,58,src/main/java/org/apache/commons/math/optimization/fitting/GaussianFitter.java,121,19a21f531697627f3cf49482796884763a6c74ba,ba96c9afd8f42adb6abc9d5e447bec823c95db88
 Math,59,src/main/java/org/apache/commons/math/util/FastMath.java,3482,80b1e90b42a34856b61cec628fcea6633d1000cd,0db46cc7ea92847d8c71564ac3e0020d7c6be144
-Math,63,src/main/java/org/apache/commons/math/util/MathUtils.java,417,adc837ab18b037b1f28974702aaaea4dcc36595f,006e834bc3d18fc1d649392a606f4f291378c965
-Math,65,src/java/org/apache/commons/math/optimization/general/AbstractLeastSquaresOptimizer.java,240,8cb418e7fa50aba9977fe073aec66ad3f6e4f07c,97686434d3664c6d04810bd746aa740071dd56a9
+Math,63,src/main/java/org/apache/commons/math/util/MathUtils.java,417,b631eb68a8aa659e0760de672edfbfb9f9ac246d,292e891aab4d737a83ebf786c02bf4003ae0442d
 Math,67,src/java/org/apache/commons/math/optimization/MultiStartUnivariateRealOptimizer.java,92,faecb297b9c67d111aae9a73553bc4ebec90491a,b219ec6d7d7d6302328f7185604eedabdaac7bbb
 Math,69,src/java/org/apache/commons/math/stat/correlation/PearsonsCorrelation.java,171,a521a82d91868d263d4a4df5859cdc17fde43f4b,8d69bf69e19dfda9c9833fc740514b7f4506b9c8
 Math,70,src/java/org/apache/commons/math/analysis/BisectionSolver.java,72,583dffc0ee383e9b5e1e08c574de10db8270fdb7,2466ed1d8402459cb2383a6fdb9188fce61320c8
@@ -29,11 +24,10 @@ Math,72,src/java/org/apache/commons/math/analysis/BrentSolver.java,115,ff69ef1cc
 Math,75,src/java/org/apache/commons/math/stat/Frequency.java,303,18b61a1b18ed7d80ec2bf28588ce95fdd3dddf28,a701b9aa98d2a3c90d612347a1a6990771cab442
 Math,79,src/java/org/apache/commons/math/util/MathUtils.java,1624,dfd9f0676b690fe8c0928316b656ffb87d44cd31,a251f02aea1ab2095bb7bdc7970fdfc04ebd8b55
 Math,80,src/main/java/org/apache/commons/math/linear/EigenDecompositionImpl.java,1135,0905e8cf724b358277e219cbf1a06413faa48c9e,9c04d147e8d81894d73ab519bc199a6d9766b1e1
-Math,82,src/java/org/apache/commons/math/optimization/linear/SimplexSolver.java,82,96b1276efd88c536f3c918396f7460e557b9ee65,2f4dff0d4184af611d4bd50f044377a88b007332
+Math,82,src/java/org/apache/commons/math/optimization/linear/SimplexSolver.java,82,6c65646a2d62b8ead3a7d4da3410fc4050c25fb5,8d356234ae61038c10881249b39b173d33aa0d40
 Math,85,src/java/org/apache/commons/math/analysis/UnivariateRealSolverUtils.java,198,6a978ea29f680a87dfc380c760adf2e17b2e7c9c,01aa3293c5238d5300300d93f5fe8253a8c668bc
 Math,91,src/java/org/apache/commons/math/fraction/Fraction.java,259,654e874a0505edeee9096d72cf86a39bf437f26d,d2d4c5fd63f279be0797468277593ef72506c696
 Math,94,src/java/org/apache/commons/math/util/MathUtils.java,412,20786a617657c0c20315005c621052a2735dfe67,12643c4a91cd155f1230591936e430064d152903
-Math,96,src/java/org/apache/commons/math/complex/Complex.java,258,0a904461932f2c0455611e77ec6a8d8aced2980b,d5e5ca813228dac93f3111b3879e44e1642bf0cf
 Math,100,src/java/org/apache/commons/math/estimation/AbstractEstimator.java,166,718a708ecfd5ac3f2d3091b2ea60e87d0d72f6a4,050937756c7b40d9485c211d31c1448af5cfcb38
+Math,101,src/java/org/apache/commons/math/complex/ComplexFormat.java,377,322706393973a99fc70f0cbd8cadee38bae3aa94,af6140fde695b8619531d04deb6d3e078f8cbfd1
 Math,104,src/java/org/apache/commons/math/special/Gamma.java,37,0a904461932f2c0455611e77ec6a8d8aced2980b,d5e5ca813228dac93f3111b3879e44e1642bf0cf
-Math,105,src/java/org/apache/commons/math/stat/BivariateRegression.java,264,d1916458812f417874b0886ed64654bb6a0b8224,03a43587a64873693855606fff17ad8ad3e99699

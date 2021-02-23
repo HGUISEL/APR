@@ -1,339 +1,535 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-package org.apache.ode.bpel.compiler;
+package org.jclouds.googlecloudstorage.features;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.ode.bpel.compiler.api.CompilationException;
-import org.apache.ode.bpel.compiler.api.CompilerContext;
-import org.apache.ode.bpel.compiler.bom.PartnerLinkType;
-import org.apache.ode.bpel.compiler.bom.PropertyAlias;
-import org.apache.ode.bpel.compiler.wsdl.Definition4BPEL;
-import org.apache.ode.bpel.compiler.wsdl.XMLSchemaType;
-import org.apache.ode.utils.DOMUtils;
-import org.apache.ode.utils.Namespaces;
-import org.apache.ode.utils.StreamUtils;
-import org.apache.ode.utils.msg.MessageBundle;
-import org.apache.ode.utils.xsd.SchemaModel;
-import org.apache.ode.utils.xsd.SchemaModelImpl;
-import org.apache.ode.utils.xsd.XSUtils;
-import org.apache.ode.utils.xsd.XsdException;
-import org.w3c.dom.Document;
-import org.xml.sax.InputSource;
+import static javax.ws.rs.core.MediaType.APPLICATION_JSON;
 
-import javax.wsdl.*;
-import javax.wsdl.extensions.ExtensibilityElement;
-import javax.xml.namespace.QName;
-import javax.xml.transform.Source;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamSource;
+import javax.inject.Named;
+import javax.ws.rs.Consumes;
+import javax.ws.rs.DELETE;
+import javax.ws.rs.Encoded;
+import javax.ws.rs.GET;
+import javax.ws.rs.HeaderParam;
+import javax.ws.rs.POST;
+import javax.ws.rs.PUT;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
 
-import java.io.ByteArrayInputStream;
-import java.io.StringReader;
-import java.io.IOException;
-import java.net.URI;
-import java.util.*;
-
+import org.jclouds.Fallbacks.FalseOnNotFoundOr404;
+import org.jclouds.Fallbacks.NullOnNotFoundOr404;
+import org.jclouds.googlecloudstorage.binders.MultipartUploadBinder;
+import org.jclouds.googlecloudstorage.binders.UploadBinder;
+import org.jclouds.googlecloudstorage.domain.GoogleCloudStorageObject;
+import org.jclouds.googlecloudstorage.domain.ListPageWithPrefixes;
+import org.jclouds.googlecloudstorage.domain.RewriteResponse;
+import org.jclouds.googlecloudstorage.domain.templates.ComposeObjectTemplate;
+import org.jclouds.googlecloudstorage.domain.templates.ObjectTemplate;
+import org.jclouds.googlecloudstorage.options.ComposeObjectOptions;
+import org.jclouds.googlecloudstorage.options.CopyObjectOptions;
+import org.jclouds.googlecloudstorage.options.DeleteObjectOptions;
+import org.jclouds.googlecloudstorage.options.GetObjectOptions;
+import org.jclouds.googlecloudstorage.options.InsertObjectOptions;
+import org.jclouds.googlecloudstorage.options.ListObjectOptions;
+import org.jclouds.googlecloudstorage.options.RewriteObjectOptions;
+import org.jclouds.googlecloudstorage.options.UpdateObjectOptions;
+import org.jclouds.googlecloudstorage.parser.ParseToPayloadEnclosing;
+import org.jclouds.http.options.HttpRequestOptions;
+import org.jclouds.io.Payload;
+import org.jclouds.io.PayloadEnclosing;
+import org.jclouds.javax.annotation.Nullable;
+import org.jclouds.oauth.v2.filters.OAuthFilter;
+import org.jclouds.rest.annotations.BinderParam;
+import org.jclouds.rest.annotations.Fallback;
+import org.jclouds.rest.annotations.MapBinder;
+import org.jclouds.rest.annotations.PATCH;
+import org.jclouds.rest.annotations.PayloadParam;
+import org.jclouds.rest.annotations.QueryParams;
+import org.jclouds.rest.annotations.RequestFilters;
+import org.jclouds.rest.annotations.ResponseParser;
+import org.jclouds.rest.binders.BindToJsonPayload;
 
 /**
- * A parsed collection of WSDL definitions, including BPEL-specific extensions.
+ * Provides access to Object entities via their REST API.
+ *
+ * @see <a href="https://developers.google.com/storage/docs/json_api/v1/objects"/>
  */
-class WSDLRegistry {
-    private static final Log __log = LogFactory.getLog(WSDLRegistry.class);
+@RequestFilters(OAuthFilter.class)
+public interface ObjectApi {
 
-    private static final CommonCompilationMessages __cmsgs =
-            MessageBundle.getMessages(CommonCompilationMessages.class);
+   /**
+    * Check the existence of an object
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    *
+    * @return a {@link Object} true if object exists
+    */
+   @Named("Object:Exist")
+   @GET
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Fallback(FalseOnNotFoundOr404.class)
+   @Nullable
+   boolean objectExists(@PathParam("bucket") String bucketName, @PathParam("object") @Encoded String objectName);
 
-    private final HashMap<String, ArrayList<Definition4BPEL>> _definitions = new HashMap<String, ArrayList<Definition4BPEL>>();
+   /**
+    * Retrieve an object metadata
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    *
+    * @return a {@link Object} resource
+    */
+   @Named("Object:get")
+   @GET
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Consumes(APPLICATION_JSON)
+   @Fallback(NullOnNotFoundOr404.class)
+   @Nullable
+   GoogleCloudStorageObject getObject(@PathParam("bucket") String bucketName,
+         @PathParam("object") @Encoded String objectName);
 
-    private final Map<URI, byte[]> _schemas = new HashMap<URI,byte[]>();
-    private final Map<URI, byte[]> _internalSchemas = new HashMap<URI, byte[]>();
-    private final Map<URI, Document> _documentSchemas = new HashMap<URI, Document>();
+   /**
+    * Retrieves objects metadata
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    * @param options
+    *           A class that implements {@link HttpRequestOptions}
+    *           such as {@link GetObjectOptions} with optional query parameters
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:get")
+   @GET
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Consumes(APPLICATION_JSON)
+   @Fallback(NullOnNotFoundOr404.class)
+   @Nullable
+   GoogleCloudStorageObject getObject(@PathParam("bucket") String bucketName,
+         @PathParam("object") @Encoded String objectName, HttpRequestOptions options);
 
-    private SchemaModel _model;
+   /**
+    * Retrieve an object or their metadata
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    *
+    * @return a {@link Object} resource
+    */
+   @Named("Object:get")
+   @GET
+   @QueryParams(keys = "alt", values = "media")
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @ResponseParser(ParseToPayloadEnclosing.class)
+   @Fallback(NullOnNotFoundOr404.class)
+   @Nullable
+   PayloadEnclosing download(@PathParam("bucket") String bucketName, @PathParam("object") @Encoded String objectName);
 
-    private CompilerContext _ctx;
+   /**
+    * Retrieves objects
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    * @param options
+    *           A class that implements {@link HttpRequestOptions}
+    *           such as {@link GetObjectOptions} with optional query parameters
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:get")
+   @GET
+   @QueryParams(keys = "alt", values = "media")
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @ResponseParser(ParseToPayloadEnclosing.class)
+   @Fallback(NullOnNotFoundOr404.class)
+   @Nullable
+   PayloadEnclosing download(@PathParam("bucket") String bucketName, @PathParam("object") @Encoded String objectName,
+         HttpRequestOptions options);
 
+   /**
+    * Stores a new object. Object metadata setting is not supported with simple uploads
+    *
+    * @see https://developers.google.com/storage/docs/json_api/v1/how-tos/upload#simple
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object to be stored
+    * @param options
+    *           Supply an {@link InsertObjectOptions}. 'name' should not null.
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:simpleUpload")
+   @POST
+   @QueryParams(keys = "uploadType", values = "media")
+   @Consumes(APPLICATION_JSON)
+   @Path("/upload/storage/v1/b/{bucket}/o")
+   @MapBinder(UploadBinder.class)
+   GoogleCloudStorageObject simpleUpload(@PathParam("bucket") String bucketName, @HeaderParam("Content-Type") String contentType,
+            @HeaderParam("Content-Length") Long contentLength, @PayloadParam("payload") Payload payload,
+            InsertObjectOptions Options);
 
-    WSDLRegistry(CompilerContext cc) {
-        // bogus schema to force schema creation
-        _schemas.put(URI.create("http://fivesight.com/bogus/namespace"),
-                ("<xsd:schema xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\""
-                        + " targetNamespace=\"http://fivesight.com/bogus/namespace\">"
-                        + "<xsd:simpleType name=\"__bogusType__\">"
-                        + "<xsd:restriction base=\"xsd:normalizedString\"/>"
-                        + "</xsd:simpleType>" + "</xsd:schema>").getBytes());
-        try {
-            _schemas.put(URI.create(Namespaces.WSDL_11), StreamUtils.read(getClass().getResource("/wsdl.xsd")));
-            _schemas.put(URI.create("http://www.w3.org/2001/xml.xsd"), StreamUtils.read(getClass().getResource("/xml.xsd")));
-        } catch (IOException e) {
-            throw new RuntimeException("Couldn't load default schemas.", e);
-        }
+   /**
+    * Deletes an object and its metadata. Deletions are permanent if versioning is not enabled.
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object to be deleted resides
+    * @param objectName
+    *           Name of the object
+    */
+   @Named("Object:delete")
+   @DELETE
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Fallback(FalseOnNotFoundOr404.class)
+   boolean deleteObject(@PathParam("bucket") String bucketName, @PathParam("object") @Encoded String objectName);
 
-        _ctx = cc;
-    }
+   /**
+    * Deletes an object and its metadata. Deletions are permanent if versioning is not enabled for the bucket, or if the
+    * generation parameter is used.
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object to be deleted resides
+    * @param objectName
+    *           Name of the object
+    * @param options
+    *           Supply {@link DeleteObjectOptions} with optional query parameters
+    */
+   @Named("Object:delete")
+   @DELETE
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Fallback(FalseOnNotFoundOr404.class)
+   boolean deleteObject(@PathParam("bucket") String bucketName, @PathParam("object") @Encoded String objectName,
+            DeleteObjectOptions options);
 
-    public Definition4BPEL[] getDefinitions(){
-        ArrayList<Definition4BPEL> result = new ArrayList<Definition4BPEL>();
-        for (ArrayList<Definition4BPEL> definition4BPELs : _definitions.values()) {
-            for (Definition4BPEL definition4BPEL : definition4BPELs) {
-                result.add(definition4BPEL);
-            }
-        }
-        return result.toArray(new Definition4BPEL[result.size()]);
-    }
+   /**
+    * Retrieves a list of objects matching the criteria.
+    *
+    * @param bucketName
+    *           Name of the bucket in which to look for objects.
+    */
+   @Named("Object:list")
+   @GET
+   @Consumes(APPLICATION_JSON)
+   @Path("storage/v1/b/{bucket}/o")
+   @Fallback(NullOnNotFoundOr404.class)
+   ListPageWithPrefixes<GoogleCloudStorageObject> listObjects(@PathParam("bucket") String bucketName);
+
+   /**
+    * Retrieves a list of objects matching the criteria.
+    *
+    * @param bucketName
+    *           Name of the bucket in which to look for objects.
+    * @param options
+    *          Supply {@link ListObjectOptions}
+    * @return a {@link ListPage<GoogleCloudStorageObject>}
+    */
+   @Named("Object:list")
+   @GET
+   @Consumes(APPLICATION_JSON)
+   @Path("storage/v1/b/{bucket}/o")
+   @Fallback(NullOnNotFoundOr404.class)
+   ListPageWithPrefixes<GoogleCloudStorageObject> listObjects(@PathParam("bucket") String bucketName, ListObjectOptions options);
+
+   /**
+    * Updates an object metadata
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    * @param objectTemplate
+    *           Supply  an {@link ObjectTemplate}
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:update")
+   @PUT
+   @Consumes(APPLICATION_JSON)
+   @Produces(APPLICATION_JSON)
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Fallback(NullOnNotFoundOr404.class)
+   GoogleCloudStorageObject updateObject(@PathParam("bucket") String bucketName,
+         @PathParam("object") @Encoded String objectName,
+         @BinderParam(BindToJsonPayload.class) ObjectTemplate objectTemplate);
+
+   /**
+    * Updates an object
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    * @param objectTemplate
+    *           Supply an{@link ObjectTemplate}
+    * @param options
+    *           Supply {@link UpdateObjectOptions} with optional query parameters
+    *
+    * @return a {@link GoogleCloudStorageObject} .
+    */
+   @Named("Object:update")
+   @PUT
+   @Consumes(APPLICATION_JSON)
+   @Produces(APPLICATION_JSON)
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Fallback(NullOnNotFoundOr404.class)
+   GoogleCloudStorageObject updateObject(@PathParam("bucket") String bucketName,
+         @PathParam("object") @Encoded String objectName,
+         @BinderParam(BindToJsonPayload.class) ObjectTemplate objectTemplate, UpdateObjectOptions options);
+
+   /**
+    * Updates an object according to patch semantics
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    * @param objectTemplate
+    *           Supply {@link ObjectTemplate} with optional query parameters
+    *
+    * @return  a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:patch")
+   @PATCH
+   @Consumes(APPLICATION_JSON)
+   @Produces(APPLICATION_JSON)
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Fallback(NullOnNotFoundOr404.class)
+   GoogleCloudStorageObject patchObject(@PathParam("bucket") String bucketName,
+         @PathParam("object") @Encoded String objectName,
+         @BinderParam(BindToJsonPayload.class) ObjectTemplate objectTemplate);
+
+   /**
+    * Updates an object according to patch semantics
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object resides
+    * @param objectName
+    *           Name of the object
+    * @param objectTemplate
+    *           Supply {@link ObjectTemplate} with optional query parameters
+    * @param options
+    *           Supply {@link UpdateObjectOptions} with optional query parameters
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:patch")
+   @PUT
+   @Consumes(APPLICATION_JSON)
+   @Produces(APPLICATION_JSON)
+   @Path("storage/v1/b/{bucket}/o/{object}")
+   @Fallback(NullOnNotFoundOr404.class)
+   GoogleCloudStorageObject patchObject(@PathParam("bucket") String bucketName,
+         @PathParam("object") @Encoded String objectName,
+         @BinderParam(BindToJsonPayload.class) ObjectTemplate objectTemplate, UpdateObjectOptions options);
+
+   /**
+    * Concatenates a list of existing objects into a new object in the same bucket.
+    *
+    * @param destinationBucket
+    *           Name of the bucket in which the object to be stored
+    * @param destinationObject
+    *           The type of upload request.
+    * @param composeObjectTemplate
+    *           Supply a {@link ComposeObjectTemplate}
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:compose")
+   @POST
+   @Consumes(APPLICATION_JSON)
+   @Path("storage/v1/b/{destinationBucket}/o/{destinationObject}/compose")
+   GoogleCloudStorageObject composeObjects(@PathParam("destinationBucket") String destinationBucket,
+            @PathParam("destinationObject") @Encoded String destinationObject,
+            @BinderParam(BindToJsonPayload.class) ComposeObjectTemplate composeObjectTemplate);
+
+   /**
+    * Concatenates a list of existing objects into a new object in the same bucket.
+    *
+    * @param destinationBucket
+    *           Name of the bucket in which the object to be stored
+    * @param destinationObject
+    *           The type of upload request.
+    * @param composeObjectTemplate
+    *           Supply a {@link ComposeObjectTemplate}
+    * @param options
+    *           Supply an {@link ComposeObjectOptions}
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:compose")
+   @POST
+   @Consumes(APPLICATION_JSON)
+   @Path("storage/v1/b/{destinationBucket}/o/{destinationObject}/compose")
+   GoogleCloudStorageObject composeObjects(@PathParam("destinationBucket") String destinationBucket,
+            @PathParam("destinationObject") @Encoded String destinationObject,
+            @BinderParam(BindToJsonPayload.class) ComposeObjectTemplate composeObjectTemplate,
+            ComposeObjectOptions options);
+
+   /**
+    * Copies an object to a specified location.
+    *
+    * @param destinationBucket
+    *           Name of the bucket in which to store the new object
+    * @param destinationObject
+    *           Name of the new object.
+    * @param sourceBucket
+    *           Name of the bucket in which to find the source object
+    * @param sourceObject
+    *           Name of the source object
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:copy")
+   @POST
+   @Consumes(APPLICATION_JSON)
+   @Path("/storage/v1/b/{sourceBucket}/o/{sourceObject}/copyTo/b/{destinationBucket}/o/{destinationObject}")
+   GoogleCloudStorageObject copyObject(@PathParam("destinationBucket") String destinationBucket,
+         @PathParam("destinationObject") @Encoded String destinationObject,
+         @PathParam("sourceBucket") String sourceBucket,
+         @PathParam("sourceObject") @Encoded String sourceObject);
 
     /**
-     * Get the schema model (XML Schema).
+     * Copies an object to a specified location with updated metadata.
      *
-     * @return schema model
-     */
-    public SchemaModel getSchemaModel() {
-        if (_model == null) {
-            _model = SchemaModelImpl.newModel(_schemas);
-        }
-        assert _model != null;
-        return _model;
-    }
-
-    /**
-     * Adds a WSDL definition for use in resolving MessageType, PortType,
-     * Operation and BPEL properties and property aliases
+     * @param destinationBucket
+     *           Name of the bucket in which to store the new object
+     * @param destinationObject
+     *           Name of the new object.
+     * @param sourceBucket
+     *           Name of the bucket in which to find the source object
+     * @param sourceObject
+     *           Name of the source object
+     * @param template
+     *           Supply a {@link CopyObjectOptions}
      *
-     * @param def WSDL definition
+     * @return a {@link GoogleCloudStorageObject}
      */
-    @SuppressWarnings("unchecked")
-    public void addDefinition(Definition4BPEL def, ResourceFinder rf, URI defuri) throws CompilationException {
-        if (def == null)
-            throw new NullPointerException("def=null");
+    @Named("Object:copy")
+    @POST
+    @Consumes(APPLICATION_JSON)
+    @Path("/storage/v1/b/{sourceBucket}/o/{sourceObject}/copyTo/b/{destinationBucket}/o/{destinationObject}")
+    GoogleCloudStorageObject copyObject(@PathParam("destinationBucket") String destinationBucket,
+          @PathParam("destinationObject") @Encoded String destinationObject,
+          @PathParam("sourceBucket") String sourceBucket,
+          @PathParam("sourceObject") @Encoded String sourceObject,
+          @BinderParam(BindToJsonPayload.class) ObjectTemplate template);
 
-        if (__log.isDebugEnabled()) {
-            __log.debug("addDefinition(" + def.getTargetNamespace() + " from " + def.getDocumentBaseURI() + ")");
-        }
+   /**
+    * Copies an object to a specified location. Optionally overrides metadata.
+    *
+    * @param destinationBucket
+    *           Name of the bucket in which to store the new object
+    * @param destinationObject
+    *           Name of the new object.
+    * @param sourceBucket
+    *           Name of the bucket in which to find the source object
+    * @param sourceObject
+    *           Name of the source object
+    * @param options
+    *           Supply a {@link CopyObjectOptions}
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:copy")
+   @POST
+   @Consumes(APPLICATION_JSON)
+   @Path("/storage/v1/b/{sourceBucket}/o/{sourceObject}/copyTo/b/{destinationBucket}/o/{destinationObject}")
+   GoogleCloudStorageObject copyObject(@PathParam("destinationBucket") String destinationBucket,
+         @PathParam("destinationObject") @Encoded String destinationObject,
+         @PathParam("sourceBucket") String sourceBucket,
+         @PathParam("sourceObject") @Encoded String sourceObject, CopyObjectOptions options);
 
-        if (_definitions.containsKey(def.getTargetNamespace())) {
-            // This indicates that we imported a WSDL with the same namespace from
-            // two different locations. This is not an error, but should be a warning.
-            if (__log.isInfoEnabled()) {
-                __log.info("WSDL at " + defuri + " is a duplicate import, your documents " +
-                        "should all be in different namespaces (its's not nice but will still work).");
-            }
-            boolean alreadyProcessed = false;
-            for (Definition4BPEL aDef : _definitions.get(def.getTargetNamespace())) {
-                if (aDef.getDocumentBaseURI().equals(def.getDocumentBaseURI())) {
-                    alreadyProcessed = true;
-                    break;
-                }
-            }
-            if (alreadyProcessed) {
-                if (__log.isInfoEnabled()) {
-                    __log.info("WSDL at " + defuri + " is already imported, this denotes a circular reference.");
-                    // no need to keep going: either return or throw an error
-                }
-                return;
-            }
-        }
+   /**
+    * Stores a new object with metadata.
+    *
+    * @see https://developers.google.com/storage/docs/json_api/v1/how-tos/upload#multipart
+    *
+    * @param bucketName
+    *           Name of the bucket in which the object to be stored
+    * @param objectTemplate
+    *           Supply an {@link ObjectTemplate}.
+    *
+    * @return a {@link GoogleCloudStorageObject}
+    */
+   @Named("Object:multipartUpload")
+   @POST
+   @QueryParams(keys = "uploadType", values = "multipart")
+   @Consumes(APPLICATION_JSON)
+   @Path("/upload/storage/v1/b/{bucket}/o")
+   @MapBinder(MultipartUploadBinder.class)
+   GoogleCloudStorageObject multipartUpload(@PathParam("bucket") String bucketName,
+            @PayloadParam("template") ObjectTemplate objectTemplate,
+            @PayloadParam("payload") Payload payload);
 
-        ArrayList<Definition4BPEL> defs = null;
-        if (_definitions.get(def.getTargetNamespace()) == null) defs = new ArrayList<Definition4BPEL>();
-        else defs = _definitions.get(def.getTargetNamespace());
+   /**
+    * Rewrites a source object to a destination object.
+    *
+    * @param destinationBucket
+    *           Name of the bucket in which the object to be stored
+    * @param destinationObject
+    *           Name of the new object.
+    * @param sourceBucket
+    *           Name of the bucket in which to find the source object.
+    * @param sourceObject
+    *           Name of the source object.
+    *
+    * @return a {@link RewriteResponse}
+    */
+   @Named("Object:rewrite")
+   @POST
+   @Consumes(APPLICATION_JSON)
+   @Path("/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}")
+   RewriteResponse rewriteObjects(@PathParam("destinationBucket") String destinationBucket,
+         @PathParam("destinationObject") @Encoded String destinationObject,
+         @PathParam("sourceBucket") String sourceBucket, @PathParam("sourceObject") @Encoded String sourceObject);
 
-        defs.add(def);
-        _definitions.put(def.getTargetNamespace(), defs);
-
-        captureSchemas(def, rf, defuri);
-
-        if (__log.isDebugEnabled())
-            __log.debug("Processing <imports> in " + def.getDocumentBaseURI());
-
-        for (List<Import>  imports : ((Map<String, List<Import>>)def.getImports()).values()) {
-            HashSet<String> imported = new HashSet<String>();
-
-            for (Import im : imports) {
-                // If there are several imports in the same WSDL all importing the same namespace
-                // that is a sure sign of programmer error.
-                if (imported.contains(im.getNamespaceURI())) {
-                    if (__log.isInfoEnabled()) {
-                        __log.info("WSDL at " + im.getLocationURI() + " imports several documents in the same " +
-                                "namespace (" + im.getNamespaceURI() + "), your documents should all be in different " +
-                                "namespaces (its's not nice but will still work).");
-                    }
-                }
-
-                Definition4BPEL importDef = (Definition4BPEL) im.getDefinition();
-
-                // The assumption here is that if the definition is not set on the
-                // import object then there was some problem parsing the thing,
-                // although it would have been nice to actually get the parse
-                // error.
-                if (importDef == null) {
-                    CompilationException ce = new CompilationException(
-                            __cmsgs.errWsdlImportNotFound(im.getNamespaceURI(),
-                                    im.getLocationURI()).setSource(new SourceLocationImpl(defuri)));
-                    if (_ctx == null)
-                        throw ce;
-
-                    _ctx.recoveredFromError(new SourceLocationImpl(defuri), ce);
-                    continue;
-                }
-
-                imported.add(im.getNamespaceURI());
-                addDefinition((Definition4BPEL) im.getDefinition(), rf, defuri.resolve(im.getLocationURI()));
-            }
-        }
-    }
-
-    public void addSchemas(Map<URI, byte[]> capture) {
-        _schemas.putAll(capture);
-    }
-
-    @SuppressWarnings("unchecked")
-    private void captureSchemas(Definition def, ResourceFinder rf, URI defuri) throws CompilationException {
-        assert def != null;
-
-        if (__log.isDebugEnabled())
-            __log.debug("Processing XSD schemas in " + def.getDocumentBaseURI());
-
-        Types types = def.getTypes();
-
-        if (types != null) {
-            for (Iterator<ExtensibilityElement> iter =
-                    ((List<ExtensibilityElement>)def.getTypes().getExtensibilityElements()).iterator();
-                 iter.hasNext();) {
-                ExtensibilityElement ee = iter.next();
-
-                if (ee instanceof XMLSchemaType) {
-                    byte[] schema = ((XMLSchemaType)ee).getXMLSchema();
-                    WsdlFinderXMLEntityResolver resolver = new WsdlFinderXMLEntityResolver(rf, defuri, _internalSchemas, false);
-                    try {
-                        Map<URI, byte[]> capture = XSUtils.captureSchema(defuri, schema, resolver);
-                        _schemas.putAll(capture);
-
-                        try {
-                            Document doc = DOMUtils.parse(new InputSource(new ByteArrayInputStream(schema)));
-                            String schemaTargetNS = doc.getDocumentElement().getAttribute("targetNamespace");
-                            if (schemaTargetNS != null && schemaTargetNS.length() > 0) {
-                                _internalSchemas.put(new URI(schemaTargetNS), schema);
-                                _documentSchemas.put(new URI(schemaTargetNS), doc);
-                            }
-                        } catch (Exception e) {
-                            throw new RuntimeException("Couldn't parse schema in " + def.getTargetNamespace(), e);
-                        }
-                    } catch (XsdException xsde) {
-                        __log.debug("captureSchemas: capture failed for " + defuri,xsde);
-
-                        LinkedList<XsdException> exceptions = new LinkedList<XsdException>();
-                        while (xsde != null)  {
-                            exceptions.addFirst(xsde);
-                            xsde = xsde.getPrevious();
-                        }
-
-                        for (XsdException ex : exceptions) {
-                            // TODO: the line number here is going to be wrong for the in-line schema.
-                            // String location = ex.getSystemId() + ":"  + ex.getLineNumber();
-                            CompilationException ce = new CompilationException(
-                                    __cmsgs.errSchemaError(ex.getDetailMessage()).setSource(new SourceLocationImpl(defuri)));
-                            if (_ctx != null)
-                                _ctx.recoveredFromError(new SourceLocationImpl(defuri),ce);
-                            else
-                                throw ce;
-                        }
-                    }
-                    // invalidate model
-                    _model = null;
-
-                }
-            }
-        }
-    }
-
-    public org.apache.ode.bpel.compiler.bom.Property getProperty(QName name) {
-        ArrayList<Definition4BPEL> defs = _definitions.get(name.getNamespaceURI());
-        if (defs == null) return null;
-        for (Definition4BPEL definition4BPEL : defs) {
-            if (definition4BPEL != null && definition4BPEL.getProperty(name) != null)
-                return definition4BPEL.getProperty(name);
-        }
-        return null;
-    }
-
-    public PropertyAlias getPropertyAlias(QName propertyName, QName messageType) {
-        ArrayList<Definition4BPEL> defs = _definitions.get(propertyName.getNamespaceURI());
-        if (defs == null) return null;
-        for (Definition4BPEL definition4BPEL : defs) {
-            if (definition4BPEL != null && definition4BPEL.getPropertyAlias(propertyName, messageType) != null)
-                return definition4BPEL.getPropertyAlias(propertyName, messageType);
-        }
-        return null;
-    }
-
-    public PartnerLinkType getPartnerLinkType(QName partnerLinkType) {
-        ArrayList<Definition4BPEL> defs = _definitions.get(partnerLinkType.getNamespaceURI());
-        if (defs == null) return null;
-        for (Definition4BPEL definition4BPEL : defs) {
-            if (definition4BPEL != null && definition4BPEL.getPartnerLinkType(partnerLinkType) != null)
-                return definition4BPEL.getPartnerLinkType(partnerLinkType);
-        }
-        return null;
-    }
-
-    public PortType getPortType(QName portType) {
-        ArrayList<Definition4BPEL> defs = _definitions.get(portType.getNamespaceURI());
-        if (defs == null) return null;
-        for (Definition4BPEL definition4BPEL : defs) {
-            if (definition4BPEL != null && definition4BPEL.getPortType(portType) != null)
-                return definition4BPEL.getPortType(portType);
-        }
-        return null;
-    }
-
-    public Message getMessage(QName msgType) {
-        ArrayList<Definition4BPEL> defs = _definitions.get(msgType.getNamespaceURI());
-        if (defs == null) return null;
-        for (Definition4BPEL definition4BPEL : defs) {
-            if (definition4BPEL != null && definition4BPEL.getMessage(msgType) != null)
-                return definition4BPEL.getMessage(msgType);
-        }
-        return null;
-    }
-
-    /**
-     * @return All parsed schemas. This doesn't include schemas from bpel imports.
-     */
-    Map<URI, Document> getSchemaDocuments() {
-        return _documentSchemas;
-    }
-
-    /**
-     * @return All captured schema sources including those from bpel imports.
-     */
-    Map<URI, Source> getSchemaSources() {
-        Map<URI, Source> schemaSources = new HashMap<URI, Source>();
-        for (URI uri : _documentSchemas.keySet()) {
-            Document document = _documentSchemas.get(uri);
-            schemaSources.put(uri, new DOMSource(document));
-        }
-
-        for (URI uri : _schemas.keySet()) {
-            schemaSources.put(uri, new StreamSource(new ByteArrayInputStream(_schemas.get(uri))));
-        }
-
-        return schemaSources;
-    }
+   /**
+    * Rewrites a source object to a destination object.
+    *
+    * @param destinationBucket
+    *           Name of the bucket in which the object to be stored
+    * @param destinationObject
+    *           Name of the new object.
+    * @param sourceBucket
+    *           Name of the bucket in which to find the source object.
+    * @param sourceObject
+    *           Name of the source object.
+    * @param options
+    *           Supply an {@link RewriteObjectOptions}
+    *
+    * @return a {@link RewriteResponse}
+    */
+   @Named("Object:rewrite")
+   @POST
+   @Consumes(APPLICATION_JSON)
+   @Path("/storage/v1/b/{sourceBucket}/o/{sourceObject}/rewriteTo/b/{destinationBucket}/o/{destinationObject}")
+   RewriteResponse rewriteObjects(@PathParam("destinationBucket") String destinationBucket,
+         @PathParam("destinationObject") @Encoded String destinationObject,
+         @PathParam("sourceBucket") String sourceBucket,
+         @PathParam("sourceObject") @Encoded String sourceObject,
+         RewriteObjectOptions options);
 }

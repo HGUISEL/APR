@@ -1,738 +1,198 @@
-package org.apache.velocity.runtime.parser.node;
+package com.fasterxml.jackson.databind.ser.std;
 
-/*
- * The Apache Software License, Version 1.1
- *
- * Copyright (c) 2000-2001 The Apache Software Foundation.  All rights
- * reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. The end-user documentation included with the redistribution, if
- *    any, must include the following acknowlegement:
- *       "This product includes software developed by the
- *        Apache Software Foundation (http://www.apache.org/)."
- *    Alternately, this acknowlegement may appear in the software itself,
- *    if and wherever such third-party acknowlegements normally appear.
- *
- * 4. The names "The Jakarta Project", "Velocity", and "Apache Software
- *    Foundation" must not be used to endorse or promote products derived
- *    from this software without prior written permission. For written
- *    permission, please contact apache@apache.org.
- *
- * 5. Products derived from this software may not be called "Apache"
- *    nor may "Apache" appear in their names without prior written
- *    permission of the Apache Group.
- *
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- * ====================================================================
- *
- * This software consists of voluntary contributions made by many
- * individuals on behalf of the Apache Software Foundation.  For more
- * information on the Apache Software Foundation, please see
- * <http://www.apache.org/>.
- */
-
-import java.io.Writer;
 import java.io.IOException;
-import java.util.Map;
-import java.lang.reflect.Method;
-import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Type;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.TimeZone;
 
-import org.apache.velocity.context.Context;
-import org.apache.velocity.context.InternalContextAdapter;
-import org.apache.velocity.runtime.RuntimeServices;
-import org.apache.velocity.runtime.RuntimeConstants;
-import org.apache.velocity.runtime.exception.ReferenceException;
-import org.apache.velocity.runtime.parser.*;
+import com.fasterxml.jackson.annotation.JsonFormat;
 
-import org.apache.velocity.util.introspection.Introspector;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParser;
 
-import org.apache.velocity.exception.MethodInvocationException;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.jsonFormatVisitors.*;
+import com.fasterxml.jackson.databind.ser.ContextualSerializer;
+import com.fasterxml.jackson.databind.util.StdDateFormat;
 
-import org.apache.velocity.app.event.EventCartridge;
-import org.apache.velocity.app.event.ReferenceInsertionEventHandler;
-
-/**
- * This class is responsible for handling the references in
- * VTL ($foo).
- * 
- * Please look at the Parser.jjt file which is
- * what controls the generation of this class.
- *
- * @author <a href="mailto:jvanzyl@periapt.com">Jason van Zyl</a>
- * @author <a href="mailto:geirm@optonline.net">Geir Magnusson Jr.</a>
- * @author <a href="mailto:Christoph.Reck@dlr.de">Christoph Reck</a>
- * @author <a href="mailto:kjohnson@transparent.com>Kent Johnson</a>
- * @version $Id: ASTReference.java,v 1.38 2001/09/10 08:56:47 geirm Exp $ 
-*/
-public class ASTReference extends SimpleNode
+@SuppressWarnings("serial")
+public abstract class DateTimeSerializerBase<T>
+    extends StdScalarSerializer<T>
+    implements ContextualSerializer
 {
-    /* Reference types */
-    private static final int NORMAL_REFERENCE = 1;
-    private static final int FORMAL_REFERENCE = 2;
-    private static final int QUIET_REFERENCE = 3;
+    /**
+     * Flag that indicates that serialization must be done as the
+     * Java timestamp, regardless of other settings.
+     */
+    protected final Boolean _useTimestamp;
+
+    /**
+     * Specific format to use, if not default format: non null value
+     * also indicates that serialization is to be done as JSON String,
+     * not numeric timestamp, unless {@link #_useTimestamp} is true.
+     */
+    protected final DateFormat _customFormat;
+
+    protected DateTimeSerializerBase(Class<T> type,
+            Boolean useTimestamp, DateFormat customFormat)
+    {
+        super(type);
+        _useTimestamp = useTimestamp;
+        _customFormat = customFormat;
+    }
+
+    public abstract DateTimeSerializerBase<T> withFormat(Boolean timestamp, DateFormat customFormat);
+
+    @Override
+    public JsonSerializer<?> createContextual(SerializerProvider serializers,
+            BeanProperty property) throws JsonMappingException
+    {
+        if (property == null) {
+            return this;
+        }
+        JsonFormat.Value format = findFormatOverrides(serializers, property, handledType());
+        if (format == null) {
+            return this;
+        }
+        // Simple case first: serialize as numeric timestamp?
+        JsonFormat.Shape shape = format.getShape();
+        if (shape.isNumeric()) {
+            return withFormat(Boolean.TRUE, null);
+        }
+
+        // 08-Jun-2017, tatu: With [databind#1648], this gets bit tricky..
+        // First: custom pattern will override things
+        if (format.hasPattern()) {
+            final Locale loc = format.hasLocale()
+                            ? format.getLocale()
+                            : serializers.getLocale();
+            SimpleDateFormat df = new SimpleDateFormat(format.getPattern(), loc);
+            TimeZone tz = format.hasTimeZone() ? format.getTimeZone()
+                    : serializers.getTimeZone();
+            df.setTimeZone(tz);
+            return withFormat(Boolean.FALSE, df);
+        }
+
+        // Otherwise, need one of these changes:
+        final boolean hasLocale = format.hasLocale();
+        final boolean hasTZ = format.hasTimeZone();
+        final boolean asString = (shape == JsonFormat.Shape.STRING);
+
+        if (!hasLocale && !hasTZ && !asString) {
+            return this;
+        }
+
+        DateFormat df0 = serializers.getConfig().getDateFormat();
+        // Jackson's own `StdDateFormat` is quite easy to deal with...
+        if (df0 instanceof StdDateFormat) {
+            StdDateFormat std = (StdDateFormat) df0;
+            if (format.hasLocale()) {
+                std = std.withLocale(format.getLocale());
+            }
+            if (format.hasTimeZone()) {
+                std = std.withTimeZone(format.getTimeZone());
+            }
+            return withFormat(Boolean.FALSE, std);
+        }
+
+        // 08-Jun-2017, tatu: Unfortunately there's no generally usable
+        //    mechanism for changing `DateFormat` instances (or even clone()ing)
+        //    So: require it be `SimpleDateFormat`; can't config other types
+        if (!(df0 instanceof SimpleDateFormat)) {
+//            serializers.reportBadDefinition(handledType(), String.format(
+            serializers.reportMappingProblem(
+"Configured `DateFormat` (%s) not a `SimpleDateFormat`; can not configure `Locale` or `TimeZone`",
+df0.getClass().getName());
+        }
+        SimpleDateFormat df = (SimpleDateFormat) df0;
+        if (hasLocale) {
+            // Ugh. No way to change `Locale`, create copy; must re-crete completely:
+            df = new SimpleDateFormat(df.toPattern(), format.getLocale());
+        } else {
+            df = (SimpleDateFormat) df.clone();
+        }
+        TimeZone newTz = format.getTimeZone();
+        boolean changeTZ = (newTz != null) && !newTz.equals(df.getTimeZone());
+        if (changeTZ) {
+            df.setTimeZone(newTz);
+        }
+        return withFormat(Boolean.FALSE, df);
+    }
+
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
+     */
+
+    @Deprecated
+    @Override
+    public boolean isEmpty(T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
+    }
+
+    @Override
+    public boolean isEmpty(SerializerProvider serializers, T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
+    }
     
-    private int referenceType;
-    private String nullString;
-    private String rootString;
-    private boolean escaped = false;
-    private boolean computableReference = true;
-    private String  prefix = "";
-    private String firstTokenPrefix = "";
-    private String identifier = "";
+    protected abstract long _timestamp(T value);
     
-    private String literal = null;
-
-    private int numChildren = 0;
-
-    public ASTReference(int id)
-    {
-        super(id);
+    @Override
+    public JsonNode getSchema(SerializerProvider serializers, Type typeHint) {
+        //todo: (ryan) add a format for the date in the schema?
+        return createSchemaNode(_asTimestamp(serializers) ? "number" : "string", true);
     }
 
-    public ASTReference(Parser p, int id)
+    @Override
+    public void acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint) throws JsonMappingException
     {
-        super(p, id);
+        _acceptJsonFormatVisitor(visitor, typeHint, _asTimestamp(visitor.getProvider()));
     }
 
-    /** Accept the visitor. **/
-    public Object jjtAccept(ParserVisitor visitor, Object data)
-    {
-        return visitor.visit(this, data);
-    }
+    /*
+    /**********************************************************
+    /* Actual serialization
+    /**********************************************************
+     */
 
-    public Object init( InternalContextAdapter context, Object data) 
-        throws Exception
-    {
-        /*
-         *  init our children
-         */
+    @Override
+    public abstract void serialize(T value, JsonGenerator gen, SerializerProvider serializers)
+        throws IOException;
 
-        super.init( context, data );
-
-        //        System.out.println("Reference init() : " + literal() );
-
-
-        /*
-         *  the only thing we can do in init() is getRoot()
-         *  as that is template based, not context based,
-         *  so it's thread- and context-safe
-         */
-
-        rootString = getRoot();
-
-        numChildren = jjtGetNumChildren();
-
-        /*
-         *  we can glom these together.. both are template immutables...
-         */
-
-        String firstToken = NodeUtils.specialText( getFirstToken() );
-        firstTokenPrefix = firstToken + prefix;
-
-        /*
-         * and if appropriate...
-         */
-
-        if (numChildren > 0 )
-        {
-            identifier = jjtGetChild(numChildren - 1).getFirstToken().image;
-        }
-
-        return data;
-    }        
+    /*
+    /**********************************************************
+    /* Helper methods
+    /**********************************************************
+     */
     
-    /**
-     *  Returns the 'root string', the reference key
-     */
-     public String getRootString()
-     {
-        return rootString;
-     }
-     
-    /**
-     *   gets an Object that 'is' the value of the reference
-     *
-     *   @param o   unused Object parameter
-     *   @param context context used to generate value
-     */
-    public Object execute(Object o, InternalContextAdapter context)
-        throws MethodInvocationException
-    {   
-        /*
-         *  get the root object from the context
-         */
-
-        Object result = getVariableValue(context, rootString);
-       
-        if (result == null)
-        {
-            return null;
-        }            
-
-        /*
-         * Iteratively work 'down' (it's flat...) the reference
-         * to get the value, but check to make sure that
-         * every result along the path is valid. For example:
-         *
-         * $hashtable.Customer.Name
-         *
-         * The $hashtable may be valid, but there is no key
-         * 'Customer' in the hashtable so we want to stop
-         * when we find a null value and return the null
-         * so the error gets logged.
-         */
-        
-        try 
-        {
-            for (int i = 0; i < numChildren; i++)
-            {
-                result = jjtGetChild(i).execute(result,context);
-            
-                if (result == null)
-                {
-                    return null;
-                }         
+    protected boolean _asTimestamp(SerializerProvider serializers)
+    {
+        if (_useTimestamp != null) {
+            return _useTimestamp.booleanValue();
+        }
+        if (_customFormat == null) {
+            if (serializers != null) {
+                return serializers.isEnabled(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
             }
-            
-            return result;
+            // 12-Jun-2014, tatu: Is it legal not to have provider? Was NPE:ing earlier so leave a check
+            throw new IllegalArgumentException("Null SerializerProvider passed for "+handledType().getName());
         }
-        catch( MethodInvocationException mie)
-        {
-            /*
-             *  someone tossed their cookies
-             */
-
-            rsvc.error("Method " + mie.getMethodName() + " threw exception for reference $" 
-                          + rootString 
-                          + " in template " + context.getCurrentTemplateName()
-                          + " at " +  " [" + this.getLine() + "," + this.getColumn() + "]");
-
-            mie.setReferenceName( rootString );
-            throw mie;
-        }
+        return false;
     }
 
-    /**
-     *  gets the value of the reference and outputs it to the
-     *  writer.
-     *
-     *  @param context  context of data to use in getting value
-     *  @param writer   writer to render to
-     */
-    public boolean render( InternalContextAdapter context, Writer writer)
-        throws IOException, MethodInvocationException
+    protected void _acceptJsonFormatVisitor(JsonFormatVisitorWrapper visitor, JavaType typeHint,
+		boolean asNumber) throws JsonMappingException
     {
-        Object value = execute(null, context);
-        
-        /*
-         *  if this reference is escaped (\$foo) then we want to do one of two things :
-         *  1) if this is a reference in the context, then we want to print $foo
-         *  2) if not, then \$foo  (its considered shmoo, not VTL)
-         */
-
-        //        System.out.println("Render : Escaped? " + escaped + " : " + ((Object) this) );
-
-        if ( escaped )
-        {
-            if ( value == null )
-            {
-                writer.write( firstTokenPrefix );
-                writer.write( "\\" );
-                writer.write( nullString );
-            }
-            else
-            {
-                writer.write( firstTokenPrefix );
-                writer.write( nullString );
-            }
-        
-            return true;
+        if (asNumber) {
+            visitIntFormat(visitor, typeHint,
+                    JsonParser.NumberType.LONG, JsonValueFormat.UTC_MILLISEC);
+        } else {
+            visitStringFormat(visitor, typeHint, JsonValueFormat.DATE_TIME);
         }
-
-        /*
-         *  the normal processing
-         *
-         *  if we have an event cartridge, get a new value object
-         */
-
-        EventCartridge ec = context.getEventCartridge();
-
-        if (ec != null)
-        {
-            value =  ec.referenceInsert( nullString, value );
-        }
-
-        /*
-         *  if value is null...
-         */
-
-        if (value == null)
-        {
-            /* 
-             *  write prefix twice, because it's shmoo, so the \ don't escape each other...
-             */
-            
-            writer.write( firstTokenPrefix );
-            writer.write( prefix );
-            writer.write( nullString );
-            
-            if (referenceType != QUIET_REFERENCE 
-                && rsvc.getBoolean( 
-                                      RuntimeConstants.RUNTIME_LOG_REFERENCE_LOG_INVALID, true) )
-            {
-               rsvc.warn(new ReferenceException("reference : template = " 
-                                                    + context.getCurrentTemplateName(), this));
-            }
-
-            return true;
-        }
-        else
-        {
-            /*
-             *  non-null processing
-             */
-            writer.write( firstTokenPrefix );
-            writer.write( value.toString() );
-        
-            return true;
-        }
-    }
-       
-    /**
-     *   Computes boolean value of this reference
-     *   Returns the actual value of reference return type
-     *   boolean, and 'true' if value is not null
-     *
-     *   @param context context to compute value with
-     */
-    public boolean evaluate( InternalContextAdapter context)
-        throws MethodInvocationException
-    {
-        Object value = execute(null, context);
-        
-        if (value == null)
-        {
-            return false;
-        }
-        else if (value instanceof Boolean)
-        {
-            if (((Boolean) value).booleanValue())
-                return true;
-            else
-                return false;
-        }
-        else
-            return true;
-    }
-
-    public Object value( InternalContextAdapter context)
-        throws MethodInvocationException
-    {
-        return ( computableReference ? execute(null, context) : null );
-    }
-
-    /**
-     *  Sets the value of a complex reference (something like $foo.bar)
-     *  Currently used by ASTSetReference()
-     *
-     *  @see ASTSetDirective
-     *
-     *  @param context context object containing this reference
-     *  @param value Object to set as value
-     *  @return true if successful, false otherwise
-     */
-    public boolean setValue( InternalContextAdapter context, Object value)
-      throws MethodInvocationException
-    {
-        /*
-         *  The rootOfIntrospection is the object we will
-         *  retrieve from the Context. This is the base
-         *  object we will apply reflection to.
-         */
-
-        Object result = getVariableValue(context, rootString);
-        
-        if (result == null)
-        {
-            rsvc.error(new ReferenceException("reference set : template = " + context.getCurrentTemplateName(), this));
-            return false;
-        }                          
-        
-        /*
-         * How many child nodes do we have?
-         */
-
-        for (int i = 0; i < numChildren - 1; i++)
-        {
-            result = jjtGetChild(i).execute(result, context);
-            
-            if (result == null)
-            {
-                rsvc.error(new ReferenceException("reference set : template = " + context.getCurrentTemplateName(), this));
-                return false;
-            }                          
-        }            
-
-        /*
-         *  We support two ways of setting the value in a #set($ref.foo = $value ) :
-         *  1) ref.setFoo( value )
-         *  2) ref,put("foo", value ) to parallel the get() map introspection
-         */
-
-        try
-        {
-            /*
-             *  first, we introspect for the set<identifier> setter method
-             */
-
-            Object[] params = { value };
-
-            Class c = result.getClass();
-            Method m = null;
-
-            try
-            {
-                m = rsvc.getIntrospector().getMethod( c, "set" + identifier, params);
-
-                if (m == null)
-                {
-                    throw new NoSuchMethodException();
-                }
-            }
-            catch( NoSuchMethodException nsme2)
-            {
-                StringBuffer sb = new StringBuffer( "set" );
-                sb.append( identifier );
-
-                if(  Character.isLowerCase( sb.charAt(3)))
-                {
-                    sb.setCharAt( 3 ,  Character.toUpperCase( sb.charAt( 3 ) ) );
-                }
-                else
-                {
-                    sb.setCharAt( 3 ,  Character.toLowerCase( sb.charAt( 3 ) ) );
-                }
-               
-                m = rsvc.getIntrospector().getMethod( c, sb.toString(), params);
-
-                if (m == null)
-                {
-                    throw new NoSuchMethodException();
-                }
-            }
-
-            /*
-             *  and if we get here, getMethod() didn't chuck an exception...
-             */
-            
-            Object[] args = { value };
-            m.invoke(result, args);
-        }
-        catch (NoSuchMethodException nsme)
-        {
-            /*
-             *  right now, we only support the Map interface
-             */
-
-            if (result instanceof Map)
-            {
-                try
-                {
-                    ((Map) result).put(identifier, value);
-                }
-                catch (Exception ex)
-                {
-                    rsvc.error("ASTReference Map.put : exception : " + ex 
-                                  + " template = " + context.getCurrentTemplateName() 
-                                  + " [" + this.getLine() + "," + this.getColumn() + "]");
-                    return false;
-                }
-            }
-            else
-            {
-                rsvc.error("ASTReference : cannot find " + identifier + " as settable property or key to Map in"
-                              + " template = " + context.getCurrentTemplateName() 
-                              + " [" + this.getLine() + "," + this.getColumn() + "]");
-                return false;
-                
-            }
-        }
-        catch( InvocationTargetException ite )
-        {
-            /*
-             *  this is possible 
-             */
-
-            throw  new MethodInvocationException( 
-                "ASTReference : Invocation of method '" 
-                + identifier + "' in  " + result.getClass()
-                + " threw exception " 
-                + ite.getTargetException().getClass(), 
-               ite.getTargetException(), identifier );
-        }
-        catch( Exception e )
-        {
-            /*
-             *  maybe a security exception?
-             */
-            rsvc.error("ASTReference setValue() : exception : " + e 
-                                  + " template = " + context.getCurrentTemplateName() 
-                                  + " [" + this.getLine() + "," + this.getColumn() + "]");
-            return false;
-         }
-        
-        return true;
-    }
-
-    private String getRoot()
-    {
-        Token t = getFirstToken();
-
-        //        System.out.println("First token for " + ((Object) this ) + " : " + t );
-
-        /*
-         *  we have a special case where something like 
-         *  $(\\)*!, where the user want's to see something
-         *  like $!blargh in the output, but the ! prevents it from showing.
-         *  I think that at this point, this isn't a reference.
-         */
-
-        /* so, see if we have "\\!" */
-
-        int slashbang = t.image.indexOf("\\!");
-
-        if ( slashbang != -1 )
-        {
-            /*
-             *  lets do all the work here.  I would argue that if this occurrs, it's 
-             *  not a reference at all, so preceeding \ characters in front of the $
-             *  are just schmoo.  So we just do the escape processing trick (even | odd)
-             *  and move on.  This kind of breaks the rule pattern of $ and # but '!' really
-             *  tosses a wrench into things.
-             */
-
-             /* 
-              *  count the escapes : even # -> not escaped, odd -> escaped
-              */
-
-            int i = 0;
-            int len = t.image.length();
-
-            i = t.image.indexOf("$");
-
-            if (i == -1)
-            {
-                /* yikes! */
-                rsvc.error("ASTReference.getRoot() : internal error : no $ found for slashbang.");
-                computableReference = false;
-                nullString = t.image;
-                return nullString;
-            }
-
-            while( i < len && t.image.charAt(i) != '\\')
-                i++;
-
-            /*  ok, i is the first \ char */
-
-            int start = i;
-            int count = 0;
- 
-            while( i < len && t.image.charAt(i++) == '\\' )
-                count++;
-           
-            /*
-             *  now construct the output string.  We really don't care about leading 
-             *  slashes as this is not a reference.  It's quasi-schmoo
-             */
-
-            nullString = t.image.substring(0,start); // prefix up to the first 
-            nullString += t.image.substring(start, start + count-1 ); // get the slashes
-            nullString += t.image.substring(start+count); // and the rest, including the 
-
-            /*
-             *  this isn't a valid reference, so lets short circuit the value and set calcs
-             */
-
-            computableReference = false;
-
-            return nullString;
-        }
-
-        /*
-         *  we need to see if this reference is escaped.  if so
-         *  we will clean off the leading \'s and let the 
-         *  regular behavior determine if we should output this
-         *  as \$foo or $foo later on in render(). Lazyness..
-         */
-      
-        escaped = false;
-
-        if ( t.image.startsWith("\\"))
-        {
-            /* 
-             *  count the escapes : even # -> not escaped, odd -> escaped
-             */
-
-            int i = 0;
-            int len = t.image.length();
-
-            while( i < len && t.image.charAt(i) == '\\' )
-                i++;
-
- 
-            if ( (i % 2) != 0 )                
-                escaped = true;
-
-            //           System.out.println("Escaped?  : " + i + " : " + escaped + " : " + ( (Object) this) );
-
-            if (i > 0)
-                prefix = t.image.substring(0, i / 2 );
-
-            t.image = t.image.substring(i);
-        }
-
-        /*
-         *  get the literal in case this reference isn't backed by the context at runtime
-         */
-
-        nullString = literal();
-
-        if (t.image.startsWith("$!"))
-        {
-            referenceType = QUIET_REFERENCE;
- 
-            /*
-             *  only if we aren't escaped do we want to null the output
-             */
-
-            if (!escaped)
-                nullString = "";
- 
-            if (t.image.startsWith("$!{"))
-            {
-                /*
-                 *  ex : $!{provider.Title} 
-                 */
-
-                return t.next.image;
-            }
-            else
-            {
-                /*
-                 *  ex : $!provider.Title
-                 */
- 
-                return t.image.substring(2);
-            }
-        }
-        else if (t.image.equals("${"))
-        {
-            /*
-             *  ex : ${provider.Title}
-             */
-
-            referenceType = FORMAL_REFERENCE;
-            return t.next.image;
-        }            
-        else
-        {
-            /*
-             * the magic <MORE> can prepend '#' and '$'
-             * on the front of a reference - so lets clean it
-             * and save that info as the prefix
-             */
-            String img = t.image;
-            int loc = 0;
-
-            for( loc = 0; loc < img.length(); loc++)
-            {
-                char c = img.charAt(loc);
-
-                if ( c != '#' && c != '$')
-                {
-                    break;
-                }
-            }
-             
-            /*
-             *  if we have extra stuff, loc > 0
-             *  ex. '#$foo' so attach that to 
-             *  the prefix.
-             */
-            if( loc > 0)
-            {
-                prefix = prefix + img.substring(0, loc-1);
-            }
-
-            referenceType = NORMAL_REFERENCE;
-
-            return img.substring(loc);
-        }            
-    }
-
-    public Object getVariableValue(Context context, String variable)
-    {
-        return context.get(variable);
-    }
-
-
-    /**
-     *  Routine to allow the literal representation to be
-     *  externally overridden.  Used now in the VM system
-     *  to override a reference in a VM tree with the
-     *  literal of the calling arg to make it work nicely
-     *  when calling arg is null.  It seems a bit much, but
-     *  does keep things consistant.
-     *
-     *  Note, you can only set the literal once...
-     *
-     *  @param literal String to render to when null
-     */
-    public void setLiteral( String literal )
-    {
-        /*
-         * do only once
-         */
-
-        if( this.literal == null)
-            this.literal = literal;
-    }
-
-    /**
-     *  Override of the SimpleNode method literal()
-     *  Returns the literal representation of the 
-     *  node.  Should be something like
-     *  $<token>.
-     */
-    public String literal()
-    {
-        if (literal != null)
-            return literal;
-
-        return super.literal();
     }
 }
-

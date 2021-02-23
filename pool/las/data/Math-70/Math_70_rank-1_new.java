@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
+ * 
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * 
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -17,139 +17,217 @@
  * under the License.
  */
 
-package org.apache.ode.bpel.elang.xpath20.runtime;
+package org.apache.ranger.plugin.resourcematcher;
 
-import java.util.Calendar;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
-import javax.xml.namespace.QName;
-import javax.xml.xpath.XPathVariableResolver;
-
-import net.sf.saxon.Configuration;
-
+import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.ode.bpel.common.FaultException;
-import org.apache.ode.bpel.elang.xpath10.o.OXPath10ExpressionBPEL20;
-import org.apache.ode.bpel.elang.xpath20.compiler.WrappedResolverException;
-import org.apache.ode.bpel.explang.EvaluationContext;
-import org.apache.ode.bpel.o.OLink;
-import org.apache.ode.bpel.o.OMessageVarType;
-import org.apache.ode.bpel.o.OScope;
-import org.apache.ode.bpel.o.OXsdTypeVarType;
-import org.apache.ode.utils.Namespaces;
-import org.apache.ode.utils.xsd.XSTypes;
-import org.w3c.dom.Document;
-import org.w3c.dom.Node;
+import org.apache.ranger.plugin.model.RangerPolicy.RangerPolicyResource;
+import org.apache.ranger.plugin.model.RangerServiceDef.RangerResourceDef;
 
-/**
- * @author mriou <mriou at apache dot org>
- */
-public class JaxpVariableResolver implements XPathVariableResolver {
 
-    private static final Log __log = LogFactory.getLog(JaxpVariableResolver.class);
+public abstract class RangerAbstractResourceMatcher implements RangerResourceMatcher {
+	private static final Log LOG = LogFactory.getLog(RangerAbstractResourceMatcher.class);
 
-    private EvaluationContext _ectx;
-    private OXPath10ExpressionBPEL20 _oxpath;
-    private Configuration _config;
+	public final static String WILDCARD_ASTERISK = "*";
 
-    public JaxpVariableResolver(EvaluationContext ectx, OXPath10ExpressionBPEL20 oxpath, Configuration config) {
-        _ectx = ectx;
-        _oxpath = oxpath;
-        _config = config;
-    }
+	public final static String OPTIONS_SEP        = ";";
+	public final static String OPTION_NV_SEP      = "=";
+	public final static String OPTION_IGNORE_CASE = "ignoreCase";
+	public final static String OPTION_WILD_CARD   = "wildCard";
 
-    public Object resolveVariable(QName variableName) {
-        __log.debug("Resolving variable " + variableName);
+	private RangerResourceDef    resourceDef    = null;
+	private RangerPolicyResource policyResource = null;
+	private Map<String, String>  options        = null;
 
-        if(!(_oxpath instanceof OXPath10ExpressionBPEL20)){
-            throw new IllegalStateException("XPath variables not supported for bpel 1.1");
-        }
+	protected boolean      optIgnoreCase = false;
+	protected boolean      optWildCard   = false;
 
-        // Custom variables
-        if (variableName.getNamespaceURI().equals(Namespaces.ODE_EXTENSION_NS)) {
-            if ("pid".equals(variableName.getLocalPart())) {
-                return _ectx.getProcessId();
-            } else if ("processQName".equals(variableName.getLocalPart())) {
-                return _ectx.getProcessQName();
-            }
-            if ("currentEventDateTime".equals(variableName.getLocalPart())) {
-                return _ectx.getCurrentEventDateTime();
-            }
-        }
+	protected List<String> policyValues     = null;
+	protected boolean      policyIsExcludes = false;
+	protected boolean      isMatchAny       = false;
 
-        OXPath10ExpressionBPEL20 expr = _oxpath;
-        if(expr.isJoinExpression){
-            OLink olink = _oxpath.links.get(variableName.getLocalPart());
+	@Override
+	public void init(RangerResourceDef resourceDef, RangerPolicyResource policyResource) {
+		if(LOG.isDebugEnabled()) {
+			LOG.debug("==> RangerAbstractResourceMatcher.init(" + resourceDef + ", " + policyResource + ")");
+		}
 
-            try {
-                return _ectx.isLinkActive(olink) ? Boolean.TRUE : Boolean.FALSE;
-            } catch (FaultException e) {
-                throw new WrappedResolverException(e);
-            }
-        }else{
-            String varName;
-            String partName;
-            int dotloc = variableName.getLocalPart().indexOf('.');
-            if (dotloc == -1) {
-                varName = variableName.getLocalPart();
-                partName = null;
-            } else {
-                varName = variableName.getLocalPart().substring(0, dotloc);
-                partName = variableName.getLocalPart().substring(dotloc + 1);
-            }
-            OScope.Variable variable = _oxpath.vars.get(varName);
-            OMessageVarType.Part part = partName == null ? null : ((OMessageVarType)variable.type).parts.get(partName);
 
-            try{
-                final Node variableNode = _ectx.readVariable(variable, part);
-                if (variableNode == null)
-                    throw new FaultException(variable.getOwner().constants.qnSelectionFailure,
-                            "Unknown variable " + variableName.getLocalPart());
-                if (_ectx.narrowTypes()) {
-                    if (variable.type instanceof OXsdTypeVarType && ((OXsdTypeVarType)variable.type).simple)
-                        return getSimpleContent(variableNode,((OXsdTypeVarType)variable.type).xsdType);
-                    if (part != null && part.type instanceof OXsdTypeVarType && ((OXsdTypeVarType)part.type).simple)
-                        return getSimpleContent(variableNode,((OXsdTypeVarType)part.type).xsdType);
-                }
+		this.options        = resourceDef.getMatcherOptions();
+		this.resourceDef    = resourceDef;
+		this.policyResource = policyResource;
 
-                // Saxon used to expect a node list, but now a regular node will suffice.
-                return variableNode;
-            }catch(FaultException e){
-                throw new WrappedResolverException(e);
-            }
-        }
-    }
-    
-    private Object getSimpleContent(Node simpleNode, QName type) {
-        Document doc = (simpleNode instanceof Document) 
-        	? ((Document) simpleNode) 
-        	: simpleNode.getOwnerDocument();
-        String text = simpleNode.getTextContent();
-        try {
-            Object jobj = XSTypes.toJavaObject(type,text);
-            if (jobj instanceof Calendar) {
-                // Saxon 9.x prefers Dates over Calendars.
-                return ((Calendar) jobj).getTime();
-            } else if (jobj instanceof String) {
-                // Saxon 9.x has a bug for which this is a workaround.
-                return doc.createTextNode(jobj.toString());
-            } 
-            return jobj;
-        } catch (Exception e) {
-	        // Elegant way failed, trying brute force 
-	        try {
-	    	    return Integer.valueOf(text);
-	      	} catch (NumberFormatException nfe) { }
-	      	try {
-	      		return Double.valueOf(text);
-	      	} catch (NumberFormatException nfe) { }
-	      
-	        // Remember: always a node set
-	        if (simpleNode.getParentNode() != null)
-	            return simpleNode.getParentNode().getChildNodes();
-	        else {        	
-	            return doc.createTextNode(text);
-	        }
-        }
-    }
+		optIgnoreCase = getBooleanOption(OPTION_IGNORE_CASE, true);
+		optWildCard   = getBooleanOption(OPTION_WILD_CARD, true);
+
+		policyValues     = new ArrayList<String>();
+		policyIsExcludes = policyResource == null ? false : policyResource.getIsExcludes();
+
+		if(policyResource != null && policyResource.getValues() != null) {
+			for(String policyValue : policyResource.getValues()) {
+				if(StringUtils.isEmpty(policyValue)) {
+					continue;
+				}
+
+				if(optIgnoreCase) {
+					policyValue = policyValue.toLowerCase();
+				}
+
+				if(StringUtils.containsOnly(policyValue, WILDCARD_ASTERISK)) {
+					isMatchAny = true;
+				}
+
+				policyValues.add(policyValue);
+			}
+		}
+
+		if(policyValues.isEmpty()) {
+			isMatchAny = true;
+		}
+
+		if(LOG.isDebugEnabled()) {
+			LOG.debug("<== RangerAbstractResourceMatcher.init(" + resourceDef + ", " + policyResource + ")");
+		}
+	}
+
+	@Override
+	public RangerResourceDef getResourceDef() {
+		return resourceDef;
+	}
+
+	@Override
+	public RangerPolicyResource getPolicyResource() {
+		return policyResource;
+	}
+
+	@Override
+	public boolean isSingleAndExactMatch(String resource) {
+		if(LOG.isDebugEnabled()) {
+			LOG.debug("==> RangerAbstractResourceMatcher.isSingleAndExactMatch(" + resource + ")");
+		}
+
+		boolean ret = false;
+
+		if(CollectionUtils.isEmpty(policyValues)) {
+			ret = StringUtils.isEmpty(resource);
+		} else if(policyValues.size() == 1) {
+			String policyValue = policyValues.get(0);
+			
+			if(isMatchAny) {
+				ret = StringUtils.containsOnly(resource, WILDCARD_ASTERISK);
+			} else {
+				ret = optIgnoreCase ? StringUtils.equalsIgnoreCase(resource, policyValue) : StringUtils.equals(resource, policyValue);
+			}
+
+			if(policyIsExcludes) {
+				ret = !ret;
+			}
+		}
+
+		if(LOG.isDebugEnabled()) {
+			LOG.debug("<== RangerAbstractResourceMatcher.isSingleAndExactMatch(" + resource + "): " + ret);
+		}
+
+		return ret;
+	}
+
+
+	public String getOption(String name) {
+		String ret = null;
+
+		if(options != null && name != null) {
+			ret = options.get(name);
+		}
+
+		return ret;
+	}
+
+	public String getOption(String name, String defaultValue) {
+		String ret = getOption(name);
+
+		if(StringUtils.isEmpty(ret)) {
+			ret = defaultValue;
+		}
+
+		return ret;
+	}
+
+	public boolean getBooleanOption(String name) {
+		String val = getOption(name);
+
+		boolean ret = StringUtils.isEmpty(val) ? false : Boolean.parseBoolean(val);
+
+		return ret;
+	}
+
+	public boolean getBooleanOption(String name, boolean defaultValue) {
+		String strVal = getOption(name);
+
+		boolean ret = StringUtils.isEmpty(strVal) ? defaultValue : Boolean.parseBoolean(strVal);
+
+		return ret;
+	}
+
+	public char getCharOption(String name, char defaultValue) {
+		String strVal = getOption(name);
+
+		char ret = StringUtils.isEmpty(strVal) ? defaultValue : strVal.charAt(0);
+
+		return ret;
+	}
+
+	@Override
+	public String toString( ) {
+		StringBuilder sb = new StringBuilder();
+
+		toString(sb);
+
+		return sb.toString();
+	}
+
+	public StringBuilder toString(StringBuilder sb) {
+		sb.append("RangerAbstractResourceMatcher={");
+
+		sb.append("resourceDef={");
+		if(resourceDef != null) {
+			resourceDef.toString(sb);
+		}
+		sb.append("} ");
+		sb.append("policyResource={");
+		if(policyResource != null) {
+			policyResource.toString(sb);
+		}
+		sb.append("} ");
+		sb.append("optIgnoreCase={").append(optIgnoreCase).append("} ");
+		sb.append("optWildCard={").append(optWildCard).append("} ");
+
+		sb.append("policyValues={");
+		if(policyValues != null) {
+			for(String value : policyValues) {
+				sb.append(value).append(",");
+			}
+		}
+		sb.append("} ");
+
+		sb.append("policyIsExcludes={").append(policyIsExcludes).append("} ");
+		sb.append("isMatchAny={").append(isMatchAny).append("} ");
+
+		sb.append("options={");
+		if(options != null) {
+			for(Map.Entry<String, String> e : options.entrySet()) {
+				sb.append(e.getKey()).append("=").append(e.getValue()).append(OPTIONS_SEP);
+			}
+		}
+		sb.append("} ");
+
+		sb.append("}");
+
+		return sb;
+	}
 }

@@ -1,12 +1,13 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,3100 +15,1345 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.beam.runners.flink.translation.wrappers.streaming;
 
-package org.apache.ignite.internal.processors.cache.query;
+import static org.apache.flink.util.Preconditions.checkArgument;
 
-import java.io.Externalizable;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.io.IOException;
-import java.io.ObjectInput;
-import java.io.ObjectOutput;
-import java.sql.SQLException;
-import java.util.ArrayDeque;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.Serializable;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
-import java.util.Queue;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.function.BiFunction;
-import javax.cache.Cache;
-import org.apache.ignite.Ignite;
-import org.apache.ignite.IgniteCheckedException;
-import org.apache.ignite.IgniteException;
-import org.apache.ignite.IgniteLogger;
-import org.apache.ignite.IgniteSystemProperties;
-import org.apache.ignite.cache.QueryIndexType;
-import org.apache.ignite.cache.query.QueryMetrics;
-import org.apache.ignite.cluster.ClusterNode;
-import org.apache.ignite.configuration.CacheConfiguration;
-import org.apache.ignite.events.CacheQueryExecutedEvent;
-import org.apache.ignite.events.CacheQueryReadEvent;
-import org.apache.ignite.events.DiscoveryEvent;
-import org.apache.ignite.events.Event;
-import org.apache.ignite.internal.GridKernalContext;
-import org.apache.ignite.internal.IgniteInternalFuture;
-import org.apache.ignite.internal.IgniteKernal;
-import org.apache.ignite.internal.NodeStoppingException;
-import org.apache.ignite.internal.managers.eventstorage.GridLocalEventListener;
-import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
-import org.apache.ignite.internal.processors.cache.CacheEntryImpl;
-import org.apache.ignite.internal.processors.cache.CacheMetricsImpl;
-import org.apache.ignite.internal.processors.cache.CacheObject;
-import org.apache.ignite.internal.processors.cache.CacheObjectContext;
-import org.apache.ignite.internal.processors.cache.CacheObjectUtils;
-import org.apache.ignite.internal.processors.cache.GridCacheAdapter;
-import org.apache.ignite.internal.processors.cache.GridCacheContext;
-import org.apache.ignite.internal.processors.cache.GridCacheEntryEx;
-import org.apache.ignite.internal.processors.cache.GridCacheEntryRemovedException;
-import org.apache.ignite.internal.processors.cache.GridCacheManagerAdapter;
-import org.apache.ignite.internal.processors.cache.IgniteCacheExpiryPolicy;
-import org.apache.ignite.internal.processors.cache.IgniteInternalCache;
-import org.apache.ignite.internal.processors.cache.KeyCacheObject;
-import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtCacheAdapter;
-import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtLocalPartition;
-import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtUnreservedPartitionException;
-import org.apache.ignite.internal.processors.cache.persistence.CacheDataRow;
-import org.apache.ignite.internal.processors.datastructures.DataStructuresProcessor;
-import org.apache.ignite.internal.processors.datastructures.GridSetQueryPredicate;
-import org.apache.ignite.internal.processors.datastructures.SetItemKey;
-import org.apache.ignite.internal.processors.platform.cache.PlatformCacheEntryFilter;
-import org.apache.ignite.internal.processors.query.GridQueryFieldMetadata;
-import org.apache.ignite.internal.processors.query.GridQueryIndexDescriptor;
-import org.apache.ignite.internal.processors.query.GridQueryProcessor;
-import org.apache.ignite.internal.processors.query.GridQueryTypeDescriptor;
-import org.apache.ignite.internal.processors.query.QueryUtils;
-import org.apache.ignite.internal.processors.task.GridInternal;
-import org.apache.ignite.internal.util.GridBoundedPriorityQueue;
-import org.apache.ignite.internal.util.GridCloseableIteratorAdapter;
-import org.apache.ignite.internal.util.GridEmptyCloseableIterator;
-import org.apache.ignite.internal.util.GridLeanMap;
-import org.apache.ignite.internal.util.GridSpiCloseableIteratorWrapper;
-import org.apache.ignite.internal.util.GridSpinBusyLock;
-import org.apache.ignite.internal.util.future.GridFutureAdapter;
-import org.apache.ignite.internal.util.lang.GridCloseableIterator;
-import org.apache.ignite.internal.util.lang.GridIterator;
-import org.apache.ignite.internal.util.typedef.C1;
-import org.apache.ignite.internal.util.typedef.CIX1;
-import org.apache.ignite.internal.util.typedef.F;
-import org.apache.ignite.internal.util.typedef.P1;
-import org.apache.ignite.internal.util.typedef.T2;
-import org.apache.ignite.internal.util.typedef.T3;
-import org.apache.ignite.internal.util.typedef.X;
-import org.apache.ignite.internal.util.typedef.internal.A;
-import org.apache.ignite.internal.util.typedef.internal.CU;
-import org.apache.ignite.internal.util.typedef.internal.LT;
-import org.apache.ignite.internal.util.typedef.internal.S;
-import org.apache.ignite.internal.util.typedef.internal.U;
-import org.apache.ignite.lang.IgniteBiPredicate;
-import org.apache.ignite.lang.IgniteBiTuple;
-import org.apache.ignite.lang.IgniteCallable;
-import org.apache.ignite.lang.IgniteClosure;
-import org.apache.ignite.lang.IgniteProductVersion;
-import org.apache.ignite.lang.IgniteReducer;
-import org.apache.ignite.lang.IgniteUuid;
-import org.apache.ignite.resources.IgniteInstanceResource;
-import org.apache.ignite.spi.IgniteSpiCloseableIterator;
-import org.apache.ignite.spi.indexing.IndexingQueryFilter;
-import org.apache.ignite.spi.indexing.IndexingQueryFilterImpl;
-import org.apache.ignite.spi.indexing.IndexingSpi;
-import org.jetbrains.annotations.Nullable;
-
-import static org.apache.ignite.IgniteSystemProperties.IGNITE_QUIET;
-import static org.apache.ignite.cache.CacheMode.LOCAL;
-import static org.apache.ignite.events.EventType.EVT_CACHE_QUERY_EXECUTED;
-import static org.apache.ignite.events.EventType.EVT_CACHE_QUERY_OBJECT_READ;
-import static org.apache.ignite.events.EventType.EVT_NODE_FAILED;
-import static org.apache.ignite.events.EventType.EVT_NODE_LEFT;
-import static org.apache.ignite.internal.GridClosureCallMode.BROADCAST;
-import static org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtPartitionState.OWNING;
-import static org.apache.ignite.internal.processors.cache.query.GridCacheQueryType.SCAN;
-import static org.apache.ignite.internal.processors.cache.query.GridCacheQueryType.SPI;
-import static org.apache.ignite.internal.processors.cache.query.GridCacheQueryType.SQL;
-import static org.apache.ignite.internal.processors.cache.query.GridCacheQueryType.SQL_FIELDS;
-import static org.apache.ignite.internal.processors.cache.query.GridCacheQueryType.TEXT;
+import java.util.Optional;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.locks.Lock;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import javax.annotation.Nullable;
+import org.apache.beam.runners.core.DoFnRunner;
+import org.apache.beam.runners.core.DoFnRunners;
+import org.apache.beam.runners.core.NullSideInputReader;
+import org.apache.beam.runners.core.ProcessFnRunner;
+import org.apache.beam.runners.core.PushbackSideInputDoFnRunner;
+import org.apache.beam.runners.core.SideInputHandler;
+import org.apache.beam.runners.core.SideInputReader;
+import org.apache.beam.runners.core.SimplePushbackSideInputDoFnRunner;
+import org.apache.beam.runners.core.SplittableParDoViaKeyedWorkItems;
+import org.apache.beam.runners.core.StateInternals;
+import org.apache.beam.runners.core.StateNamespace;
+import org.apache.beam.runners.core.StateNamespaces.WindowNamespace;
+import org.apache.beam.runners.core.StatefulDoFnRunner;
+import org.apache.beam.runners.core.StepContext;
+import org.apache.beam.runners.core.TimerInternals;
+import org.apache.beam.runners.core.TimerInternals.TimerData;
+import org.apache.beam.runners.core.construction.SerializablePipelineOptions;
+import org.apache.beam.runners.flink.FlinkPipelineOptions;
+import org.apache.beam.runners.flink.metrics.DoFnRunnerWithMetricsUpdate;
+import org.apache.beam.runners.flink.metrics.FlinkMetricContainer;
+import org.apache.beam.runners.flink.translation.types.CoderTypeSerializer;
+import org.apache.beam.runners.flink.translation.utils.Workarounds;
+import org.apache.beam.runners.flink.translation.wrappers.streaming.stableinput.BufferingDoFnRunner;
+import org.apache.beam.runners.flink.translation.wrappers.streaming.state.FlinkBroadcastStateInternals;
+import org.apache.beam.runners.flink.translation.wrappers.streaming.state.FlinkStateInternals;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.StructuredCoder;
+import org.apache.beam.sdk.coders.VarIntCoder;
+import org.apache.beam.sdk.io.FileSystems;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.state.StateSpec;
+import org.apache.beam.sdk.state.TimeDomain;
+import org.apache.beam.sdk.transforms.DoFn;
+import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
+import org.apache.beam.sdk.transforms.join.RawUnionValue;
+import org.apache.beam.sdk.transforms.reflect.DoFnInvoker;
+import org.apache.beam.sdk.transforms.reflect.DoFnInvokers;
+import org.apache.beam.sdk.transforms.reflect.DoFnSignature;
+import org.apache.beam.sdk.transforms.reflect.DoFnSignatures;
+import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
+import org.apache.beam.sdk.util.NoopLock;
+import org.apache.beam.sdk.util.WindowedValue;
+import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.sdk.values.WindowingStrategy;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Joiner;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Preconditions;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
+import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.typeutils.base.StringSerializer;
+import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.runtime.state.KeyedStateBackend;
+import org.apache.flink.runtime.state.OperatorStateBackend;
+import org.apache.flink.runtime.state.StateInitializationContext;
+import org.apache.flink.runtime.state.StateSnapshotContext;
+import org.apache.flink.runtime.state.VoidNamespace;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.graph.StreamConfig;
+import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
+import org.apache.flink.streaming.api.operators.ChainingStrategy;
+import org.apache.flink.streaming.api.operators.InternalTimer;
+import org.apache.flink.streaming.api.operators.InternalTimerService;
+import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
+import org.apache.flink.streaming.api.operators.Output;
+import org.apache.flink.streaming.api.operators.Triggerable;
+import org.apache.flink.streaming.api.operators.TwoInputStreamOperator;
+import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.runtime.tasks.StreamTask;
+import org.apache.flink.util.OutputTag;
+import org.joda.time.Instant;
 
 /**
- * Query and index manager.
+ * Flink operator for executing {@link DoFn DoFns}.
+ *
+ * @param <InputT> the input type of the {@link DoFn}
+ * @param <OutputT> the output type of the {@link DoFn}
  */
-@SuppressWarnings("FieldAccessedSynchronizedAndUnsynchronized")
-public abstract class GridCacheQueryManager<K, V> extends GridCacheManagerAdapter<K, V> {
-    /** Maximum number of query detail metrics to evict at once. */
-    private static final int QRY_DETAIL_METRICS_EVICTION_LIMIT = 10_000;
+public class DoFnOperator<InputT, OutputT> extends AbstractStreamOperator<WindowedValue<OutputT>>
+    implements OneInputStreamOperator<WindowedValue<InputT>, WindowedValue<OutputT>>,
+        TwoInputStreamOperator<WindowedValue<InputT>, RawUnionValue, WindowedValue<OutputT>>,
+        Triggerable<ByteBuffer, TimerData> {
 
-    /** Support 'not null' field constraint since v 2.3.0. */
-    private static final IgniteProductVersion NOT_NULLS_SUPPORT_VER = IgniteProductVersion.fromString("2.3.0");
+  protected DoFn<InputT, OutputT> doFn;
 
-    /** Comparator for priority queue with query detail metrics with priority to new metrics. */
-    private static final Comparator<GridCacheQueryDetailMetricsAdapter> QRY_DETAIL_METRICS_PRIORITY_NEW_CMP =
-        new Comparator<GridCacheQueryDetailMetricsAdapter>() {
-            @Override public int compare(GridCacheQueryDetailMetricsAdapter m1, GridCacheQueryDetailMetricsAdapter m2) {
-                return Long.compare(m1.lastStartTime(), m2.lastStartTime());
-            }
-        };
+  protected final SerializablePipelineOptions serializedOptions;
 
-    /** Comparator for priority queue with query detail metrics with priority to old metrics. */
-    private static final Comparator<GridCacheQueryDetailMetricsAdapter> QRY_DETAIL_METRICS_PRIORITY_OLD_CMP =
-        new Comparator<GridCacheQueryDetailMetricsAdapter>() {
-            @Override public int compare(GridCacheQueryDetailMetricsAdapter m1, GridCacheQueryDetailMetricsAdapter m2) {
-                return Long.compare(m2.lastStartTime(), m1.lastStartTime());
-            }
-        };
+  protected final TupleTag<OutputT> mainOutputTag;
+  protected final List<TupleTag<?>> additionalOutputTags;
 
-    /** Function to merge query detail metrics. */
-    private static final BiFunction<
-        GridCacheQueryDetailMetricsAdapter,
-        GridCacheQueryDetailMetricsAdapter,
-        GridCacheQueryDetailMetricsAdapter>
-        QRY_DETAIL_METRICS_MERGE_FX = GridCacheQueryDetailMetricsAdapter::aggregate;
+  protected final Collection<PCollectionView<?>> sideInputs;
+  protected final Map<Integer, PCollectionView<?>> sideInputTagMapping;
 
-    /** Default is @{code true} */
-    private final boolean isIndexingSpiAllowsBinary = !IgniteSystemProperties.getBoolean(IgniteSystemProperties.IGNITE_UNWRAP_BINARY_FOR_INDEXING_SPI);
+  protected final WindowingStrategy<?, ?> windowingStrategy;
 
-    /** */
-    private GridQueryProcessor qryProc;
+  protected final OutputManagerFactory<OutputT> outputManagerFactory;
 
-    /** */
-    private String cacheName;
+  protected transient DoFnRunner<InputT, OutputT> doFnRunner;
+  protected transient PushbackSideInputDoFnRunner<InputT, OutputT> pushbackDoFnRunner;
+  protected transient BufferingDoFnRunner<InputT, OutputT> bufferingDoFnRunner;
 
-    /** */
-    private int maxIterCnt;
+  protected transient SideInputHandler sideInputHandler;
 
-    /** */
-    private volatile GridCacheQueryMetricsAdapter metrics = new GridCacheQueryMetricsAdapter();
+  protected transient SideInputReader sideInputReader;
 
-    /** */
-    private int detailMetricsSz;
+  protected transient BufferedOutputManager<OutputT> outputManager;
 
-    /** */
-    private ConcurrentHashMap<GridCacheQueryDetailMetricsKey, GridCacheQueryDetailMetricsAdapter> detailMetrics;
+  private transient DoFnInvoker<InputT, OutputT> doFnInvoker;
 
-    /** */
-    private final ConcurrentMap<UUID, RequestFutureMap> qryIters = new ConcurrentHashMap<>();
+  protected transient FlinkStateInternals<?> keyedStateInternals;
+  protected transient FlinkTimerInternals timerInternals;
 
-    /** */
-    private final ConcurrentMap<UUID, Map<Long, GridFutureAdapter<FieldsResult>>> fieldsQryRes =
-        new ConcurrentHashMap<>();
+  protected final String stepName;
 
-    /** */
-    private volatile ConcurrentMap<Object, CachedResult<?>> qryResCache = new ConcurrentHashMap<>();
+  private final Coder<WindowedValue<InputT>> windowedInputCoder;
 
-    /** */
-    private final GridSpinBusyLock busyLock = new GridSpinBusyLock();
+  private final Map<TupleTag<?>, Coder<?>> outputCoders;
 
-    /** Event listener. */
-    private GridLocalEventListener lsnr;
+  protected final Coder<?> keyCoder;
 
-    /** */
-    private boolean enabled;
+  final KeySelector<WindowedValue<InputT>, ?> keySelector;
 
-    /** */
-    private boolean qryProcEnabled;
+  private final TimerInternals.TimerDataCoderV2 timerCoder;
 
-    /** */
-    private AffinityTopologyVersion qryTopVer;
+  /** Max number of elements to include in a bundle. */
+  private final long maxBundleSize;
+  /** Max duration of a bundle. */
+  private final long maxBundleTimeMills;
 
-    /** {@inheritDoc} */
-    @Override public void start0() throws IgniteCheckedException {
-        CacheConfiguration ccfg = cctx.config();
+  private final DoFnSchemaInformation doFnSchemaInformation;
 
-        qryProcEnabled = QueryUtils.isEnabled(ccfg);
+  private final Map<String, PCollectionView<?>> sideInputMapping;
 
-        qryProc = cctx.kernalContext().query();
+  /** If true, we must process elements only after a checkpoint is finished. */
+  private final boolean requiresStableInput;
 
-        cacheName = cctx.name();
+  protected transient InternalTimerService<TimerData> timerService;
 
-        enabled = qryProcEnabled || (isIndexingSpiEnabled() && !CU.isSystemCache(cacheName));
+  private transient PushedBackElementsHandler<WindowedValue<InputT>> pushedBackElementsHandler;
 
-        maxIterCnt = ccfg.getMaxQueryIteratorsCount();
+  /** Metrics container for reporting Beam metrics to Flink (null if metrics are disabled). */
+  @Nullable transient FlinkMetricContainer flinkMetricContainer;
 
-        detailMetricsSz = ccfg.getQueryDetailMetricsSize();
+  /** A timer that finishes the current bundle after a fixed amount of time. */
+  private transient ScheduledFuture<?> checkFinishBundleTimer;
 
-        if (detailMetricsSz > 0)
-            detailMetrics = new ConcurrentHashMap<>(detailMetricsSz);
+  /**
+   * This and the below fields need to be volatile because we use multiple threads to access these.
+   * (a) the main processing thread (b) a timer thread to finish bundles by a timeout instead of the
+   * number of element However, we do not need a lock because Flink makes sure to acquire the
+   * "checkpointing" lock for the main processing but also for timer set via its {@code
+   * timerService}.
+   *
+   * <p>The volatile flag can be removed once https://issues.apache.org/jira/browse/FLINK-12481 has
+   * been addressed.
+   */
+  private transient volatile boolean bundleStarted;
+  /** Number of processed elements in the current bundle. */
+  private transient volatile long elementCount;
+  /** Time that the last bundle was finished (to set the timer). */
+  private transient volatile long lastFinishBundleTime;
+  /** Callback to be executed after the current bundle was finished. */
+  private transient volatile Runnable bundleFinishedCallback;
 
-        lsnr = new GridLocalEventListener() {
-            @Override public void onEvent(Event evt) {
-                UUID nodeId = ((DiscoveryEvent)evt).eventNode().id();
+  // Watermark state.
+  // Volatile because these can be set in two mutually exclusive threads (see above).
+  protected transient volatile long currentInputWatermark;
+  protected transient volatile long currentSideInputWatermark;
+  protected transient volatile long currentOutputWatermark;
+  private transient volatile long pushedBackWatermark;
 
-                Map<Long, GridFutureAdapter<QueryResult<K, V>>> futs = qryIters.remove(nodeId);
+  /** Constructor for DoFnOperator. */
+  public DoFnOperator(
+      DoFn<InputT, OutputT> doFn,
+      String stepName,
+      Coder<WindowedValue<InputT>> inputWindowedCoder,
+      Map<TupleTag<?>, Coder<?>> outputCoders,
+      TupleTag<OutputT> mainOutputTag,
+      List<TupleTag<?>> additionalOutputTags,
+      OutputManagerFactory<OutputT> outputManagerFactory,
+      WindowingStrategy<?, ?> windowingStrategy,
+      Map<Integer, PCollectionView<?>> sideInputTagMapping,
+      Collection<PCollectionView<?>> sideInputs,
+      PipelineOptions options,
+      Coder<?> keyCoder,
+      KeySelector<WindowedValue<InputT>, ?> keySelector,
+      DoFnSchemaInformation doFnSchemaInformation,
+      Map<String, PCollectionView<?>> sideInputMapping) {
+    this.doFn = doFn;
+    this.stepName = stepName;
+    this.windowedInputCoder = inputWindowedCoder;
+    this.outputCoders = outputCoders;
+    this.mainOutputTag = mainOutputTag;
+    this.additionalOutputTags = additionalOutputTags;
+    this.sideInputTagMapping = sideInputTagMapping;
+    this.sideInputs = sideInputs;
+    this.serializedOptions = new SerializablePipelineOptions(options);
+    this.windowingStrategy = windowingStrategy;
+    this.outputManagerFactory = outputManagerFactory;
 
-                if (futs != null) {
-                    for (Map.Entry<Long, GridFutureAdapter<QueryResult<K, V>>> entry : futs.entrySet()) {
-                        final Object rcpt = recipient(nodeId, entry.getKey());
+    setChainingStrategy(ChainingStrategy.ALWAYS);
 
-                        entry.getValue().listen(new CIX1<IgniteInternalFuture<QueryResult<K, V>>>() {
-                            @Override public void applyx(IgniteInternalFuture<QueryResult<K, V>> f)
-                                throws IgniteCheckedException {
-                                f.get().closeIfNotShared(rcpt);
-                            }
-                        });
-                    }
-                }
+    this.keyCoder = keyCoder;
+    this.keySelector = keySelector;
 
-                Map<Long, GridFutureAdapter<FieldsResult>> fieldsFuts = fieldsQryRes.remove(nodeId);
+    this.timerCoder =
+        TimerInternals.TimerDataCoderV2.of(windowingStrategy.getWindowFn().windowCoder());
 
-                if (fieldsFuts != null) {
-                    for (Map.Entry<Long, GridFutureAdapter<FieldsResult>> entry : fieldsFuts.entrySet()) {
-                        final Object rcpt = recipient(nodeId, entry.getKey());
+    FlinkPipelineOptions flinkOptions = options.as(FlinkPipelineOptions.class);
 
-                        entry.getValue().listen(new CIX1<IgniteInternalFuture<FieldsResult>>() {
-                            @Override public void applyx(IgniteInternalFuture<FieldsResult> f)
-                                throws IgniteCheckedException {
-                                f.get().closeIfNotShared(rcpt);
-                            }
-                        });
-                    }
-                }
-            }
-        };
+    this.maxBundleSize = flinkOptions.getMaxBundleSize();
+    Preconditions.checkArgument(maxBundleSize > 0, "Bundle size must be at least 1");
+    this.maxBundleTimeMills = flinkOptions.getMaxBundleTimeMills();
+    Preconditions.checkArgument(maxBundleTimeMills > 0, "Bundle time must be at least 1");
+    this.doFnSchemaInformation = doFnSchemaInformation;
+    this.sideInputMapping = sideInputMapping;
 
-        cctx.events().addListener(lsnr, EVT_NODE_LEFT, EVT_NODE_FAILED);
+    this.requiresStableInput =
+        // WindowDoFnOperator does not use a DoFn
+        doFn != null
+            && DoFnSignatures.getSignature(doFn.getClass()).processElement().requiresStableInput();
 
-        qryTopVer = cctx.startTopologyVersion();
+    if (requiresStableInput) {
+      Preconditions.checkState(
+          CheckpointingMode.valueOf(flinkOptions.getCheckpointingMode())
+              == CheckpointingMode.EXACTLY_ONCE,
+          "Checkpointing mode is not set to exactly once but @RequiresStableInput is used.");
+      Preconditions.checkState(
+          flinkOptions.getCheckpointingInterval() > 0,
+          "No checkpointing configured but pipeline uses @RequiresStableInput");
+      LOG.warn(
+          "Enabling stable input for transform {}. Will only process elements at most every {} milliseconds.",
+          stepName,
+          flinkOptions.getCheckpointingInterval()
+              + Math.max(0, flinkOptions.getMinPauseBetweenCheckpoints()));
+    }
+  }
 
-        assert qryTopVer != null : cctx.name();
+  // allow overriding this in WindowDoFnOperator because this one dynamically creates
+  // the DoFn
+  protected DoFn<InputT, OutputT> getDoFn() {
+    return doFn;
+  }
+
+  // allow overriding this, for example SplittableDoFnOperator will not create a
+  // stateful DoFn runner because ProcessFn, which is used for executing a Splittable DoFn
+  // doesn't play by the normal DoFn rules and WindowDoFnOperator uses LateDataDroppingDoFnRunner
+  protected DoFnRunner<InputT, OutputT> createWrappingDoFnRunner(
+      DoFnRunner<InputT, OutputT> wrappedRunner, StepContext stepContext) {
+
+    if (keyCoder != null) {
+      StatefulDoFnRunner.CleanupTimer cleanupTimer =
+          new StatefulDoFnRunner.TimeInternalsCleanupTimer(timerInternals, windowingStrategy);
+
+      // we don't know the window type
+      @SuppressWarnings({"unchecked", "rawtypes"})
+      Coder windowCoder = windowingStrategy.getWindowFn().windowCoder();
+
+      @SuppressWarnings({"unchecked", "rawtypes"})
+      StatefulDoFnRunner.StateCleaner<?> stateCleaner =
+          new StatefulDoFnRunner.StateInternalsStateCleaner<>(
+              doFn, keyedStateInternals, windowCoder);
+
+      return DoFnRunners.defaultStatefulDoFnRunner(
+          doFn,
+          getInputCoder(),
+          wrappedRunner,
+          stepContext,
+          windowingStrategy,
+          cleanupTimer,
+          stateCleaner,
+          true /* requiresTimeSortedInput is supported */);
+
+    } else {
+      return doFnRunner;
+    }
+  }
+
+  @Override
+  public void setup(
+      StreamTask<?, ?> containingTask,
+      StreamConfig config,
+      Output<StreamRecord<WindowedValue<OutputT>>> output) {
+
+    // make sure that FileSystems is initialized correctly
+    FileSystems.setDefaultPipelineOptions(serializedOptions.get());
+
+    super.setup(containingTask, config, output);
+  }
+
+  @Override
+  public void initializeState(StateInitializationContext context) throws Exception {
+    super.initializeState(context);
+
+    ListStateDescriptor<WindowedValue<InputT>> pushedBackStateDescriptor =
+        new ListStateDescriptor<>(
+            "pushed-back-elements", new CoderTypeSerializer<>(windowedInputCoder));
+
+    if (keySelector != null) {
+      pushedBackElementsHandler =
+          KeyedPushedBackElementsHandler.create(
+              keySelector, getKeyedStateBackend(), pushedBackStateDescriptor);
+    } else {
+      ListState<WindowedValue<InputT>> listState =
+          getOperatorStateBackend().getListState(pushedBackStateDescriptor);
+      pushedBackElementsHandler = NonKeyedPushedBackElementsHandler.create(listState);
     }
 
-    /**
-     * @return {@code True} if indexing is enabled for cache.
-     */
-    public boolean enabled() {
-        return enabled;
+    setCurrentInputWatermark(BoundedWindow.TIMESTAMP_MIN_VALUE.getMillis());
+    setCurrentSideInputWatermark(BoundedWindow.TIMESTAMP_MIN_VALUE.getMillis());
+    setCurrentOutputWatermark(BoundedWindow.TIMESTAMP_MIN_VALUE.getMillis());
+
+    sideInputReader = NullSideInputReader.of(sideInputs);
+
+    if (!sideInputs.isEmpty()) {
+
+      FlinkBroadcastStateInternals sideInputStateInternals =
+          new FlinkBroadcastStateInternals<>(
+              getContainingTask().getIndexInSubtaskGroup(), getOperatorStateBackend());
+
+      sideInputHandler = new SideInputHandler(sideInputs, sideInputStateInternals);
+      sideInputReader = sideInputHandler;
+
+      Stream<WindowedValue<InputT>> pushedBack = pushedBackElementsHandler.getElements();
+      long min =
+          pushedBack.map(v -> v.getTimestamp().getMillis()).reduce(Long.MAX_VALUE, Math::min);
+      setPushedBackWatermark(min);
+    } else {
+      setPushedBackWatermark(Long.MAX_VALUE);
     }
 
-    /** {@inheritDoc} */
-    @Override protected void onKernalStop0(boolean cancel) {
-        busyLock.block();
+    // StatefulPardo or WindowDoFn
+    if (keyCoder != null) {
+      keyedStateInternals =
+          new FlinkStateInternals<>((KeyedStateBackend) getKeyedStateBackend(), keyCoder);
 
-        cctx.events().removeListener(lsnr);
+      if (timerService == null) {
+        timerService =
+            getInternalTimerService("beam-timer", new CoderTypeSerializer<>(timerCoder), this);
+      }
 
-        if (cancel)
-            onCancelAtStop();
-        else
-            onWaitAtStop();
+      timerInternals = new FlinkTimerInternals();
     }
 
-    /**
-     * @return {@code True} if entered busy state.
-     */
-    private boolean enterBusy() {
-        return busyLock.enterBusy();
+    outputManager =
+        outputManagerFactory.create(
+            output, getLockToAcquireForStateAccessDuringBundles(), getOperatorStateBackend());
+  }
+
+  /**
+   * Subclasses may provide a lock to ensure that the state backend is not accessed concurrently
+   * during bundle execution.
+   */
+  protected Lock getLockToAcquireForStateAccessDuringBundles() {
+    return NoopLock.get();
+  }
+
+  @Override
+  public void open() throws Exception {
+    // WindowDoFnOperator need use state and timer to get DoFn.
+    // So must wait StateInternals and TimerInternals ready.
+    // This will be called after initializeState()
+    this.doFn = getDoFn();
+    doFnInvoker = DoFnInvokers.invokerFor(doFn);
+    doFnInvoker.invokeSetup();
+
+    FlinkPipelineOptions options = serializedOptions.get().as(FlinkPipelineOptions.class);
+    StepContext stepContext = new FlinkStepContext();
+    doFnRunner =
+        DoFnRunners.simpleRunner(
+            options,
+            doFn,
+            sideInputReader,
+            outputManager,
+            mainOutputTag,
+            additionalOutputTags,
+            stepContext,
+            getInputCoder(),
+            outputCoders,
+            windowingStrategy,
+            doFnSchemaInformation,
+            sideInputMapping);
+
+    if (requiresStableInput) {
+      // put this in front of the root FnRunner before any additional wrappers
+      doFnRunner =
+          bufferingDoFnRunner =
+              BufferingDoFnRunner.create(
+                  doFnRunner,
+                  "stable-input-buffer",
+                  windowedInputCoder,
+                  windowingStrategy.getWindowFn().windowCoder(),
+                  getOperatorStateBackend(),
+                  getKeyedStateBackend());
+    }
+    doFnRunner = createWrappingDoFnRunner(doFnRunner, stepContext);
+    earlyBindStateIfNeeded();
+
+    if (!options.getDisableMetrics()) {
+      flinkMetricContainer = new FlinkMetricContainer(getRuntimeContext());
+      doFnRunner = new DoFnRunnerWithMetricsUpdate<>(stepName, doFnRunner, flinkMetricContainer);
     }
 
-    /**
-     * Leaves busy state.
-     */
-    private void leaveBusy() {
-        busyLock.leaveBusy();
+    elementCount = 0L;
+    lastFinishBundleTime = getProcessingTimeService().getCurrentProcessingTime();
+
+    // Schedule timer to check timeout of finish bundle.
+    long bundleCheckPeriod = Math.max(maxBundleTimeMills / 2, 1);
+    checkFinishBundleTimer =
+        getProcessingTimeService()
+            .scheduleAtFixedRate(
+                timestamp -> checkInvokeFinishBundleByTime(), bundleCheckPeriod, bundleCheckPeriod);
+
+    if (doFn instanceof SplittableParDoViaKeyedWorkItems.ProcessFn) {
+      pushbackDoFnRunner =
+          new ProcessFnRunner<>((DoFnRunner) doFnRunner, sideInputs, sideInputHandler);
+    } else {
+      pushbackDoFnRunner =
+          SimplePushbackSideInputDoFnRunner.create(doFnRunner, sideInputs, sideInputHandler);
     }
+  }
 
-    /**
-     * Stops query manager.
-     *
-     * @param cancel Cancel queries.
-     * @param destroy Cache destroy flag..
-     */
-    @SuppressWarnings({"LockAcquiredButNotSafelyReleased"})
-    @Override public final void stop0(boolean cancel, boolean destroy) {
-        if (log.isDebugEnabled())
-            log.debug("Stopped cache query manager.");
-    }
-
-    /**
-     * Marks this request as canceled.
-     *
-     * @param reqId Request id.
-     */
-    void onQueryFutureCanceled(long reqId) {
-        // No-op.
-    }
-
-    /**
-     * Cancel flag handler at stop.
-     */
-    void onCancelAtStop() {
-        // No-op.
-    }
-
-    /**
-     * Wait flag handler at stop.
-     */
-    void onWaitAtStop() {
-        // No-op.
-    }
-
-    /**
-     * Processes cache query request.
-     *
-     * @param sndId Sender node id.
-     * @param req Query request.
-     */
-    void processQueryRequest(UUID sndId, GridCacheQueryRequest req) {
-        // No-op.
-    }
-
-    /**
-     * Checks if IndexinSPI is enabled.
-     *
-     * @return IndexingSPI enabled flag.
-     */
-    private boolean isIndexingSpiEnabled() {
-        return cctx.kernalContext().indexing().enabled();
-    }
-
-    /**
-     *
-     */
-    private void invalidateResultCache() {
-        if (!qryResCache.isEmpty())
-            qryResCache = new ConcurrentHashMap<>();
-    }
-
-    /**
-     * @param newRow New row.
-     * @param prevRow Previous row.
-     * @param prevRowAvailable Whether previous row is available.
-     * @throws IgniteCheckedException In case of error.
-     */
-    public void store(CacheDataRow newRow, @Nullable CacheDataRow prevRow, boolean prevRowAvailable)
-        throws IgniteCheckedException {
-        assert enabled();
-        assert newRow != null && newRow.value() != null && newRow.link() != 0 : newRow;
-
-        if (!enterBusy())
-            throw new NodeStoppingException("Operation has been cancelled (node is stopping).");
-
-        try {
-            if (isIndexingSpiEnabled()) {
-                CacheObjectContext coctx = cctx.cacheObjectContext();
-
-                Object key0 = unwrapIfNeeded(newRow.key(), coctx);
-
-                Object val0 = unwrapIfNeeded(newRow.value(), coctx);
-
-                cctx.kernalContext().indexing().store(cacheName, key0, val0, newRow.expireTime());
-            }
-
-            if (qryProcEnabled)
-                qryProc.store(cctx, newRow, prevRow, prevRowAvailable);
+  private void earlyBindStateIfNeeded() throws IllegalArgumentException, IllegalAccessException {
+    if (keyCoder != null) {
+      if (doFn != null) {
+        DoFnSignature signature = DoFnSignatures.getSignature(doFn.getClass());
+        FlinkStateInternals.EarlyBinder earlyBinder =
+            new FlinkStateInternals.EarlyBinder(getKeyedStateBackend());
+        for (DoFnSignature.StateDeclaration value : signature.stateDeclarations().values()) {
+          StateSpec<?> spec =
+              (StateSpec<?>) signature.stateDeclarations().get(value.id()).field().get(doFn);
+          spec.bind(value.id(), earlyBinder);
         }
-        finally {
-            invalidateResultCache();
-
-            leaveBusy();
+        if (doFnRunner instanceof StatefulDoFnRunner) {
+          ((StatefulDoFnRunner<InputT, OutputT, BoundedWindow>) doFnRunner)
+              .getSystemStateTags()
+              .forEach(tag -> tag.getSpec().bind(tag.getId(), earlyBinder));
         }
+      }
+    }
+  }
+
+  @Override
+  public void dispose() throws Exception {
+    try {
+      Optional.ofNullable(checkFinishBundleTimer).ifPresent(timer -> timer.cancel(true));
+      Workarounds.deleteStaticCaches();
+      Optional.ofNullable(doFnInvoker).ifPresent(DoFnInvoker::invokeTeardown);
+    } finally {
+      // This releases all task's resources. We need to call this last
+      // to ensure that state, timers, or output buffers can still be
+      // accessed during finishing the bundle.
+      super.dispose();
+    }
+  }
+
+  @Override
+  public void close() throws Exception {
+    try {
+      flinkMetricContainer.registerMetricsForPipelineResult();
+      // This is our last change to block shutdown of this operator while
+      // there are still remaining processing-time timers. Flink will ignore pending
+      // processing-time timers when upstream operators have shut down and will also
+      // shut down this operator with pending processing-time timers.
+      while (this.numProcessingTimeTimers() > 0) {
+        getContainingTask().getCheckpointLock().wait(100);
+      }
+      if (this.numProcessingTimeTimers() > 0) {
+        throw new RuntimeException(
+            "There are still processing-time timers left, this indicates a bug");
+      }
+
+      // make sure we send a +Inf watermark downstream. It can happen that we receive +Inf
+      // in processWatermark*() but have holds, so we have to re-evaluate here.
+      processWatermark(new Watermark(Long.MAX_VALUE));
+      invokeFinishBundle();
+      if (currentOutputWatermark < Long.MAX_VALUE) {
+        if (keyedStateInternals == null) {
+          throw new RuntimeException("Current watermark is still " + currentOutputWatermark + ".");
+
+        } else {
+          throw new RuntimeException(
+              "There are still watermark holds. Watermark held at "
+                  + keyedStateInternals.watermarkHold().getMillis()
+                  + ".");
+        }
+      }
+    } finally {
+      super.close();
     }
 
-    /**
-     * @param key Key.
-     * @param prevRow Previous row.
-     * @throws IgniteCheckedException Thrown in case of any errors.
-     */
-    public void remove(KeyCacheObject key, @Nullable CacheDataRow prevRow) throws IgniteCheckedException {
-        if (!QueryUtils.isEnabled(cctx.config()))
-            return; // No-op.
+    // sanity check: these should have been flushed out by +Inf watermarks
+    if (!sideInputs.isEmpty()) {
 
-        if (!enterBusy())
-            return; // Ignore index update when node is stopping.
+      List<WindowedValue<InputT>> pushedBackElements =
+          pushedBackElementsHandler.getElements().collect(Collectors.toList());
 
-        try {
-            if (isIndexingSpiEnabled()) {
-                Object key0 = unwrapIfNeeded(key, cctx.cacheObjectContext());
-
-                cctx.kernalContext().indexing().remove(cacheName, key0);
-            }
-
-            // val may be null if we have no previous value. We should not call processor in this case.
-            if (qryProcEnabled && prevRow != null)
-                qryProc.remove(cctx, prevRow);
-        }
-        finally {
-            invalidateResultCache();
-
-            leaveBusy();
-        }
+      if (pushedBackElements.size() > 0) {
+        String pushedBackString = Joiner.on(",").join(pushedBackElements);
+        throw new RuntimeException(
+            "Leftover pushed-back data: " + pushedBackString + ". This indicates a bug.");
+      }
     }
+  }
 
-    /**
-     * Executes local query.
-     *
-     * @param qry Query.
-     * @return Query future.
-     */
+  protected long getPushbackWatermarkHold() {
+    return pushedBackWatermark;
+  }
+
+  protected void setPushedBackWatermark(long watermark) {
+    pushedBackWatermark = watermark;
+  }
+
+  protected void setBundleFinishedCallback(Runnable callback) {
+    this.bundleFinishedCallback = callback;
+  }
+
+  @Override
+  public final void processElement(StreamRecord<WindowedValue<InputT>> streamRecord)
+      throws Exception {
+    checkInvokeStartBundle();
+    doFnRunner.processElement(streamRecord.getValue());
+    checkInvokeFinishBundleByCount();
+  }
+
+  @Override
+  public final void processElement1(StreamRecord<WindowedValue<InputT>> streamRecord)
+      throws Exception {
+    checkInvokeStartBundle();
+    Iterable<WindowedValue<InputT>> justPushedBack =
+        pushbackDoFnRunner.processElementInReadyWindows(streamRecord.getValue());
+
+    long min = pushedBackWatermark;
+    for (WindowedValue<InputT> pushedBackValue : justPushedBack) {
+      min = Math.min(min, pushedBackValue.getTimestamp().getMillis());
+      pushedBackElementsHandler.pushBack(pushedBackValue);
+    }
+    setPushedBackWatermark(min);
+
+    checkInvokeFinishBundleByCount();
+  }
+
+  /**
+   * Add the side input value. Here we are assuming that views have already been materialized and
+   * are sent over the wire as {@link Iterable}. Subclasses may elect to perform materialization in
+   * state and receive side input incrementally instead.
+   *
+   * @param streamRecord
+   */
+  protected void addSideInputValue(StreamRecord<RawUnionValue> streamRecord) {
     @SuppressWarnings("unchecked")
-    CacheQueryFuture<?> queryLocal(GridCacheQueryBean qry) {
-        assert qry.query().type() != GridCacheQueryType.SCAN : qry;
+    WindowedValue<Iterable<?>> value =
+        (WindowedValue<Iterable<?>>) streamRecord.getValue().getValue();
 
-        if (log.isDebugEnabled())
-            log.debug("Executing query on local node: " + qry);
+    PCollectionView<?> sideInput = sideInputTagMapping.get(streamRecord.getValue().getUnionTag());
+    sideInputHandler.addSideInputValue(sideInput, value);
+  }
 
-        GridCacheLocalQueryFuture fut = new GridCacheLocalQueryFuture<>(cctx, qry);
+  @Override
+  public final void processElement2(StreamRecord<RawUnionValue> streamRecord) throws Exception {
+    // we finish the bundle because the newly arrived side-input might
+    // make a view available that was previously not ready.
+    // The PushbackSideInputRunner will only reset it's cache of non-ready windows when
+    // finishing a bundle.
+    invokeFinishBundle();
+    checkInvokeStartBundle();
 
-        try {
-            qry.query().validate();
+    // add the side input, which may cause pushed back elements become eligible for processing
+    addSideInputValue(streamRecord);
 
-            fut.execute();
-        }
-        catch (IgniteCheckedException e) {
-            if (fut != null)
-                fut.onDone(e);
-        }
+    List<WindowedValue<InputT>> newPushedBack = new ArrayList<>();
 
-        return fut;
+    Iterator<WindowedValue<InputT>> it = pushedBackElementsHandler.getElements().iterator();
+
+    while (it.hasNext()) {
+      WindowedValue<InputT> element = it.next();
+      // we need to set the correct key in case the operator is
+      // a (keyed) window operator
+      setKeyContextElement1(new StreamRecord<>(element));
+
+      Iterable<WindowedValue<InputT>> justPushedBack =
+          pushbackDoFnRunner.processElementInReadyWindows(element);
+      Iterables.addAll(newPushedBack, justPushedBack);
+    }
+
+    pushedBackElementsHandler.clear();
+    long min = Long.MAX_VALUE;
+    for (WindowedValue<InputT> pushedBackValue : newPushedBack) {
+      min = Math.min(min, pushedBackValue.getTimestamp().getMillis());
+      pushedBackElementsHandler.pushBack(pushedBackValue);
+    }
+    setPushedBackWatermark(min);
+
+    checkInvokeFinishBundleByCount();
+
+    // maybe output a new watermark
+    processWatermark1(new Watermark(currentInputWatermark));
+  }
+
+  @Override
+  public void processWatermark(Watermark mark) throws Exception {
+    processWatermark1(mark);
+  }
+
+  @Override
+  public void processWatermark1(Watermark mark) throws Exception {
+    // We do the check here because we are guaranteed to at least get the +Inf watermark on the
+    // main input when the job finishes.
+    if (currentSideInputWatermark >= BoundedWindow.TIMESTAMP_MAX_VALUE.getMillis()) {
+      // this means we will never see any more side input
+      // we also do the check here because we might have received the side-input MAX watermark
+      // before receiving any main-input data
+      emitAllPushedBackData();
+    }
+
+    setCurrentInputWatermark(mark.getTimestamp());
+
+    if (keyCoder == null) {
+      long potentialOutputWatermark = Math.min(getPushbackWatermarkHold(), currentInputWatermark);
+      if (potentialOutputWatermark > currentOutputWatermark) {
+        setCurrentOutputWatermark(potentialOutputWatermark);
+        emitWatermark(currentOutputWatermark);
+      }
+    } else {
+      // hold back by the pushed back values waiting for side inputs
+      long pushedBackInputWatermark = Math.min(getPushbackWatermarkHold(), mark.getTimestamp());
+
+      timeServiceManager.advanceWatermark(new Watermark(pushedBackInputWatermark));
+
+      Instant watermarkHold = keyedStateInternals.watermarkHold();
+
+      long combinedWatermarkHold = Math.min(watermarkHold.getMillis(), getPushbackWatermarkHold());
+      combinedWatermarkHold =
+          Math.min(combinedWatermarkHold, timerInternals.getMinOutputTimestampMs());
+      long potentialOutputWatermark = Math.min(pushedBackInputWatermark, combinedWatermarkHold);
+
+      if (potentialOutputWatermark > currentOutputWatermark) {
+        setCurrentOutputWatermark(potentialOutputWatermark);
+        emitWatermark(currentOutputWatermark);
+      }
+    }
+  }
+
+  private void emitWatermark(long watermark) {
+    // Must invoke finishBatch before emit the +Inf watermark otherwise there are some late events.
+    if (watermark >= BoundedWindow.TIMESTAMP_MAX_VALUE.getMillis()) {
+      invokeFinishBundle();
+    }
+    output.emitWatermark(new Watermark(watermark));
+  }
+
+  @Override
+  public void processWatermark2(Watermark mark) throws Exception {
+
+    setCurrentSideInputWatermark(mark.getTimestamp());
+    if (mark.getTimestamp() >= BoundedWindow.TIMESTAMP_MAX_VALUE.getMillis()) {
+      // this means we will never see any more side input
+      emitAllPushedBackData();
+
+      // maybe output a new watermark
+      processWatermark1(new Watermark(currentInputWatermark));
+    }
+  }
+
+  /**
+   * Emits all pushed-back data. This should be used once we know that there will not be any future
+   * side input, i.e. that there is no point in waiting.
+   */
+  private void emitAllPushedBackData() throws Exception {
+
+    Iterator<WindowedValue<InputT>> it = pushedBackElementsHandler.getElements().iterator();
+
+    while (it.hasNext()) {
+      checkInvokeStartBundle();
+      WindowedValue<InputT> element = it.next();
+      // we need to set the correct key in case the operator is
+      // a (keyed) window operator
+      setKeyContextElement1(new StreamRecord<>(element));
+
+      doFnRunner.processElement(element);
+    }
+
+    pushedBackElementsHandler.clear();
+
+    setPushedBackWatermark(Long.MAX_VALUE);
+  }
+
+  /**
+   * Check whether invoke startBundle, if it is, need to output elements that were buffered as part
+   * of finishing a bundle in snapshot() first.
+   *
+   * <p>In order to avoid having {@link DoFnRunner#processElement(WindowedValue)} or {@link
+   * DoFnRunner#onTimer(String, BoundedWindow, Instant, TimeDomain)} not between StartBundle and
+   * FinishBundle, this method needs to be called in each processElement and each processWatermark
+   * and onProcessingTime. Do not need to call in onEventTime, because it has been guaranteed in the
+   * processWatermark.
+   */
+  private void checkInvokeStartBundle() {
+    if (!bundleStarted) {
+      outputManager.flushBuffer();
+      pushbackDoFnRunner.startBundle();
+      bundleStarted = true;
+    }
+  }
+
+  /** Check whether invoke finishBundle by elements count. Called in processElement. */
+  @SuppressWarnings("NonAtomicVolatileUpdate")
+  @SuppressFBWarnings("VO_VOLATILE_INCREMENT")
+  private void checkInvokeFinishBundleByCount() {
+    // We do not access this statement concurrently but we want to make sure that each thread
+    // sees the latest value, which is why we use volatile. See the class field section above
+    // for more information.
+    //noinspection NonAtomicOperationOnVolatileField
+    elementCount++;
+    if (elementCount >= maxBundleSize) {
+      invokeFinishBundle();
+    }
+  }
+
+  /** Check whether invoke finishBundle by timeout. */
+  private void checkInvokeFinishBundleByTime() {
+    long now = getProcessingTimeService().getCurrentProcessingTime();
+    if (now - lastFinishBundleTime >= maxBundleTimeMills) {
+      invokeFinishBundle();
+    }
+  }
+
+  protected final void invokeFinishBundle() {
+    if (bundleStarted) {
+      pushbackDoFnRunner.finishBundle();
+      elementCount = 0L;
+      lastFinishBundleTime = getProcessingTimeService().getCurrentProcessingTime();
+      bundleStarted = false;
+      // callback only after current bundle was fully finalized
+      // it could start a new bundle, for example resulting from timer processing
+      if (bundleFinishedCallback != null) {
+        bundleFinishedCallback.run();
+        bundleFinishedCallback = null;
+      }
+    }
+  }
+
+  @Override
+  public final void snapshotState(StateSnapshotContext context) throws Exception {
+    if (requiresStableInput) {
+      // We notify the BufferingDoFnRunner to associate buffered state with this
+      // snapshot id and start a new buffer for elements arriving after this snapshot.
+      bufferingDoFnRunner.checkpoint(context.getCheckpointId());
+    }
+
+    // We can't output here anymore because the checkpoint barrier has already been
+    // sent downstream. This is going to change with 1.6/1.7's prepareSnapshotBarrier.
+    try {
+      outputManager.openBuffer();
+      // Ensure that no new bundle gets started as part of finishing a bundle
+      while (bundleStarted) {
+        invokeFinishBundle();
+      }
+      outputManager.closeBuffer();
+    } catch (Exception e) {
+      // https://jira.apache.org/jira/browse/FLINK-14653
+      // Any regular exception during checkpointing will be tolerated by Flink because those
+      // typically do not affect the execution flow. We need to fail hard here because errors
+      // in bundle execution are application errors which are not related to checkpointing.
+      throw new Error("Checkpointing failed because bundle failed to finalize.", e);
+    }
+
+    super.snapshotState(context);
+  }
+
+  @Override
+  public final void notifyCheckpointComplete(long checkpointId) throws Exception {
+    super.notifyCheckpointComplete(checkpointId);
+    if (requiresStableInput) {
+      // We can now release all buffered data which was held back for
+      // @RequiresStableInput guarantees.
+      bufferingDoFnRunner.checkpointCompleted(checkpointId);
+    }
+  }
+
+  @Override
+  public void onEventTime(InternalTimer<ByteBuffer, TimerData> timer) throws Exception {
+    checkInvokeStartBundle();
+    fireTimer(timer);
+  }
+
+  @Override
+  public void onProcessingTime(InternalTimer<ByteBuffer, TimerData> timer) throws Exception {
+    checkInvokeStartBundle();
+    fireTimer(timer);
+  }
+
+  // allow overriding this in WindowDoFnOperator
+  protected void fireTimer(InternalTimer<ByteBuffer, TimerData> timer) {
+    TimerInternals.TimerData timerData = timer.getNamespace();
+    StateNamespace namespace = timerData.getNamespace();
+    // This is a user timer, so namespace must be WindowNamespace
+    checkArgument(namespace instanceof WindowNamespace);
+    BoundedWindow window = ((WindowNamespace) namespace).getWindow();
+    timerInternals.onFiredOrDeletedTimer(timer.getNamespace());
+    pushbackDoFnRunner.onTimer(
+        timerData.getTimerId(),
+        timerData.getTimerFamilyId(),
+        window,
+        timerData.getTimestamp(),
+        timerData.getOutputTimestamp(),
+        timerData.getDomain());
+  }
+
+  private void setCurrentInputWatermark(long currentInputWatermark) {
+    this.currentInputWatermark = currentInputWatermark;
+  }
+
+  private void setCurrentSideInputWatermark(long currentInputWatermark) {
+    this.currentSideInputWatermark = currentInputWatermark;
+  }
+
+  private void setCurrentOutputWatermark(long currentOutputWatermark) {
+    this.currentOutputWatermark = currentOutputWatermark;
+  }
+
+  @SuppressWarnings("unchecked")
+  Coder<InputT> getInputCoder() {
+    return (Coder<InputT>) Iterables.getOnlyElement(windowedInputCoder.getCoderArguments());
+  }
+
+  /** Factory for creating an {@link BufferedOutputManager} from a Flink {@link Output}. */
+  interface OutputManagerFactory<OutputT> extends Serializable {
+    BufferedOutputManager<OutputT> create(
+        Output<StreamRecord<WindowedValue<OutputT>>> output,
+        Lock bufferLock,
+        OperatorStateBackend operatorStateBackend)
+        throws Exception;
+  }
+
+  /**
+   * A {@link DoFnRunners.OutputManager} that can buffer its outputs. Uses {@link
+   * PushedBackElementsHandler} to buffer the data. Buffering data is necessary because no elements
+   * can be emitted during {@code snapshotState}. This can be removed once we upgrade Flink to >=
+   * 1.6 which allows us to finish the bundle before the checkpoint barriers have been emitted.
+   */
+  public static class BufferedOutputManager<OutputT> implements DoFnRunners.OutputManager {
+
+    private final TupleTag<OutputT> mainTag;
+    private final Map<TupleTag<?>, OutputTag<WindowedValue<?>>> tagsToOutputTags;
+    private final Map<TupleTag<?>, Integer> tagsToIds;
+    /**
+     * A lock to be acquired before writing to the buffer. This lock will only be acquired during
+     * buffering. It will not be acquired during flushing the buffer.
+     */
+    private final Lock bufferLock;
+
+    private Map<Integer, TupleTag<?>> idsToTags;
+    /** Elements buffered during a snapshot, by output id. */
+    @VisibleForTesting
+    final PushedBackElementsHandler<KV<Integer, WindowedValue<?>>> pushedBackElementsHandler;
+
+    protected final Output<StreamRecord<WindowedValue<OutputT>>> output;
+
+    private boolean openBuffer = false;
+
+    BufferedOutputManager(
+        Output<StreamRecord<WindowedValue<OutputT>>> output,
+        TupleTag<OutputT> mainTag,
+        Map<TupleTag<?>, OutputTag<WindowedValue<?>>> tagsToOutputTags,
+        Map<TupleTag<?>, Integer> tagsToIds,
+        Lock bufferLock,
+        PushedBackElementsHandler<KV<Integer, WindowedValue<?>>> pushedBackElementsHandler) {
+      this.output = output;
+      this.mainTag = mainTag;
+      this.tagsToOutputTags = tagsToOutputTags;
+      this.tagsToIds = tagsToIds;
+      this.bufferLock = bufferLock;
+      this.idsToTags = new HashMap<>();
+      for (Map.Entry<TupleTag<?>, Integer> entry : tagsToIds.entrySet()) {
+        idsToTags.put(entry.getValue(), entry.getKey());
+      }
+      this.pushedBackElementsHandler = pushedBackElementsHandler;
+    }
+
+    void openBuffer() {
+      this.openBuffer = true;
+    }
+
+    void closeBuffer() {
+      this.openBuffer = false;
+    }
+
+    @Override
+    public <T> void output(TupleTag<T> tag, WindowedValue<T> value) {
+      if (!openBuffer) {
+        emit(tag, value);
+      } else {
+        buffer(KV.of(tagsToIds.get(tag), value));
+      }
+    }
+
+    private void buffer(KV<Integer, WindowedValue<?>> taggedValue) {
+      try {
+        bufferLock.lock();
+        pushedBackElementsHandler.pushBack(taggedValue);
+      } catch (Exception e) {
+        throw new RuntimeException("Couldn't pushback element.", e);
+      } finally {
+        bufferLock.unlock();
+      }
     }
 
     /**
-     * Executes distributed query.
-     *
-     * @param qry Query.
-     * @param nodes Nodes.
-     * @return Query future.
+     * Flush elements of bufferState to Flink Output. This method can't be invoked in {@link
+     * #snapshotState(StateSnapshotContext)}. The buffer should be flushed before starting a new
+     * bundle when the buffer cannot be concurrently accessed and thus does not need to be guarded
+     * by a lock.
      */
-    public abstract CacheQueryFuture<?> queryDistributed(GridCacheQueryBean qry, Collection<ClusterNode> nodes);
-
-    /**
-     * Executes distributed SCAN query.
-     *
-     * @param qry Query.
-     * @param nodes Nodes.
-     * @return Iterator.
-     * @throws IgniteCheckedException If failed.
-     */
-    public abstract GridCloseableIterator scanQueryDistributed(GridCacheQueryAdapter qry,
-        Collection<ClusterNode> nodes) throws IgniteCheckedException;
-
-    /**
-     * Loads page.
-     *
-     * @param id Query ID.
-     * @param qry Query.
-     * @param nodes Nodes.
-     * @param all Whether to load all pages.
-     */
-    public abstract void loadPage(long id, GridCacheQueryAdapter<?> qry, Collection<ClusterNode> nodes, boolean all);
-
-    /**
-     * Executes distributed fields query.
-     *
-     * @param qry Query.
-     * @return Query future.
-     */
-    public abstract CacheQueryFuture<?> queryFieldsLocal(GridCacheQueryBean qry);
-
-    /**
-     * Executes distributed fields query.
-     *
-     * @param qry Query.
-     * @param nodes Nodes.
-     * @return Query future.
-     */
-    public abstract CacheQueryFuture<?> queryFieldsDistributed(GridCacheQueryBean qry, Collection<ClusterNode> nodes);
-
-    /**
-     * Unwrap CacheObject if needed.
-     */
-    private Object unwrapIfNeeded(CacheObject obj, CacheObjectContext coctx) {
-        return isIndexingSpiAllowsBinary && cctx.cacheObjects().isBinaryObject(obj) ? obj : obj.value(coctx, false);
+    void flushBuffer() {
+      if (openBuffer) {
+        // Buffering currently in progress, do not proceed
+        return;
+      }
+      try {
+        pushedBackElementsHandler
+            .getElements()
+            .forEach(
+                element ->
+                    emit(idsToTags.get(element.getKey()), (WindowedValue) element.getValue()));
+        pushedBackElementsHandler.clear();
+      } catch (Exception e) {
+        throw new RuntimeException("Couldn't flush pushed back elements.", e);
+      }
     }
 
-    /**
-     * Performs query.
-     *
-     * @param qry Query.
-     * @param args Arguments.
-     * @param loc Local query or not.
-     * @param subjId Security subject ID.
-     * @param taskName Task name.
-     * @param rcpt ID of the recipient.
-     * @return Collection of found keys.
-     * @throws IgniteCheckedException In case of error.
-     */
+    private <T> void emit(TupleTag<T> tag, WindowedValue<T> value) {
+      if (tag.equals(mainTag)) {
+        // with tagged outputs we can't get around this because we don't
+        // know our own output type...
+        @SuppressWarnings("unchecked")
+        WindowedValue<OutputT> castValue = (WindowedValue<OutputT>) value;
+        output.collect(new StreamRecord<>(castValue));
+      } else {
+        @SuppressWarnings("unchecked")
+        OutputTag<WindowedValue<T>> outputTag = (OutputTag) tagsToOutputTags.get(tag);
+        output.collect(outputTag, new StreamRecord<>(value));
+      }
+    }
+  }
+
+  /** Coder for KV of id and value. It will be serialized in Flink checkpoint. */
+  private static class TaggedKvCoder extends StructuredCoder<KV<Integer, WindowedValue<?>>> {
+
+    private Map<Integer, Coder<WindowedValue<?>>> idsToCoders;
+
+    TaggedKvCoder(Map<Integer, Coder<WindowedValue<?>>> idsToCoders) {
+      this.idsToCoders = idsToCoders;
+    }
+
+    @Override
+    public void encode(KV<Integer, WindowedValue<?>> kv, OutputStream out) throws IOException {
+      Coder<WindowedValue<?>> coder = idsToCoders.get(kv.getKey());
+      VarIntCoder.of().encode(kv.getKey(), out);
+      coder.encode(kv.getValue(), out);
+    }
+
+    @Override
+    public KV<Integer, WindowedValue<?>> decode(InputStream in) throws IOException {
+      Integer id = VarIntCoder.of().decode(in);
+      Coder<WindowedValue<?>> coder = idsToCoders.get(id);
+      WindowedValue<?> value = coder.decode(in);
+      return KV.of(id, value);
+    }
+
+    @Override
+    public List<? extends Coder<?>> getCoderArguments() {
+      return new ArrayList<>(idsToCoders.values());
+    }
+
+    @Override
+    public void verifyDeterministic() throws NonDeterministicException {
+      for (Coder<?> coder : idsToCoders.values()) {
+        verifyDeterministic(this, "Coder must be deterministic", coder);
+      }
+    }
+  }
+
+  /**
+   * Implementation of {@link OutputManagerFactory} that creates an {@link BufferedOutputManager}
+   * that can write to multiple logical outputs by Flink side output.
+   */
+  public static class MultiOutputOutputManagerFactory<OutputT>
+      implements OutputManagerFactory<OutputT> {
+
+    private TupleTag<OutputT> mainTag;
+    private Map<TupleTag<?>, Integer> tagsToIds;
+    private Map<TupleTag<?>, OutputTag<WindowedValue<?>>> tagsToOutputTags;
+    private Map<TupleTag<?>, Coder<WindowedValue<?>>> tagsToCoders;
+
+    // There is no side output.
     @SuppressWarnings("unchecked")
-    private QueryResult<K, V> executeQuery(GridCacheQueryAdapter<?> qry,
-        @Nullable Object[] args, boolean loc, @Nullable UUID subjId, @Nullable String taskName, Object rcpt)
-        throws IgniteCheckedException {
-        if (qry.type() == null) {
-            assert !loc;
-
-            throw new IgniteCheckedException("Received next page request after iterator was removed. " +
-                "Consider increasing maximum number of stored iterators (see " +
-                "CacheConfiguration.getMaxQueryIteratorsCount() configuration property).");
-        }
-
-        QueryResult<K, V> res;
-
-        T3<String, String, List<Object>> resKey = null;
-
-        if (qry.type() == SQL) {
-            resKey = new T3<>(qry.queryClassName(), qry.clause(), F.asList(args));
-
-            res = (QueryResult<K, V>)qryResCache.get(resKey);
-
-            if (res != null && res.addRecipient(rcpt))
-                return res;
-
-            res = new QueryResult<>(qry.type(), rcpt);
-
-            if (qryResCache.putIfAbsent(resKey, res) != null)
-                resKey = null;
-        }
-        else
-            res = new QueryResult<>(qry.type(), rcpt);
-
-        GridCloseableIterator<IgniteBiTuple<K, V>> iter;
-
-        try {
-            switch (qry.type()) {
-                case SQL:
-                    throw new IllegalStateException("Should never be called.");
-
-                case SCAN:
-                    if (cctx.events().isRecordable(EVT_CACHE_QUERY_EXECUTED)) {
-                        cctx.gridEvents().record(new CacheQueryExecutedEvent<>(
-                            cctx.localNode(),
-                            "Scan query executed.",
-                            EVT_CACHE_QUERY_EXECUTED,
-                            CacheQueryType.SCAN.name(),
-                            cctx.name(),
-                            null,
-                            null,
-                            qry.scanFilter(),
-                            null,
-                            null,
-                            subjId,
-                            taskName));
-                    }
-
-                    iter = scanIterator(qry, false);
-
-                    break;
-
-                case TEXT:
-                    if (cctx.events().isRecordable(EVT_CACHE_QUERY_EXECUTED)) {
-                        cctx.gridEvents().record(new CacheQueryExecutedEvent<>(
-                            cctx.localNode(),
-                            "Full text query executed.",
-                            EVT_CACHE_QUERY_EXECUTED,
-                            CacheQueryType.FULL_TEXT.name(),
-                            cctx.name(),
-                            qry.queryClassName(),
-                            qry.clause(),
-                            null,
-                            null,
-                            null,
-                            subjId,
-                            taskName));
-                    }
-
-                    iter = qryProc.queryText(cacheName, qry.clause(), qry.queryClassName(), filter(qry));
-
-                    break;
-
-                case SET:
-                    iter = setIterator(qry);
-
-                    break;
-
-                case SQL_FIELDS:
-                    assert false : "SQL fields query is incorrectly processed.";
-
-                default:
-                    throw new IgniteCheckedException("Unknown query type: " + qry.type());
-            }
-
-            res.onDone(iter);
-        }
-        catch (Exception e) {
-            res.onDone(e);
-        }
-        finally {
-            if (resKey != null)
-                qryResCache.remove(resKey, res);
-        }
-
-        return res;
+    public MultiOutputOutputManagerFactory(
+        TupleTag<OutputT> mainTag, Coder<WindowedValue<OutputT>> mainCoder) {
+      this(
+          mainTag,
+          new HashMap<>(),
+          ImmutableMap.<TupleTag<?>, Coder<WindowedValue<?>>>builder()
+              .put(mainTag, (Coder) mainCoder)
+              .build(),
+          ImmutableMap.<TupleTag<?>, Integer>builder().put(mainTag, 0).build());
     }
 
+    public MultiOutputOutputManagerFactory(
+        TupleTag<OutputT> mainTag,
+        Map<TupleTag<?>, OutputTag<WindowedValue<?>>> tagsToOutputTags,
+        Map<TupleTag<?>, Coder<WindowedValue<?>>> tagsToCoders,
+        Map<TupleTag<?>, Integer> tagsToIds) {
+      this.mainTag = mainTag;
+      this.tagsToOutputTags = tagsToOutputTags;
+      this.tagsToCoders = tagsToCoders;
+      this.tagsToIds = tagsToIds;
+    }
+
+    @Override
+    public BufferedOutputManager<OutputT> create(
+        Output<StreamRecord<WindowedValue<OutputT>>> output,
+        Lock bufferLock,
+        OperatorStateBackend operatorStateBackend)
+        throws Exception {
+      Preconditions.checkNotNull(output);
+      Preconditions.checkNotNull(bufferLock);
+      Preconditions.checkNotNull(operatorStateBackend);
+
+      TaggedKvCoder taggedKvCoder = buildTaggedKvCoder();
+      ListStateDescriptor<KV<Integer, WindowedValue<?>>> taggedOutputPushbackStateDescriptor =
+          new ListStateDescriptor<>("bundle-buffer-tag", new CoderTypeSerializer<>(taggedKvCoder));
+      ListState<KV<Integer, WindowedValue<?>>> listStateBuffer =
+          operatorStateBackend.getListState(taggedOutputPushbackStateDescriptor);
+      PushedBackElementsHandler<KV<Integer, WindowedValue<?>>> pushedBackElementsHandler =
+          NonKeyedPushedBackElementsHandler.create(listStateBuffer);
+
+      return new BufferedOutputManager<>(
+          output, mainTag, tagsToOutputTags, tagsToIds, bufferLock, pushedBackElementsHandler);
+    }
+
+    private TaggedKvCoder buildTaggedKvCoder() {
+      ImmutableMap.Builder<Integer, Coder<WindowedValue<?>>> idsToCodersBuilder =
+          ImmutableMap.builder();
+      for (Map.Entry<TupleTag<?>, Integer> entry : tagsToIds.entrySet()) {
+        idsToCodersBuilder.put(entry.getValue(), tagsToCoders.get(entry.getKey()));
+      }
+      return new TaggedKvCoder(idsToCodersBuilder.build());
+    }
+  }
+
+  /**
+   * {@link StepContext} for running {@link DoFn DoFns} on Flink. This does not allow accessing
+   * state or timer internals.
+   */
+  protected class FlinkStepContext implements StepContext {
+
+    @Override
+    public StateInternals stateInternals() {
+      return keyedStateInternals;
+    }
+
+    @Override
+    public TimerInternals timerInternals() {
+      return timerInternals;
+    }
+  }
+
+  class FlinkTimerInternals implements TimerInternals {
+
+    private static final String PENDING_TIMERS_STATE_NAME = "pending-timers";
+
     /**
-     * Performs fields query.
+     * Pending Timers (=not been fired yet) by context id. The id is generated from the state
+     * namespace of the timer and the timer's id. Necessary for supporting removal of existing
+     * timers. In Flink removal of timers can only be done by providing id and time of the timer.
      *
-     * @param qry Query.
-     * @param args Arguments.
-     * @param loc Local query or not.
-     * @param subjId Security subject ID.
-     * @param taskName Task name.
-     * @param rcpt ID of the recipient.
-     * @return Collection of found keys.
-     * @throws IgniteCheckedException In case of error.
+     * <p>CAUTION: This map is scoped by the current active key. Do not attempt to perform any
+     * calculations which span across keys.
      */
-    private FieldsResult executeFieldsQuery(GridCacheQueryAdapter<?> qry, @Nullable Object[] args,
-        boolean loc, @Nullable UUID subjId, @Nullable String taskName, Object rcpt) throws IgniteCheckedException {
-        assert qry != null;
+    @VisibleForTesting final MapState<String, TimerData> pendingTimersById;
 
-        FieldsResult res;
+    /** Current minimum output timestamp across all registered timers. */
+    private long minOutputTimestampMs;
 
-        T2<String, List<Object>> resKey = null;
-
-        if (qry.clause() == null && qry.type() != SPI) {
-            assert !loc;
-
-            throw new IgniteCheckedException("Received next page request after iterator was removed. " +
-                "Consider increasing maximum number of stored iterators (see " +
-                "CacheConfiguration.getMaxQueryIteratorsCount() configuration property).");
-        }
-
-        if (qry.type() == SQL_FIELDS) {
-            if (cctx.events().isRecordable(EVT_CACHE_QUERY_EXECUTED)) {
-                cctx.gridEvents().record(new CacheQueryExecutedEvent<>(
-                    cctx.localNode(),
-                    "SQL fields query executed.",
-                    EVT_CACHE_QUERY_EXECUTED,
-                    CacheQueryType.SQL_FIELDS.name(),
-                    cctx.name(),
-                    null,
-                    qry.clause(),
-                    null,
-                    null,
-                    args,
-                    subjId,
-                    taskName));
-            }
-
-            // Attempt to get result from cache.
-            resKey = new T2<>(qry.clause(), F.asList(args));
-
-            res = (FieldsResult)qryResCache.get(resKey);
-
-            if (res != null && res.addRecipient(rcpt))
-                return res; // Cached result found.
-
-            res = new FieldsResult(rcpt);
-
-            if (qryResCache.putIfAbsent(resKey, res) != null)
-                resKey = null; // Failed to cache result.
-        }
-        else {
-            assert qry.type() == SPI : "Unexpected query type: " + qry.type();
-
-            if (cctx.events().isRecordable(EVT_CACHE_QUERY_EXECUTED)) {
-                cctx.gridEvents().record(new CacheQueryExecutedEvent<>(
-                    cctx.localNode(),
-                    "SPI query executed.",
-                    EVT_CACHE_QUERY_EXECUTED,
-                    CacheQueryType.SPI.name(),
-                    cctx.name(),
-                    null,
-                    null,
-                    null,
-                    null,
-                    args,
-                    subjId,
-                    taskName));
-            }
-
-            res = new FieldsResult(rcpt);
-        }
-
-        try {
-            if (qry.type() == SPI) {
-                IgniteSpiCloseableIterator<?> iter = cctx.kernalContext().indexing().query(cacheName, F.asList(args),
-                    filter(qry));
-
-                res.onDone(iter);
-            }
-            else {
-                assert qry.type() == SQL_FIELDS;
-
-                throw new IllegalStateException("Should never be called.");
-            }
-        }
-        catch (Exception e) {
-            res.onDone(e);
-        }
-        finally {
-            if (resKey != null)
-                qryResCache.remove(resKey, res);
-        }
-
-        return res;
+    private FlinkTimerInternals() {
+      MapStateDescriptor<String, TimerData> pendingTimersByIdStateDescriptor =
+          new MapStateDescriptor<>(
+              PENDING_TIMERS_STATE_NAME,
+              new StringSerializer(),
+              new CoderTypeSerializer<>(timerCoder));
+      this.pendingTimersById = getKeyedStateStore().getMapState(pendingTimersByIdStateDescriptor);
+      computeAndSetMinOutputTimestamp();
     }
 
-    /**
-     * @param qry Query.
-     * @return Cache set items iterator.
-     */
-    private GridCloseableIterator<IgniteBiTuple<K, V>> setIterator(GridCacheQueryAdapter<?> qry) {
-        final GridSetQueryPredicate filter = (GridSetQueryPredicate)qry.scanFilter();
+    /** Gets the current minimum output timestamp across all registered timers. */
+    long getMinOutputTimestampMs() {
+      return minOutputTimestampMs;
+    }
 
-        filter.init(cctx);
+    /** Keeps a minimum output timestamp across all event timers. */
+    private void updateMinTimestampOnNewTimer(TimerData newTimer) {
+      Preconditions.checkState(
+          newTimer.getDomain() == TimeDomain.EVENT_TIME,
+          "Timer with id %s is not an event time timer!",
+          newTimer.getTimerId());
+      // A new timer means a potential new minimum; this is cheap to compute.
+      minOutputTimestampMs =
+          Math.min(minOutputTimestampMs, newTimer.getOutputTimestamp().getMillis());
+    }
 
-        IgniteUuid id = filter.setId();
+    private void updateMinTimestampOnRemovedTimer(TimerData removedTimer) {
+      if (removedTimer.getDomain() != TimeDomain.EVENT_TIME) {
+        return;
+      }
+      long outputTimestampMs = removedTimer.getOutputTimestamp().getMillis();
+      Preconditions.checkState(
+          outputTimestampMs >= minOutputTimestampMs || minOutputTimestampMs == Long.MAX_VALUE,
+          "Removed timer's output timestamp (%s) was smaller than the current minimum output timestamp (%s).",
+          outputTimestampMs,
+          minOutputTimestampMs);
+      // If the removed timer had an output timestamp which matched the current minimum,
+      // we have to recompute the output timestamp
+      if (outputTimestampMs == minOutputTimestampMs) {
+        computeAndSetMinOutputTimestamp();
+      }
+    }
 
-        Collection<SetItemKey> data = cctx.dataStructures().setData(id);
-
-        if (data == null)
-            data = Collections.emptyList();
-
-        final GridIterator<IgniteBiTuple<K, V>> it = F.iterator(
-            data,
-            new C1<SetItemKey, IgniteBiTuple<K, V>>() {
-                @Override public IgniteBiTuple<K, V> apply(SetItemKey e) {
-                    return new IgniteBiTuple<>((K)e.item(), (V)Boolean.TRUE);
+    private void computeAndSetMinOutputTimestamp() {
+      minOutputTimestampMs = Long.MAX_VALUE;
+      final KeyedStateBackend<Object> keyedStateBackend = getKeyedStateBackend();
+      final Object currentKey = keyedStateBackend.getCurrentKey();
+      try (Stream<Object> keys =
+          keyedStateBackend.getKeys(PENDING_TIMERS_STATE_NAME, VoidNamespace.INSTANCE)) {
+        keys.forEach(
+            key -> {
+              keyedStateBackend.setCurrentKey(key);
+              try {
+                for (TimerData timerData : pendingTimersById.values()) {
+                  if (timerData.getDomain() == TimeDomain.EVENT_TIME) {
+                    minOutputTimestampMs =
+                        Math.min(minOutputTimestampMs, timerData.getOutputTimestamp().getMillis());
+                  }
                 }
-            },
-            true,
-            new P1<SetItemKey>() {
-                @Override public boolean apply(SetItemKey e) {
-                    return filter.apply(e, null);
-                }
+              } catch (Exception e) {
+                throw new RuntimeException(
+                    "Exception while reading set of timers for key: " + key, e);
+              }
             });
+      } finally {
+        if (currentKey != null) {
+          keyedStateBackend.setCurrentKey(currentKey);
+        }
+      }
+    }
 
-        return new GridCloseableIteratorAdapter<IgniteBiTuple<K, V>>() {
-            @Override protected boolean onHasNext() {
-                return it.hasNext();
-            }
-
-            @Override protected IgniteBiTuple<K, V> onNext() {
-                return it.next();
-            }
-
-            @Override protected void onRemove() {
-                it.remove();
-            }
-
-            @Override protected void onClose() {
-                // No-op.
-            }
-        };
+    @Override
+    public void setTimer(
+        StateNamespace namespace,
+        String timerId,
+        String timerFamilyId,
+        Instant target,
+        Instant outputTimestamp,
+        TimeDomain timeDomain) {
+      setTimer(
+          TimerData.of(timerId, timerFamilyId, namespace, target, outputTimestamp, timeDomain));
     }
 
     /**
-     * @param qry Query.
-     * @param locNode Local node.
-     * @return Full-scan row iterator.
-     * @throws IgniteCheckedException If failed to get iterator.
+     * @deprecated use {@link #setTimer(StateNamespace, String, String, Instant, Instant,
+     *     TimeDomain)}.
      */
-    @SuppressWarnings({"unchecked"})
-    private GridCloseableIterator scanIterator(final GridCacheQueryAdapter<?> qry, boolean locNode)
-        throws IgniteCheckedException {
-        final IgniteBiPredicate<K, V> keyValFilter = qry.scanFilter();
+    @Deprecated
+    @Override
+    public void setTimer(TimerData timer) {
+      try {
+        String contextTimerId = getContextTimerId(timer.getTimerId(), timer.getNamespace());
+        // Only one timer can exist at a time for a given timer id and context.
+        // If a timer gets set twice in the same context, the second must
+        // override the first. Thus, we must cancel any pending timers
+        // before we set the new one.
+        cancelPendingTimerById(contextTimerId);
+        registerTimer(timer, contextTimerId);
+      } catch (Exception e) {
+        throw new RuntimeException("Failed to set timer", e);
+      }
+    }
 
-        try {
-            injectResources(keyValFilter);
-
-            Integer part = cctx.isLocal() ? null : qry.partition();
-
-            if (part != null && (part < 0 || part >= cctx.affinity().partitions()))
-                return new GridEmptyCloseableIterator() {
-                    @Override public void close() throws IgniteCheckedException {
-                        closeScanFilter(keyValFilter);
-                        super.close();
-                    }
-                };
-
-            AffinityTopologyVersion topVer = GridQueryProcessor.getRequestAffinityTopologyVersion();
-
-            if (topVer == null)
-                topVer = cctx.affinity().affinityTopologyVersion();
-
-            final boolean backups = qry.includeBackups() || cctx.isReplicated();
-
-            final GridDhtLocalPartition locPart;
-
-            final GridIterator<CacheDataRow> it;
-
-            if (part != null) {
-                final GridDhtCacheAdapter dht = cctx.isNear() ? cctx.near().dht() : cctx.dht();
-
-                GridDhtLocalPartition locPart0 = dht.topology().localPartition(part, topVer, false);
-
-                if (locPart0 == null || locPart0.state() != OWNING || !locPart0.reserve())
-                    throw new GridDhtUnreservedPartitionException(part, cctx.affinity().affinityTopologyVersion(),
-                        "Partition can not be reserved");
-
-                locPart = locPart0;
-
-                it = cctx.offheap().cachePartitionIterator(cctx.cacheId(), part);
-            }
-            else {
-                locPart = null;
-
-                // TODO shouldn't we reserve all involved partitions?
-                it = cctx.offheap().cacheIterator(cctx.cacheId(), true, backups, topVer);
-            }
-
-            return new ScanQueryIterator(it, qry, topVer, locPart, keyValFilter, locNode, cctx, log);
-        }
-        catch (IgniteCheckedException | RuntimeException e) {
-            closeScanFilter(keyValFilter);
-
-            throw e;
-        }
+    private void registerTimer(TimerData timer, String contextTimerId) throws Exception {
+      long time = timer.getTimestamp().getMillis();
+      switch (timer.getDomain()) {
+        case EVENT_TIME:
+          timerService.registerEventTimeTimer(timer, adjustTimestampForFlink(time));
+          updateMinTimestampOnNewTimer(timer);
+          break;
+        case PROCESSING_TIME:
+        case SYNCHRONIZED_PROCESSING_TIME:
+          timerService.registerProcessingTimeTimer(timer, adjustTimestampForFlink(time));
+          break;
+        default:
+          throw new UnsupportedOperationException("Unsupported time domain: " + timer.getDomain());
+      }
+      pendingTimersById.put(contextTimerId, timer);
     }
 
     /**
-     * Closes a filter if it is closeable.
+     * Looks up a timer by its id. This is necessary to support canceling existing timers with the
+     * same id. Flink does not provide this functionality.
+     */
+    private void cancelPendingTimerById(String contextTimerId) throws Exception {
+      TimerData oldTimer = pendingTimersById.get(contextTimerId);
+      if (oldTimer != null) {
+        deleteTimerInternal(oldTimer);
+      }
+    }
+
+    /** Hook which must be called when a timer is fired or deleted to perform cleanup. */
+    void onFiredOrDeletedTimer(TimerData timer) {
+      try {
+        pendingTimersById.remove(getContextTimerId(timer.getTimerId(), timer.getNamespace()));
+        updateMinTimestampOnRemovedTimer(timer);
+      } catch (Exception e) {
+        throw new RuntimeException("Failed to cleanup pending timers state.", e);
+      }
+    }
+
+    /** Unique contextual id of a timer. Used to look up any existing timers in a context. */
+    private String getContextTimerId(String timerId, StateNamespace namespace) {
+      return timerId + namespace.stringKey();
+    }
+
+    /** @deprecated use {@link #deleteTimer(StateNamespace, String, TimeDomain)}. */
+    @Deprecated
+    @Override
+    public void deleteTimer(StateNamespace namespace, String timerId, String timerFamilyId) {
+      throw new UnsupportedOperationException("Canceling of a timer by ID is not yet supported.");
+    }
+
+    @Override
+    public void deleteTimer(StateNamespace namespace, String timerId, TimeDomain timeDomain) {
+      try {
+        cancelPendingTimerById(getContextTimerId(timerId, namespace));
+      } catch (Exception e) {
+        throw new RuntimeException("Failed to cancel timer", e);
+      }
+    }
+
+    /** @deprecated use {@link #deleteTimer(StateNamespace, String, TimeDomain)}. */
+    @Override
+    @Deprecated
+    public void deleteTimer(TimerData timer) {
+      deleteTimer(timer.getNamespace(), timer.getTimerId(), timer.getDomain());
+    }
+
+    void deleteTimerInternal(TimerData timer) {
+      long time = timer.getTimestamp().getMillis();
+      switch (timer.getDomain()) {
+        case EVENT_TIME:
+          timerService.deleteEventTimeTimer(timer, adjustTimestampForFlink(time));
+          break;
+        case PROCESSING_TIME:
+        case SYNCHRONIZED_PROCESSING_TIME:
+          timerService.deleteProcessingTimeTimer(timer, adjustTimestampForFlink(time));
+          break;
+        default:
+          throw new UnsupportedOperationException("Unsupported time domain: " + timer.getDomain());
+      }
+      onFiredOrDeletedTimer(timer);
+    }
+
+    @Override
+    public Instant currentProcessingTime() {
+      return new Instant(timerService.currentProcessingTime());
+    }
+
+    @Nullable
+    @Override
+    public Instant currentSynchronizedProcessingTime() {
+      return new Instant(timerService.currentProcessingTime());
+    }
+
+    @Override
+    public Instant currentInputWatermarkTime() {
+      return new Instant(Math.min(currentInputWatermark, getPushbackWatermarkHold()));
+    }
+
+    @Nullable
+    @Override
+    public Instant currentOutputWatermarkTime() {
+      return new Instant(currentOutputWatermark);
+    }
+
+    /**
+     * In Beam, a timer with timestamp {@code T} is only illegible for firing when the time has
+     * moved past this time stamp, i.e. {@code T < current_time}. In the case of event time,
+     * current_time is the watermark, in the case of processing time it is the system time.
      *
-     * @param f Filter.
-     */
-    private static void closeScanFilter(Object f) {
-        if (f instanceof PlatformCacheEntryFilter)
-            ((PlatformCacheEntryFilter)f).onClose();
-    }
-
-    /**
-     * @param o Object to inject resources to.
-     * @throws IgniteCheckedException If failure occurred while injecting resources.
-     */
-    private void injectResources(@Nullable Object o) throws IgniteCheckedException {
-        if (o != null) {
-            GridKernalContext ctx = cctx.kernalContext();
-
-            ClassLoader ldr = o.getClass().getClassLoader();
-
-            if (ctx.deploy().isGlobalLoader(ldr))
-                ctx.resource().inject(ctx.deploy().getDeployment(ctx.deploy().getClassLoaderId(ldr)), o.getClass(), o);
-            else
-                ctx.resource().inject(ctx.deploy().getDeployment(o.getClass().getName()), o.getClass(), o);
-        }
-    }
-
-    /**
-     * Processes fields query request.
+     * <p>Flink's TimerService has different semantics because it only ensures {@code T <=
+     * current_time}.
      *
-     * @param qryInfo Query info.
-     */
-    protected void runFieldsQuery(GridCacheQueryInfo qryInfo) {
-        assert qryInfo != null;
-
-        if (!enterBusy()) {
-            if (cctx.localNodeId().equals(qryInfo.senderId()))
-                throw new IllegalStateException("Failed to process query request (grid is stopping).");
-
-            return; // Ignore remote requests when when node is stopping.
-        }
-
-        try {
-            if (log.isDebugEnabled())
-                log.debug("Running query: " + qryInfo);
-
-            boolean rmvRes = true;
-
-            FieldsResult res = null;
-
-            final boolean statsEnabled = cctx.statisticsEnabled();
-
-            final boolean readEvt = cctx.events().isRecordable(EVT_CACHE_QUERY_OBJECT_READ);
-
-            try {
-                // Preparing query closures.
-                IgniteReducer<Object, Object> rdc = (IgniteReducer<Object, Object>)qryInfo.reducer();
-
-                injectResources(rdc);
-
-                GridCacheQueryAdapter<?> qry = qryInfo.query();
-
-                int pageSize = qry.pageSize();
-
-                Collection<Object> data = null;
-                Collection<Object> entities = null;
-
-                if (qryInfo.local() || rdc != null || cctx.isLocalNode(qryInfo.senderId()))
-                    data = new ArrayList<>(pageSize);
-                else
-                    entities = new ArrayList<>(pageSize);
-
-                String taskName = cctx.kernalContext().task().resolveTaskName(qry.taskHash());
-
-                res = qryInfo.local() ?
-                    executeFieldsQuery(qry, qryInfo.arguments(), qryInfo.local(), qry.subjectId(), taskName,
-                        recipient(qryInfo.senderId(), qryInfo.requestId())) :
-                    fieldsQueryResult(qryInfo, taskName);
-
-                // If metadata needs to be returned to user and cleaned from internal fields - copy it.
-                List<GridQueryFieldMetadata> meta = qryInfo.includeMetaData() ?
-                    (res.metaData() != null ? new ArrayList<>(res.metaData()) : null) :
-                    res.metaData();
-
-                if (!qryInfo.includeMetaData())
-                    meta = null;
-
-                GridCloseableIterator<?> it = new GridSpiCloseableIteratorWrapper<Object>(
-                    res.iterator(recipient(qryInfo.senderId(), qryInfo.requestId())));
-
-                if (log.isDebugEnabled())
-                    log.debug("Received fields iterator [iterHasNext=" + it.hasNext() + ']');
-
-                if (!it.hasNext()) {
-                    if (rdc != null)
-                        data = Collections.singletonList(rdc.reduce());
-
-                    onFieldsPageReady(qryInfo.local(), qryInfo, meta, entities, data, true, null);
-
-                    return;
-                }
-
-                int cnt = 0;
-                boolean metaSent = false;
-
-                while (!Thread.currentThread().isInterrupted() && it.hasNext()) {
-                    long start = statsEnabled ? System.nanoTime() : 0L;
-
-                    Object row = it.next();
-
-                    // Query is cancelled.
-                    if (row == null) {
-                        onPageReady(qryInfo.local(), qryInfo, null, true, null);
-
-                        break;
-                    }
-
-                    if (statsEnabled) {
-                        CacheMetricsImpl metrics = cctx.cache().metrics0();
-
-                        metrics.onRead(true);
-
-                        metrics.addGetTimeNanos(System.nanoTime() - start);
-                    }
-
-                    if (readEvt && cctx.gridEvents().hasListener(EVT_CACHE_QUERY_OBJECT_READ)) {
-                        cctx.gridEvents().record(new CacheQueryReadEvent<K, V>(
-                            cctx.localNode(),
-                            "SQL fields query result set row read.",
-                            EVT_CACHE_QUERY_OBJECT_READ,
-                            CacheQueryType.SQL_FIELDS.name(),
-                            cctx.name(),
-                            null,
-                            qry.clause(),
-                            null,
-                            null,
-                            qryInfo.arguments(),
-                            qry.subjectId(),
-                            taskName,
-                            null,
-                            null,
-                            null,
-                            row));
-                    }
-
-                    if ((qryInfo.local() || rdc != null || cctx.isLocalNode(qryInfo.senderId()))) {
-                        // Reduce.
-                        if (rdc != null) {
-                            if (!rdc.collect(row))
-                                break;
-                        }
-                        else
-                            data.add(row);
-                    }
-                    else
-                        entities.add(row);
-
-                    if (rdc == null && ((!qryInfo.allPages() && ++cnt == pageSize) || !it.hasNext())) {
-                        onFieldsPageReady(qryInfo.local(), qryInfo, !metaSent ? meta : null,
-                            entities, data, !it.hasNext(), null);
-
-                        if (it.hasNext())
-                            rmvRes = false;
-
-                        if (!qryInfo.allPages())
-                            return;
-                    }
-                }
-
-                if (rdc != null) {
-                    onFieldsPageReady(qryInfo.local(), qryInfo, meta, null,
-                        Collections.singletonList(rdc.reduce()), true, null);
-                }
-            }
-            catch (IgniteCheckedException e) {
-                if (log.isDebugEnabled() || !e.hasCause(SQLException.class))
-                    U.error(log, "Failed to run fields query [qry=" + qryInfo + ", node=" + cctx.nodeId() + ']', e);
-                else {
-                    if (e.hasCause(SQLException.class))
-                        U.error(log, "Failed to run fields query [node=" + cctx.nodeId() +
-                            ", msg=" + e.getCause(SQLException.class).getMessage() + ']');
-                    else
-                        U.error(log, "Failed to run fields query [node=" + cctx.nodeId() +
-                            ", msg=" + e.getMessage() + ']');
-                }
-
-                onFieldsPageReady(qryInfo.local(), qryInfo, null, null, null, true, e);
-            }
-            catch (Throwable e) {
-                U.error(log, "Failed to run fields query [qry=" + qryInfo + ", node=" + cctx.nodeId() + "]", e);
-
-                onFieldsPageReady(qryInfo.local(), qryInfo, null, null, null, true, e);
-
-                if (e instanceof Error)
-                    throw (Error)e;
-            }
-            finally {
-                if (qryInfo.local()) {
-                    // Don't we need to always remove local iterators?
-                    if (rmvRes && res != null) {
-                        try {
-                            res.closeIfNotShared(recipient(qryInfo.senderId(), qryInfo.requestId()));
-                        }
-                        catch (IgniteCheckedException e) {
-                            U.error(log, "Failed to close local iterator [qry=" + qryInfo + ", node=" +
-                                cctx.nodeId() + "]", e);
-                        }
-                    }
-                }
-                else if (rmvRes)
-                    removeFieldsQueryResult(qryInfo.senderId(), qryInfo.requestId());
-            }
-        }
-        finally {
-            leaveBusy();
-        }
-    }
-
-    /**
-     * Processes cache query request.
+     * <p>To make up for this, we need to add one millisecond to Flink's internal timer timestamp.
+     * Note that we do not modify Beam's timestamp and we are not exposing Flink's timestamp.
      *
-     * @param qryInfo Query info.
+     * <p>See also https://jira.apache.org/jira/browse/BEAM-3863
      */
-    @SuppressWarnings("unchecked")
-    protected void runQuery(GridCacheQueryInfo qryInfo) {
-        assert qryInfo != null;
-        assert qryInfo.query().type() != SCAN || !qryInfo.local() : qryInfo;
-
-        if (!enterBusy()) {
-            if (cctx.localNodeId().equals(qryInfo.senderId()))
-                throw new IllegalStateException("Failed to process query request (grid is stopping).");
-
-            return; // Ignore remote requests when when node is stopping.
-        }
-
-        try {
-            boolean loc = qryInfo.local();
-
-            QueryResult<K, V> res = null;
-
-            if (log.isDebugEnabled())
-                log.debug("Running query: " + qryInfo);
-
-            boolean rmvIter = true;
-
-            GridCacheQueryAdapter<?> qry = qryInfo.query();
-
-            try {
-                // Preparing query closures.
-                IgniteClosure<Cache.Entry<K, V>, Object> trans =
-                    (IgniteClosure<Cache.Entry<K, V>, Object>)qryInfo.transformer();
-
-                IgniteReducer<Cache.Entry<K, V>, Object> rdc = (IgniteReducer<Cache.Entry<K, V>, Object>)qryInfo.reducer();
-
-                injectResources(trans);
-                injectResources(rdc);
-
-                int pageSize = qry.pageSize();
-
-                boolean incBackups = qry.includeBackups();
-
-                String taskName = cctx.kernalContext().task().resolveTaskName(qry.taskHash());
-
-                IgniteSpiCloseableIterator<IgniteBiTuple<K, V>> iter;
-                GridCacheQueryType type;
-
-                res = loc ?
-                    executeQuery(qry, qryInfo.arguments(), loc, qry.subjectId(), taskName,
-                        recipient(qryInfo.senderId(), qryInfo.requestId())) :
-                    queryResult(qryInfo, taskName);
-
-                if (res == null)
-                    return;
-
-                iter = res.iterator(recipient(qryInfo.senderId(), qryInfo.requestId()));
-                type = res.type();
-
-                final GridCacheAdapter<K, V> cache = cctx.cache();
-
-                if (log.isDebugEnabled())
-                    log.debug("Received index iterator [iterHasNext=" + iter.hasNext() +
-                        ", cacheSize=" + cache.size() + ']');
-
-                int cnt = 0;
-
-                boolean stop = false;
-                boolean pageSent = false;
-
-                Collection<Object> data = new ArrayList<>(pageSize);
-
-                AffinityTopologyVersion topVer = cctx.affinity().affinityTopologyVersion();
-
-                final boolean statsEnabled = cctx.statisticsEnabled();
-
-                final boolean readEvt = cctx.events().isRecordable(EVT_CACHE_QUERY_OBJECT_READ);
-
-                CacheObjectContext objCtx = cctx.cacheObjectContext();
-
-                while (!Thread.currentThread().isInterrupted()) {
-                    long start = statsEnabled ? System.nanoTime() : 0L;
-
-                    // Need to call it after gathering start time because
-                    // actual row extracting may happen inside this method.
-                    if(!iter.hasNext())
-                        break;
-
-                    IgniteBiTuple<K, V> row = iter.next();
-
-                    // Query is cancelled.
-                    if (row == null) {
-                        onPageReady(loc, qryInfo, null, true, null);
-
-                        break;
-                    }
-
-                    final K key = row.getKey();
-
-                    // Filter backups for SCAN queries, if it isn't partition scan.
-                    // Other types are filtered in indexing manager.
-                    if (!cctx.isReplicated() && qry.type() == SCAN && qry.partition() == null &&
-                        cctx.config().getCacheMode() != LOCAL && !incBackups &&
-                        !cctx.affinity().primaryByKey(cctx.localNode(), key, topVer)) {
-                        if (log.isDebugEnabled())
-                            log.debug("Ignoring backup element [row=" + row +
-                                ", cacheMode=" + cctx.config().getCacheMode() + ", incBackups=" + incBackups +
-                                ", primary=" + cctx.affinity().primaryByKey(cctx.localNode(), key, topVer) + ']');
-
-                        continue;
-                    }
-
-                    V val = row.getValue();
-
-                    if (log.isDebugEnabled()) {
-                        ClusterNode primaryNode = cctx.affinity().primaryByKey(key,
-                            cctx.affinity().affinityTopologyVersion());
-
-                        log.debug(S.toString("Record",
-                            "key", key, true,
-                            "val", val, true,
-                            "incBackups", incBackups, false,
-                            "priNode", primaryNode != null ? U.id8(primaryNode.id()) : null, false,
-                            "node", U.id8(cctx.localNode().id()), false));
-                    }
-
-                    if (val == null) {
-                        if (log.isDebugEnabled())
-                            log.debug(S.toString("Unsuitable record value", "val", val, true));
-
-                        continue;
-                    }
-
-                    if (statsEnabled) {
-                        CacheMetricsImpl metrics = cctx.cache().metrics0();
-
-                        metrics.onRead(true);
-
-                        metrics.addGetTimeNanos(System.nanoTime() - start);
-                    }
-
-                    K key0 = null;
-                    V val0 = null;
-
-                    if (readEvt && cctx.gridEvents().hasListener(EVT_CACHE_QUERY_OBJECT_READ)) {
-                        key0 = (K)CacheObjectUtils.unwrapBinaryIfNeeded(objCtx, key, qry.keepBinary(), false);
-                        val0 = (V)CacheObjectUtils.unwrapBinaryIfNeeded(objCtx, val, qry.keepBinary(), false);
-
-                        switch (type) {
-                            case SQL:
-                                cctx.gridEvents().record(new CacheQueryReadEvent<>(
-                                    cctx.localNode(),
-                                    "SQL query entry read.",
-                                    EVT_CACHE_QUERY_OBJECT_READ,
-                                    CacheQueryType.SQL.name(),
-                                    cctx.name(),
-                                    qry.queryClassName(),
-                                    qry.clause(),
-                                    null,
-                                    null,
-                                    qryInfo.arguments(),
-                                    qry.subjectId(),
-                                    taskName,
-                                    key0,
-                                    val0,
-                                    null,
-                                    null));
-
-                                break;
-
-                            case TEXT:
-                                cctx.gridEvents().record(new CacheQueryReadEvent<>(
-                                    cctx.localNode(),
-                                    "Full text query entry read.",
-                                    EVT_CACHE_QUERY_OBJECT_READ,
-                                    CacheQueryType.FULL_TEXT.name(),
-                                    cctx.name(),
-                                    qry.queryClassName(),
-                                    qry.clause(),
-                                    null,
-                                    null,
-                                    null,
-                                    qry.subjectId(),
-                                    taskName,
-                                    key0,
-                                    val0,
-                                    null,
-                                    null));
-
-                                break;
-
-                            case SCAN:
-                                cctx.gridEvents().record(new CacheQueryReadEvent<>(
-                                    cctx.localNode(),
-                                    "Scan query entry read.",
-                                    EVT_CACHE_QUERY_OBJECT_READ,
-                                    CacheQueryType.SCAN.name(),
-                                    cctx.name(),
-                                    null,
-                                    null,
-                                    qry.scanFilter(),
-                                    null,
-                                    null,
-                                    qry.subjectId(),
-                                    taskName,
-                                    key0,
-                                    val0,
-                                    null,
-                                    null));
-
-                                break;
-                        }
-                    }
-
-                    if (rdc != null || trans != null) {
-                        if (key0 == null)
-                            key0 = (K)CacheObjectUtils.unwrapBinaryIfNeeded(objCtx, key, qry.keepBinary(), false);
-                        if (val0 == null)
-                            val0 = (V)CacheObjectUtils.unwrapBinaryIfNeeded(objCtx, val, qry.keepBinary(), false);
-
-                        Cache.Entry<K, V> entry = new CacheEntryImpl(key0, val0);
-
-                        // Reduce.
-                        if (rdc != null) {
-                            if (!rdc.collect(entry) || !iter.hasNext()) {
-                                onPageReady(loc, qryInfo, Collections.singletonList(rdc.reduce()), true, null);
-
-                                pageSent = true;
-
-                                break;
-                            }
-                            else
-                                continue;
-                        }
-
-                        data.add(trans != null ? trans.apply(entry) :
-                            !loc ? new GridCacheQueryResponseEntry<>(key, val) : F.t(key, val));
-                    }
-                    else
-                        data.add(!loc ? new GridCacheQueryResponseEntry<>(key, val) : F.t(key, val));
-
-                    if (!loc) {
-                        if (++cnt == pageSize || !iter.hasNext()) {
-                            boolean finished = !iter.hasNext();
-
-                            onPageReady(loc, qryInfo, data, finished, null);
-
-                            pageSent = true;
-
-                            if (!finished)
-                                rmvIter = false;
-
-                            if (!qryInfo.allPages())
-                                return;
-
-                            data = new ArrayList<>(pageSize);
-
-                            if (stop)
-                                break; // while
-                        }
-                    }
-                }
-
-                if (!pageSent) {
-                    if (rdc == null)
-                        onPageReady(loc, qryInfo, data, true, null);
-                    else
-                        onPageReady(loc, qryInfo, Collections.singletonList(rdc.reduce()), true, null);
-                }
-            }
-            catch (Throwable e) {
-                if (X.hasCause(e, ClassNotFoundException.class) && !qry.keepBinary() && cctx.binaryMarshaller() &&
-                    !cctx.localNode().isClient() && !log.isQuiet()) {
-                    LT.warn(log, "Suggestion for the cause of ClassNotFoundException");
-                    LT.warn(log, "To disable, set -D" + IGNITE_QUIET + "=true");
-                    LT.warn(log, "  ^-- Ignite configured to use BinaryMarshaller but keepBinary is false for " +
-                        "request");
-                    LT.warn(log, "  ^-- Server node need to load definition of data classes. " +
-                        "It can be reason of ClassNotFoundException(consider IgniteCache.withKeepBinary to fix)");
-                    LT.warn(log, "Refer this page for detailed information: " +
-                        "https://apacheignite.readme.io/docs/binary-marshaller");
-                }
-
-                if (!X.hasCause(e, GridDhtUnreservedPartitionException.class))
-                    U.error(log, "Failed to run query [qry=" + qryInfo + ", node=" + cctx.nodeId() + "]", e);
-
-                onPageReady(loc, qryInfo, null, true, e);
-
-                if (e instanceof Error)
-                    throw (Error)e;
-            }
-            finally {
-                if (loc) {
-                    // Local iterators are always removed.
-                    if (res != null) {
-                        try {
-                            res.closeIfNotShared(recipient(qryInfo.senderId(), qryInfo.requestId()));
-                        }
-                        catch (IgniteCheckedException e) {
-                            if (!X.hasCause(e, GridDhtUnreservedPartitionException.class))
-                                U.error(log, "Failed to close local iterator [qry=" + qryInfo + ", node=" +
-                                    cctx.nodeId() + "]", e);
-                        }
-                    }
-                }
-                else if (rmvIter)
-                    removeQueryResult(qryInfo.senderId(), qryInfo.requestId());
-            }
-        }
-        finally {
-            leaveBusy();
-        }
+    private long adjustTimestampForFlink(long beamTimerTimestamp) {
+      if (beamTimerTimestamp == Long.MAX_VALUE) {
+        // We would overflow, do not adjust timestamp
+        return Long.MAX_VALUE;
+      }
+      return beamTimerTimestamp + 1;
     }
-
-    /**
-     * Process local scan query.
-     *
-     * @param qry Query.
-     * @param updateStatistics Update statistics flag.
-     */
-    @SuppressWarnings({"unchecked", "serial"})
-    protected GridCloseableIterator scanQueryLocal(final GridCacheQueryAdapter qry,
-        boolean updateStatistics) throws IgniteCheckedException {
-        if (!enterBusy())
-            throw new IllegalStateException("Failed to process query request (grid is stopping).");
-
-        final boolean statsEnabled = cctx.statisticsEnabled();
-
-        updateStatistics &= statsEnabled;
-
-        long startTime = U.currentTimeMillis();
-
-        final String namex = cctx.name();
-
-        final IgniteBiPredicate<K, V> scanFilter = qry.scanFilter();
-
-        try {
-            assert qry.type() == SCAN;
-
-            if (log.isDebugEnabled())
-                log.debug("Running local SCAN query: " + qry);
-
-            final String taskName = cctx.kernalContext().task().resolveTaskName(qry.taskHash());
-            final ClusterNode locNode = cctx.localNode();
-            final UUID subjId = qry.subjectId();
-
-            if (cctx.events().isRecordable(EVT_CACHE_QUERY_EXECUTED)) {
-                cctx.gridEvents().record(new CacheQueryExecutedEvent<>(
-                    locNode,
-                    "Scan query executed.",
-                    EVT_CACHE_QUERY_EXECUTED,
-                    CacheQueryType.SCAN.name(),
-                    namex,
-                    null,
-                    null,
-                    scanFilter,
-                    null,
-                    null,
-                    subjId,
-                    taskName));
-            }
-
-            GridCloseableIterator it = scanIterator(qry, true);
-
-            updateStatistics = false;
-
-            return it;
-        }
-        catch (Exception e) {
-            closeScanFilter(scanFilter);
-
-            if (updateStatistics)
-                cctx.queries().collectMetrics(GridCacheQueryType.SCAN, namex, startTime,
-                    U.currentTimeMillis() - startTime, true);
-
-            throw e;
-        }
-        finally {
-            leaveBusy();
-        }
-    }
-
-    /**
-     * @param qryInfo Info.
-     * @param taskName Task name.
-     * @return Iterator.
-     * @throws IgniteCheckedException In case of error.
-     */
-    @Nullable private QueryResult<K, V> queryResult(final GridCacheQueryInfo qryInfo,
-        String taskName) throws IgniteCheckedException {
-        assert qryInfo != null;
-
-        final UUID sndId = qryInfo.senderId();
-
-        assert sndId != null;
-
-        RequestFutureMap futs = qryIters.get(sndId);
-
-        if (futs == null) {
-            futs = new RequestFutureMap() {
-                @Override protected boolean removeEldestEntry(Map.Entry<Long, GridFutureAdapter<QueryResult<K, V>>> e) {
-                    boolean rmv = size() > maxIterCnt;
-
-                    if (rmv) {
-                        try {
-                            e.getValue().get().closeIfNotShared(recipient(sndId, e.getKey()));
-                        }
-                        catch (IgniteCheckedException ex) {
-                            U.error(log, "Failed to close query iterator.", ex);
-                        }
-                    }
-
-                    return rmv;
-                }
-            };
-
-            RequestFutureMap old = qryIters.putIfAbsent(sndId, futs);
-
-            if (old != null)
-                futs = old;
-        }
-
-        assert futs != null;
-
-        GridFutureAdapter<QueryResult<K, V>> fut;
-
-        boolean exec = false;
-
-        synchronized (futs) {
-            if (futs.isCanceled(qryInfo.requestId()))
-                return null;
-
-            fut = futs.get(qryInfo.requestId());
-
-            if (fut == null) {
-                futs.put(qryInfo.requestId(), fut = new GridFutureAdapter<>());
-
-                exec = true;
-            }
-        }
-
-        if (exec) {
-            try {
-                fut.onDone(executeQuery(qryInfo.query(), qryInfo.arguments(), false,
-                    qryInfo.query().subjectId(), taskName, recipient(qryInfo.senderId(), qryInfo.requestId())));
-            }
-            catch (Throwable e) {
-                fut.onDone(e);
-
-                if (e instanceof Error)
-                    throw (Error)e;
-            }
-        }
-
-        return fut.get();
-    }
-
-    /**
-     * @param sndId Sender node ID.
-     * @param reqId Request ID.
-     */
-    @SuppressWarnings("SynchronizationOnLocalVariableOrMethodParameter")
-    protected void removeQueryResult(@Nullable UUID sndId, long reqId) {
-        if (sndId == null)
-            return;
-
-        RequestFutureMap futs = qryIters.get(sndId);
-
-        if (futs != null) {
-            IgniteInternalFuture<QueryResult<K, V>> fut;
-
-            synchronized (futs) {
-                fut = futs.remove(reqId);
-            }
-
-            if (fut != null) {
-                try {
-                    fut.get().closeIfNotShared(recipient(sndId, reqId));
-                }
-                catch (IgniteCheckedException e) {
-                    if (!X.hasCause(e, GridDhtUnreservedPartitionException.class))
-                        U.error(log, "Failed to close iterator.", e);
-                }
-            }
-        }
-    }
-
-    /**
-     * @param sndId Sender node ID.
-     * @param reqId Request ID.
-     * @return Recipient ID.
-     */
-    private static Object recipient(UUID sndId, long reqId) {
-        assert sndId != null;
-
-        return new IgniteBiTuple<>(sndId, reqId);
-    }
-
-    /**
-     * @param qryInfo Info.
-     * @return Iterator.
-     * @throws IgniteCheckedException In case of error.
-     */
-    private FieldsResult fieldsQueryResult(GridCacheQueryInfo qryInfo, String taskName)
-        throws IgniteCheckedException {
-        final UUID sndId = qryInfo.senderId();
-
-        assert sndId != null;
-
-        Map<Long, GridFutureAdapter<FieldsResult>> iters = fieldsQryRes.get(sndId);
-
-        if (iters == null) {
-            iters = new LinkedHashMap<Long, GridFutureAdapter<FieldsResult>>(16, 0.75f, true) {
-                @Override protected boolean removeEldestEntry(Map.Entry<Long,
-                    GridFutureAdapter<FieldsResult>> e) {
-                    boolean rmv = size() > maxIterCnt;
-
-                    if (rmv) {
-                        try {
-                            e.getValue().get().closeIfNotShared(recipient(sndId, e.getKey()));
-                        }
-                        catch (IgniteCheckedException ex) {
-                            U.error(log, "Failed to close fields query iterator.", ex);
-                        }
-                    }
-
-                    return rmv;
-                }
-
-                @Override public boolean equals(Object o) {
-                    return o == this;
-                }
-            };
-
-            Map<Long, GridFutureAdapter<FieldsResult>> old = fieldsQryRes.putIfAbsent(sndId, iters);
-
-            if (old != null)
-                iters = old;
-        }
-
-        return fieldsQueryResult(iters, qryInfo, taskName);
-    }
-
-    /**
-     * @param resMap Results map.
-     * @param qryInfo Info.
-     * @return Fields query result.
-     * @throws IgniteCheckedException In case of error.
-     */
-    @SuppressWarnings({
-        "SynchronizationOnLocalVariableOrMethodParameter",
-        "NonPrivateFieldAccessedInSynchronizedContext"})
-    private FieldsResult fieldsQueryResult(Map<Long, GridFutureAdapter<FieldsResult>> resMap,
-        GridCacheQueryInfo qryInfo, String taskName) throws IgniteCheckedException {
-        assert resMap != null;
-        assert qryInfo != null;
-
-        GridFutureAdapter<FieldsResult> fut;
-
-        boolean exec = false;
-
-        synchronized (resMap) {
-            fut = resMap.get(qryInfo.requestId());
-
-            if (fut == null) {
-                resMap.put(qryInfo.requestId(), fut =
-                    new GridFutureAdapter<>());
-
-                exec = true;
-            }
-        }
-
-        if (exec) {
-            try {
-                fut.onDone(executeFieldsQuery(qryInfo.query(), qryInfo.arguments(), false,
-                    qryInfo.query().subjectId(), taskName, recipient(qryInfo.senderId(), qryInfo.requestId())));
-            }
-            catch (IgniteCheckedException e) {
-                fut.onDone(e);
-            }
-        }
-
-        return fut.get();
-    }
-
-    /**
-     * @param sndId Sender node ID.
-     * @param reqId Request ID.
-     */
-    @SuppressWarnings("SynchronizationOnLocalVariableOrMethodParameter")
-    protected void removeFieldsQueryResult(@Nullable UUID sndId, long reqId) {
-        if (sndId == null)
-            return;
-
-        Map<Long, GridFutureAdapter<FieldsResult>> futs = fieldsQryRes.get(sndId);
-
-        if (futs != null) {
-            IgniteInternalFuture<FieldsResult> fut;
-
-            synchronized (futs) {
-                fut = futs.remove(reqId);
-            }
-
-            if (fut != null) {
-                assert fut.isDone();
-
-                try {
-                    fut.get().closeIfNotShared(recipient(sndId, reqId));
-                }
-                catch (IgniteCheckedException e) {
-                    U.error(log, "Failed to close iterator.", e);
-                }
-            }
-        }
-    }
-
-    /**
-     * Called when data for page is ready.
-     *
-     * @param loc Local query or not.
-     * @param qryInfo Query info.
-     * @param data Result data.
-     * @param finished Last page or not.
-     * @param e Exception in case of error.
-     * @return {@code true} if page was processed right.
-     */
-    protected abstract boolean onPageReady(boolean loc, GridCacheQueryInfo qryInfo,
-        @Nullable Collection<?> data, boolean finished, @Nullable Throwable e);
-
-    /**
-     * @param loc Local query or not.
-     * @param qryInfo Query info.
-     * @param metaData Meta data.
-     * @param entities Indexing entities.
-     * @param data Data.
-     * @param finished Last page or not.
-     * @param e Exception in case of error.
-     * @return {@code true} if page was processed right.
-     */
-    protected abstract boolean onFieldsPageReady(boolean loc, GridCacheQueryInfo qryInfo,
-        @Nullable List<GridQueryFieldMetadata> metaData,
-        @Nullable Collection<?> entities,
-        @Nullable Collection<?> data,
-        boolean finished, @Nullable Throwable e);
-
-    /**
-     * Gets cache queries metrics.
-     *
-     * @return Cache queries metrics.
-     */
-    public QueryMetrics metrics() {
-        return metrics.copy();
-    }
-
-    /**
-     * Gets cache queries detailed metrics. Detail metrics could be enabled by setting non-zero value via {@link
-     * CacheConfiguration#setQueryDetailMetricsSize(int)}
-     *
-     * @return Cache queries metrics aggregated by query type and query text.
-     */
-    public Collection<GridCacheQueryDetailMetricsAdapter> detailMetrics() {
-        if (detailMetricsSz > 0) {
-            // Return no more than latest detailMetricsSz items.
-            if (detailMetrics.size() > detailMetricsSz) {
-                GridBoundedPriorityQueue<GridCacheQueryDetailMetricsAdapter> latestMetrics =
-                    new GridBoundedPriorityQueue<>(detailMetricsSz, QRY_DETAIL_METRICS_PRIORITY_NEW_CMP);
-
-                latestMetrics.addAll(detailMetrics.values());
-
-                return latestMetrics;
-            }
-
-            return new ArrayList<>(detailMetrics.values());
-        }
-
-        return Collections.emptyList();
-    }
-
-    /**
-     * Evict detail metrics.
-     */
-    public void evictDetailMetrics() {
-        if (detailMetricsSz > 0) {
-            int sz = detailMetrics.size();
-
-            if (sz > detailMetricsSz) {
-                // Limit number of metrics to evict in order make eviction time predictable.
-                int evictCnt = Math.min(QRY_DETAIL_METRICS_EVICTION_LIMIT, sz - detailMetricsSz);
-
-                Queue<GridCacheQueryDetailMetricsAdapter> metricsToEvict =
-                    new GridBoundedPriorityQueue<>(evictCnt, QRY_DETAIL_METRICS_PRIORITY_OLD_CMP);
-
-                metricsToEvict.addAll(detailMetrics.values());
-
-                for (GridCacheQueryDetailMetricsAdapter m : metricsToEvict)
-                    detailMetrics.remove(m.key());
-            }
-        }
-    }
-
-    /**
-     * Resets metrics.
-     */
-    public void resetMetrics() {
-        metrics = new GridCacheQueryMetricsAdapter();
-    }
-
-    /**
-     * Resets detail metrics.
-     */
-    public void resetDetailMetrics() {
-        if (detailMetrics != null)
-            detailMetrics.clear();
-    }
-
-    /**
-     * @param qryType Query type.
-     * @param qry Query description.
-     * @param startTime Query start size.
-     * @param duration Execution duration.
-     * @param failed {@code True} if query execution failed.
-     */
-    public void collectMetrics(GridCacheQueryType qryType, String qry, long startTime, long duration, boolean failed) {
-        metrics.update(duration, failed);
-
-        if (detailMetricsSz > 0) {
-            // Do not collect metrics for EXPLAIN queries.
-            if (qryType == SQL_FIELDS && !F.isEmpty(qry)) {
-                int off = 0;
-                int len = qry.length();
-
-                while (off < len && Character.isWhitespace(qry.charAt(off)))
-                    off++;
-
-                if (qry.regionMatches(true, off, "EXPLAIN", 0, 7))
-                    return;
-            }
-
-            GridCacheQueryDetailMetricsAdapter m = new GridCacheQueryDetailMetricsAdapter(qryType, qry,
-                cctx.name(), startTime, duration, failed);
-
-            GridCacheQueryDetailMetricsKey key = m.key();
-
-            detailMetrics.merge(key, m, QRY_DETAIL_METRICS_MERGE_FX);
-        }
-    }
-
-    /**
-     * Gets SQL metadata.
-     *
-     * @return SQL metadata.
-     * @throws IgniteCheckedException In case of error.
-     */
-    public Collection<GridCacheSqlMetadata> sqlMetadata() throws IgniteCheckedException {
-        if (!enterBusy())
-            throw new IllegalStateException("Failed to get metadata (grid is stopping).");
-
-        try {
-            Callable<Collection<CacheSqlMetadata>> job = new MetadataJob();
-
-            // Remote nodes that have current cache.
-            Collection<ClusterNode> nodes = CU.affinityNodes(cctx, AffinityTopologyVersion.NONE);
-
-            Collection<Collection<CacheSqlMetadata>> res = new ArrayList<>(nodes.size() + 1);
-
-            IgniteInternalFuture<Collection<Collection<CacheSqlMetadata>>> rmtFut = null;
-
-            // Get metadata from remote nodes.
-            if (!nodes.isEmpty())
-                rmtFut = cctx.closures().callAsyncNoFailover(BROADCAST, Collections.singleton(job), nodes, true, 0);
-
-            // Get local metadata.
-            IgniteInternalFuture<Collection<CacheSqlMetadata>> locFut = cctx.closures().callLocalSafe(job, true);
-
-            if (rmtFut != null)
-                res.addAll(rmtFut.get());
-
-            res.add(locFut.get());
-
-            Map<String, Collection<CacheSqlMetadata>> map = new HashMap<>();
-
-            for (Collection<CacheSqlMetadata> col : res) {
-                for (CacheSqlMetadata meta : col) {
-                    String name = meta.cacheName();
-
-                    Collection<CacheSqlMetadata> cacheMetas = map.get(name);
-
-                    if (cacheMetas == null)
-                        map.put(name, cacheMetas = new LinkedList<>());
-
-                    cacheMetas.add(meta);
-                }
-            }
-
-            Collection<GridCacheSqlMetadata> col = new ArrayList<>(map.size());
-
-            // Metadata for current cache must be first in list.
-            col.add(new CacheSqlMetadata(map.remove(cacheName)));
-
-            for (Collection<CacheSqlMetadata> metas : map.values())
-                col.add(new CacheSqlMetadata(metas));
-
-            return col;
-        }
-        finally {
-            leaveBusy();
-        }
-    }
-
-    /**
-     * Gets SQL metadata with not nulls fields.
-     *
-     * @return SQL metadata.
-     * @throws IgniteCheckedException In case of error.
-     */
-    public Collection<GridCacheSqlMetadata> sqlMetadataV2() throws IgniteCheckedException {
-        if (!enterBusy())
-            throw new IllegalStateException("Failed to get metadata (grid is stopping).");
-
-        try {
-            Callable<Collection<CacheSqlMetadata>> job = new GridCacheQuerySqlMetadataJobV2();
-
-            // Remote nodes that have current cache.
-            Collection<ClusterNode> nodes = CU.affinityNodes(cctx, AffinityTopologyVersion.NONE);
-
-            Collection<Collection<CacheSqlMetadata>> res = new ArrayList<>(nodes.size() + 1);
-
-            IgniteInternalFuture<Collection<Collection<CacheSqlMetadata>>> rmtFut = null;
-
-            // Get metadata from remote nodes.
-            if (!nodes.isEmpty()) {
-                boolean allNodesNew = true;
-
-                for (ClusterNode n : nodes) {
-                    if (n.version().compareTo(NOT_NULLS_SUPPORT_VER) < 0)
-                        allNodesNew = false;
-                }
-
-                if (!allNodesNew)
-                    return sqlMetadata();
-
-                rmtFut = cctx.closures().callAsyncNoFailover(BROADCAST, Collections.singleton(job), nodes, true, 0);
-            }
-
-            // Get local metadata.
-            IgniteInternalFuture<Collection<CacheSqlMetadata>> locFut = cctx.closures().callLocalSafe(job, true);
-
-            if (rmtFut != null)
-                res.addAll(rmtFut.get());
-
-            res.add(locFut.get());
-
-            Map<String, Collection<CacheSqlMetadata>> map = new HashMap<>();
-
-            for (Collection<CacheSqlMetadata> col : res) {
-                for (CacheSqlMetadata meta : col) {
-                    String name = meta.cacheName();
-
-                    Collection<CacheSqlMetadata> cacheMetas = map.get(name);
-
-                    if (cacheMetas == null)
-                        map.put(name, cacheMetas = new LinkedList<>());
-
-                    cacheMetas.add(meta);
-                }
-            }
-
-            Collection<GridCacheSqlMetadata> col = new ArrayList<>(map.size());
-
-            // Metadata for current cache must be first in list.
-            col.add(new GridCacheQuerySqlMetadataV2(map.remove(cacheName)));
-
-            for (Collection<CacheSqlMetadata> metas : map.values())
-                col.add(new GridCacheQuerySqlMetadataV2(metas));
-
-            return col;
-        }
-        finally {
-            leaveBusy();
-        }
-    }
-
-    /**
-     * @return Topology version for query requests.
-     */
-    public AffinityTopologyVersion queryTopologyVersion() {
-        return qryTopVer;
-    }
-
-    /**
-     * @param qry Query.
-     * @return Filter.
-     */
-    private IndexingQueryFilter filter(GridCacheQueryAdapter<?> qry) {
-        if (qry.includeBackups())
-            return null;
-
-        return new IndexingQueryFilterImpl(cctx.kernalContext(), AffinityTopologyVersion.NONE, null);
-    }
-
-    /**
-     * Prints memory statistics for debugging purposes.
-     */
-    @Override public void printMemoryStats() {
-        X.println(">>>");
-        X.println(">>> Query manager memory stats [igniteInstanceName=" + cctx.igniteInstanceName() + ", cache=" + cctx.name() + ']');
-    }
-
-    /**
-     * FOR TESTING ONLY
-     *
-     * @return Cache name for this query manager.
-     */
-    public String cacheName() {
-        return cacheName;
-    }
-
-    /**
-     * Metadata job.
-     */
-    @GridInternal
-    private static class MetadataJob implements IgniteCallable<Collection<CacheSqlMetadata>> {
-        /** */
-        private static final long serialVersionUID = 0L;
-
-        /**
-         * Number of fields to report when no fields defined. Includes _key and _val columns.
-         */
-        private static final int NO_FIELDS_COLUMNS_COUNT = 2;
-
-        /** Grid */
-        @IgniteInstanceResource
-        private Ignite ignite;
-
-        /** {@inheritDoc} */
-        @Override public Collection<CacheSqlMetadata> call() {
-            final GridKernalContext ctx = ((IgniteKernal)ignite).context();
-
-            Collection<String> cacheNames = F.viewReadOnly(ctx.cache().caches(),
-                new C1<IgniteInternalCache<?, ?>, String>() {
-                    @Override public String apply(IgniteInternalCache<?, ?> c) {
-                        return c.name();
-                    }
-                },
-                new P1<IgniteInternalCache<?, ?>>() {
-                    @Override public boolean apply(IgniteInternalCache<?, ?> c) {
-                        return !CU.isSystemCache(c.name()) && !DataStructuresProcessor.isDataStructureCache(c.name());
-                    }
-                }
-            );
-
-            return F.transform(cacheNames, new C1<String, CacheSqlMetadata>() {
-                @Override public CacheSqlMetadata apply(String cacheName) {
-                    Collection<GridQueryTypeDescriptor> types = ctx.query().types(cacheName);
-
-                    Collection<String> names = U.newHashSet(types.size());
-                    Map<String, String> keyClasses = U.newHashMap(types.size());
-                    Map<String, String> valClasses = U.newHashMap(types.size());
-                    Map<String, Map<String, String>> fields = U.newHashMap(types.size());
-                    Map<String, Collection<GridCacheSqlIndexMetadata>> indexes = U.newHashMap(types.size());
-
-                    for (GridQueryTypeDescriptor type : types) {
-                        // Filter internal types (e.g., data structures).
-                        if (type.name().startsWith("GridCache"))
-                            continue;
-
-                        names.add(type.name());
-
-                        keyClasses.put(type.name(), type.keyClass().getName());
-                        valClasses.put(type.name(), type.valueClass().getName());
-
-                        int size = type.fields().isEmpty() ? NO_FIELDS_COLUMNS_COUNT : type.fields().size();
-
-                        Map<String, String> fieldsMap = U.newLinkedHashMap(size);
-
-                        // _KEY and _VAL are not included in GridIndexingTypeDescriptor.valueFields
-                        if (type.fields().isEmpty()) {
-                            fieldsMap.put("_KEY", type.keyClass().getName());
-                            fieldsMap.put("_VAL", type.valueClass().getName());
-                        }
-
-                        for (Map.Entry<String, Class<?>> e : type.fields().entrySet())
-                            fieldsMap.put(e.getKey().toUpperCase(), e.getValue().getName());
-
-                        fields.put(type.name(), fieldsMap);
-
-                        Map<String, GridQueryIndexDescriptor> idxs = type.indexes();
-
-                        Collection<GridCacheSqlIndexMetadata> indexesCol = new ArrayList<>(idxs.size());
-
-                        for (Map.Entry<String, GridQueryIndexDescriptor> e : idxs.entrySet()) {
-                            GridQueryIndexDescriptor desc = e.getValue();
-
-                            // Add only SQL indexes.
-                            if (desc.type() == QueryIndexType.SORTED) {
-                                Collection<String> idxFields = new LinkedList<>();
-                                Collection<String> descendings = new LinkedList<>();
-
-                                for (String idxField : e.getValue().fields()) {
-                                    String idxFieldUpper = idxField.toUpperCase();
-
-                                    idxFields.add(idxFieldUpper);
-
-                                    if (desc.descending(idxField))
-                                        descendings.add(idxFieldUpper);
-                                }
-
-                                indexesCol.add(new CacheSqlIndexMetadata(e.getKey().toUpperCase(),
-                                    idxFields, descendings, false));
-                            }
-                        }
-
-                        indexes.put(type.name(), indexesCol);
-                    }
-
-                    return new CacheSqlMetadata(cacheName, names, keyClasses, valClasses, fields, indexes);
-                }
-            });
-        }
-    }
-
-    /**
-     * Cache metadata.
-     */
-    public static class CacheSqlMetadata implements GridCacheSqlMetadata {
-        /** */
-        private static final long serialVersionUID = 0L;
-
-        /** */
-        private String cacheName;
-
-        /** */
-        private Collection<String> types;
-
-        /** */
-        private Map<String, String> keyClasses;
-
-        /** */
-        private Map<String, String> valClasses;
-
-        /** */
-        private Map<String, Map<String, String>> fields;
-
-        /** */
-        private Map<String, Collection<GridCacheSqlIndexMetadata>> indexes;
-
-        /**
-         * Required by {@link Externalizable}.
-         */
-        public CacheSqlMetadata() {
-            // No-op.
-        }
-
-        /**
-         * @param cacheName Cache name.
-         * @param types Types.
-         * @param keyClasses Key classes map.
-         * @param valClasses Value classes map.
-         * @param fields Fields maps.
-         * @param indexes Indexes.
-         */
-        CacheSqlMetadata(@Nullable String cacheName, Collection<String> types, Map<String, String> keyClasses,
-            Map<String, String> valClasses, Map<String, Map<String, String>> fields,
-            Map<String, Collection<GridCacheSqlIndexMetadata>> indexes) {
-            assert types != null;
-            assert keyClasses != null;
-            assert valClasses != null;
-            assert fields != null;
-            assert indexes != null;
-
-            this.cacheName = cacheName;
-            this.types = types;
-            this.keyClasses = keyClasses;
-            this.valClasses = valClasses;
-            this.fields = fields;
-            this.indexes = indexes;
-        }
-
-        /**
-         * @param metas Meta data instances from different nodes.
-         */
-        CacheSqlMetadata(Iterable<CacheSqlMetadata> metas) {
-            types = new HashSet<>();
-            keyClasses = new HashMap<>();
-            valClasses = new HashMap<>();
-            fields = new HashMap<>();
-            indexes = new HashMap<>();
-
-            for (CacheSqlMetadata meta : metas) {
-                if (cacheName == null)
-                    cacheName = meta.cacheName;
-                else
-                    assert F.eq(cacheName, meta.cacheName);
-
-                types.addAll(meta.types);
-                keyClasses.putAll(meta.keyClasses);
-                valClasses.putAll(meta.valClasses);
-                fields.putAll(meta.fields);
-                indexes.putAll(meta.indexes);
-            }
-        }
-
-        /** {@inheritDoc} */
-        @Override public String cacheName() {
-            return cacheName;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Collection<String> types() {
-            return types;
-        }
-
-        /** {@inheritDoc} */
-        @Override public String keyClass(String type) {
-            return keyClasses.get(type);
-        }
-
-        /** {@inheritDoc} */
-        @Override public String valueClass(String type) {
-            return valClasses.get(type);
-        }
-
-        /** {@inheritDoc} */
-        @Override public Map<String, String> fields(String type) {
-            return fields.get(type);
-        }
-
-        /** {@inheritDoc} */
-        @Override public Collection<String> notNullFields(String type) {
-            return null;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Map<String, String> keyClasses() {
-            return keyClasses;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Map<String, String> valClasses() {
-            return valClasses;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Map<String, Map<String, String>> fields() {
-            return fields;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Map<String, Collection<GridCacheSqlIndexMetadata>> indexes() {
-            return indexes;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Collection<GridCacheSqlIndexMetadata> indexes(String type) {
-            return indexes.get(type);
-        }
-
-        /** {@inheritDoc} */
-        @Override public void writeExternal(ObjectOutput out) throws IOException {
-            U.writeString(out, cacheName);
-            U.writeCollection(out, types);
-            U.writeMap(out, keyClasses);
-            U.writeMap(out, valClasses);
-            U.writeMap(out, fields);
-            U.writeMap(out, indexes);
-        }
-
-        /** {@inheritDoc} */
-        @Override public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
-            cacheName = U.readString(in);
-            types = U.readCollection(in);
-            keyClasses = U.readMap(in);
-            valClasses = U.readMap(in);
-            fields = U.readMap(in);
-            indexes = U.readMap(in);
-        }
-
-        /** {@inheritDoc} */
-        @Override public String toString() {
-            return S.toString(CacheSqlMetadata.class, this);
-        }
-    }
-
-    /**
-     * Cache metadata index.
-     */
-    public static class CacheSqlIndexMetadata implements GridCacheSqlIndexMetadata {
-        /** */
-        private static final long serialVersionUID = 0L;
-
-        /** */
-        private String name;
-
-        /** */
-        private Collection<String> fields;
-
-        /** */
-        private Collection<String> descendings;
-
-        /** */
-        private boolean unique;
-
-        /**
-         * Required by {@link Externalizable}.
-         */
-        public CacheSqlIndexMetadata() {
-            // No-op.
-        }
-
-        /**
-         * @param name Index name.
-         * @param fields Fields.
-         * @param descendings Descendings.
-         * @param unique Unique flag.
-         */
-        CacheSqlIndexMetadata(String name, Collection<String> fields, Collection<String> descendings,
-            boolean unique) {
-            assert name != null;
-            assert fields != null;
-            assert descendings != null;
-
-            this.name = name;
-            this.fields = fields;
-            this.descendings = descendings;
-            this.unique = unique;
-        }
-
-        /** {@inheritDoc} */
-        @Override public String name() {
-            return name;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Collection<String> fields() {
-            return fields;
-        }
-
-        /** {@inheritDoc} */
-        @Override public boolean descending(String field) {
-            return descendings.contains(field);
-        }
-
-        /** {@inheritDoc} */
-        @Override public Collection<String> descendings() {
-            return descendings;
-        }
-
-        /** {@inheritDoc} */
-        @Override public boolean unique() {
-            return unique;
-        }
-
-        /** {@inheritDoc} */
-        @Override public void writeExternal(ObjectOutput out) throws IOException {
-            U.writeString(out, name);
-            U.writeCollection(out, fields);
-            U.writeCollection(out, descendings);
-            out.writeBoolean(unique);
-        }
-
-        /** {@inheritDoc} */
-        @Override public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
-            name = U.readString(in);
-            fields = U.readCollection(in);
-            descendings = U.readCollection(in);
-            unique = in.readBoolean();
-        }
-
-        /** {@inheritDoc} */
-        @Override public String toString() {
-            return S.toString(CacheSqlIndexMetadata.class, this);
-        }
-    }
-
-    /**
-     *
-     */
-    private static class QueryResult<K, V> extends CachedResult<IgniteBiTuple<K, V>> {
-        /** */
-        private static final long serialVersionUID = 0L;
-
-        /** */
-        private final GridCacheQueryType type;
-
-        /**
-         * @param type Query type.
-         * @param rcpt ID of the recipient.
-         */
-        private QueryResult(GridCacheQueryType type, Object rcpt) {
-            super(rcpt);
-
-            this.type = type;
-        }
-
-        /**
-         * @return Type.
-         */
-        public GridCacheQueryType type() {
-            return type;
-        }
-    }
-
-    /**
-     *
-     */
-    private static class FieldsResult<Q> extends CachedResult<Q> {
-        /** */
-        private static final long serialVersionUID = 0L;
-
-        /** */
-        private List<GridQueryFieldMetadata> meta;
-
-        /**
-         * @param rcpt ID of the recipient.
-         */
-        FieldsResult(Object rcpt) {
-            super(rcpt);
-        }
-
-        /**
-         * @return Metadata.
-         * @throws IgniteCheckedException On error.
-         */
-        public List<GridQueryFieldMetadata> metaData() throws IgniteCheckedException {
-            get(); // Ensure that result is ready.
-
-            return meta;
-        }
-
-        /**
-         * @param meta Metadata.
-         */
-        public void metaData(List<GridQueryFieldMetadata> meta) {
-            this.meta = meta;
-        }
-    }
-
-    /**
-     * Cached result.
-     */
-    private abstract static class CachedResult<R> extends GridFutureAdapter<IgniteSpiCloseableIterator<R>> {
-        /** Absolute position of each recipient. */
-        private final Map<Object, QueueIterator> recipients = new GridLeanMap<>(1);
-
-        /** */
-        private CircularQueue<R> queue;
-
-        /** */
-        private int pruned;
-
-        /**
-         * @param rcpt ID of the recipient.
-         */
-        protected CachedResult(Object rcpt) {
-            boolean res = addRecipient(rcpt);
-
-            assert res;
-        }
-
-        /**
-         * Close if this result does not have any other recipients.
-         *
-         * @param rcpt ID of the recipient.
-         * @throws IgniteCheckedException If failed.
-         */
-        public void closeIfNotShared(Object rcpt) throws IgniteCheckedException {
-            assert isDone();
-
-            synchronized (recipients) {
-                if (recipients.isEmpty())
-                    return;
-
-                recipients.remove(rcpt);
-
-                if (recipients.isEmpty())
-                    get().close();
-            }
-        }
-
-        /**
-         * @param rcpt ID of the recipient.
-         * @return {@code true} If the recipient successfully added.
-         */
-        public boolean addRecipient(Object rcpt) {
-            synchronized (recipients) {
-                if (isDone())
-                    return false;
-
-                assert !recipients.containsKey(rcpt) : rcpt + " -> " + recipients;
-
-                recipients.put(rcpt, new QueueIterator(rcpt));
-            }
-
-            return true;
-        }
-
-        /** {@inheritDoc} */
-        @Override public boolean onDone(@Nullable IgniteSpiCloseableIterator<R> res, @Nullable Throwable err) {
-            assert !isDone();
-
-            synchronized (recipients) {
-                if (recipients.size() > 1) {
-                    queue = new CircularQueue<>(128);
-
-                    for (QueueIterator it : recipients.values())
-                        it.init();
-                }
-
-                return super.onDone(res, err);
-            }
-        }
-
-        /**
-         *
-         */
-        private void pruneQueue() {
-            assert !recipients.isEmpty();
-            assert Thread.holdsLock(recipients);
-
-            int minPos = Collections.min(recipients.values()).pos;
-
-            if (minPos > pruned) {
-                queue.remove(minPos - pruned);
-
-                pruned = minPos;
-            }
-        }
-
-        /**
-         * @param rcpt ID of the recipient.
-         * @throws IgniteCheckedException If failed.
-         */
-        public IgniteSpiCloseableIterator<R> iterator(Object rcpt) throws IgniteCheckedException {
-            assert rcpt != null;
-
-            IgniteSpiCloseableIterator<R> it = get();
-
-            assert it != null;
-
-            synchronized (recipients) {
-                return queue == null ? it : recipients.get(rcpt);
-            }
-        }
-
-        /**
-         *
-         */
-        @SuppressWarnings("ComparableImplementedButEqualsNotOverridden")
-        private class QueueIterator implements IgniteSpiCloseableIterator<R>, Comparable<QueueIterator> {
-            /** */
-            private static final long serialVersionUID = 0L;
-
-            /** */
-            private static final int NEXT_SIZE = 64;
-
-            /** */
-            private final Object rcpt;
-
-            /** */
-            private int pos;
-
-            /** */
-            private Queue<R> next;
-
-            /**
-             * @param rcpt ID of the recipient.
-             */
-            private QueueIterator(Object rcpt) {
-                this.rcpt = rcpt;
-            }
-
-            /**
-             */
-            public void init() {
-                assert next == null;
-
-                next = new ArrayDeque<>(NEXT_SIZE);
-            }
-
-            /** {@inheritDoc} */
-            @Override public void close() throws IgniteCheckedException {
-                closeIfNotShared(rcpt);
-            }
-
-            /** {@inheritDoc} */
-            @Override public boolean hasNext() {
-                return !next.isEmpty() || fillNext();
-            }
-
-            /** {@inheritDoc} */
-            @SuppressWarnings("IteratorNextCanNotThrowNoSuchElementException") // It can actually.
-            @Override public R next() {
-                return next.remove();
-            }
-
-            /**
-             * @return {@code true} If elements were fetched into local queue of the iterator.
-             */
-            private boolean fillNext() {
-                assert next.isEmpty();
-
-                IgniteSpiCloseableIterator<R> it;
-
-                try {
-                    it = get();
-                }
-                catch (IgniteCheckedException e) {
-                    throw new IgniteException(e);
-                }
-
-                synchronized (recipients) {
-                    for (int i = 0; i < NEXT_SIZE; i++) {
-                        R res;
-
-                        int off = pos - pruned; // Offset of current iterator relative to queue begin.
-
-                        if (off == queue.size()) { // We are leading the race.
-                            if (!it.hasNext())
-                                break; // Happy end.
-
-                            res = it.next();
-
-                            queue.add(res);
-                        }
-                        else // Someone fetched result into queue before us.
-                            res = queue.get(off);
-
-                        assert res != null;
-
-                        pos++;
-                        next.add(res);
-                    }
-
-                    pruneQueue();
-                }
-
-                return !next.isEmpty();
-            }
-
-            /** {@inheritDoc} */
-            @Override public void remove() {
-                throw new UnsupportedOperationException();
-            }
-
-            /** {@inheritDoc} */
-            @Override public int compareTo(QueueIterator o) {
-                return Integer.compare(pos, o.pos);
-            }
-        }
-    }
-
-    /**
-     * Queue.
-     */
-    @SuppressWarnings("PackageVisibleInnerClass")
-    static class CircularQueue<R> {
-        /** */
-        private int off;
-
-        /** */
-        private int size;
-
-        /** */
-        private R[] arr;
-
-        /**
-         * @param cap Initial capacity.
-         */
-        CircularQueue(int cap) {
-            assert U.isPow2(cap);
-
-            arr = (R[])new Object[cap];
-        }
-
-        /**
-         * @param o Object to add.
-         */
-        public void add(R o) {
-            if (size == arr.length) { // Resize.
-                Object[] newArr = new Object[arr.length << 1];
-
-                int tailSize = arr.length - off;
-
-                System.arraycopy(arr, off, newArr, 0, tailSize);
-
-                if (off != 0) {
-                    System.arraycopy(arr, 0, newArr, tailSize, off);
-
-                    off = 0;
-                }
-
-                arr = (R[])newArr;
-            }
-
-            int idx = (off + size) & (arr.length - 1);
-
-            assert arr[idx] == null;
-
-            arr[idx] = o;
-
-            size++;
-        }
-
-        /**
-         * @param n Number of elements to remove.
-         */
-        public void remove(int n) {
-            assert n > 0 : n;
-            assert n <= size : n + " " + size;
-
-            int mask = arr.length - 1;
-
-            for (int i = 0; i < n; i++) {
-                int idx = (off + i) & mask;
-
-                assert arr[idx] != null;
-
-                arr[idx] = null;
-            }
-
-            size -= n;
-            off += n;
-
-            if (off >= arr.length)
-                off -= arr.length;
-        }
-
-        /**
-         * @param idx Index in queue.
-         * @return Element at the given index.
-         */
-        public R get(int idx) {
-            assert idx >= 0 : idx;
-            assert idx < size : idx + " " + size;
-
-            R res = arr[(idx + off) & (arr.length - 1)];
-
-            assert res != null;
-
-            return res;
-        }
-
-        /**
-         * @return Size.
-         */
-        public int size() {
-            return size;
-        }
-    }
-
-    /**
-     * Query for {@link IndexingSpi}.
-     *
-     * @param keepBinary Keep binary flag.
-     * @return Query.
-     */
-    public <R> CacheQuery<R> createSpiQuery(boolean keepBinary) {
-        return new GridCacheQueryAdapter<>(cctx,
-            SPI,
-            null,
-            null,
-            null,
-            null,
-            false,
-            keepBinary);
-    }
-
-    /**
-     * Creates user's predicate based scan query.
-     *
-     * @param filter Scan filter.
-     * @param part Partition.
-     * @param keepBinary Keep binary flag.
-     * @return Created query.
-     */
-    public <R> CacheQuery<R> createScanQuery(@Nullable IgniteBiPredicate<K, V> filter,
-        @Nullable Integer part, boolean keepBinary) {
-        return createScanQuery(filter, null, part, keepBinary);
-    }
-
-    /**
-     * Creates user's predicate based scan query.
-     *
-     * @param filter Scan filter.
-     * @param part Partition.
-     * @param keepBinary Keep binary flag.
-     * @return Created query.
-     */
-    public <T, R> CacheQuery<R> createScanQuery(@Nullable IgniteBiPredicate<K, V> filter,
-        @Nullable IgniteClosure<T, R> trans,
-        @Nullable Integer part, boolean keepBinary) {
-
-        return new GridCacheQueryAdapter(cctx,
-            SCAN,
-            filter,
-            trans,
-            part,
-            keepBinary);
-    }
-
-    /**
-     * Creates user's full text query, queried class, and query clause. For more information refer to {@link CacheQuery}
-     * documentation.
-     *
-     * @param clsName Query class name.
-     * @param search Search clause.
-     * @param keepBinary Keep binary flag.
-     * @return Created query.
-     */
-    public CacheQuery<Map.Entry<K, V>> createFullTextQuery(String clsName,
-        String search, boolean keepBinary) {
-        A.notNull("clsName", clsName);
-        A.notNull("search", search);
-
-        return new GridCacheQueryAdapter<>(cctx,
-            TEXT,
-            clsName,
-            search,
-            null,
-            null,
-            false,
-            keepBinary);
-    }
-
-    /**
-     * Creates user's SQL fields query for given clause. For more information refer to {@link CacheQuery}
-     * documentation.
-     *
-     * @param qry Query.
-     * @param keepBinary Keep binary flag.
-     * @return Created query.
-     */
-    public CacheQuery<List<?>> createSqlFieldsQuery(String qry, boolean keepBinary) {
-        A.notNull(qry, "qry");
-
-        return new GridCacheQueryAdapter<>(cctx,
-            SQL_FIELDS,
-            null,
-            qry,
-            null,
-            null,
-            false,
-            keepBinary);
-    }
-
-    /**
-     * The map prevents put to the map in case the specified request has been removed previously.
-     */
-    private class RequestFutureMap extends LinkedHashMap<Long, GridFutureAdapter<QueryResult<K, V>>> {
-        /** */
-        private static final long serialVersionUID = 0L;
-
-        /** Count of canceled keys */
-        private static final int CANCELED_COUNT = 128;
-
-        /**
-         * The ID of the canceled request is stored to the set in case remove(reqId) is called before put(reqId,
-         * future).
-         */
-        private Set<Long> canceled;
-
-        /** {@inheritDoc} */
-        @Override public GridFutureAdapter<QueryResult<K, V>> remove(Object key) {
-            if (containsKey(key))
-                return super.remove(key);
-            else {
-                if (canceled == null) {
-                    canceled = Collections.newSetFromMap(
-                        new LinkedHashMap<Long, Boolean>() {
-                            @Override protected boolean removeEldestEntry(Map.Entry<Long, Boolean> eldest) {
-                                return size() > CANCELED_COUNT;
-                            }
-                        });
-                }
-
-                canceled.add((Long)key);
-
-                return null;
-            }
-        }
-
-        /**
-         * @return true if the key is canceled
-         */
-        boolean isCanceled(Long key) {
-            return canceled != null && canceled.contains(key);
-        }
-    }
-
-    /** */
-    private static final class ScanQueryIterator<K, V> extends GridCloseableIteratorAdapter<Object> {
-        /** */
-        private static final long serialVersionUID = 0L;
-
-        /** */
-        private final GridDhtCacheAdapter dht;
-
-        /** */
-        private final GridDhtLocalPartition locPart;
-
-        /** */
-        private final IgniteBiPredicate<K, V> scanFilter;
-
-        /** */
-        private final boolean statsEnabled;
-
-        /** */
-        private final GridIterator<CacheDataRow> it;
-
-        /** */
-        private final GridCacheAdapter cache;
-
-        /** */
-        private final AffinityTopologyVersion topVer;
-
-        /** */
-        private final boolean keepBinary;
-
-        /** */
-        private final boolean readEvt;
-
-        /** */
-        private final String cacheName;
-
-        /** */
-        private final UUID subjId;
-
-        /** */
-        private final String taskName;
-
-        /** */
-        private final IgniteClosure transform;
-
-        /** */
-        private final CacheObjectContext objCtx;
-
-        /** */
-        private final GridCacheContext cctx;
-
-        /** */
-        private final IgniteLogger log;
-
-        /** */
-        private Object next;
-
-        /** */
-        private boolean needAdvance;
-
-        /** */
-        private IgniteCacheExpiryPolicy expiryPlc;
-
-        /**
-         * @param it Iterator.
-         * @param qry Query.
-         * @param topVer Topology version.
-         * @param locPart Local partition.
-         * @param scanFilter Scan filter.
-         * @param locNode Local node flag.
-         * @param cctx Cache context.
-         * @param log Logger.
-         */
-        ScanQueryIterator(
-            GridIterator<CacheDataRow> it,
-            GridCacheQueryAdapter qry,
-            AffinityTopologyVersion topVer,
-            GridDhtLocalPartition locPart,
-            IgniteBiPredicate<K, V> scanFilter,
-            boolean locNode,
-            GridCacheContext cctx,
-            IgniteLogger log) {
-            this.it = it;
-            this.topVer = topVer;
-            this.locPart = locPart;
-            this.scanFilter = scanFilter;
-            this.cctx = cctx;
-            this.log = log;
-
-            statsEnabled = locNode && cctx.statisticsEnabled();
-
-            readEvt = locNode && cctx.events().isRecordable(EVT_CACHE_QUERY_OBJECT_READ);
-
-            if(readEvt){
-                taskName = cctx.kernalContext().task().resolveTaskName(qry.taskHash());
-                subjId = qry.subjectId();
-            }
-            else {
-                taskName = null;
-                subjId = null;
-            }
-
-            // keep binary for remote scans if possible
-            keepBinary = (!locNode && scanFilter == null) || qry.keepBinary();
-            transform = qry.transform();
-            dht = cctx.isLocal() ? null : (cctx.isNear() ? cctx.near().dht() : cctx.dht());
-            cache = dht != null ? dht : cctx.cache();
-            objCtx = cctx.cacheObjectContext();
-            cacheName = cctx.name();
-
-            needAdvance = true;
-            expiryPlc = this.cctx.cache().expiryPolicy(null);
-        }
-
-        /** {@inheritDoc} */
-        @Override protected Object onNext() {
-            if (needAdvance)
-                advance();
-            else
-                needAdvance = true;
-
-            if (next == null)
-                throw new NoSuchElementException();
-
-            return next;
-        }
-
-        /** {@inheritDoc} */
-        @Override protected boolean onHasNext() {
-            if (needAdvance) {
-                advance();
-
-                needAdvance = false;
-            }
-
-            return next != null;
-        }
-
-        /** {@inheritDoc} */
-        @Override protected void onClose() {
-            if (expiryPlc != null && dht != null) {
-                dht.sendTtlUpdateRequest(expiryPlc);
-
-                expiryPlc = null;
-            }
-
-            if (locPart != null)
-                locPart.release();
-
-            closeScanFilter(scanFilter);
-        }
-
-        /**
-         * Moves the iterator to the next cache entry.
-         */
-        private void advance() {
-            long start = statsEnabled ? System.nanoTime() : 0L;
-
-            Object next = null;
-
-            while (it.hasNext()) {
-                CacheDataRow row = it.next();
-
-                KeyCacheObject key = row.key();
-                CacheObject val;
-
-                if (expiryPlc != null) {
-                    try {
-                        CacheDataRow tmp = row;
-
-                        while (true) {
-                            try {
-                                GridCacheEntryEx entry = cache.entryEx(key);
-
-                                entry.unswap(tmp);
-
-                                val = entry.peek(true, true, topVer, expiryPlc);
-
-                                cctx.evicts().touch(entry, topVer);
-
-                                break;
-                            }
-                            catch (GridCacheEntryRemovedException ignore) {
-                                tmp = null;
-                            }
-                        }
-                    }
-                    catch (IgniteCheckedException e) {
-                        if (log.isDebugEnabled())
-                            log.debug("Failed to peek value: " + e);
-
-                        val = null;
-                    }
-
-                    if (dht != null && expiryPlc.readyToFlush(100))
-                        dht.sendTtlUpdateRequest(expiryPlc);
-                }
-                else
-                    val = row.value();
-
-                if (val != null) {
-                    K key0 = (K)CacheObjectUtils.unwrapBinaryIfNeeded(objCtx, key, keepBinary, false);
-                    V val0 = (V)CacheObjectUtils.unwrapBinaryIfNeeded(objCtx, val, keepBinary, false);
-
-                    if (statsEnabled) {
-                        CacheMetricsImpl metrics = cctx.cache().metrics0();
-
-                        metrics.onRead(true);
-
-                        metrics.addGetTimeNanos(System.nanoTime() - start);
-                    }
-
-                    if (scanFilter == null || scanFilter.apply(key0, val0)) {
-                        if (readEvt && cctx.gridEvents().hasListener(EVT_CACHE_QUERY_OBJECT_READ)) {
-                            cctx.gridEvents().record(new CacheQueryReadEvent<>(
-                                cctx.localNode(),
-                                "Scan query entry read.",
-                                EVT_CACHE_QUERY_OBJECT_READ,
-                                CacheQueryType.SCAN.name(),
-                                cacheName,
-                                null,
-                                null,
-                                scanFilter,
-                                null,
-                                null,
-                                subjId,
-                                taskName,
-                                key0,
-                                val0,
-                                null,
-                                null));
-                        }
-
-                        next = transform == null ? new CacheQueryEntry<>(key0, val0)
-                            : transform.apply(new CacheQueryEntry<>(key0, val0));
-
-                        break;
-                    }
-                }
-            }
-
-            if ((this.next = next) == null && expiryPlc != null && dht != null) {
-                dht.sendTtlUpdateRequest(expiryPlc);
-
-                expiryPlc = null;
-            }
-        }
-    }
+  }
 }

@@ -1,57 +1,98 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License") +  you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied.  See the License for the
- * specific language governing permissions and limitations
- * under the License.
- */
-package org.apache.openmeetings.web.common.menu;
+package com.fasterxml.jackson.databind.ser.std;
 
-import java.util.List;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 
-import com.googlecode.wicket.jquery.ui.widget.menu.IMenuItem;
-import com.googlecode.wicket.jquery.ui.widget.menu.MenuItem;
+import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.core.JsonGenerationException;
+import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.databind.*;
+import com.fasterxml.jackson.databind.ser.ContextualSerializer;
 
-public class OmMenuItem extends MenuItem {
-	private static final long serialVersionUID = 1L;
-	private String desc;
-	private boolean top;
+public abstract class DateTimeSerializerBase<T>
+    extends StdScalarSerializer<T>
+    implements ContextualSerializer
+{
+    /**
+     * Flag that indicates that serialization must be done as the
+     * Java timetamp, regardless of other settings.
+     */
+    protected final boolean _useTimestamp;
+    
+    /**
+     * Specific format to use, if not default format: non null value
+     * also indicates that serialization is to be done as JSON String,
+     * not numeric timestamp, unless {@link #_useTimestamp} is true.
+     */
+    protected final DateFormat _customFormat;
 
-	public OmMenuItem(String title, List<IMenuItem> items) {
-		super(title, items);
-		setTop(true);
-	}
+    protected DateTimeSerializerBase(Class<T> type,
+            boolean useTimestamp, DateFormat customFormat)
+    {
+        super(type);
+        _useTimestamp = useTimestamp;
+        _customFormat = customFormat;
+    }
 
-	public OmMenuItem(String title, String desc) {
-		super(title);
-		this.desc = desc;
-	}
+    public abstract DateTimeSerializerBase<T> withFormat(boolean timestamp, DateFormat customFormat);
 
-	public String getDesc() {
-		return desc;
-	}
+    @Override
+    public JsonSerializer<?> createContextual(SerializerProvider prov,
+            BeanProperty property) throws JsonMappingException
+    {
+        if (property != null) {
+            JsonFormat.Value format = prov.getAnnotationIntrospector().findFormat(property.getMember());
+            if (format != null) {
+                if (format.shape.isNumeric()) {
+                    return withFormat(true, null);
+                }
+                String pattern = format.pattern;
+                if (pattern.length() > 0){
+                    SimpleDateFormat df = new SimpleDateFormat(pattern, prov.getLocale());
+                    df.setTimeZone(prov.getTimeZone());
+                    return withFormat(false, df);
+                }
+            }
+        }
+        return this;
+    }
 
-	public void setDesc(String desc) {
-		this.desc = desc;
-	}
+    /*
+    /**********************************************************
+    /* Accessors
+    /**********************************************************
+     */
 
-	public boolean isTop() {
-		return top;
-	}
+    @Override
+    public boolean isEmpty(T value) {
+        // let's assume "null date" (timestamp 0) qualifies for empty
+        return (value == null) || (_timestamp(value) == 0L);
+    }
 
-	public OmMenuItem setTop(boolean top) {
-		this.top = top;
-		return this;
-	}
+    protected abstract long _timestamp(T value);
+    
+    @Override
+    public JsonNode getSchema(SerializerProvider provider, Type typeHint)
+    {
+        //todo: (ryan) add a format for the date in the schema?
+        boolean asNumber = _useTimestamp;
+        if (!asNumber) {
+            if (_customFormat == null) {
+                asNumber = provider.isEnabled(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            }
+        }
+        return createSchemaNode(asNumber ? "number" : "string", true);
+    }
+
+    /*
+    /**********************************************************
+    /* Actual serialization
+    /**********************************************************
+     */
+
+    @Override
+    public abstract void serialize(T value, JsonGenerator jgen, SerializerProvider provider)
+        throws IOException, JsonGenerationException;
 }

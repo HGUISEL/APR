@@ -1,203 +1,284 @@
-package org.mockitoutil;
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.phoenix.iterate;
 
-import java.io.File;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
+import java.sql.SQLException;
 import java.util.*;
+import java.util.Map.Entry;
+import java.util.concurrent.*;
 
-import static java.util.Arrays.asList;
+import org.apache.hadoop.hbase.HRegionLocation;
+import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.filter.FirstKeyOnlyFilter;
+import org.apache.hadoop.hbase.filter.PageFilter;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.phoenix.compile.GroupByCompiler.GroupBy;
+import org.apache.phoenix.compile.*;
+import org.apache.phoenix.filter.ColumnProjectionFilter;
+import org.apache.phoenix.hbase.index.util.ImmutableBytesPtr;
+import org.apache.phoenix.job.JobManager.JobCallable;
+import org.apache.phoenix.parse.FilterableStatement;
+import org.apache.phoenix.parse.HintNode;
+import org.apache.phoenix.query.*;
+import org.apache.phoenix.schema.*;
+import org.apache.phoenix.schema.PTable.ViewType;
+import org.apache.phoenix.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public abstract class ClassLoaders {
-    protected ClassLoaders() {}
+import com.google.common.base.Function;
 
-    public static IsolatedURLClassLoaderBuilder isolatedClassLoader() {
-        return new IsolatedURLClassLoaderBuilder();
+
+/**
+ *
+ * Class that parallelizes the scan over a table using the ExecutorService provided.  Each region of the table will be scanned in parallel with
+ * the results accessible through {@link #getIterators()}
+ *
+ * 
+ * @since 0.1
+ */
+public class ParallelIterators extends ExplainTable implements ResultIterators {
+	private static final Logger logger = LoggerFactory.getLogger(ParallelIterators.class);
+    private final List<KeyRange> splits;
+    private final ParallelIteratorFactory iteratorFactory;
+    
+    public static interface ParallelIteratorFactory {
+        PeekingResultIterator newIterator(StatementContext context, ResultIterator scanner) throws SQLException;
     }
 
-    public static ExcludingURLClassLoaderBuilder excludingClassLoader() {
-        return new ExcludingURLClassLoaderBuilder();
-    }
+    private static final int DEFAULT_THREAD_TIMEOUT_MS = 60000; // 1min
 
-    public static InMemoryClassLoaderBuilder inMemoryClassLoader() {
-        return new InMemoryClassLoaderBuilder();
-    }
-
-
-
-
-
-    public static class IsolatedURLClassLoaderBuilder extends ClassLoaders {
-        private final ArrayList<String> privateCopyPrefixes = new ArrayList<String>();
-        private final ArrayList<URL> codeSourceUrls = new ArrayList<URL>();
-
-        public IsolatedURLClassLoaderBuilder withPrivateCopyOf(String... privatePrefixes) {
-            privateCopyPrefixes.addAll(asList(privatePrefixes));
-            return this;
-        }
-
-        public IsolatedURLClassLoaderBuilder withCodeSourceUrls(String... urls) {
-            codeSourceUrls.addAll(pathsToURLs(urls));
-            return this;
-        }
-
-        public IsolatedURLClassLoaderBuilder withCodeSourceUrlOf(Class<?>... classes) {
-            for (Class<?> clazz : classes) {
-                codeSourceUrls.add(obtainClassPathOf(clazz.getName()));
-            }
-            return this;
-        }
-
-        public IsolatedURLClassLoaderBuilder withCurrentCodeSourceUrls() {
-            codeSourceUrls.add(obtainClassPathOf(ClassLoaders.class.getName()));
-            return this;
-        }
-
-        public ClassLoader build() {
-            return new LocalIsolatedURLClassLoader(
-                    codeSourceUrls.toArray(new URL[codeSourceUrls.size()]),
-                    privateCopyPrefixes
-            );
-        }
-    }
-
-    static class LocalIsolatedURLClassLoader extends URLClassLoader {
-        private final ArrayList<String> privateCopyPrefixes;
-
-        public LocalIsolatedURLClassLoader(URL[] urls, ArrayList<String> privateCopyPrefixes) {
-            super(urls, null);
-            this.privateCopyPrefixes = privateCopyPrefixes;
-        }
-
+    static final Function<HRegionLocation, KeyRange> TO_KEY_RANGE = new Function<HRegionLocation, KeyRange>() {
         @Override
-        public Class<?> findClass(String name) throws ClassNotFoundException {
-            if(classShouldBePrivate(name)) return super.findClass(name);
-            throw new ClassNotFoundException("Can only load classes with prefix : " + privateCopyPrefixes);
+        public KeyRange apply(HRegionLocation region) {
+            return KeyRange.getKeyRange(region.getRegionInfo().getStartKey(), region.getRegionInfo().getEndKey());
         }
+    };
 
-        private boolean classShouldBePrivate(String name) {
-            for (String prefix : privateCopyPrefixes) {
-                if (name.startsWith(prefix)) return true;
+    public ParallelIterators(StatementContext context, TableRef tableRef, FilterableStatement statement,
+            RowProjector projector, GroupBy groupBy, Integer limit, ParallelIteratorFactory iteratorFactory)
+            throws SQLException {
+        super(context, tableRef, groupBy);
+        this.splits = getSplits(context, tableRef, statement.getHint());
+        this.iteratorFactory = iteratorFactory;
+        Scan scan = context.getScan();
+        PTable table = tableRef.getTable();
+        if (projector.isProjectEmptyKeyValue()) {
+            Map<byte [], NavigableSet<byte []>> familyMap = scan.getFamilyMap();
+            // If nothing projected into scan and we only have one column family, just allow everything
+            // to be projected and use a FirstKeyOnlyFilter to skip from row to row. This turns out to
+            // be quite a bit faster.
+            // Where condition columns also will get added into familyMap
+            // When where conditions are present, we can not add FirstKeyOnlyFilter at beginning.
+            if (familyMap.isEmpty() && context.getWhereCoditionColumns().isEmpty()
+                    && table.getColumnFamilies().size() == 1) {
+                // Project the one column family. We must project a column family since it's possible
+                // that there are other non declared column families that we need to ignore.
+                scan.addFamily(table.getColumnFamilies().get(0).getName().getBytes());
+                ScanUtil.andFilterAtBeginning(scan, new FirstKeyOnlyFilter());
+            } else {
+                byte[] ecf = SchemaUtil.getEmptyColumnFamily(table);
+                // Project empty key value unless the column family containing it has
+                // been projected in its entirety.
+                if (!familyMap.containsKey(ecf) || familyMap.get(ecf) != null) {
+                    scan.addColumn(ecf, QueryConstants.EMPTY_COLUMN_BYTES);
+                }
             }
-            return false;
+        }
+        if (limit != null) {
+            ScanUtil.andFilterAtEnd(scan, new PageFilter(limit));
+        }
+
+        if (!(statement.isAggregate())) {
+            doColumnProjectionOptimization(context, scan, table);
         }
     }
 
-    public static class ExcludingURLClassLoaderBuilder extends ClassLoaders {
-        private final ArrayList<String> privateCopyPrefixes = new ArrayList<String>();
-        private final ArrayList<URL> codeSourceUrls = new ArrayList<URL>();
-
-        public ExcludingURLClassLoaderBuilder without(String... privatePrefixes) {
-            privateCopyPrefixes.addAll(asList(privatePrefixes));
-            return this;
-        }
-
-        public ExcludingURLClassLoaderBuilder withCodeSourceUrls(String... urls) {
-            codeSourceUrls.addAll(pathsToURLs(urls));
-            return this;
-        }
-
-        public ExcludingURLClassLoaderBuilder withCodeSourceUrlOf(Class<?>... classes) {
-            for (Class<?> clazz : classes) {
-                codeSourceUrls.add(obtainClassPathOf(clazz.getName()));
+    private void doColumnProjectionOptimization(StatementContext context, Scan scan, PTable table) {
+        Map<byte[], NavigableSet<byte[]>> familyMap = scan.getFamilyMap();
+        if (familyMap != null && !familyMap.isEmpty()) {
+            // columnsTracker contain cf -> qualifiers which should get returned.
+            Map<ImmutableBytesPtr, NavigableSet<ImmutableBytesPtr>> columnsTracker = 
+                    new TreeMap<ImmutableBytesPtr, NavigableSet<ImmutableBytesPtr>>();
+            Set<byte[]> conditionOnlyCfs = new TreeSet<byte[]>(Bytes.BYTES_COMPARATOR);
+            boolean useOptimization = true;
+            for (Entry<byte[], NavigableSet<byte[]>> entry : familyMap.entrySet()) {
+                ImmutableBytesPtr cf = new ImmutableBytesPtr(entry.getKey());
+                NavigableSet<byte[]> qs = entry.getValue();
+                NavigableSet<ImmutableBytesPtr> cols = null;
+                if (qs != null) {
+                    cols = new TreeSet<ImmutableBytesPtr>();
+                    for (byte[] q : qs) {
+                        cols.add(new ImmutableBytesPtr(q));
+                    }
+                }
+                columnsTracker.put(cf, cols);
             }
-            return this;
-        }
-
-        public ExcludingURLClassLoaderBuilder withCurrentCodeSourceUrls() {
-            codeSourceUrls.add(obtainClassPathOf(ClassLoaders.class.getName()));
-            return this;
-        }
-
-        public ClassLoader build() {
-            return new LocalExcludingURLClassLoader(
-                    codeSourceUrls.toArray(new URL[codeSourceUrls.size()]),
-                    privateCopyPrefixes
-            );
-        }
-    }
-
-    static class LocalExcludingURLClassLoader extends URLClassLoader {
-        private final ArrayList<String> privateCopyPrefixes;
-
-        public LocalExcludingURLClassLoader(URL[] urls, ArrayList<String> privateCopyPrefixes) {
-            super(urls, null);
-            this.privateCopyPrefixes = privateCopyPrefixes;
-        }
-
-        @Override
-        public Class<?> findClass(String name) throws ClassNotFoundException {
-            if(classShouldBePrivate(name)) throw new ClassNotFoundException("classes with prefix : " + privateCopyPrefixes + " are excluded");
-            return super.findClass(name);
-        }
-
-        private boolean classShouldBePrivate(String name) {
-            for (String prefix : privateCopyPrefixes) {
-                if (name.startsWith(prefix)) return true;
+            if (familyMap.size() > 1) {
+                useOptimization = false;
             }
-            return false;
-        }
-    }
-
-    public static class InMemoryClassLoaderBuilder extends ClassLoaders {
-        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
-
-        public InMemoryClassLoaderBuilder withClassDefinition(String name, byte[] classDefinition) {
-            inMemoryClassObjects.put(name, classDefinition);
-            return this;
-        }
-
-        public ClassLoader build() {
-            return new InMemoryClassLoader(inMemoryClassObjects);
-        }
-    }
-
-    static class InMemoryClassLoader extends ClassLoader {
-        private Map<String , byte[]> inMemoryClassObjects = new HashMap<String , byte[]>();
-
-        public InMemoryClassLoader(Map<String, byte[]> inMemoryClassObjects) {
-            this.inMemoryClassObjects = inMemoryClassObjects;
-        }
-
-        protected Class findClass(String name) throws ClassNotFoundException {
-            byte[] classDefinition = inMemoryClassObjects.get(name);
-            if (classDefinition != null) {
-                return defineClass(name, classDefinition, 0, classDefinition.length);
+            // Making sure that where condition CFs are getting scanned at HRS.
+            for (Pair<byte[], byte[]> whereCol : context.getWhereCoditionColumns()) {
+                if (useOptimization) {
+                    if (!(familyMap.containsKey(whereCol.getFirst()))) {
+                        scan.addFamily(whereCol.getFirst());
+                        conditionOnlyCfs.add(whereCol.getFirst());
+                    }
+                } else {
+                    scan.addColumn(whereCol.getFirst(), whereCol.getSecond());
+                }
             }
-            throw new ClassNotFoundException(name);
+            if (familyMap.size() > 1) {
+                useOptimization = false;
+            }
+            if (useOptimization && !columnsTracker.isEmpty()) {
+                for (ImmutableBytesPtr f : columnsTracker.keySet()) {
+                    // This addFamily will remove explicit cols in scan familyMap and make it as entire row.
+                    // We don't want the ExplicitColumnTracker to be used. Instead we have the ColumnProjectionFilter
+                    scan.addFamily(f.get());
+                }
+                ScanUtil.andFilterAtEnd(scan, new ColumnProjectionFilter(SchemaUtil.getEmptyColumnFamily(table),
+                        columnsTracker, conditionOnlyCfs));
+            }
+            if (table.getViewType() == ViewType.MAPPED) {
+                // Since we don't have the empty key value in MAPPED tables, we must select all CFs in HRS. But only the
+                // selected column values are returned back to client
+                for (PColumnFamily family : table.getColumnFamilies()) {
+                    scan.addFamily(family.getName().getBytes());
+                }
+            }
         }
-
-
     }
 
-    protected URL obtainClassPathOf(String className) {
-        String path = className.replace('.', '/') + ".class";
-        String url = ClassLoaders.class.getClassLoader().getResource(path).toExternalForm();
+    /**
+     * Splits the given scan's key range so that each split can be queried in parallel
+     * @param hintNode TODO
+     *
+     * @return the key ranges that should be scanned in parallel
+     */
+    // exposed for tests
+    public static List<KeyRange> getSplits(StatementContext context, TableRef table, HintNode hintNode) throws SQLException {
+        return ParallelIteratorRegionSplitterFactory.getSplitter(context, table, hintNode).getSplits();
+    }
 
+    public List<KeyRange> getSplits() {
+        return splits;
+    }
+
+    /**
+     * Executes the scan in parallel across all regions, blocking until all scans are complete.
+     * @return the result iterators for the scan of each region
+     */
+    @Override
+    public List<PeekingResultIterator> getIterators() throws SQLException {
+        boolean success = false;
+        final ConnectionQueryServices services = context.getConnection().getQueryServices();
+        ReadOnlyProps props = services.getProps();
+        int numSplits = splits.size();
+        List<PeekingResultIterator> iterators = new ArrayList<PeekingResultIterator>(numSplits);
+        List<Pair<byte[],Future<PeekingResultIterator>>> futures = new ArrayList<Pair<byte[],Future<PeekingResultIterator>>>(numSplits);
+        final UUID scanId = UUID.randomUUID();
         try {
-            return new URL(url.substring(0, url.length() - path.length()));
-        } catch (MalformedURLException e) {
-            throw new RuntimeException("Classloader couldn't obtain a proper classpath URL", e);
+            ExecutorService executor = services.getExecutor();
+            for (KeyRange split : splits) {
+                final Scan splitScan = new Scan(this.context.getScan());
+                // Intersect with existing start/stop key if the table is salted
+                // If not salted, we've already intersected it. If salted, we need
+                // to wait until now to intersect, as we're running parallel scans
+                // on all the possible regions here.
+                if (tableRef.getTable().getBucketNum() != null) {
+                    KeyRange minMaxRange = context.getMinMaxRange();
+                    if (minMaxRange != null) {
+                        // Add salt byte based on current split, as minMaxRange won't have it
+                        minMaxRange = SaltingUtil.addSaltByte(split.getLowerRange(), minMaxRange);
+                        split = split.intersect(minMaxRange);
+                    }
+                }
+                if (ScanUtil.intersectScanRange(splitScan, split.getLowerRange(), split.getUpperRange(), this.context.getScanRanges().useSkipScanFilter())) {
+                    // Delay the swapping of start/stop row until row so we don't muck with the intersect logic
+                    ScanUtil.swapStartStopRowIfReversed(splitScan);
+                    Future<PeekingResultIterator> future =
+                        executor.submit(new JobCallable<PeekingResultIterator>() {
+
+                        @Override
+                        public PeekingResultIterator call() throws Exception {
+                            // TODO: different HTableInterfaces for each thread or the same is better?
+                        	long startTime = System.currentTimeMillis();
+                            ResultIterator scanner = new TableResultIterator(context, tableRef, splitScan);
+                            if (logger.isDebugEnabled()) {
+                            	logger.debug("Id: " + scanId + ", Time: " + (System.currentTimeMillis() - startTime) + "ms, Scan: " + splitScan);
+                            }
+                            return iteratorFactory.newIterator(context, scanner);
+                        }
+
+                        /**
+                         * Defines the grouping for round robin behavior.  All threads spawned to process
+                         * this scan will be grouped together and time sliced with other simultaneously
+                         * executing parallel scans.
+                         */
+                        @Override
+                        public Object getJobId() {
+                            return ParallelIterators.this;
+                        }
+                    });
+                    futures.add(new Pair<byte[],Future<PeekingResultIterator>>(split.getLowerRange(),future));
+                }
+            }
+
+            int timeoutMs = props.getInt(QueryServices.THREAD_TIMEOUT_MS_ATTRIB, DEFAULT_THREAD_TIMEOUT_MS);
+            final int factor = ScanUtil.isReversed(this.context.getScan()) ? -1 : 1;
+            // Sort futures by row key so that we have a predicatble order we're getting rows back for scans.
+            // We're going to wait here until they're finished anyway and this makes testing much easier.
+            Collections.sort(futures, new Comparator<Pair<byte[],Future<PeekingResultIterator>>>() {
+                @Override
+                public int compare(Pair<byte[], Future<PeekingResultIterator>> o1, Pair<byte[], Future<PeekingResultIterator>> o2) {
+                    return factor * Bytes.compareTo(o1.getFirst(), o2.getFirst());
+                }
+            });
+            for (Pair<byte[],Future<PeekingResultIterator>> future : futures) {
+                iterators.add(future.getSecond().get(timeoutMs, TimeUnit.MILLISECONDS));
+            }
+
+            success = true;
+            return iterators;
+        } catch (Exception e) {
+            throw ServerUtil.parseServerException(e);
+        } finally {
+            if (!success) {
+                SQLCloseables.closeAllQuietly(iterators);
+                // Don't call cancel, as it causes the HConnection to get into a funk
+//                for (Pair<byte[],Future<PeekingResultIterator>> future : futures) {
+//                    future.getSecond().cancel(true);
+//                }
+            }
         }
     }
 
-    protected List<URL> pathsToURLs(String... codeSourceUrls) {
-        return pathsToURLs(Arrays.asList(codeSourceUrls));
-    }
-    private List<URL> pathsToURLs(List<String> codeSourceUrls) {
-        ArrayList<URL> urls = new ArrayList<URL>(codeSourceUrls.size());
-        for (String codeSourceUrl : codeSourceUrls) {
-            URL url = pathToUrl(codeSourceUrl);
-            urls.add(url);
-        }
-        return urls;
+    @Override
+    public int size() {
+        return this.splits.size();
     }
 
-    private URL pathToUrl(String path) {
-        try {
-            return new File(path).getAbsoluteFile().toURI().toURL();
-        } catch (MalformedURLException e) {
-            throw new IllegalArgumentException("Path is malformed", e);
-        }
+    @Override
+    public void explain(List<String> planSteps) {
+        StringBuilder buf = new StringBuilder();
+        buf.append("CLIENT PARALLEL " + size() + "-WAY ");
+        explain(buf.toString(),planSteps);
     }
 }

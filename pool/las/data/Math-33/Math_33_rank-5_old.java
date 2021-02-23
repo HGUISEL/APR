@@ -1,147 +1,135 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
+ * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
+ * regarding copyright ownership.  The ASF licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+package org.apache.sqoop.shell;
 
-package org.apache.axiom.soap.impl.dom.soap11;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.OptionBuilder;
+import org.apache.sqoop.common.Direction;
+import org.apache.sqoop.model.MJob;
+import org.apache.sqoop.shell.core.Constants;
+import org.apache.sqoop.shell.utils.TableDisplayer;
+import org.apache.sqoop.validation.Status;
 
-import org.apache.axiom.om.OMCloneOptions;
-import org.apache.axiom.om.OMElement;
-import org.apache.axiom.om.OMFactory;
-import org.apache.axiom.om.OMNamespace;
-import org.apache.axiom.om.OMXMLParserWrapper;
-import org.apache.axiom.om.impl.common.OMElementSupport;
-import org.apache.axiom.om.impl.dom.ParentNode;
-import org.apache.axiom.soap.SOAP11Constants;
-import org.apache.axiom.soap.SOAPBody;
-import org.apache.axiom.soap.SOAPFactory;
-import org.apache.axiom.soap.SOAPFault;
-import org.apache.axiom.soap.SOAPFaultCode;
-import org.apache.axiom.soap.SOAPFaultDetail;
-import org.apache.axiom.soap.SOAPFaultNode;
-import org.apache.axiom.soap.SOAPFaultReason;
-import org.apache.axiom.soap.SOAPFaultRole;
-import org.apache.axiom.soap.SOAPProcessingException;
-import org.apache.axiom.soap.impl.dom.SOAPFaultImpl;
+import java.text.DateFormat;
+import java.util.LinkedList;
+import java.util.List;
 
-public class SOAP11FaultImpl extends SOAPFaultImpl {
-    private static final Class[] sequence = { SOAPFaultCode.class, SOAPFaultReason.class,
-            SOAPFaultRole.class, SOAPFaultDetail.class };
+import static org.apache.sqoop.shell.ShellEnvironment.*;
+import static org.apache.sqoop.shell.utils.FormDisplayer.*;
 
-    public SOAP11FaultImpl(SOAPBody parent, Exception e, SOAPFactory factory)
-            throws SOAPProcessingException {
-        super(parent, e, factory);
+/**
+ *
+ */
+@SuppressWarnings("serial")
+public class ShowJobFunction extends SqoopFunction {
+  @SuppressWarnings("static-access")
+  public ShowJobFunction() {
+    this.addOption(OptionBuilder
+        .withDescription(resourceString(Constants.RES_SHOW_PROMPT_DISPLAY_ALL_JOBS))
+        .withLongOpt(Constants.OPT_ALL)
+        .create(Constants.OPT_ALL_CHAR));
+    this.addOption(OptionBuilder.hasArg().withArgName(Constants.OPT_JID)
+        .withDescription(resourceString(Constants.RES_SHOW_PROMPT_DISPLAY_JOB_JID))
+        .withLongOpt(Constants.OPT_JID)
+        .create(Constants.OPT_JID_CHAR));
+  }
+
+  @Override
+  public Object executeFunction(CommandLine line, boolean isInteractive) {
+    if (line.hasOption(Constants.OPT_ALL)) {
+      showJobs();
+    } else if (line.hasOption(Constants.OPT_JID)) {
+      showJob(getLong(line, Constants.OPT_JID));
+    } else {
+      showSummary();
     }
 
-    public SOAP11FaultImpl(ParentNode parentNode, OMNamespace ns, OMXMLParserWrapper builder,
-            OMFactory factory, boolean generateNSDecl) {
-        super(parentNode, ns, builder, factory, generateNSDecl);
+    return Status.FINE;
+  }
+
+  private void showSummary() {
+    List<MJob> jobs = client.getJobs();
+
+    List<String> header = new LinkedList<String>();
+    header.add(resourceString(Constants.RES_TABLE_HEADER_ID));
+    header.add(resourceString(Constants.RES_TABLE_HEADER_NAME));
+    header.add(resourceString(Constants.RES_TABLE_HEADER_FROM_CONNECTOR));
+    header.add(resourceString(Constants.RES_TABLE_HEADER_TO_CONNECTOR));
+    header.add(resourceString(Constants.RES_TABLE_HEADER_ENABLED));
+
+    List<String> ids = new LinkedList<String>();
+    List<String> names = new LinkedList<String>();
+    List<String> fromConnectors = new LinkedList<String>();
+    List<String> toConnectors = new LinkedList<String>();
+    List<String> availabilities = new LinkedList<String>();
+
+    for(MJob job : jobs) {
+      ids.add(String.valueOf(job.getPersistenceId()));
+      names.add(job.getName());
+      fromConnectors.add(String.valueOf(
+          job.getConnectorId(Direction.FROM)));
+      toConnectors.add(String.valueOf(
+          job.getConnectorId(Direction.TO)));
+      availabilities.add(String.valueOf(job.getEnabled()));
     }
 
-    /**
-     * This is a convenience method for the SOAP Fault Impl.
-     *
-     * @param parent
-     */
-    public SOAP11FaultImpl(SOAPBody parent, SOAPFactory factory)
-            throws SOAPProcessingException {
-        super(parent, factory);
-    }
+    TableDisplayer.display(header, ids, names, fromConnectors, toConnectors, availabilities);
+  }
 
-    protected SOAPFaultDetail getNewSOAPFaultDetail(SOAPFault fault)
-            throws SOAPProcessingException {
-        return new SOAP11FaultDetailImpl(fault, (SOAPFactory)getOMFactory());
-    }
+  private void showJobs() {
+    List<MJob> jobs = client.getJobs();
+    printlnResource(Constants.RES_SHOW_PROMPT_JOBS_TO_SHOW, jobs.size());
 
-    public void setCode(SOAPFaultCode soapFaultCode)
-            throws SOAPProcessingException {
-        if (!(soapFaultCode instanceof SOAP11FaultCodeImpl)) {
-            throw new SOAPProcessingException(
-                    "Expecting SOAP 1.1 implementation of SOAP Fault Code. " +
-                            "But received some other implementation");
-        }
-        OMElementSupport.insertChild(this, sequence, 0, soapFaultCode);
+    for (MJob job : jobs) {
+      displayJob(job);
     }
+  }
 
-    public void setReason(SOAPFaultReason reason) throws SOAPProcessingException {
-        if (!(reason instanceof SOAP11FaultReasonImpl)) {
-            throw new SOAPProcessingException(
-                    "Expecting SOAP 1.1 implementation of SOAP Fault Reason. " +
-                            "But received some other implementation");
-        }
-        OMElementSupport.insertChild(this, sequence, 1, reason);
-    }
+  private void showJob(Long jid) {
+    MJob job = client.getJob(jid);
+    printlnResource(Constants.RES_SHOW_PROMPT_JOBS_TO_SHOW, 1);
 
-    public void setNode(SOAPFaultNode node) throws SOAPProcessingException {
-        throw new UnsupportedOperationException("SOAP 1.1 has no SOAP Fault Node");
-    }
+    displayJob(job);
+  }
 
-    public void setRole(SOAPFaultRole role) throws SOAPProcessingException {
-        if (!(role instanceof SOAP11FaultRoleImpl)) {
-            throw new SOAPProcessingException(
-                    "Expecting SOAP 1.1 implementation of SOAP Fault Role. " +
-                            "But received some other implementation");
-        }
-        OMElementSupport.insertChild(this, sequence, 2, role);
-    }
+  private void displayJob(MJob job) {
+    DateFormat formatter = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT);
 
-    protected void checkParent(OMElement parent) throws SOAPProcessingException {
-        if (!(parent instanceof SOAP11BodyImpl)) {
-            throw new SOAPProcessingException(
-                    "Expecting SOAP 1.1 implementation of SOAP Body as the " +
-                            "parent. But received some other implementation");
-        }
-    }
+    printlnResource(
+      Constants.RES_SHOW_PROMPT_JOB_INFO,
+      job.getPersistenceId(),
+      job.getName(),
+      job.getEnabled(),
+      job.getCreationUser(),
+      formatter.format(job.getCreationDate()),
+      job.getLastUpdateUser(),
+      formatter.format(job.getLastUpdateDate())
+    );
+    printlnResource(Constants.RES_SHOW_PROMPT_JOB_LID_CID_INFO,
+        job.getLinkId(Direction.FROM),
+        job.getConnectorId(Direction.FROM));
 
-    public void setDetail(SOAPFaultDetail detail) throws SOAPProcessingException {
-        if (!(detail instanceof SOAP11FaultDetailImpl)) {
-            throw new SOAPProcessingException(
-                    "Expecting SOAP 1.1 implementation of SOAP Fault Detail. " +
-                            "But received some other implementation");
-        }
-        OMElementSupport.insertChild(this, sequence, 3, detail);
-    }
-
-    public SOAPFaultRole getRole() {
-        return (SOAP11FaultRoleImpl)getFirstChildWithName(SOAP11Constants.QNAME_FAULT_ROLE);
-    }
-
-    public SOAPFaultCode getCode() {
-        return (SOAPFaultCode)getFirstChildWithName(SOAP11Constants.QNAME_FAULT_CODE);
-    }
-
-    public SOAPFaultReason getReason() {
-        return (SOAPFaultReason)getFirstChildWithName(SOAP11Constants.QNAME_FAULT_REASON);
-    }
-
-    public SOAPFaultDetail getDetail() {
-        return (SOAPFaultDetail)getFirstChildWithName(SOAP11Constants.QNAME_FAULT_DETAIL);
-    }
-
-    public SOAPFaultNode getNode() {
-        return null;
-    }
-
-    protected OMElement createClone(OMCloneOptions options, ParentNode targetParent,
-            boolean generateNSDecl) {
-        SOAPFault clone = new SOAP11FaultImpl(targetParent, getNamespace(), null, getOMFactory(), generateNSDecl);
-        if (e != null) {
-            clone.setException(e);
-        }
-        return clone;
-    }
+    // Display connector part
+    displayForms(job.getConnectorPart(Direction.FROM).getForms(),
+                 client.getConnectorConfigResourceBundle(job.getConnectorId(Direction.FROM)));
+    displayForms(job.getFrameworkPart().getForms(),
+                 client.getDriverConfigBundle());
+    displayForms(job.getConnectorPart(Direction.TO).getForms(),
+                 client.getConnectorConfigResourceBundle(job.getConnectorId(Direction.TO)));
+  }
 }

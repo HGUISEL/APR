@@ -1,1083 +1,1011 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
+package org.apache.myfaces.application;
 
-package org.apache.commons.dbcp2;
-
-import java.sql.ResultSet;
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
-import java.io.InputStream;
-import java.sql.SQLWarning;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
-import java.io.Reader;
-import java.sql.Statement;
+import java.lang.reflect.Constructor;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
-import java.sql.Connection;
-import java.sql.Ref;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Array;
-import java.util.Calendar;
-/* JDBC_4_ANT_KEY_BEGIN */
-import java.sql.NClob;
-import java.sql.RowId;
-import java.sql.SQLXML;
-/* JDBC_4_ANT_KEY_END */
+import java.util.MissingResourceException;
+import java.util.concurrent.ConcurrentHashMap;
+
+import javax.el.CompositeELResolver;
+import javax.el.ELContext;
+import javax.el.ELContextListener;
+import javax.el.ELException;
+import javax.el.ELResolver;
+import javax.el.ExpressionFactory;
+import javax.el.MethodExpression;
+import javax.el.ValueExpression;
+import javax.faces.FacesException;
+import javax.faces.application.Application;
+import javax.faces.application.NavigationHandler;
+import javax.faces.application.StateManager;
+import javax.faces.application.ViewHandler;
+import javax.faces.component.UIComponent;
+import javax.faces.component.UIViewRoot;
+import javax.faces.context.FacesContext;
+import javax.faces.convert.Converter;
+import javax.faces.el.MethodBinding;
+import javax.faces.el.PropertyResolver;
+import javax.faces.el.ReferenceSyntaxException;
+import javax.faces.el.ValueBinding;
+import javax.faces.el.VariableResolver;
+import javax.faces.event.ActionListener;
+import javax.faces.validator.Validator;
+
+import org.apache.commons.beanutils.BeanUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.myfaces.application.jsp.JspStateManagerImpl;
+import org.apache.myfaces.application.jsp.JspViewHandlerImpl;
+import org.apache.myfaces.config.RuntimeConfig;
+import org.apache.myfaces.config.impl.digester.elements.Property;
+import org.apache.myfaces.config.impl.digester.elements.ResourceBundle;
+import org.apache.myfaces.el.PropertyResolverImpl;
+import org.apache.myfaces.el.VariableResolverToApplicationELResolverAdapter;
+import org.apache.myfaces.el.convert.MethodExpressionToMethodBinding;
+import org.apache.myfaces.el.convert.ValueBindingToValueExpression;
+import org.apache.myfaces.el.convert.ValueExpressionToValueBinding;
+import org.apache.myfaces.el.unified.ELResolverBuilder;
+import org.apache.myfaces.el.unified.ResolverBuilderForFaces;
+import org.apache.myfaces.el.unified.resolver.FacesCompositeELResolver;
+import org.apache.myfaces.el.unified.resolver.FacesCompositeELResolver.Scope;
+import org.apache.myfaces.shared_impl.util.ClassUtils;
 
 /**
- * A base delegating implementation of {@link ResultSet}.
- * <p>
- * All of the methods from the {@link ResultSet} interface
- * simply call the corresponding method on the "delegate"
- * provided in my constructor.
- * <p>
- * Extends AbandonedTrace to implement result set tracking and
- * logging of code which created the ResultSet. Tracking the
- * ResultSet ensures that the Statment which created it can
- * close any open ResultSet's on Statement close.
+ * DOCUMENT ME!
  *
- * @author Glenn L. Nielsen
- * @author James House
- * @author Dirk Verbeeck
+ * @author Manfred Geiler (latest modification by $Author$)
+ * @author Anton Koinov
+ * @author Thomas Spiegl
+ * @author Stan Silvert
  * @version $Revision$ $Date$
  */
-public class DelegatingResultSet extends AbandonedTrace implements ResultSet {
+@SuppressWarnings("deprecation")
+public class ApplicationImpl extends Application
+{
+    private static final Log log = LogFactory.getLog(ApplicationImpl.class);
 
-    /** My delegate. **/
-    private ResultSet _res;
+    private final static VariableResolver VARIABLERESOLVER = new VariableResolverToApplicationELResolverAdapter();
 
-    /** The Statement that created me, if any. **/
-    private Statement _stmt;
+    private final static PropertyResolver PROPERTYRESOLVER = new PropertyResolverImpl();
 
-    /** The Connection that created me, if any. **/
-    private Connection _conn;
+    // recives the runtime config instance during initializing
+    private final static ThreadLocal<RuntimeConfig> initializingRuntimeConfig = new ThreadLocal<RuntimeConfig>();
 
-    /**
-     * Create a wrapper for the ResultSet which traces this
-     * ResultSet to the Statement which created it and the
-     * code which created it.
-     *
-     * @param stmt Statement which created this ResultSet
-     * @param res ResultSet to wrap
-     */
-    public DelegatingResultSet(Statement stmt, ResultSet res) {
-        super((AbandonedTrace)stmt);
-        this._stmt = stmt;
-        this._res = res;
+    // ~ Instance fields
+    // ----------------------------------------------------------------------------
+
+    private Collection<Locale> _supportedLocales = Collections.emptySet();
+    private Locale _defaultLocale;
+    private String _messageBundle;
+
+    private ViewHandler _viewHandler;
+    private NavigationHandler _navigationHandler;
+    private ActionListener _actionListener;
+    private String _defaultRenderKitId;
+    private StateManager _stateManager;
+
+    private ArrayList<ELContextListener> _elContextListeners;
+
+    // components, converters, and validators can be added at runtime--must
+    // synchronize, uses ConcurrentHashMap to allow concurrent read of map
+    private final Map<String, Class> _converterIdToClassMap = new ConcurrentHashMap<String, Class>();
+    private final Map<Class, String> _converterClassNameToClassMap = new ConcurrentHashMap<Class, String>();
+    private final Map<String, org.apache.myfaces.config.impl.digester.elements.Converter> _converterClassNameToConfigurationMap = new ConcurrentHashMap<String, org.apache.myfaces.config.impl.digester.elements.Converter>();
+    private final Map<String, Class> _componentClassMap = new ConcurrentHashMap<String, Class>();
+    private final Map<String, Class> _validatorClassMap = new ConcurrentHashMap<String, Class>();
+
+    private final RuntimeConfig _runtimeConfig;
+
+    private ELResolver elResolver;
+
+    private ELResolverBuilder resolverBuilderForFaces;
+
+    // ~ Constructors
+    // -------------------------------------------------------------------------------
+
+    public ApplicationImpl()
+    {
+        this(internalGetRuntimeConfig());
     }
-    
-    /**
-     * Create a wrapper for the ResultSet which traces this
-     * ResultSet to the Connection which created it (via, for
-     * example DatabaseMetadata, and the code which created it.
-     *
-     * @param conn Connection which created this ResultSet
-     * @param res ResultSet to wrap
-     */
-    public DelegatingResultSet(Connection conn, ResultSet res) {
-        super((AbandonedTrace)conn);
-        this._conn = conn;
-        this._res = res;
+
+    private static RuntimeConfig internalGetRuntimeConfig()
+    {
+        if (initializingRuntimeConfig.get() == null)
+        {
+            //It may happen that the current thread value
+            //for initializingRuntimeConfig is not set 
+            //(note that this value is final, so it just 
+            //allow set only once per thread).
+            //So the better for this case is try to get
+            //the value using RuntimeConfig.getCurrentInstance()
+            //instead throw an IllegalStateException (only fails if
+            //the constructor is called before setInitializingRuntimeConfig).
+            //From other point of view, AbstractFacesInitializer do 
+            //the same as below, so there is not problem if
+            //we do this here and this is the best place to do
+            //this.
+            //log.info("initializingRuntimeConfig.get() == null, so loading from ExternalContext");
+            ApplicationImpl.setInitializingRuntimeConfig(
+                    RuntimeConfig.getCurrentInstance(
+                            FacesContext.getCurrentInstance()
+                            .getExternalContext()));
+
+            //throw new IllegalStateException("The runtime config instance which is created while initialize myfaces "
+            //        + "must be set through ApplicationImpl.setInitializingRuntimeConfig");
+        }
+        return initializingRuntimeConfig.get();
     }
-    
-    public static ResultSet wrapResultSet(Statement stmt, ResultSet rset) {
-        if(null == rset) {
+
+    ApplicationImpl(final RuntimeConfig runtimeConfig)
+    {
+        if (runtimeConfig == null)
+        {
+            throw new IllegalArgumentException("runtimeConfig must mot be null");
+        }
+        // set default implementation in constructor
+        // pragmatic approach, no syncronizing will be needed in get methods
+        _viewHandler = new JspViewHandlerImpl();
+        _navigationHandler = new NavigationHandlerImpl();
+        _actionListener = new ActionListenerImpl();
+        _defaultRenderKitId = "HTML_BASIC";
+        _stateManager = new JspStateManagerImpl();
+        _elContextListeners = new ArrayList<ELContextListener>();
+        _runtimeConfig = runtimeConfig;
+
+        if (log.isTraceEnabled())
+            log.trace("New Application instance created");
+    }
+
+    public static void setInitializingRuntimeConfig(RuntimeConfig config)
+    {
+        initializingRuntimeConfig.set(config);
+    }
+
+    // ~ Methods
+    // ------------------------------------------------------------------------------------
+
+    @Override
+    public final void addELResolver(final ELResolver resolver)
+    {
+        if (FacesContext.getCurrentInstance() != null)
+        {
+            throw new IllegalStateException("It is illegal to add a resolver after the first request is processed");
+        }
+        if (resolver != null)
+        {
+            _runtimeConfig.addApplicationElResolver(resolver);
+        }
+    }
+
+    @Override
+    public final ELResolver getELResolver()
+    {
+        // we don't need synchronization here since it is ok to have multiple instances of the elresolver
+        if (elResolver == null)
+        {
+            elResolver = createFacesResolver();
+        }
+        return elResolver;
+    }
+
+    private ELResolver createFacesResolver()
+    {
+        final CompositeELResolver resolver = new FacesCompositeELResolver(Scope.Faces);
+        getResolverBuilderForFaces().build(resolver);
+        return resolver;
+    }
+
+    protected final ELResolverBuilder getResolverBuilderForFaces()
+    {
+        if (resolverBuilderForFaces == null)
+        {
+            resolverBuilderForFaces = new ResolverBuilderForFaces(_runtimeConfig);
+        }
+        return resolverBuilderForFaces;
+    }
+
+    public final void setResolverBuilderForFaces(final ELResolverBuilder factory)
+    {
+        resolverBuilderForFaces = factory;
+    }
+
+    @Override
+    public final java.util.ResourceBundle getResourceBundle(final FacesContext facesContext, final String name) throws FacesException,
+            NullPointerException
+    {
+
+        checkNull(facesContext, "facesContext");
+        checkNull(name, "name");
+
+        final String bundleName = getBundleName(facesContext, name);
+
+        if (bundleName == null)
+        {
             return null;
-        } else {
-            return new DelegatingResultSet(stmt,rset);
+        }
+
+        Locale locale = Locale.getDefault();
+
+        final UIViewRoot viewRoot = facesContext.getViewRoot();
+        if (viewRoot != null && viewRoot.getLocale() != null)
+        {
+            locale = viewRoot.getLocale();
+        }
+
+        try
+        {
+            return getResourceBundle(bundleName, locale, getClassLoader());
+        }
+        catch (MissingResourceException e)
+        {
+            throw new FacesException("Could not load resource bundle for name '" + name + "': " + e.getMessage(), e);
         }
     }
 
-    public static ResultSet wrapResultSet(Connection conn, ResultSet rset) {
-        if(null == rset) {
-            return null;
-        } else {
-            return new DelegatingResultSet(conn,rset);
-        }
+    private ClassLoader getClassLoader()
+    {
+        return Thread.currentThread().getContextClassLoader();
     }
 
-    public ResultSet getDelegate() {
-        return _res;
+    String getBundleName(final FacesContext facesContext, final String name)
+    {
+        ResourceBundle bundle = getRuntimeConfig(facesContext).getResourceBundle(name);
+        return bundle != null ? bundle.getBaseName() : null;
     }
 
-    public boolean equals(Object obj) {
-    	if (this == obj) return true;
-        ResultSet delegate = getInnermostDelegate();
-        if (delegate == null) {
-            return false;
-        }
-        if (obj instanceof DelegatingResultSet) {
-            DelegatingResultSet s = (DelegatingResultSet) obj;
-            return delegate.equals(s.getInnermostDelegate());
-        }
-        else {
-            return delegate.equals(obj);
-        }
+    java.util.ResourceBundle getResourceBundle(final String name, final Locale locale, final ClassLoader loader)
+            throws MissingResourceException
+    {
+        return java.util.ResourceBundle.getBundle(name, locale, loader);
     }
 
-    public int hashCode() {
-        Object obj = getInnermostDelegate();
-        if (obj == null) {
-            return 0;
-        }
-        return obj.hashCode();
+    final RuntimeConfig getRuntimeConfig(final FacesContext facesContext)
+    {
+        return RuntimeConfig.getCurrentInstance(facesContext.getExternalContext());
     }
 
-    /**
-     * If my underlying {@link ResultSet} is not a
-     * <tt>DelegatingResultSet</tt>, returns it,
-     * otherwise recursively invokes this method on
-     * my delegate.
-     * <p>
-     * Hence this method will return the first
-     * delegate that is not a <tt>DelegatingResultSet</tt>,
-     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
-     * delegate can be found by transversing this chain.
-     * <p>
-     * This method is useful when you may have nested
-     * <tt>DelegatingResultSet</tt>s, and you want to make
-     * sure to obtain a "genuine" {@link ResultSet}.
-     */
-    public ResultSet getInnermostDelegate() {
-        ResultSet r = _res;
-        while(r != null && r instanceof DelegatingResultSet) {
-            r = ((DelegatingResultSet)r).getDelegate();
-            if(this == r) {
-                return null;
+    final FacesContext getFaceContext()
+    {
+        return FacesContext.getCurrentInstance();
+    }
+
+    @Override
+    public final UIComponent createComponent(final ValueExpression componentExpression, final FacesContext facesContext,
+            final String componentType) throws FacesException, NullPointerException
+    {
+
+        checkNull(componentExpression, "componentExpression");
+        checkNull(facesContext, "facesContext");
+        checkNull(componentType, "componentType");
+
+        final ELContext elContext = facesContext.getELContext();
+
+        try
+        {
+            final Object retVal = componentExpression.getValue(elContext);
+
+            UIComponent createdComponent;
+
+            if (retVal instanceof UIComponent)
+            {
+                createdComponent = (UIComponent) retVal;
             }
-        }
-        return r;
-    }
-    
-    public Statement getStatement() throws SQLException {
-        return _stmt;
-    }
-
-    /**
-     * Wrapper for close of ResultSet which removes this
-     * result set from being traced then calls close on
-     * the original ResultSet.
-     */
-    public void close() throws SQLException {
-        try {
-            if(_stmt != null) {
-                ((AbandonedTrace)_stmt).removeTrace(this);
-                _stmt = null;
+            else
+            {
+                createdComponent = createComponent(componentType);
+                componentExpression.setValue(elContext, createdComponent);
             }
-            if(_conn != null) {
-                ((AbandonedTrace)_conn).removeTrace(this);
-                _conn = null;
-            }
-            _res.close();
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
 
-    protected void handleException(SQLException e) throws SQLException {
-        if ((_stmt != null) && (_stmt instanceof DelegatingStatement)) {
-            ((DelegatingStatement)_stmt).handleException(e);
+            return createdComponent;
         }
-        else if ((_conn != null) && (_conn instanceof DelegatingConnection)) {
-            ((DelegatingConnection)_conn).handleException(e);
-        }
-        else {
+        catch (FacesException e)
+        {
             throw e;
         }
-    }
-
-    public boolean next() throws SQLException 
-    { try { return _res.next(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean wasNull() throws SQLException
-    { try { return _res.wasNull(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public String getString(int columnIndex) throws SQLException
-    { try { return _res.getString(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(int columnIndex) throws SQLException
-    { try { return _res.getBoolean(columnIndex); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(int columnIndex) throws SQLException
-    { try { return _res.getByte(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(int columnIndex) throws SQLException
-    { try { return _res.getShort(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(int columnIndex) throws SQLException
-    { try { return _res.getInt(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(int columnIndex) throws SQLException
-    { try { return _res.getLong(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(int columnIndex) throws SQLException
-    { try { return _res.getFloat(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(int columnIndex) throws SQLException
-    { try { return _res.getDouble(columnIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    /** @deprecated */
-    public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException
-    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public byte[] getBytes(int columnIndex) throws SQLException
-    { try { return _res.getBytes(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int columnIndex) throws SQLException
-    { try { return _res.getDate(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int columnIndex) throws SQLException
-    { try { return _res.getTime(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int columnIndex) throws SQLException
-    { try { return _res.getTimestamp(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public InputStream getAsciiStream(int columnIndex) throws SQLException
-    { try { return _res.getAsciiStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    /** @deprecated */
-    public InputStream getUnicodeStream(int columnIndex) throws SQLException
-    { try { return _res.getUnicodeStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public InputStream getBinaryStream(int columnIndex) throws SQLException
-    { try { return _res.getBinaryStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public String getString(String columnName) throws SQLException
-    { try { return _res.getString(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(String columnName) throws SQLException
-    { try { return _res.getBoolean(columnName); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(String columnName) throws SQLException
-    { try { return _res.getByte(columnName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(String columnName) throws SQLException
-    { try { return _res.getShort(columnName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(String columnName) throws SQLException
-    { try { return _res.getInt(columnName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(String columnName) throws SQLException
-    { try { return _res.getLong(columnName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(String columnName) throws SQLException
-    { try { return _res.getFloat(columnName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(String columnName) throws SQLException
-    { try { return _res.getDouble(columnName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    /** @deprecated */
-    public BigDecimal getBigDecimal(String columnName, int scale) throws SQLException
-    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public byte[] getBytes(String columnName) throws SQLException
-    { try { return _res.getBytes(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String columnName) throws SQLException
-    { try { return _res.getDate(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String columnName) throws SQLException
-    { try { return _res.getTime(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String columnName) throws SQLException
-    { try { return _res.getTimestamp(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public InputStream getAsciiStream(String columnName) throws SQLException
-    { try { return _res.getAsciiStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    /** @deprecated */
-    public InputStream getUnicodeStream(String columnName) throws SQLException
-    { try { return _res.getUnicodeStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public InputStream getBinaryStream(String columnName) throws SQLException
-    { try { return _res.getBinaryStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public SQLWarning getWarnings() throws SQLException
-    { try { return _res.getWarnings(); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void clearWarnings() throws SQLException
-    { try { _res.clearWarnings(); } catch (SQLException e) { handleException(e); } }
-
-    public String getCursorName() throws SQLException
-    { try { return _res.getCursorName(); } catch (SQLException e) { handleException(e); return null; } }
-
-    public ResultSetMetaData getMetaData() throws SQLException
-    { try { return _res.getMetaData(); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(int columnIndex) throws SQLException
-    { try { return _res.getObject(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String columnName) throws SQLException
-    { try { return _res.getObject(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public int findColumn(String columnName) throws SQLException
-    { try { return _res.findColumn(columnName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public Reader getCharacterStream(int columnIndex) throws SQLException
-    { try { return _res.getCharacterStream(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Reader getCharacterStream(String columnName) throws SQLException
-    { try { return _res.getCharacterStream(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(int columnIndex) throws SQLException
-    { try { return _res.getBigDecimal(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(String columnName) throws SQLException
-    { try { return _res.getBigDecimal(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean isBeforeFirst() throws SQLException
-    { try { return _res.isBeforeFirst(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean isAfterLast() throws SQLException
-    { try { return _res.isAfterLast(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean isFirst() throws SQLException
-    { try { return _res.isFirst(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean isLast() throws SQLException
-    { try { return _res.isLast(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public void beforeFirst() throws SQLException
-    { try { _res.beforeFirst(); } catch (SQLException e) { handleException(e); } }
-
-    public void afterLast() throws SQLException
-    { try { _res.afterLast(); } catch (SQLException e) { handleException(e); } }
-
-    public boolean first() throws SQLException
-    { try { return _res.first(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean last() throws SQLException
-    { try { return _res.last(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public int getRow() throws SQLException
-    { try { return _res.getRow(); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public boolean absolute(int row) throws SQLException
-    { try { return _res.absolute(row); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean relative(int rows) throws SQLException
-    { try { return _res.relative(rows); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean previous() throws SQLException
-    { try { return _res.previous(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public void setFetchDirection(int direction) throws SQLException
-    { try { _res.setFetchDirection(direction); } catch (SQLException e) { handleException(e); } }
-
-    public int getFetchDirection() throws SQLException
-    { try { return _res.getFetchDirection(); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public void setFetchSize(int rows) throws SQLException
-    { try { _res.setFetchSize(rows); } catch (SQLException e) { handleException(e); } }
-
-    public int getFetchSize() throws SQLException
-    { try { return _res.getFetchSize(); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getType() throws SQLException
-    { try { return _res.getType(); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getConcurrency() throws SQLException
-    { try { return _res.getConcurrency(); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public boolean rowUpdated() throws SQLException
-    { try { return _res.rowUpdated(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean rowInserted() throws SQLException
-    { try { return _res.rowInserted(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public boolean rowDeleted() throws SQLException
-    { try { return _res.rowDeleted(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public void updateNull(int columnIndex) throws SQLException
-    { try { _res.updateNull(columnIndex); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBoolean(int columnIndex, boolean x) throws SQLException
-    { try { _res.updateBoolean(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateByte(int columnIndex, byte x) throws SQLException
-    { try { _res.updateByte(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateShort(int columnIndex, short x) throws SQLException
-    { try { _res.updateShort(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateInt(int columnIndex, int x) throws SQLException
-    { try { _res.updateInt(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateLong(int columnIndex, long x) throws SQLException
-    { try { _res.updateLong(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateFloat(int columnIndex, float x) throws SQLException
-    { try { _res.updateFloat(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateDouble(int columnIndex, double x) throws SQLException
-    { try { _res.updateDouble(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBigDecimal(int columnIndex, BigDecimal x) throws SQLException
-    { try { _res.updateBigDecimal(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateString(int columnIndex, String x) throws SQLException
-    { try { _res.updateString(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBytes(int columnIndex, byte[] x) throws SQLException
-    { try { _res.updateBytes(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateDate(int columnIndex, Date x) throws SQLException
-    { try { _res.updateDate(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateTime(int columnIndex, Time x) throws SQLException
-    { try { _res.updateTime(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateTimestamp(int columnIndex, Timestamp x) throws SQLException
-    { try { _res.updateTimestamp(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateAsciiStream(int columnIndex, InputStream x, int length) throws SQLException
-    { try { _res.updateAsciiStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBinaryStream(int columnIndex, InputStream x, int length) throws SQLException
-    { try { _res.updateBinaryStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void updateCharacterStream(int columnIndex, Reader x, int length) throws SQLException
-    { try { _res.updateCharacterStream(columnIndex, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void updateObject(int columnIndex, Object x, int scale) throws SQLException
-    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateObject(int columnIndex, Object x) throws SQLException
-    { try { _res.updateObject(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateNull(String columnName) throws SQLException
-    { try { _res.updateNull(columnName); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBoolean(String columnName, boolean x) throws SQLException
-    { try { _res.updateBoolean(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateByte(String columnName, byte x) throws SQLException
-    { try { _res.updateByte(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateShort(String columnName, short x) throws SQLException
-    { try { _res.updateShort(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateInt(String columnName, int x) throws SQLException
-    { try { _res.updateInt(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateLong(String columnName, long x) throws SQLException
-    { try { _res.updateLong(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateFloat(String columnName, float x) throws SQLException
-    { try { _res.updateFloat(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateDouble(String columnName, double x) throws SQLException
-    { try { _res.updateDouble(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBigDecimal(String columnName, BigDecimal x) throws SQLException
-    { try { _res.updateBigDecimal(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateString(String columnName, String x) throws SQLException
-    { try { _res.updateString(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBytes(String columnName, byte[] x) throws SQLException
-    { try { _res.updateBytes(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateDate(String columnName, Date x) throws SQLException
-    { try { _res.updateDate(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateTime(String columnName, Time x) throws SQLException
-    { try { _res.updateTime(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateTimestamp(String columnName, Timestamp x) throws SQLException
-    { try { _res.updateTimestamp(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateAsciiStream(String columnName, InputStream x, int length) throws SQLException
-    { try { _res.updateAsciiStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBinaryStream(String columnName, InputStream x, int length) throws SQLException
-    { try { _res.updateBinaryStream(columnName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void updateCharacterStream(String columnName, Reader reader, int length) throws SQLException
-    { try { _res.updateCharacterStream(columnName, reader, length); } catch (SQLException e) { handleException(e); } }
-
-    public void updateObject(String columnName, Object x, int scale) throws SQLException
-    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateObject(String columnName, Object x) throws SQLException
-    { try { _res.updateObject(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void insertRow() throws SQLException
-    { try { _res.insertRow(); } catch (SQLException e) { handleException(e); } }
-
-    public void updateRow() throws SQLException
-    { try { _res.updateRow(); } catch (SQLException e) { handleException(e); } }
-
-    public void deleteRow() throws SQLException
-    { try { _res.deleteRow(); } catch (SQLException e) { handleException(e); } }
-
-    public void refreshRow() throws SQLException
-    { try { _res.refreshRow(); } catch (SQLException e) { handleException(e); } }
-
-    public void cancelRowUpdates() throws SQLException
-    { try { _res.cancelRowUpdates(); } catch (SQLException e) { handleException(e); } }
-
-    public void moveToInsertRow() throws SQLException
-    { try { _res.moveToInsertRow(); } catch (SQLException e) { handleException(e); } }
-
-    public void moveToCurrentRow() throws SQLException
-    { try { _res.moveToCurrentRow(); } catch (SQLException e) { handleException(e); } }
-
-    public Object getObject(int i, Map map) throws SQLException
-    { try { return _res.getObject(i, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(int i) throws SQLException
-    { try { return _res.getRef(i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(int i) throws SQLException
-    { try { return _res.getBlob(i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(int i) throws SQLException
-    { try { return _res.getClob(i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(int i) throws SQLException
-    { try { return _res.getArray(i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String colName, Map map) throws SQLException
-    { try { return _res.getObject(colName, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(String colName) throws SQLException
-    { try { return _res.getRef(colName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(String colName) throws SQLException
-    { try { return _res.getBlob(colName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(String colName) throws SQLException
-    { try { return _res.getClob(colName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(String colName) throws SQLException
-    { try { return _res.getArray(colName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int columnIndex, Calendar cal) throws SQLException
-    { try { return _res.getDate(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String columnName, Calendar cal) throws SQLException
-    { try { return _res.getDate(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int columnIndex, Calendar cal) throws SQLException
-    { try { return _res.getTime(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String columnName, Calendar cal) throws SQLException
-    { try { return _res.getTime(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException
-    { try { return _res.getTimestamp(columnIndex, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String columnName, Calendar cal) throws SQLException
-    { try { return _res.getTimestamp(columnName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-
-    public java.net.URL getURL(int columnIndex) throws SQLException
-    { try { return _res.getURL(columnIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public java.net.URL getURL(String columnName) throws SQLException
-    { try { return _res.getURL(columnName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void updateRef(int columnIndex, java.sql.Ref x) throws SQLException
-    { try { _res.updateRef(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateRef(String columnName, java.sql.Ref x) throws SQLException
-    { try { _res.updateRef(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBlob(int columnIndex, java.sql.Blob x) throws SQLException
-    { try { _res.updateBlob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateBlob(String columnName, java.sql.Blob x) throws SQLException
-    { try { _res.updateBlob(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateClob(int columnIndex, java.sql.Clob x) throws SQLException
-    { try { _res.updateClob(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateClob(String columnName, java.sql.Clob x) throws SQLException
-    { try { _res.updateClob(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateArray(int columnIndex, java.sql.Array x) throws SQLException
-    { try { _res.updateArray(columnIndex, x); } catch (SQLException e) { handleException(e); } }
-
-    public void updateArray(String columnName, java.sql.Array x) throws SQLException
-    { try { _res.updateArray(columnName, x); } catch (SQLException e) { handleException(e); } }
-
-/* JDBC_4_ANT_KEY_BEGIN */
-
-    public boolean isWrapperFor(Class<?> iface) throws SQLException {
-        return iface.isAssignableFrom(getClass()) || _res.isWrapperFor(iface);
-    }
-
-    public <T> T unwrap(Class<T> iface) throws SQLException {
-        if (iface.isAssignableFrom(getClass())) {
-            return iface.cast(this);
-        } else if (iface.isAssignableFrom(_res.getClass())) {
-            return iface.cast(_res);
-        } else {
-            return _res.unwrap(iface);
+        catch (Exception e)
+        {
+            throw new FacesException(e);
         }
     }
 
-    public RowId getRowId(int columnIndex) throws SQLException {
-        try {
-            return _res.getRowId(columnIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+    @Override
+    public final ExpressionFactory getExpressionFactory()
+    {
+        return _runtimeConfig.getExpressionFactory();
+    }
+
+    @Override
+    public final Object evaluateExpressionGet(final FacesContext context, final String expression, final Class expectedType) throws ELException
+    {
+        ELContext elContext = context.getELContext();
+        return getExpressionFactory().createValueExpression(elContext, expression, expectedType).getValue(elContext);
+    }
+
+    @Override
+    public final void addELContextListener(final ELContextListener listener)
+    {
+
+        synchronized (_elContextListeners)
+        {
+            _elContextListeners.add(listener);
         }
     }
 
-    public RowId getRowId(String columnLabel) throws SQLException {
-        try {
-            return _res.getRowId(columnLabel);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void updateRowId(int columnIndex, RowId value) throws SQLException {
-        try {
-            _res.updateRowId(columnIndex, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
+    @Override
+    public final void removeELContextListener(final ELContextListener listener)
+    {
+        synchronized (_elContextListeners)
+        {
+            _elContextListeners.remove(listener);
         }
     }
 
-    public void updateRowId(String columnLabel, RowId value) throws SQLException {
-        try {
-            _res.updateRowId(columnLabel, value);
+    @Override
+    public final ELContextListener[] getELContextListeners()
+    {
+        // this gets called on every request, so I can't afford to synchronize
+        // I just have to trust that toArray() with do the right thing if the
+        // list is changing (not likely)
+        return _elContextListeners.toArray(new ELContextListener[_elContextListeners.size()]);
+    }
+
+    @Override
+    public final void setActionListener(final ActionListener actionListener)
+    {
+        checkNull(actionListener, "actionListener");
+
+        _actionListener = actionListener;
+        if (log.isTraceEnabled())
+            log.trace("set actionListener = " + actionListener.getClass().getName());
+    }
+
+    @Override
+    public final ActionListener getActionListener()
+    {
+        return _actionListener;
+    }
+
+    @Override
+    public final Iterator<String> getComponentTypes()
+    {
+        return _componentClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final Iterator<String> getConverterIds()
+    {
+        return _converterIdToClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final Iterator<Class> getConverterTypes()
+    {
+        return _converterClassNameToClassMap.keySet().iterator();
+    }
+
+    @Override
+    public final void setDefaultLocale(final Locale locale)
+    {
+        checkNull(locale, "locale");
+
+        _defaultLocale = locale;
+        if (log.isTraceEnabled())
+            log.trace("set defaultLocale = " + locale.getCountry() + " " + locale.getLanguage());
+    }
+
+    @Override
+    public final Locale getDefaultLocale()
+    {
+        return _defaultLocale;
+    }
+
+    @Override
+    public final void setMessageBundle(final String messageBundle)
+    {
+        checkNull(messageBundle, "messageBundle");
+
+        _messageBundle = messageBundle;
+        if (log.isTraceEnabled())
+            log.trace("set MessageBundle = " + messageBundle);
+    }
+
+    @Override
+    public final String getMessageBundle()
+    {
+        return _messageBundle;
+    }
+
+    @Override
+    public final void setNavigationHandler(final NavigationHandler navigationHandler)
+    {
+        checkNull(navigationHandler, "navigationHandler");
+
+        _navigationHandler = navigationHandler;
+        if (log.isTraceEnabled())
+            log.trace("set NavigationHandler = " + navigationHandler.getClass().getName());
+    }
+
+    @Override
+    public final NavigationHandler getNavigationHandler()
+    {
+        return _navigationHandler;
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final void setPropertyResolver(final PropertyResolver propertyResolver)
+    {
+        checkNull(propertyResolver, "propertyResolver");
+
+        if (getFaceContext() != null)
+        {
+            throw new IllegalStateException("propertyResolver must be defined before request processing");
         }
-        catch (SQLException e) {
-            handleException(e);
+
+        _runtimeConfig.setPropertyResolver(propertyResolver);
+
+        if (log.isTraceEnabled())
+            log.trace("set PropertyResolver = " + propertyResolver.getClass().getName());
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final PropertyResolver getPropertyResolver()
+    {
+        return PROPERTYRESOLVER;
+    }
+
+    @Override
+    public final void setSupportedLocales(final Collection<Locale> locales)
+    {
+        checkNull(locales, "locales");
+
+        _supportedLocales = locales;
+        if (log.isTraceEnabled())
+            log.trace("set SupportedLocales");
+    }
+
+    @Override
+    public final Iterator<Locale> getSupportedLocales()
+    {
+        return _supportedLocales.iterator();
+    }
+
+    @Override
+    public final Iterator<String> getValidatorIds()
+    {
+        return _validatorClassMap.keySet().iterator();
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final void setVariableResolver(final VariableResolver variableResolver)
+    {
+        checkNull(variableResolver, "variableResolver");
+
+        if (getFaceContext() != null)
+        {
+            throw new IllegalStateException("variableResolver must be defined before request processing");
+        }
+
+        _runtimeConfig.setVariableResolver(variableResolver);
+
+        if (log.isTraceEnabled())
+            log.trace("set VariableResolver = " + variableResolver.getClass().getName());
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final VariableResolver getVariableResolver()
+    {
+        return VARIABLERESOLVER;
+    }
+
+    @Override
+    public final void setViewHandler(final ViewHandler viewHandler)
+    {
+        checkNull(viewHandler, "viewHandler");
+
+        _viewHandler = viewHandler;
+        if (log.isTraceEnabled())
+            log.trace("set ViewHandler = " + viewHandler.getClass().getName());
+    }
+
+    @Override
+    public final ViewHandler getViewHandler()
+    {
+        return _viewHandler;
+    }
+
+    @Override
+    public final void addComponent(final String componentType, final String componentClassName)
+    {
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+        checkNull(componentClassName, "componentClassName");
+        checkEmpty(componentClassName, "componentClassName");
+
+        try
+        {
+            _componentClassMap.put(componentType, ClassUtils.simpleClassForName(componentClassName));
+            if (log.isTraceEnabled())
+                log.trace("add Component class = " + componentClassName + " for type = " + componentType);
+        }
+        catch (Exception e)
+        {
+            log.error("Component class " + componentClassName + " not found", e);
         }
     }
 
-    public int getHoldability() throws SQLException {
-        try {
-            return _res.getHoldability();
+    @Override
+    public final void addConverter(final String converterId, final String converterClass)
+    {
+        checkNull(converterId, "converterId");
+        checkEmpty(converterId, "converterId");
+        checkNull(converterClass, "converterClass");
+        checkEmpty(converterClass, "converterClass");
+
+        try
+        {
+            _converterIdToClassMap.put(converterId, ClassUtils.simpleClassForName(converterClass));
+            if (log.isTraceEnabled())
+                log.trace("add Converter id = " + converterId + " converterClass = " + converterClass);
         }
-        catch (SQLException e) {
-            handleException(e);
-            return 0;
+        catch (Exception e)
+        {
+            log.error("Converter class " + converterClass + " not found", e);
         }
     }
 
-    public boolean isClosed() throws SQLException {
-        try {
-            return _res.isClosed();
+    @Override
+    public final void addConverter(final Class targetClass, final String converterClass)
+    {
+        checkNull(targetClass, "targetClass");
+        checkNull(converterClass, "converterClass");
+        checkEmpty(converterClass, "converterClass");
+
+        try
+        {
+            _converterClassNameToClassMap.put(targetClass, converterClass);
+            if (log.isTraceEnabled())
+                log.trace("add Converter for class = " + targetClass + " converterClass = " + converterClass);
         }
-        catch (SQLException e) {
-            handleException(e);
-            return false;
+        catch (Exception e)
+        {
+            log.error("Converter class " + converterClass + " not found", e);
         }
     }
 
-    public void updateNString(int columnIndex, String value) throws SQLException {
-        try {
-            _res.updateNString(columnIndex, value);
+    public final void addConverterConfiguration(final String converterClassName,
+            final org.apache.myfaces.config.impl.digester.elements.Converter configuration)
+    {
+        checkNull(converterClassName, "converterClassName");
+        checkEmpty(converterClassName, "converterClassName");
+        checkNull(configuration, "configuration");
+
+        _converterClassNameToConfigurationMap.put(converterClassName, configuration);
+    }
+
+    @Override
+    public final void addValidator(final String validatorId, final String validatorClass)
+    {
+        checkNull(validatorId, "validatorId");
+        checkEmpty(validatorId, "validatorId");
+        checkNull(validatorClass, "validatorClass");
+        checkEmpty(validatorClass, "validatorClass");
+
+        try
+        {
+            _validatorClassMap.put(validatorId, ClassUtils.simpleClassForName(validatorClass));
+            if (log.isTraceEnabled())
+                log.trace("add Validator id = " + validatorId + " class = " + validatorClass);
         }
-        catch (SQLException e) {
-            handleException(e);
+        catch (Exception e)
+        {
+            log.error("Validator class " + validatorClass + " not found", e);
         }
     }
 
-    public void updateNString(String columnLabel, String value) throws SQLException {
-        try {
-            _res.updateNString(columnLabel, value);
+    @Override
+    public final UIComponent createComponent(final String componentType) throws FacesException
+    {
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+
+        final Class componentClass = _componentClassMap.get(componentType);
+        if (componentClass == null)
+        {
+            log.error("Undefined component type " + componentType);
+            throw new FacesException("Undefined component type " + componentType);
         }
-        catch (SQLException e) {
-            handleException(e);
+
+        try
+        {
+            return (UIComponent) componentClass.newInstance();
+        }
+        catch (Exception e)
+        {
+            log.error("Could not instantiate component componentType = " + componentType, e);
+            throw new FacesException("Could not instantiate component componentType = " + componentType, e);
         }
     }
 
-    public void updateNClob(int columnIndex, NClob value) throws SQLException {
-        try {
-            _res.updateNClob(columnIndex, value);
+    /**
+     * @deprecated Use createComponent(ValueExpression, FacesContext, String) instead.
+     */
+    @Deprecated
+    @Override
+    public final UIComponent createComponent(final ValueBinding valueBinding, final FacesContext facesContext,
+            final String componentType) throws FacesException
+    {
+
+        checkNull(valueBinding, "valueBinding");
+        checkNull(facesContext, "facesContext");
+        checkNull(componentType, "componentType");
+        checkEmpty(componentType, "componentType");
+
+        final ValueExpression valExpression = new ValueBindingToValueExpression(valueBinding);
+
+        return createComponent(valExpression, facesContext, componentType);
+    }
+
+    /**
+     * Return an instance of the converter class that has been registered under
+     * the specified id.
+     * <p>
+     * Converters are registered via faces-config.xml files, and can also be registered
+     * via the addConverter(String id, Class converterClass) method on this class. Here
+     * the the appropriate Class definition is found, then an instance is created and
+     * returned.
+     * <p>
+     * A converter registered via a config file can have any number of nested attribute or
+     * property tags. The JSF specification is very vague about what effect these nested
+     * tags have. This method ignores nested attribute definitions, but for each nested
+     * property tag the corresponding setter is invoked on the new Converter instance
+     * passing the property's defaultValuer. Basic typeconversion is done so the target
+     * properties on the Converter instance can be String, int, boolean, etc. Note that:
+     * <ol>
+     * <li>the Sun Mojarra JSF implemenation ignores nested property tags completely, so
+     * this behaviour cannot be relied on across implementations.
+     * <li>there is no equivalent functionality for converter classes registered via
+     * the Application.addConverter api method.
+     * </ol>
+     * <p>
+     * Note that this method is most commonly called from the standard f:attribute tag.
+     * As an alternative, most components provide a "converter" attribute which uses an
+     * EL expression to create a Converter instance, in which case this method is not
+     * invoked at all. The converter attribute allows the returned Converter instance to
+     * be configured via normal dependency-injection, and is generally a better choice
+     * than using this method.
+     */
+    @Override
+    public final Converter createConverter(final String converterId)
+    {
+        checkNull(converterId, "converterId");
+        checkEmpty(converterId, "converterId");
+
+        final Class converterClass = _converterIdToClassMap.get(converterId);
+        if(converterClass == null)
+        {
+            throw new FacesException("Could not find any registered converter-class by converterId : "+converterId);
         }
-        catch (SQLException e) {
-            handleException(e);
+
+        try
+        {
+            final Converter converter = (Converter) converterClass.newInstance();
+
+            setConverterProperties(converterClass, converter);
+
+            return converter;
+        }
+        catch (Exception e)
+        {
+            log.error("Could not instantiate converter " + converterClass, e);
+            throw new FacesException("Could not instantiate converter: " + converterClass, e);
         }
     }
 
-    public void updateNClob(String columnLabel, NClob value) throws SQLException {
-        try {
-            _res.updateNClob(columnLabel, value);
+    @Override
+    public final Converter createConverter(final Class targetClass)
+    {
+        checkNull(targetClass, "targetClass");
+
+        return internalCreateConverter(targetClass);
+    }
+
+    private Converter internalCreateConverter(final Class targetClass)
+    {
+        // Locate a Converter registered for the target class itself.
+        String converterClassName = _converterClassNameToClassMap.get(targetClass);
+
+        // Get EnumConverter for enum classes with no special converter, check
+        // here as recursive call with java.lang.Enum will not work
+        if (converterClassName == null && targetClass.isEnum()) {
+            converterClassName = _converterClassNameToClassMap.get(Enum.class);
         }
-        catch (SQLException e) {
-            handleException(e);
+
+        // Locate a Converter registered for interfaces that are
+        // implemented by the target class (directly or indirectly).
+        if (converterClassName == null)
+        {
+            final Class interfaces[] = targetClass.getInterfaces();
+            if (interfaces != null)
+            {
+                for (int i = 0, len = interfaces.length; i < len; i++)
+                {
+                    // search all superinterfaces for a matching converter,
+                    // create it
+                    final Converter converter = internalCreateConverter(interfaces[i]);
+                    if (converter != null)
+                    {
+                        return converter;
+                    }
+                }
+            }
+        }
+
+        if (converterClassName != null)
+        {
+            try
+            {
+                final Class converterClass = ClassUtils.simpleClassForName(converterClassName);
+
+                Converter converter = null;
+                try
+                {
+                    // look for a constructor that takes a single Class object
+                    // See JSF 1.2 javadoc for Converter
+                    final Constructor constructor = converterClass.getConstructor(new Class[] { Class.class });
+                    converter = (Converter) constructor.newInstance(new Object[] { targetClass });
+                }
+                catch (Exception e)
+                {
+                    // if there is no matching constructor use no-arg
+                    // constructor
+                    converter = (Converter) converterClass.newInstance();
+                }
+
+                setConverterProperties(converterClass, converter);
+
+                return converter;
+            }
+            catch (Exception e)
+            {
+                log.error("Could not instantiate converter " + converterClassName, e);
+                throw new FacesException("Could not instantiate converter: " + converterClassName, e);
+            }
+        }
+
+        // locate converter for primitive types
+        if (targetClass == Long.TYPE)
+        {
+            return internalCreateConverter(Long.class);
+        }
+        else if (targetClass == Boolean.TYPE)
+        {
+            return internalCreateConverter(Boolean.class);
+        }
+        else if (targetClass == Double.TYPE)
+        {
+            return internalCreateConverter(Double.class);
+        }
+        else if (targetClass == Byte.TYPE)
+        {
+            return internalCreateConverter(Byte.class);
+        }
+        else if (targetClass == Short.TYPE)
+        {
+            return internalCreateConverter(Short.class);
+        }
+        else if (targetClass == Integer.TYPE)
+        {
+            return internalCreateConverter(Integer.class);
+        }
+        else if (targetClass == Float.TYPE)
+        {
+            return internalCreateConverter(Float.class);
+        }
+        else if (targetClass == Character.TYPE)
+        {
+            return internalCreateConverter(Character.class);
+        }
+
+        // Locate a Converter registered for the superclass (if any) of the
+        // target class,
+        // recursively working up the inheritance hierarchy.
+        Class superClazz = targetClass.getSuperclass();
+
+        return superClazz != null ? internalCreateConverter(superClazz) : null;
+
+    }
+
+    private void setConverterProperties(final Class converterClass, final Converter converter)
+    {
+        final org.apache.myfaces.config.impl.digester.elements.Converter converterConfig = _converterClassNameToConfigurationMap
+                .get(converterClass.getName());
+
+        if (converterConfig != null)
+        {
+
+            final Iterator it = converterConfig.getProperties();
+
+            while (it.hasNext())
+            {
+                final Property property = (Property) it.next();
+
+                try
+                {
+                    BeanUtils.setProperty(converter, property.getPropertyName(), property.getDefaultValue());
+                }
+                catch (Throwable th)
+                {
+                    log.error("Initializing converter : " + converterClass.getName() + " with property : "
+                            + property.getPropertyName() + " and value : " + property.getDefaultValue() + " failed.");
+                }
+            }
         }
     }
 
-    public NClob getNClob(int columnIndex) throws SQLException {
-        try {
-            return _res.getNClob(columnIndex);
+    // Note: this method used to be synchronized in the JSF 1.1 version. Why?
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    @Override
+    public final MethodBinding createMethodBinding(final String reference, Class[] params) throws ReferenceSyntaxException
+    {
+        checkNull(reference, "reference");
+        checkEmpty(reference, "reference");
+
+        // TODO: this check should be performed by the expression factory. It is a requirement of the TCK
+        if (!(reference.startsWith("#{") && reference.endsWith("}")))
+        {
+            throw new ReferenceSyntaxException("Invalid method reference: '" + reference + "'");
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+
+        if (params == null)
+            params = new Class[0];
+
+        MethodExpression methodExpression;
+
+        try
+        {
+            methodExpression = getExpressionFactory().createMethodExpression(threadELContext(), reference,
+                    Object.class, params);
+        }
+        catch (ELException e)
+        {
+            throw new ReferenceSyntaxException(e);
+        }
+
+        return new MethodExpressionToMethodBinding(methodExpression);
+    }
+
+    @Override
+    public final Validator createValidator(final String validatorId) throws FacesException
+    {
+        checkNull(validatorId, "validatorId");
+        checkEmpty(validatorId, "validatorId");
+
+        Class validatorClass = _validatorClassMap.get(validatorId);
+        if (validatorClass == null)
+        {
+            String message = "Unknown validator id '" + validatorId + "'.";
+            log.error(message);
+            throw new FacesException(message);
+        }
+
+        try
+        {
+            return (Validator) validatorClass.newInstance();
+        }
+        catch (Exception e)
+        {
+            log.error("Could not instantiate validator " + validatorClass, e);
+            throw new FacesException("Could not instantiate validator: " + validatorClass, e);
         }
     }
 
-    public NClob getNClob(String columnLabel) throws SQLException {
-        try {
-            return _res.getNClob(columnLabel);
+    /**
+     * @deprecated
+     */
+    @Override
+    public final ValueBinding createValueBinding(final String reference) throws ReferenceSyntaxException
+    {
+        checkNull(reference, "reference");
+        checkEmpty(reference, "reference");
+
+        ValueExpression valueExpression;
+
+        try
+        {
+            valueExpression = getExpressionFactory().createValueExpression(threadELContext(), reference, Object.class);
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+        catch (ELException e)
+        {
+            throw new ReferenceSyntaxException(e);
+        }
+
+        return new ValueExpressionToValueBinding(valueExpression);
+    }
+
+    // gets the elContext from the current FacesContext()
+    private final ELContext threadELContext()
+    {
+        return getFaceContext().getELContext();
+    }
+
+    @Override
+    public final String getDefaultRenderKitId()
+    {
+        return _defaultRenderKitId;
+    }
+
+    @Override
+    public final void setDefaultRenderKitId(final String defaultRenderKitId)
+    {
+        _defaultRenderKitId = defaultRenderKitId;
+    }
+
+    @Override
+    public final StateManager getStateManager()
+    {
+        return _stateManager;
+    }
+
+    @Override
+    public final void setStateManager(final StateManager stateManager)
+    {
+        _stateManager = stateManager;
+    }
+
+    private void checkNull(final Object param, final String paramName)
+    {
+        if (param == null)
+        {
+            throw new NullPointerException(paramName + " can not be null.");
         }
     }
 
-    public SQLXML getSQLXML(int columnIndex) throws SQLException {
-        try {
-            return _res.getSQLXML(columnIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+    private void checkEmpty(final String param, final String paramName)
+    {
+        if (param.length() == 0)
+        {
+            throw new NullPointerException("String " + paramName + " can not be empty.");
         }
     }
-
-    public SQLXML getSQLXML(String columnLabel) throws SQLException {
-        try {
-            return _res.getSQLXML(columnLabel);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void updateSQLXML(int columnIndex, SQLXML value) throws SQLException {
-        try {
-            _res.updateSQLXML(columnIndex, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateSQLXML(String columnLabel, SQLXML value) throws SQLException {
-        try {
-            _res.updateSQLXML(columnLabel, value);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public String getNString(int columnIndex) throws SQLException {
-        try {
-            return _res.getNString(columnIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public String getNString(String columnLabel) throws SQLException {
-        try {
-            return _res.getNString(columnLabel);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getNCharacterStream(int columnIndex) throws SQLException {
-        try {
-            return _res.getNCharacterStream(columnIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getNCharacterStream(String columnLabel) throws SQLException {
-        try {
-            return _res.getNCharacterStream(columnLabel);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void updateNCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateNCharacterStream(columnIndex, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateNCharacterStream(columnLabel, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateAsciiStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
-        try {
-            _res.updateAsciiStream(columnIndex, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBinaryStream(int columnIndex, InputStream inputStream, long length) throws SQLException {
-        try {
-            _res.updateBinaryStream(columnIndex, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateCharacterStream(int columnIndex, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateCharacterStream(columnIndex, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateAsciiStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
-        try {
-            _res.updateAsciiStream(columnLabel, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBinaryStream(String columnLabel, InputStream inputStream, long length) throws SQLException {
-        try {
-            _res.updateBinaryStream(columnLabel, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateCharacterStream(String columnLabel, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateCharacterStream(columnLabel, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBlob(int columnIndex, InputStream inputStream, long length) throws SQLException {
-        try {
-            _res.updateBlob(columnIndex, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBlob(String columnLabel, InputStream inputStream, long length) throws SQLException {
-        try {
-            _res.updateBlob(columnLabel, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateClob(int columnIndex, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateClob(columnIndex, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateClob(String columnLabel, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateClob(columnLabel, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateNClob(int columnIndex, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateNClob(columnIndex, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateNClob(String columnLabel, Reader reader, long length) throws SQLException {
-        try {
-            _res.updateNClob(columnLabel, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateNCharacterStream(int columnIndex, Reader reader) throws SQLException {
-        try {
-            _res.updateNCharacterStream(columnIndex, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateNCharacterStream(String columnLabel, Reader reader) throws SQLException {
-        try {
-            _res.updateNCharacterStream(columnLabel, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateAsciiStream(int columnIndex, InputStream inputStream) throws SQLException {
-        try {
-            _res.updateAsciiStream(columnIndex, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBinaryStream(int columnIndex, InputStream inputStream) throws SQLException {
-        try {
-            _res.updateBinaryStream(columnIndex, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateCharacterStream(int columnIndex, Reader reader) throws SQLException {
-        try {
-            _res.updateCharacterStream(columnIndex, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateAsciiStream(String columnLabel, InputStream inputStream) throws SQLException {
-        try {
-            _res.updateAsciiStream(columnLabel, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBinaryStream(String columnLabel, InputStream inputStream) throws SQLException {
-        try {
-            _res.updateBinaryStream(columnLabel, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateCharacterStream(String columnLabel, Reader reader) throws SQLException {
-        try {
-            _res.updateCharacterStream(columnLabel, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBlob(int columnIndex, InputStream inputStream) throws SQLException {
-        try {
-            _res.updateBlob(columnIndex, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateBlob(String columnLabel, InputStream inputStream) throws SQLException {
-        try {
-            _res.updateBlob(columnLabel, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateClob(int columnIndex, Reader reader) throws SQLException {
-        try {
-            _res.updateClob(columnIndex, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateClob(String columnLabel, Reader reader) throws SQLException {
-        try {
-            _res.updateClob(columnLabel, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateNClob(int columnIndex, Reader reader) throws SQLException {
-        try {
-            _res.updateNClob(columnIndex, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void updateNClob(String columnLabel, Reader reader) throws SQLException {
-        try {
-            _res.updateNClob(columnLabel, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-/* JDBC_4_ANT_KEY_END */
 }

@@ -1,1532 +1,2022 @@
-package com.fasterxml.jackson.databind.deser;
+package com.fasterxml.jackson.databind;
 
-import java.io.IOException;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
+import java.io.*;
+import java.net.URL;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonTypeInfo;
-import com.fasterxml.jackson.annotation.ObjectIdGenerator;
-import com.fasterxml.jackson.annotation.ObjectIdGenerators;
-import com.fasterxml.jackson.annotation.ObjectIdResolver;
 import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.deser.impl.*;
-import com.fasterxml.jackson.databind.deser.std.StdDelegatingDeserializer;
-import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
-import com.fasterxml.jackson.databind.exc.IgnoredPropertyException;
-import com.fasterxml.jackson.databind.introspect.*;
-import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
-import com.fasterxml.jackson.databind.type.ClassKey;
-import com.fasterxml.jackson.databind.util.*;
+import com.fasterxml.jackson.core.filter.FilteringParserDelegate;
+import com.fasterxml.jackson.core.filter.JsonPointerBasedFilter;
+import com.fasterxml.jackson.core.filter.TokenFilter;
+import com.fasterxml.jackson.core.type.ResolvedType;
+import com.fasterxml.jackson.core.type.TypeReference;
+
+import com.fasterxml.jackson.databind.cfg.ContextAttributes;
+import com.fasterxml.jackson.databind.deser.DataFormatReaders;
+import com.fasterxml.jackson.databind.deser.DefaultDeserializationContext;
+import com.fasterxml.jackson.databind.deser.DeserializationProblemHandler;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.TreeTraversingParser;
+import com.fasterxml.jackson.databind.type.SimpleType;
+import com.fasterxml.jackson.databind.type.TypeFactory;
+import com.fasterxml.jackson.databind.util.ClassUtil;
 
 /**
- * Base class for <code>BeanDeserializer</code>.
+ * Builder object that can be used for per-serialization configuration of
+ * deserialization parameters, such as root type to use or object
+ * to update (instead of constructing new instance).
+ *<p>
+ * Uses "mutant factory" pattern so that instances are immutable
+ * (and thus fully thread-safe with no external synchronization);
+ * new instances are constructed for different configurations.
+ * Instances are initially constructed by {@link ObjectMapper} and can be
+ * reused, shared, cached; both because of thread-safety and because
+ * instances are relatively light-weight.
+ *<p>
+ * NOTE: this class is NOT meant as sub-classable (with Jackson 2.8 and
+ * above) by users. It is left as non-final mostly to allow frameworks
+ * that require bytecode generation for proxying and similar use cases,
+ * but there is no expecation that functionality should be extended
+ * by sub-classing.
  */
-public abstract class BeanDeserializerBase
-    extends StdDeserializer<Object>
-    implements ContextualDeserializer, ResolvableDeserializer,
-        java.io.Serializable // since 2.1
+public class ObjectReader
+    extends ObjectCodec
+    implements Versioned, java.io.Serializable // since 2.1
 {
-    private static final long serialVersionUID = 1;
+    private static final long serialVersionUID = 2L; // since 2.9
 
-    protected final static PropertyName TEMP_PROPERTY_NAME = new PropertyName("#temporary-name");
-
-    /*
-    /**********************************************************
-    /* Information regarding type being deserialized
-    /**********************************************************
-     */
-
-    /**
-     * Annotations from the bean class: used for accessing
-     * annotations during resolution
-     * (see {@link #resolve}) and
-     * contextualization (see {@link #createContextual})
-     *<p> 
-     * Transient since annotations only used during construction.
-     */
-    final private transient Annotations _classAnnotations;
-
-    /**
-     * Declared type of the bean this deserializer handles.
-     */
-    final protected JavaType _beanType;
-
-    /**
-     * Requested shape from bean class annotations.
-     */
-    final protected JsonFormat.Shape _serializationShape;
-    
-    /*
-    /**********************************************************
-    /* Configuration for creating value instance
-    /**********************************************************
-     */
-
-    /**
-     * Object that handles details of constructing initial 
-     * bean value (to which bind data to), unless instance
-     * is passed (via updateValue())
-     */
-    protected final ValueInstantiator _valueInstantiator;
-    
-    /**
-     * Deserializer that is used iff delegate-based creator is
-     * to be used for deserializing from JSON Object.
-     */
-    protected JsonDeserializer<Object> _delegateDeserializer;
-    
-    /**
-     * If the bean needs to be instantiated using constructor
-     * or factory method
-     * that takes one or more named properties as argument(s),
-     * this creator is used for instantiation.
-     * This value gets resolved during general resolution.
-     */
-    protected PropertyBasedCreator _propertyBasedCreator;
-
-    /**
-     * Flag that is set to mark "non-standard" cases; where either
-     * we use one of non-default creators, or there are unwrapped
-     * values to consider.
-     */
-    protected boolean _nonStandardCreation;
-
-    /**
-     * Flag that indicates that no "special features" whatsoever
-     * are enabled, so the simplest processing is possible.
-     */
-    protected boolean _vanillaProcessing;
+    private final static JavaType JSON_NODE_TYPE = SimpleType.constructUnsafe(JsonNode.class);
 
     /*
     /**********************************************************
-    /* Property information, setters
+    /* Immutable configuration from ObjectMapper
     /**********************************************************
      */
 
     /**
-     * Mapping of property names to properties, built when all properties
-     * to use have been successfully resolved.
+     * General serialization configuration settings; while immutable,
+     * can use copy-constructor to create modified instances as necessary.
      */
-    final protected BeanPropertyMap _beanProperties;
+    protected final DeserializationConfig _config;
 
     /**
-     * List of {@link ValueInjector}s, if any injectable values are
-     * expected by the bean; otherwise null.
-     * This includes injectors used for injecting values via setters
-     * and fields, but not ones passed through constructor parameters.
+     * Blueprint instance of deserialization context; used for creating
+     * actual instance when needed.
      */
-    final protected ValueInjector[] _injectables;
+    protected final DefaultDeserializationContext _context;
 
     /**
-     * Fallback setter used for handling any properties that are not
-     * mapped to regular setters. If setter is not null, it will be
-     * called once for each such property.
+     * Factory used for constructing {@link JsonGenerator}s
      */
-    protected SettableAnyProperty _anySetter;
+    protected final JsonFactory _parserFactory;
 
     /**
-     * In addition to properties that are set, we will also keep
-     * track of recognized but ignorable properties: these will
-     * be skipped without errors or warnings.
+     * Flag that indicates whether root values are expected to be unwrapped or not
      */
-    final protected HashSet<String> _ignorableProps;
+    protected final boolean _unwrapRoot;
 
     /**
-     * Flag that can be set to ignore and skip unknown properties.
-     * If set, will not throw an exception for unknown properties.
+     * Filter to be consider for JsonParser.  
+     * Default value to be null as filter not considered.
      */
-    final protected boolean _ignoreAllUnknown;
-
-    /**
-     * Flag that indicates that some aspect of deserialization depends
-     * on active view used (if any)
-     */
-    final protected boolean _needViewProcesing;
-    
-    /**
-     * We may also have one or more back reference fields (usually
-     * zero or one).
-     */
-    final protected Map<String, SettableBeanProperty> _backRefs;
+    private final TokenFilter _filter;
     
     /*
     /**********************************************************
-    /* Related handlers
+    /* Configuration that can be changed during building
     /**********************************************************
      */
 
     /**
-     * Lazily constructed map used to contain deserializers needed
-     * for polymorphic subtypes.
-     * Note that this is <b>only needed</b> for polymorphic types,
-     * that is, when the actual type is not statically known.
-     * For other types this remains null.
+     * Declared type of value to instantiate during deserialization.
+     * Defines which deserializer to use; as well as base type of instance
+     * to construct if an updatable value is not configured to be used
+     * (subject to changes by embedded type information, for polymorphic
+     * types). If {@link #_valueToUpdate} is non-null, only used for
+     * locating deserializer.
      */
-    protected transient HashMap<ClassKey, JsonDeserializer<Object>> _subDeserializers;
+    protected final JavaType _valueType;
 
     /**
-     * If one of properties has "unwrapped" value, we need separate
-     * helper object
-     */
-    protected UnwrappedPropertyHandler _unwrappedPropertyHandler;
-
-    /**
-     * Handler that we need iff any of properties uses external
-     * type id.
-     */
-    protected ExternalTypeHandler _externalTypeIdHandler;
-
-    /**
-     * If an Object Id is to be used for value handled by this
-     * deserializer, this reader is used for handling.
-     */
-    protected final ObjectIdReader _objectIdReader;
-
-    /*
-    /**********************************************************
-    /* Life-cycle, construction, initialization
-    /**********************************************************
-     */
-
-    /**
-     * Constructor used when initially building a deserializer
-     * instance, given a {@link BeanDeserializerBuilder} that
-     * contains configuration.
-     */
-    protected BeanDeserializerBase(BeanDeserializerBuilder builder,
-            BeanDescription beanDesc,
-            BeanPropertyMap properties, Map<String, SettableBeanProperty> backRefs,
-            HashSet<String> ignorableProps, boolean ignoreAllUnknown,
-            boolean hasViews)
-    {
-        super(beanDesc.getType());
-
-        AnnotatedClass ac = beanDesc.getClassInfo();
-        _classAnnotations = ac.getAnnotations();       
-        _beanType = beanDesc.getType();
-        _valueInstantiator = builder.getValueInstantiator();
-        
-        _beanProperties = properties;
-        _backRefs = backRefs;
-        _ignorableProps = ignorableProps;
-        _ignoreAllUnknown = ignoreAllUnknown;
-
-        _anySetter = builder.getAnySetter();
-        List<ValueInjector> injectables = builder.getInjectables();
-        _injectables = (injectables == null || injectables.isEmpty()) ? null
-                : injectables.toArray(new ValueInjector[injectables.size()]);
-        _objectIdReader = builder.getObjectIdReader();
-        _nonStandardCreation = (_unwrappedPropertyHandler != null)
-            || _valueInstantiator.canCreateUsingDelegate()
-            || _valueInstantiator.canCreateFromObjectWith()
-            || !_valueInstantiator.canCreateUsingDefault()
-            ;
-
-        // Any transformation we may need to apply?
-        JsonFormat.Value format = beanDesc.findExpectedFormat(null);
-        _serializationShape = (format == null) ? null : format.getShape();
-
-        _needViewProcesing = hasViews;
-        _vanillaProcessing = !_nonStandardCreation
-                && (_injectables == null)
-                && !_needViewProcesing
-                // also, may need to reorder stuff if we expect Object Id:
-                && (_objectIdReader == null)
-                ;
-    }
-
-    protected BeanDeserializerBase(BeanDeserializerBase src) {
-        this(src, src._ignoreAllUnknown);
-    }
-
-    protected BeanDeserializerBase(BeanDeserializerBase src, boolean ignoreAllUnknown)
-    {
-        super(src._beanType);
-        
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-        
-        _beanProperties = src._beanProperties;
-        _backRefs = src._backRefs;
-        _ignorableProps = src._ignorableProps;
-        _ignoreAllUnknown = ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        _objectIdReader = src._objectIdReader;
-        
-        _nonStandardCreation = src._nonStandardCreation;
-        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        _vanillaProcessing = src._vanillaProcessing;
-    }
- 
-    protected BeanDeserializerBase(BeanDeserializerBase src, NameTransformer unwrapper)
-    {
-        super(src._beanType);
-
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-
-        _backRefs = src._backRefs;
-        _ignorableProps = src._ignorableProps;
-        _ignoreAllUnknown = (unwrapper != null) || src._ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        _objectIdReader = src._objectIdReader;
-
-        _nonStandardCreation = src._nonStandardCreation;
-        UnwrappedPropertyHandler uph = src._unwrappedPropertyHandler;
-
-        if (unwrapper != null) {
-            // delegate further unwraps, if any
-            if (uph != null) { // got handler, delegate
-                uph = uph.renameAll(unwrapper);
-            }
-            // and handle direct unwrapping as well:
-            _beanProperties = src._beanProperties.renameAll(unwrapper);
-        } else {
-            _beanProperties = src._beanProperties;
-        }
-        _unwrappedPropertyHandler = uph;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        // probably adds a twist, so:
-        _vanillaProcessing = false;
-    }
-
-    public BeanDeserializerBase(BeanDeserializerBase src, ObjectIdReader oir)
-    {
-        super(src._beanType);
-        
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-        
-        _backRefs = src._backRefs;
-        _ignorableProps = src._ignorableProps;
-        _ignoreAllUnknown = src._ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        
-        _nonStandardCreation = src._nonStandardCreation;
-        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        // then actual changes:
-        _objectIdReader = oir;
-
-        if (oir == null) {
-            _beanProperties = src._beanProperties;
-            _vanillaProcessing = src._vanillaProcessing;
-        } else {
-            /* 18-Nov-2012, tatu: May or may not have annotations for id property;
-             *   but no easy access. But hard to see id property being optional,
-             *   so let's consider required at this point.
-             */
-            ObjectIdValueProperty idProp = new ObjectIdValueProperty(oir, PropertyMetadata.STD_REQUIRED);
-            _beanProperties = src._beanProperties.withProperty(idProp);
-            _vanillaProcessing = false;
-        }
-    }
-
-    public BeanDeserializerBase(BeanDeserializerBase src, HashSet<String> ignorableProps)
-    {
-        super(src._beanType);
-        
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-        
-        _backRefs = src._backRefs;
-        _ignorableProps = ignorableProps;
-        _ignoreAllUnknown = src._ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        
-        _nonStandardCreation = src._nonStandardCreation;
-        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        _vanillaProcessing = src._vanillaProcessing;
-        _objectIdReader = src._objectIdReader;
-        _beanProperties = src._beanProperties;
-    }
-    
-    @Override
-    public abstract JsonDeserializer<Object> unwrappingDeserializer(NameTransformer unwrapper);
-
-    public abstract BeanDeserializerBase withObjectIdReader(ObjectIdReader oir);
-
-    public abstract BeanDeserializerBase withIgnorableProperties(HashSet<String> ignorableProps);
-
-    /**
-     * Fluent factory for creating a variant that can handle
-     * POJO output as a JSON Array. Implementations may ignore this request
-     * if no such input is possible.
+     * We may pre-fetch deserializer as soon as {@link #_valueType}
+     * is known, and if so, reuse it afterwards.
+     * This allows avoiding further deserializer lookups and increases
+     * performance a bit on cases where readers are reused.
      * 
      * @since 2.1
      */
-    protected abstract BeanDeserializerBase asArrayDeserializer();
-
-    /*
-    /**********************************************************
-    /* Validation, post-processing
-    /**********************************************************
-     */
-
-    /**
-     * Method called to finalize setup of this deserializer,
-     * after deserializer itself has been registered.
-     * This is needed to handle recursive and transitive dependencies.
-     */
-    @Override
-    public void resolve(DeserializationContext ctxt)
-        throws JsonMappingException
-    {
-        ExternalTypeHandler.Builder extTypes = null;
-        // if ValueInstantiator can use "creator" approach, need to resolve it here...
-        SettableBeanProperty[] creatorProps;
-        if (_valueInstantiator.canCreateFromObjectWith()) {
-            creatorProps = _valueInstantiator.getFromObjectArguments(ctxt.getConfig());
-            // also: need to try to resolve 'external' type ids...
-            for (SettableBeanProperty prop : creatorProps) {
-                if (prop.hasValueTypeDeserializer()) {
-                    TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
-                    if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
-                        if (extTypes == null) {
-                            extTypes = new ExternalTypeHandler.Builder();
-                        }
-                        extTypes.addExternal(prop, typeDeser);
-                    }
-                }
-            }
-        } else {
-            creatorProps = null;
-        }
-
-        UnwrappedPropertyHandler unwrapped = null;
-
-        for (SettableBeanProperty origProp : _beanProperties) {
-            SettableBeanProperty prop = origProp;
-
-            // May already have deserializer from annotations, if so, skip:
-            if (!prop.hasValueDeserializer()) {
-                // [Issue#125]: allow use of converters
-                JsonDeserializer<?> deser = findConvertingDeserializer(ctxt, prop);
-                if (deser == null) {
-                    deser = findDeserializer(ctxt, prop.getType(), prop);
-                }
-                prop = prop.withValueDeserializer(deser);
-            } else { // may need contextual version
-                JsonDeserializer<Object> deser = prop.getValueDeserializer();
-                /* Important! This is the only place where actually handle "primary"
-                 * property deserializers -- call is different from other places.
-                 */
-                JsonDeserializer<?> cd = ctxt.handlePrimaryContextualization(deser, prop,
-                        prop.getType());
-                if (cd != deser) {
-                    prop = prop.withValueDeserializer(cd);
-                }
-            }
-
-            // [JACKSON-235]: need to link managed references with matching back references
-            prop = _resolveManagedReferenceProperty(ctxt, prop);
-
-            // issue #351: need to wrap properties that require object id resolution.
-            if (!(prop instanceof ManagedReferenceProperty)) {
-                prop = _resolvedObjectIdProperty(ctxt, prop);
-            }
-            // [JACKSON-132]: support unwrapped values (via @JsonUnwrapped)
-            SettableBeanProperty u = _resolveUnwrappedProperty(ctxt, prop);
-            if (u != null) {
-                prop = u;
-                if (unwrapped == null) {
-                    unwrapped = new UnwrappedPropertyHandler();
-                }
-                unwrapped.addProperty(prop);
-                /* 12-Dec-2014, tatu: As per [databind#647], we will have problems if
-                 *    the original property is left in place. So let's remove it now.
-                 */
-                _beanProperties.remove(prop);
-                continue;
-            }
-            // [JACKSON-594]: non-static inner classes too:
-            prop = _resolveInnerClassValuedProperty(ctxt, prop);
-            if (prop != origProp) {
-                _beanProperties.replace(prop);
-                // [databind#795]: Make sure PropertyBasedCreator's properties stay in sync
-                if (creatorProps != null) {
-                    // 18-May-2015, tatu: _Should_ start with consistent set. But can we really
-                    //   fully count on this? May need to revisit in future; seems to hold for now.
-                    for (int i = 0, len = creatorProps.length; i < len; ++i) {
-                        if (creatorProps[i] == origProp) {
-                            creatorProps[i] = prop;
-                            break;
-                        }
-                        // ... as per above, it is possible we'd need to add this as fallback
-                        // if (but only if) identity check fails?
-                        /*
-                        if (creatorProps[i].getName().equals(prop.getName())) {
-                            creatorProps[i] = prop;
-                            break;
-                        }
-                        */
-                    }
-                }
-            }
-            // one more thing: if this property uses "external property" type inclusion,
-            // it needs different handling altogether
-            if (prop.hasValueTypeDeserializer()) {
-                TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
-                if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
-                    if (extTypes == null) {
-                        extTypes = new ExternalTypeHandler.Builder();
-                    }
-                    extTypes.addExternal(prop, typeDeser);
-                    // In fact, remove from list of known properties to simplify later handling
-                    _beanProperties.remove(prop);
-                    continue;
-                }
-            }
-        }
-
-        // "any setter" may also need to be resolved now
-        if (_anySetter != null && !_anySetter.hasValueDeserializer()) {
-            _anySetter = _anySetter.withValueDeserializer(findDeserializer(ctxt,
-                    _anySetter.getType(), _anySetter.getProperty()));
-        }
-
-        // as well as delegate-based constructor:
-        if (_valueInstantiator.canCreateUsingDelegate()) {
-            JavaType delegateType = _valueInstantiator.getDelegateType(ctxt.getConfig());
-            if (delegateType == null) {
-                throw new IllegalArgumentException("Invalid delegate-creator definition for "+_beanType
-                        +": value instantiator ("+_valueInstantiator.getClass().getName()
-                        +") returned true for 'canCreateUsingDelegate()', but null for 'getDelegateType()'");
-            }
-            AnnotatedWithParams delegateCreator = _valueInstantiator.getDelegateCreator();
-            // Need to create a temporary property to allow contextual deserializers:
-            BeanProperty.Std property = new BeanProperty.Std(TEMP_PROPERTY_NAME,
-                    delegateType, null, _classAnnotations, delegateCreator,
-                    PropertyMetadata.STD_OPTIONAL);
-
-            TypeDeserializer td = delegateType.getTypeHandler();
-            if (td == null) {
-                td = ctxt.getConfig().findTypeDeserializer(delegateType);
-            }
-            JsonDeserializer<Object> dd = findDeserializer(ctxt, delegateType, property);
-            if (td != null) {
-                td = td.forProperty(property);
-                dd = new TypeWrappedDeserializer(td, dd);
-            }
-            _delegateDeserializer = dd;
-        }
-
-        // And now that we know CreatorProperty instances are also resolved can finally create the creator:
-        if (creatorProps != null) {
-            _propertyBasedCreator = PropertyBasedCreator.construct(ctxt, _valueInstantiator, creatorProps);
-        }
-
-        if (extTypes != null) {
-            _externalTypeIdHandler = extTypes.build();
-            // we consider this non-standard, to offline handling
-            _nonStandardCreation = true;
-        }
-        
-        _unwrappedPropertyHandler = unwrapped;
-        if (unwrapped != null) { // we consider this non-standard, to offline handling
-            _nonStandardCreation = true;
-        }
-
-        // may need to disable vanilla processing, if unwrapped handling was enabled...
-        _vanillaProcessing = _vanillaProcessing && !_nonStandardCreation;
-    }
-
-    /**
-     * Helper method that can be used to see if specified property is annotated
-     * to indicate use of a converter for property value (in case of container types,
-     * it is container type itself, not key or content type).
-     * 
-     * @since 2.2
-     */
-    protected JsonDeserializer<Object> findConvertingDeserializer(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-        throws JsonMappingException
-    {
-        final AnnotationIntrospector intr = ctxt.getAnnotationIntrospector();
-        if (intr != null) {
-            Object convDef = intr.findDeserializationConverter(prop.getMember());
-            if (convDef != null) {
-                Converter<Object,Object> conv = ctxt.converterInstance(prop.getMember(), convDef);
-                JavaType delegateType = conv.getInputType(ctxt.getTypeFactory());
-                JsonDeserializer<?> ser = ctxt.findContextualValueDeserializer(delegateType, prop);
-                return new StdDelegatingDeserializer<Object>(conv, delegateType, ser);
-            }
-        }
-        return null;
-    }
+    protected final JsonDeserializer<Object> _rootDeserializer;
     
     /**
-     * Although most of post-processing is done in resolve(), we only get
-     * access to referring property's annotations here; and this is needed
-     * to support per-property ObjectIds.
-     * We will also consider Shape transformations (read from Array) at this
-     * point, since it may come from either Class definition or property.
+     * Instance to update with data binding; if any. If null,
+     * a new instance is created, if non-null, properties of
+     * this value object will be updated instead.
+     * Note that value can be of almost any type, except not
+     * {@link com.fasterxml.jackson.databind.type.ArrayType}; array
+     * types cannot be modified because array size is immutable.
      */
-    @Override
-    public JsonDeserializer<?> createContextual(DeserializationContext ctxt,
-            BeanProperty property) throws JsonMappingException
-    {
-        ObjectIdReader oir = _objectIdReader;
-        
-        // First: may have an override for Object Id:
-        final AnnotationIntrospector intr = ctxt.getAnnotationIntrospector();
-        final AnnotatedMember accessor = (property == null || intr == null)
-                ? null : property.getMember();
-        if (accessor != null && intr != null) {
-            ObjectIdInfo objectIdInfo = intr.findObjectIdInfo(accessor);
-            if (objectIdInfo != null) { // some code duplication here as well (from BeanDeserializerFactory)
-                // 2.1: allow modifications by "id ref" annotations as well:
-                objectIdInfo = intr.findObjectReferenceInfo(accessor, objectIdInfo);
-                
-                Class<?> implClass = objectIdInfo.getGeneratorType();
-                // Property-based generator is trickier
-                JavaType idType;
-                SettableBeanProperty idProp;
-                ObjectIdGenerator<?> idGen;
-                ObjectIdResolver resolver = ctxt.objectIdResolverInstance(accessor, objectIdInfo);
-                if (implClass == ObjectIdGenerators.PropertyGenerator.class) {
-                    PropertyName propName = objectIdInfo.getPropertyName();
-                    idProp = findProperty(propName);
-                    if (idProp == null) {
-                        throw new IllegalArgumentException("Invalid Object Id definition for "
-                                +handledType().getName()+": can not find property with name '"+propName+"'");
-                    }
-                    idType = idProp.getType();
-                    idGen = new PropertyBasedObjectIdGenerator(objectIdInfo.getScope());
-                } else { // other types need to be simpler
-                    JavaType type = ctxt.constructType(implClass);
-                    idType = ctxt.getTypeFactory().findTypeParameters(type, ObjectIdGenerator.class)[0];
-                    idProp = null;
-                    idGen = ctxt.objectIdGeneratorInstance(accessor, objectIdInfo);
-                }
-                JsonDeserializer<?> deser = ctxt.findRootValueDeserializer(idType);
-                oir = ObjectIdReader.construct(idType, objectIdInfo.getPropertyName(),
-                		idGen, deser, idProp, resolver);
-            }
-        }
-        // either way, need to resolve serializer:
-        BeanDeserializerBase contextual = this;
-        if (oir != null && oir != _objectIdReader) {
-            contextual = contextual.withObjectIdReader(oir);
-        }
-        // And possibly add more properties to ignore
-        if (accessor != null) {
-            String[] ignorals = intr.findPropertiesToIgnore(accessor, false);
-            if (ignorals != null && ignorals.length != 0) {
-                HashSet<String> newIgnored = ArrayBuilders.setAndArray(contextual._ignorableProps, ignorals);
-                contextual = contextual.withIgnorableProperties(newIgnored);
-            }
-        }
-
-        // One more thing: are we asked to serialize POJO as array?
-        JsonFormat.Shape shape = null;
-        if (accessor != null) {
-            JsonFormat.Value format = intr.findFormat((Annotated) accessor);
-
-            if (format != null) {
-                shape = format.getShape();
-            }
-        }
-        if (shape == null) {
-            shape = _serializationShape;
-        }
-        if (shape == JsonFormat.Shape.ARRAY) {
-            contextual = contextual.asArrayDeserializer();
-        }
-        return contextual;
-    }
+    protected final Object _valueToUpdate;
 
     /**
-     * Helper method called to see if given property is part of 'managed' property
-     * pair (managed + back reference), and if so, handle resolution details.
+     * When using data format that uses a schema, schema is passed
+     * to parser.
      */
-    protected SettableBeanProperty _resolveManagedReferenceProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-    {
-        String refName = prop.getManagedReferenceName();
-        if (refName == null) {
-            return prop;
-        }
-        JsonDeserializer<?> valueDeser = prop.getValueDeserializer();
-        SettableBeanProperty backProp = valueDeser.findBackReference(refName);
-        if (backProp == null) {
-            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': no back reference property found from type "
-                    +prop.getType());
-        }
-        // also: verify that type is compatible
-        JavaType referredType = _beanType;
-        JavaType backRefType = backProp.getType();
-        boolean isContainer = prop.getType().isContainerType();
-        if (!backRefType.getRawClass().isAssignableFrom(referredType.getRawClass())) {
-            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': back reference type ("
-                    +backRefType.getRawClass().getName()+") not compatible with managed type ("
-                    +referredType.getRawClass().getName()+")");
-        }
-        return new ManagedReferenceProperty(prop, refName, backProp,
-                _classAnnotations, isContainer);
-    }
+    protected final FormatSchema _schema;
 
     /**
-     * Method that wraps given property with {@link ObjectIdReferenceProperty}
-     * in case where object id resolution is required.
+     * Values that can be injected during deserialization, if any.
      */
-    protected SettableBeanProperty _resolvedObjectIdProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-    {
-        ObjectIdInfo objectIdInfo = prop.getObjectIdInfo();
-        JsonDeserializer<Object> valueDeser = prop.getValueDeserializer();
-        ObjectIdReader objectIdReader = valueDeser.getObjectIdReader();
-        if (objectIdInfo == null && objectIdReader == null) {
-            return prop;
-        }
-        return new ObjectIdReferenceProperty(prop, objectIdInfo);
-    }
+    protected final InjectableValues _injectableValues;
 
     /**
-     * Helper method called to see if given property might be so-called unwrapped
-     * property: these require special handling.
-     */
-    protected SettableBeanProperty _resolveUnwrappedProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-    {
-        AnnotatedMember am = prop.getMember();
-        if (am != null) {
-            NameTransformer unwrapper = ctxt.getAnnotationIntrospector().findUnwrappingNameTransformer(am);
-            if (unwrapper != null) {
-                JsonDeserializer<Object> orig = prop.getValueDeserializer();
-                JsonDeserializer<Object> unwrapping = orig.unwrappingDeserializer(unwrapper);
-                if (unwrapping != orig && unwrapping != null) {
-                    // might be cleaner to create new instance; but difficult to do reliably, so:
-                    return prop.withValueDeserializer(unwrapping);
-                }
-            }
-        }
-        return null;
-    }
-    
-    /**
-     * Helper method that will handle gruesome details of dealing with properties
-     * that have non-static inner class as value...
-     */
-    protected SettableBeanProperty _resolveInnerClassValuedProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-    {            
-        /* Should we encounter a property that has non-static inner-class
-         * as value, we need to add some more magic to find the "hidden" constructor...
-         */
-        JsonDeserializer<Object> deser = prop.getValueDeserializer();
-        // ideally wouldn't rely on it being BeanDeserializerBase; but for now it'll have to do
-        if (deser instanceof BeanDeserializerBase) {
-            BeanDeserializerBase bd = (BeanDeserializerBase) deser;
-            ValueInstantiator vi = bd.getValueInstantiator();
-            if (!vi.canCreateUsingDefault()) { // no default constructor
-                Class<?> valueClass = prop.getType().getRawClass();
-                Class<?> enclosing = ClassUtil.getOuterClass(valueClass);
-                // and is inner class of the bean class...
-                if (enclosing != null && enclosing == _beanType.getRawClass()) {
-                    for (Constructor<?> ctor : valueClass.getConstructors()) {
-                        Class<?>[] paramTypes = ctor.getParameterTypes();
-                        if (paramTypes.length == 1 && paramTypes[0] == enclosing) {
-                            if (ctxt.getConfig().canOverrideAccessModifiers()) {
-                                ClassUtil.checkAndFixAccess(ctor);
-                            }
-                            return new InnerClassProperty(prop, ctor);
-                        }
-                    }
-                }
-            }
-        }
-        return prop;
-    }
-
-    /*
-    /**********************************************************
-    /* Public accessors
-    /**********************************************************
-     */
-
-    @Override
-    public boolean isCachable() { return true; }
-
-    @Override
-    public Class<?> handledType() {
-        return _beanType.getRawClass();
-    }
-    
-    /**
-     * Overridden to return true for those instances that are
-     * handling value for which Object Identity handling is enabled
-     * (either via value type or referring property).
-     */
-    @Override
-    public ObjectIdReader getObjectIdReader() {
-        return _objectIdReader;
-    }
-    
-    public boolean hasProperty(String propertyName) {
-        return _beanProperties.find(propertyName) != null;
-    }
-
-    public boolean hasViews() {
-        return _needViewProcesing;
-    }
-    
-    /**
-     * Accessor for checking number of deserialized properties.
-     */
-    public int getPropertyCount() { 
-        return _beanProperties.size();
-    }
-
-    @Override
-    public Collection<Object> getKnownPropertyNames() {
-        ArrayList<Object> names = new ArrayList<Object>();
-        for (SettableBeanProperty prop : _beanProperties) {
-            names.add(prop.getName());
-        }
-        return names;
-    }
-
-    /**
-     * @deprecated Since 2.3, use {@link #handledType()} instead
-     */
-    @Deprecated
-    public final Class<?> getBeanClass() { return _beanType.getRawClass(); }
-
-    @Override
-    public JavaType getValueType() { return _beanType; }
-
-    /**
-     * Accessor for iterating over properties this deserializer uses; with
-     * the exception that properties passed via Creator methods
-     * (specifically, "property-based constructor") are not included,
-     * but can be accessed separate by calling
-     * {@link #creatorProperties}
-     */
-    public Iterator<SettableBeanProperty> properties()
-    {
-        if (_beanProperties == null) {
-            throw new IllegalStateException("Can only call after BeanDeserializer has been resolved");
-        }
-        return _beanProperties.iterator();
-    }
-
-    /**
-     * Accessor for finding properties that represents values to pass
-     * through property-based creator method (constructor or
-     * factory method)
-     * 
-     * @since 2.0
-     */
-    public Iterator<SettableBeanProperty> creatorProperties()
-    {
-        if (_propertyBasedCreator == null) {
-            return Collections.<SettableBeanProperty>emptyList().iterator();
-        }
-        return _propertyBasedCreator.properties().iterator();
-    }
-
-    public SettableBeanProperty findProperty(PropertyName propertyName)
-    {
-        // TODO: start matching full name?
-        return findProperty(propertyName.getSimpleName());
-    }
-    
-    /**
-     * Accessor for finding the property with given name, if POJO
-     * has one. Name used is the external name, i.e. name used
-     * in external data representation (JSON).
-     * 
-     * @since 2.0
-     */
-    public SettableBeanProperty findProperty(String propertyName)
-    {
-        SettableBeanProperty prop = (_beanProperties == null) ?
-                null : _beanProperties.find(propertyName);
-        if (prop == null && _propertyBasedCreator != null) {
-            prop = _propertyBasedCreator.findCreatorProperty(propertyName);
-        }
-        return prop;
-    }
-
-    /**
-     * Alternate find method that tries to locate a property with given
-     * <code>property index</code>.
-     * Note that access by index is not necessarily faster than by name,
-     * since properties are not directly indexable; however, for most
-     * instances difference is not significant as number of properties
-     * is low.
-     * 
-     * @since 2.3
-     */
-    public SettableBeanProperty findProperty(int propertyIndex)
-    {
-        SettableBeanProperty prop = (_beanProperties == null) ?
-                null : _beanProperties.find(propertyIndex);
-        if (prop == null && _propertyBasedCreator != null) {
-            prop = _propertyBasedCreator.findCreatorProperty(propertyIndex);
-        }
-        return prop;
-    }
-    
-    /**
-     * Method needed by {@link BeanDeserializerFactory} to properly link
-     * managed- and back-reference pairs.
-     */
-    @Override
-    public SettableBeanProperty findBackReference(String logicalName)
-    {
-        if (_backRefs == null) {
-            return null;
-        }
-        return _backRefs.get(logicalName);
-    }
-
-    public ValueInstantiator getValueInstantiator() {
-        return _valueInstantiator;
-    }
-
-    /*
-    /**********************************************************
-    /* Mutators
-    /**********************************************************
-     */
-
-    /**
-     * Method that can be used to replace an existing property with
-     * a modified one.
+     * Optional detector used for auto-detecting data format that byte-based
+     * input uses.
      *<p>
-     * NOTE: only ever use this method if you know what you are doing;
-     * incorrect usage can break deserializer.
-     *
-     * @param original Property to replace
-     * @param replacement Property to replace it with
+     * NOTE: If defined non-null, <code>readValue()</code> methods that take
+     * {@link Reader} or {@link String} input <b>will fail with exception</b>,
+     * because format-detection only works on byte-sources. Also, if format
+     * cannot be detect reliably (as per detector settings),
+     * a {@link JsonParseException} will be thrown).
      * 
      * @since 2.1
      */
-    public void replaceProperty(SettableBeanProperty original,
-            SettableBeanProperty replacement)
+    protected final DataFormatReaders _dataFormatReaders;
+
+    /*
+    /**********************************************************
+    /* Caching
+    /**********************************************************
+     */
+
+    /**
+     * Root-level cached deserializers.
+     * Passed by {@link ObjectMapper}, shared with it.
+     */
+    final protected ConcurrentHashMap<JavaType, JsonDeserializer<Object>> _rootDeserializers;
+
+    /*
+    /**********************************************************
+    /* Life-cycle, construction
+    /**********************************************************
+     */
+
+    /**
+     * Constructor used by {@link ObjectMapper} for initial instantiation
+     */
+    protected ObjectReader(ObjectMapper mapper, DeserializationConfig config) {
+        this(mapper, config, null, null, null, null);
+    }
+
+    /**
+     * Constructor called when a root deserializer should be fetched based
+     * on other configuration.
+     */
+    protected ObjectReader(ObjectMapper mapper, DeserializationConfig config,
+            JavaType valueType, Object valueToUpdate,
+            FormatSchema schema, InjectableValues injectableValues)
     {
-        _beanProperties.replace(replacement);
+        _config = config;
+        _context = mapper._deserializationContext;
+        _rootDeserializers = mapper._rootDeserializers;
+        _parserFactory = mapper._jsonFactory;
+        _valueType = valueType;
+        _valueToUpdate = valueToUpdate;
+        _schema = schema;
+        _injectableValues = injectableValues;
+        _unwrapRoot = config.useRootWrapping();
+
+        _rootDeserializer = _prefetchRootDeserializer(valueType);
+        _dataFormatReaders = null;        
+        _filter = null;
+    }
+    
+    /**
+     * Copy constructor used for building variations.
+     */
+    protected ObjectReader(ObjectReader base, DeserializationConfig config,
+            JavaType valueType, JsonDeserializer<Object> rootDeser, Object valueToUpdate,
+            FormatSchema schema, InjectableValues injectableValues,
+            DataFormatReaders dataFormatReaders)
+    {
+        _config = config;
+        _context = base._context;
+
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = base._parserFactory;
+
+        _valueType = valueType;
+        _rootDeserializer = rootDeser;
+        _valueToUpdate = valueToUpdate;
+        _schema = schema;
+        _injectableValues = injectableValues;
+        _unwrapRoot = config.useRootWrapping();
+        _dataFormatReaders = dataFormatReaders;
+        _filter = base._filter;
+    }
+
+    /**
+     * Copy constructor used when modifying simple feature flags
+     */
+    protected ObjectReader(ObjectReader base, DeserializationConfig config)
+    {
+        _config = config;
+        _context = base._context;
+
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = base._parserFactory;
+
+        _valueType = base._valueType;
+        _rootDeserializer = base._rootDeserializer;
+        _valueToUpdate = base._valueToUpdate;
+        _schema = base._schema;
+        _injectableValues = base._injectableValues;
+        _unwrapRoot = config.useRootWrapping();
+        _dataFormatReaders = base._dataFormatReaders;
+        _filter = base._filter;
+    }
+    
+    protected ObjectReader(ObjectReader base, JsonFactory f)
+    {
+        // may need to override ordering, based on data format capabilities
+        _config = base._config
+            .with(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, f.requiresPropertyOrdering());
+        _context = base._context;
+
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = f;
+
+        _valueType = base._valueType;
+        _rootDeserializer = base._rootDeserializer;
+        _valueToUpdate = base._valueToUpdate;
+        _schema = base._schema;
+        _injectableValues = base._injectableValues;
+        _unwrapRoot = base._unwrapRoot;
+        _dataFormatReaders = base._dataFormatReaders;
+        _filter = base._filter;
+    }
+    
+    protected ObjectReader(ObjectReader base, TokenFilter filter) {
+        _config = base._config;
+        _context = base._context;
+        _rootDeserializers = base._rootDeserializers;
+        _parserFactory = base._parserFactory;
+        _valueType = base._valueType;
+        _rootDeserializer = base._rootDeserializer;
+        _valueToUpdate = base._valueToUpdate;
+        _schema = base._schema;
+        _injectableValues = base._injectableValues;
+        _unwrapRoot = base._unwrapRoot;
+        _dataFormatReaders = base._dataFormatReaders;
+        _filter = filter;
+    }
+    
+    /**
+     * Method that will return version information stored in and read from jar
+     * that contains this class.
+     */
+    @Override
+    public Version version() {
+        return com.fasterxml.jackson.databind.cfg.PackageVersion.VERSION;
     }
 
     /*
     /**********************************************************
-    /* Partial deserializer implementation
+    /* Helper methods used internally for invoking constructors
+    /* Need to be overridden if sub-classing (not recommended)
+    /* is used.
     /**********************************************************
      */
 
     /**
-     * General version used when handling needs more advanced
-     * features.
-     */
-    public abstract Object deserializeFromObject(JsonParser p, DeserializationContext ctxt)
-        throws IOException;
-
-    @Override
-    public Object deserializeWithType(JsonParser p, DeserializationContext ctxt,
-            TypeDeserializer typeDeserializer)
-        throws IOException
-    {
-        // 16-Feb-2012, tatu: ObjectId may be used as well... need to check that first
-        if (_objectIdReader != null) {
-            // 05-Aug-2013, tatu: May use native Object Id
-            if (p.canReadObjectId()) {
-                Object id = p.getObjectId();
-                if (id != null) {
-                    Object ob = typeDeserializer.deserializeTypedFromObject(p, ctxt);
-                    return _handleTypedObjectId(p, ctxt, ob, id);
-                }
-            }
-            // or, Object Ids Jackson explicitly sets
-            JsonToken t = p.getCurrentToken();
-            if (t != null) {
-                // Most commonly, a scalar (int id, uuid String, ...)
-                if (t.isScalarValue()) {
-                    return deserializeFromObjectId(p, ctxt);
-                }
-                // but, with 2.5+, a simple Object-wrapped value also legal:
-                if (t == JsonToken.START_OBJECT) {
-                    t = p.nextToken();
-                }
-                if (t == JsonToken.FIELD_NAME && _objectIdReader.maySerializeAsObject()
-                        && _objectIdReader.isValidReferencePropertyName(p.getCurrentName(), p)) {
-                    return deserializeFromObjectId(p, ctxt);
-                }
-            }
-        }
-        // In future could check current token... for now this should be enough:
-        return typeDeserializer.deserializeTypedFromObject(p, ctxt);
-    }
-
-    /**
-     * Offlined method called to handle "native" Object Id that has been read
-     * and known to be associated with given deserialized POJO.
-     *
-     * @since 2.3
-     */
-    protected Object _handleTypedObjectId(JsonParser jp, DeserializationContext ctxt,
-            Object pojo, Object rawId)
-        throws IOException
-    {
-        /* 07-Aug-2013, tatu: One more challenge: type of id may not be type
-         *   of property we are expecting later on; specifically, numeric ids
-         *   vs Strings.
-         */
-        JsonDeserializer<Object> idDeser = _objectIdReader.getDeserializer();
-        final Object id;
-
-        // Ok, this is bit ridiculous; let's see if conversion is needed:
-        if (idDeser.handledType() == rawId.getClass()) {
-            // nope: already same type
-            id = rawId;
-        } else {
-            id = _convertObjectId(jp, ctxt, rawId, idDeser);
-        }
-
-        ReadableObjectId roid = ctxt.findObjectId(id, _objectIdReader.generator, _objectIdReader.resolver);
-        roid.bindItem(pojo);
-        // also: may need to set a property value as well
-        SettableBeanProperty idProp = _objectIdReader.idProperty;
-        if (idProp != null) {
-            return idProp.setAndReturn(pojo, id);
-        }
-        return pojo;
-    }
-
-    /**
-     * Helper method we need to do necessary conversion from whatever native object id
-     * type is, into declared type that Jackson internals expect. This may be
-     * simple cast (for String ids), or something more complicated; in latter
-     * case we may need to create bogus content buffer to allow use of
-     * id deserializer.
-     *
-     * @since 2.3
-     */
-    @SuppressWarnings("resource") // TokenBuffers don't need close, nor parser thereof
-    protected Object _convertObjectId(JsonParser jp, DeserializationContext ctxt,
-            Object rawId, JsonDeserializer<Object> idDeser) throws IOException
-    {
-        TokenBuffer buf = new TokenBuffer(jp);
-        if (rawId instanceof String) {
-            buf.writeString((String) rawId);
-        } else if (rawId instanceof Long) {
-            buf.writeNumber(((Long) rawId).longValue());
-        } else if (rawId instanceof Integer) {
-            buf.writeNumber(((Integer) rawId).intValue());
-        } else {
-            // should we worry about UUIDs? They should be fine, right?
-            // 07-Aug-2014, tatu: Maybe, but not necessarily; had issues with
-            //   Smile format; [Smile#19], possibly related.
-            buf.writeObject(rawId);
-        }
-        JsonParser bufParser = buf.asParser();
-        bufParser.nextToken();
-        return idDeser.deserialize(bufParser, ctxt);
-    }
-
-    // NOTE: currently only used by standard BeanDeserializer (not Builder-based)
-    /**
-     * Alternative deserialization method used when we expect to see Object Id;
-     * if so, we will need to ensure that the Id is seen before anything
-     * else, to ensure that it is available for solving references,
-     * even if JSON itself is not ordered that way. This may require
-     * buffering in some cases, but usually just a simple lookup to ensure
-     * that ordering is correct.
-     */
-    protected Object deserializeWithObjectId(JsonParser jp, DeserializationContext ctxt) throws IOException {
-        return deserializeFromObject(jp, ctxt);
-    }
-
-    /**
-     * Method called in cases where it looks like we got an Object Id
-     * to parse and use as a reference.
-     */
-    protected Object deserializeFromObjectId(JsonParser jp, DeserializationContext ctxt) throws IOException
-    {
-        Object id = _objectIdReader.readObjectReference(jp, ctxt);
-        ReadableObjectId roid = ctxt.findObjectId(id, _objectIdReader.generator, _objectIdReader.resolver);
-        // do we have it resolved?
-        Object pojo = roid.resolve();
-        if (pojo == null) { // not yet; should wait...
-            throw new UnresolvedForwardReference("Could not resolve Object Id ["+id+"] (for "
-                    +_beanType+").", jp.getCurrentLocation(), roid);
-        }
-        return pojo;
-    }
-
-    protected Object deserializeFromObjectUsingNonDefault(JsonParser jp,
-            DeserializationContext ctxt) throws IOException
-    {
-        if (_delegateDeserializer != null) {
-            return _valueInstantiator.createUsingDelegate(ctxt,
-                    _delegateDeserializer.deserialize(jp, ctxt));
-        }
-        if (_propertyBasedCreator != null) {
-            return _deserializeUsingPropertyBased(jp, ctxt);
-        }
-        // should only occur for abstract types...
-        if (_beanType.isAbstract()) {
-            throw JsonMappingException.from(jp, "Can not instantiate abstract type "+_beanType
-                    +" (need to add/enable type information?)");
-        }
-        throw JsonMappingException.from(jp, "No suitable constructor found for type "
-                +_beanType+": can not instantiate from JSON object (missing default constructor or creator, or perhaps need to add/enable type information?)");
-    }
-
-    protected abstract Object _deserializeUsingPropertyBased(final JsonParser jp,
-            final DeserializationContext ctxt)
-        throws IOException, JsonProcessingException;
-
-    @SuppressWarnings("incomplete-switch")
-    public Object deserializeFromNumber(JsonParser jp, DeserializationContext ctxt) throws IOException
-    {
-        // First things first: id Object Id is used, most likely that's it
-        if (_objectIdReader != null) {
-            return deserializeFromObjectId(jp, ctxt);
-        }
-
-        switch (jp.getNumberType()) {
-        case INT:
-            if (_delegateDeserializer != null) {
-                if (!_valueInstantiator.canCreateFromInt()) {
-                    Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(jp, ctxt));
-                    if (_injectables != null) {
-                        injectValues(ctxt, bean);
-                    }
-                    return bean;
-                }
-            }
-            return _valueInstantiator.createFromInt(ctxt, jp.getIntValue());
-        case LONG:
-            if (_delegateDeserializer != null) {
-                if (!_valueInstantiator.canCreateFromInt()) {
-                    Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(jp, ctxt));
-                    if (_injectables != null) {
-                        injectValues(ctxt, bean);
-                    }
-                    return bean;
-                }
-            }
-            return _valueInstantiator.createFromLong(ctxt, jp.getLongValue());
-        }
-        // actually, could also be BigInteger, so:
-        if (_delegateDeserializer != null) {
-            Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(jp, ctxt));
-            if (_injectables != null) {
-                injectValues(ctxt, bean);
-            }
-            return bean;
-        }
-        throw ctxt.instantiationException(handledType(), "no suitable creator method found to deserialize from JSON integer number");
-    }
-
-    public Object deserializeFromString(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        // First things first: id Object Id is used, most likely that's it
-        if (_objectIdReader != null) {
-            return deserializeFromObjectId(p, ctxt);
-        }
-        
-        /* Bit complicated if we have delegating creator; may need to use it,
-         * or might not...
-         */
-        if (_delegateDeserializer != null) {
-            if (!_valueInstantiator.canCreateFromString()) {
-                Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                if (_injectables != null) {
-                    injectValues(ctxt, bean);
-                }
-                return bean;
-            }
-        }
-        return _valueInstantiator.createFromString(ctxt, p.getText());
-    }
-
-    /**
-     * Method called to deserialize POJO value from a JSON floating-point
-     * number.
-     */
-    @SuppressWarnings("incomplete-switch")
-    public Object deserializeFromDouble(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        switch (p.getNumberType()) {
-        case FLOAT: // no separate methods for taking float...
-        case DOUBLE:
-            if (_delegateDeserializer != null) {
-                if (!_valueInstantiator.canCreateFromDouble()) {
-                    Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                    if (_injectables != null) {
-                        injectValues(ctxt, bean);
-                    }
-                    return bean;
-                }
-            }
-            return _valueInstantiator.createFromDouble(ctxt, p.getDoubleValue());
-        }
-        // actually, could also be BigDecimal, so:
-        if (_delegateDeserializer != null) {
-            return _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-        }
-        throw ctxt.instantiationException(handledType(), "no suitable creator method found to deserialize from JSON floating-point number");
-    }
-
-    /**
-     * Method called to deserialize POJO value from a JSON boolean value (true, false)
-     */
-    public Object deserializeFromBoolean(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        if (_delegateDeserializer != null) {
-            if (!_valueInstantiator.canCreateFromBoolean()) {
-                Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                if (_injectables != null) {
-                    injectValues(ctxt, bean);
-                }
-                return bean;
-            }
-        }
-        boolean value = (p.getCurrentToken() == JsonToken.VALUE_TRUE);
-        return _valueInstantiator.createFromBoolean(ctxt, value);
-    }
-
-    public Object deserializeFromArray(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        if (_delegateDeserializer != null) {
-            try {
-                Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                if (_injectables != null) {
-                    injectValues(ctxt, bean);
-                }
-                return bean;
-            } catch (Exception e) {
-                wrapInstantiationProblem(e, ctxt);
-            }
-        }
-        if (ctxt.isEnabled(DeserializationFeature.UNWRAP_SINGLE_VALUE_ARRAYS)) {
-            JsonToken t = p.nextToken();
-            if (t == JsonToken.END_ARRAY && ctxt.isEnabled(DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT)) {
-                return null;
-            }
-            final Object value = deserialize(p, ctxt);
-            if (p.nextToken() != JsonToken.END_ARRAY) {
-                throw ctxt.wrongTokenException(p, JsonToken.END_ARRAY, 
-                        "Attempted to unwrap single value array for single '" + _valueClass.getName() + "' value but there was more than a single value in the array");
-            }
-            return value;
-        }
-        if (ctxt.isEnabled(DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT)) {
-            JsonToken t = p.nextToken();
-            if (t == JsonToken.END_ARRAY) {
-                return null;
-            }
-            throw ctxt.mappingException(handledType(), JsonToken.START_ARRAY);
-        }
-        throw ctxt.mappingException(handledType());
-    }
-
-    public Object deserializeFromEmbedded(JsonParser jp, DeserializationContext ctxt) throws IOException
-    {
-        // First things first: id Object Id is used, most likely that's it; specifically,
-        // true for UUIDs when written as binary (with Smile, other binary formats)
-        if (_objectIdReader != null) {
-            return deserializeFromObjectId(jp, ctxt);
-        }
-
-        // TODO: maybe add support for ValueInstantiator, embedded?
-        
-        return jp.getEmbeddedObject();
-    }
-    
-    /*
-    /**********************************************************
-    /* Overridable helper methods
-    /**********************************************************
-     */
-
-    protected void injectValues(DeserializationContext ctxt, Object bean)
-        throws IOException, JsonProcessingException
-    {
-        for (ValueInjector injector : _injectables) {
-            injector.inject(ctxt, bean);
-        }
-    }
-    
-    /**
-     * Method called to handle set of one or more unknown properties,
-     * stored in their entirety in given {@link TokenBuffer}
-     * (as field entries, name and value).
-     */
-    @SuppressWarnings("resource")
-    protected Object handleUnknownProperties(DeserializationContext ctxt,
-            Object bean, TokenBuffer unknownTokens)
-        throws IOException, JsonProcessingException
-    {
-        // First: add closing END_OBJECT as marker
-        unknownTokens.writeEndObject();
-        
-        // note: buffer does NOT have starting START_OBJECT
-        JsonParser bufferParser = unknownTokens.asParser();
-        while (bufferParser.nextToken() != JsonToken.END_OBJECT) {
-            String propName = bufferParser.getCurrentName();
-            // Unknown: let's call handler method
-            bufferParser.nextToken();
-            handleUnknownProperty(bufferParser, ctxt, bean, propName);
-        }
-        return bean;
-    }
-
-    /**
-     * Helper method called for an unknown property, when using "vanilla"
-     * processing.
-     */
-    protected void handleUnknownVanilla(JsonParser jp, DeserializationContext ctxt,
-            Object bean, String propName)
-        throws IOException, JsonProcessingException
-    {
-        if (_ignorableProps != null && _ignorableProps.contains(propName)) {
-            handleIgnoredProperty(jp, ctxt, bean, propName);
-        } else if (_anySetter != null) {
-            try {
-               // should we consider return type of any setter?
-                _anySetter.deserializeAndSet(jp, ctxt, bean, propName);
-            } catch (Exception e) {
-                wrapAndThrow(e, bean, propName, ctxt);
-            }
-        } else {
-            // Unknown: let's call handler method
-            handleUnknownProperty(jp, ctxt, bean, propName);         
-        }
-    }
-
-    /**
-     * Method called when a JSON property is encountered that has not matching
-     * setter, any-setter or field, and thus can not be assigned.
-     */
-    @Override
-    protected void handleUnknownProperty(JsonParser jp, DeserializationContext ctxt,
-            Object beanOrClass, String propName)
-        throws IOException, JsonProcessingException
-    {
-        if (_ignoreAllUnknown) {
-            jp.skipChildren();
-            return;
-        }
-        if (_ignorableProps != null && _ignorableProps.contains(propName)) {
-            handleIgnoredProperty(jp, ctxt, beanOrClass, propName);
-        }
-        // Otherwise use default handling (call handler(s); if not
-        // handled, throw exception or skip depending on settings)
-        super.handleUnknownProperty(jp, ctxt, beanOrClass, propName);
-    }
-
-    /**
-     * Method called when an explicitly ignored property (one specified with a
-     * name to match, either by property annotation or class annotation) is encountered.
+     * Overridable factory method called by various "withXxx()" methods
      * 
-     * @since 2.3
+     * @since 2.5
      */
-    protected void handleIgnoredProperty(JsonParser jp, DeserializationContext ctxt,
-            Object beanOrClass, String propName)
-        throws IOException, JsonProcessingException
-    {
-        if (ctxt.isEnabled(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES)) {
-            throw IgnoredPropertyException.from(jp, beanOrClass, propName, getKnownPropertyNames());
-        }
-        jp.skipChildren();
+    protected ObjectReader _new(ObjectReader base, JsonFactory f) {
+        return new ObjectReader(base, f);
     }
-    
-    /**
-     * Method called in cases where we may have polymorphic deserialization
-     * case: that is, type of Creator-constructed bean is not the type
-     * of deserializer itself. It should be a sub-class or implementation
-     * class; either way, we may have more specific deserializer to use
-     * for handling it.
-     *
-     * @param jp (optional) If not null, parser that has more properties to handle
-     *   (in addition to buffered properties); if null, all properties are passed
-     *   in buffer
-     */
-    @SuppressWarnings("resource")
-    protected Object handlePolymorphic(JsonParser jp, DeserializationContext ctxt,                                          
-            Object bean, TokenBuffer unknownTokens)
-        throws IOException, JsonProcessingException
-    {  
-        // First things first: maybe there is a more specific deserializer available?
-        JsonDeserializer<Object> subDeser = _findSubclassDeserializer(ctxt, bean, unknownTokens);
-        if (subDeser != null) {
-            if (unknownTokens != null) {
-                // need to add END_OBJECT marker first
-                unknownTokens.writeEndObject();
-                JsonParser p2 = unknownTokens.asParser();
-                p2.nextToken(); // to get to first data field
-                bean = subDeser.deserialize(p2, ctxt, bean);
-            }
-            // Original parser may also have some leftovers
-            if (jp != null) {
-                bean = subDeser.deserialize(jp, ctxt, bean);
-            }
-            return bean;
-        }
-        // nope; need to use this deserializer. Unknowns we've seen so far?
-        if (unknownTokens != null) {
-            bean = handleUnknownProperties(ctxt, bean, unknownTokens);
-        }
-        // and/or things left to process via main parser?
-        if (jp != null) {
-            bean = deserialize(jp, ctxt, bean);
-        }
-        return bean;
-    }
-    
-    /**
-     * Helper method called to (try to) locate deserializer for given sub-type of
-     * type that this deserializer handles.
-     */
-    protected JsonDeserializer<Object> _findSubclassDeserializer(DeserializationContext ctxt,
-            Object bean, TokenBuffer unknownTokens)
-        throws IOException, JsonProcessingException
-    {  
-        JsonDeserializer<Object> subDeser;
 
-        // First: maybe we have already created sub-type deserializer?
-        synchronized (this) {
-            subDeser = (_subDeserializers == null) ? null : _subDeserializers.get(new ClassKey(bean.getClass()));
-        }
-        if (subDeser != null) {
-            return subDeser;
-        }
-        // If not, maybe we can locate one. First, need provider
-        JavaType type = ctxt.constructType(bean.getClass());
-        /* 30-Jan-2012, tatu: Ideally we would be passing referring
-         *   property; which in theory we could keep track of via
-         *   ResolvableDeserializer (if we absolutely must...).
-         *   But for now, let's not bother.
-         */
-//        subDeser = ctxt.findValueDeserializer(type, _property);
-        subDeser = ctxt.findRootValueDeserializer(type);
-        // Also, need to cache it
-        if (subDeser != null) {
-            synchronized (this) {
-                if (_subDeserializers == null) {
-                    _subDeserializers = new HashMap<ClassKey,JsonDeserializer<Object>>();;
-                }
-                _subDeserializers.put(new ClassKey(bean.getClass()), subDeser);
-            }            
-        }
-        return subDeser;
+    /**
+     * Overridable factory method called by various "withXxx()" methods
+     * 
+     * @since 2.5
+     */
+    protected ObjectReader _new(ObjectReader base, DeserializationConfig config) {
+        return new ObjectReader(base, config);
     }
-    
+
+    /**
+     * Overridable factory method called by various "withXxx()" methods
+     * 
+     * @since 2.5
+     */
+    protected ObjectReader _new(ObjectReader base, DeserializationConfig config,
+            JavaType valueType, JsonDeserializer<Object> rootDeser, Object valueToUpdate,
+            FormatSchema schema, InjectableValues injectableValues,
+            DataFormatReaders dataFormatReaders) {
+        return new ObjectReader(base, config, valueType, rootDeser,  valueToUpdate,
+                 schema,  injectableValues, dataFormatReaders);
+    }
+
+    /**
+     * Factory method used to create {@link MappingIterator} instances;
+     * either default, or custom subtype.
+     * 
+     * @since 2.5
+     */
+    protected <T> MappingIterator<T> _newIterator(JsonParser p, DeserializationContext ctxt,
+            JsonDeserializer<?> deser, boolean parserManaged)
+    {
+        return new MappingIterator<T>(_valueType, p, ctxt,
+                deser, parserManaged, _valueToUpdate);
+    }
+
     /*
     /**********************************************************
-    /* Helper methods for error reporting
+    /* Methods for initializing parser instance to use
     /**********************************************************
      */
 
-    /**
-     * Method that will modify caught exception (passed in as argument)
-     * as necessary to include reference information, and to ensure it
-     * is a subtype of {@link IOException}, or an unchecked exception.
-     *<p>
-     * Rules for wrapping and unwrapping are bit complicated; essentially:
-     *<ul>
-     * <li>Errors are to be passed as is (if uncovered via unwrapping)
-     * <li>"Plain" IOExceptions (ones that are not of type
-     *   {@link JsonMappingException} are to be passed as is
-     *</ul>
-     */
-    public void wrapAndThrow(Throwable t, Object bean, String fieldName, DeserializationContext ctxt)
+    protected JsonToken _initForReading(DeserializationContext ctxt, JsonParser p)
         throws IOException
     {
-        // [JACKSON-55] Need to add reference information
-        throw JsonMappingException.wrapWithPath(throwOrReturnThrowable(t, ctxt), bean, fieldName);
-    }
+        if (_schema != null) {
+            p.setSchema(_schema);
+        }
+        _config.initialize(p); // since 2.5
 
-    @Deprecated // since 2.4, not used by core Jackson; only relevant for arrays/Collections
-    public void wrapAndThrow(Throwable t, Object bean, int index, DeserializationContext ctxt) throws IOException {
-        // [JACKSON-55] Need to add reference information
-        throw JsonMappingException.wrapWithPath(throwOrReturnThrowable(t, ctxt), bean, index);
-    }
-
-    private Throwable throwOrReturnThrowable(Throwable t, DeserializationContext ctxt) 
-        throws IOException
-    {
-        /* 05-Mar-2009, tatu: But one nasty edge is when we get
-         *   StackOverflow: usually due to infinite loop. But that
-         *   often gets hidden within an InvocationTargetException...
+        /* First: must point to a token; if not pointing to one, advance.
+         * This occurs before first read from JsonParser, as well as
+         * after clearing of current token.
          */
-        while (t instanceof InvocationTargetException && t.getCause() != null) {
-            t = t.getCause();
-        }
-        // Errors to be passed as is
-        if (t instanceof Error) {
-            throw (Error) t;
-        }
-        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
-        // Ditto for IOExceptions; except we may want to wrap JSON exceptions
-        if (t instanceof IOException) {
-            if (!wrap || !(t instanceof JsonProcessingException)) {
-                throw (IOException) t;
-            }
-        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
-            if (t instanceof RuntimeException) {
-                throw (RuntimeException) t;
+        JsonToken t = p.getCurrentToken();
+        if (t == null) { // and then we must get something...
+            t = p.nextToken();
+            if (t == null) {
+                // Throw mapping exception, since it's failure to map, not an actual parsing problem
+                ctxt.reportInputMismatch(_valueType,
+                        "No content to map due to end-of-input");
             }
         }
         return t;
     }
 
-    protected void wrapInstantiationProblem(Throwable t, DeserializationContext ctxt)
+    /**
+     * Alternative to {@link #_initForReading} used in cases where reading
+     * of multiple values means that we may or may not want to advance the stream,
+     * but need to do other initialization.
+     *<p>
+     * Base implementation only sets configured {@link FormatSchema}, if any, on parser.
+     * 
+     * @since 2.8
+     */
+    protected void _initForMultiRead(DeserializationContext ctxt, JsonParser p)
         throws IOException
     {
-        while (t instanceof InvocationTargetException && t.getCause() != null) {
-            t = t.getCause();
+        if (_schema != null) {
+            p.setSchema(_schema);
         }
-        // Errors and "plain" IOExceptions to be passed as is
-        if (t instanceof Error) {
-            throw (Error) t;
+        _config.initialize(p);
+    }
+
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods for DeserializationFeatures
+    /**********************************************************
+     */
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature enabled.
+     */
+    public ObjectReader with(DeserializationFeature feature) {
+        return _with(_config.with(feature));
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
+     */
+    public ObjectReader with(DeserializationFeature first,
+            DeserializationFeature... other)
+    {
+        return _with(_config.with(first, other));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
+     */
+    public ObjectReader withFeatures(DeserializationFeature... features) {
+        return _with(_config.withFeatures(features));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature disabled.
+     */
+    public ObjectReader without(DeserializationFeature feature) {
+        return _with(_config.without(feature)); 
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     */
+    public ObjectReader without(DeserializationFeature first,
+            DeserializationFeature... other) {
+        return _with(_config.without(first, other));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     */
+    public ObjectReader withoutFeatures(DeserializationFeature... features) {
+        return _with(_config.withoutFeatures(features));
+    }    
+
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods for JsonParser.Features
+    /**********************************************************
+     */
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature enabled.
+     */
+    public ObjectReader with(JsonParser.Feature feature) {
+        return _with(_config.with(feature));
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
+     */
+    public ObjectReader withFeatures(JsonParser.Feature... features) {
+        return _with(_config.withFeatures(features));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature disabled.
+     */
+    public ObjectReader without(JsonParser.Feature feature) {
+        return _with(_config.without(feature)); 
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     */
+    public ObjectReader withoutFeatures(JsonParser.Feature... features) {
+        return _with(_config.withoutFeatures(features));
+    }
+
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods for FormatFeature (2.7)
+    /**********************************************************
+     */
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature enabled.
+     *
+     * @since 2.7
+     */
+    public ObjectReader with(FormatFeature feature) {
+        return _with(_config.with(feature));
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features enabled.
+     *
+     * @since 2.7
+     */
+    public ObjectReader withFeatures(FormatFeature... features) {
+        return _with(_config.withFeatures(features));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified feature disabled.
+     *
+     * @since 2.7
+     */
+    public ObjectReader without(FormatFeature feature) {
+        return _with(_config.without(feature)); 
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * with specified features disabled.
+     *
+     * @since 2.7
+     */
+    public ObjectReader withoutFeatures(FormatFeature... features) {
+        return _with(_config.withoutFeatures(features));
+    }
+    
+    /*
+    /**********************************************************
+    /* Life-cycle, fluent factory methods, other
+    /**********************************************************
+     */
+
+    /**
+     * Convenience method to bind from {@link JsonPointer}.  
+     * {@link JsonPointerBasedFilter} is registered and will be used for parsing later. 
+     * @since 2.6
+     */
+    public ObjectReader at(final String value) {
+        return new ObjectReader(this, new JsonPointerBasedFilter(value));
+    }
+
+    /**
+     * Convenience method to bind from {@link JsonPointer}
+      * {@link JsonPointerBasedFilter} is registered and will be used for parsing later.
+     * @since 2.6
+     */
+    public ObjectReader at(final JsonPointer pointer) {
+        return new ObjectReader(this, new JsonPointerBasedFilter(pointer));
+    }
+
+    /**
+     * Mutant factory method that will construct a new instance that has
+     * specified underlying {@link DeserializationConfig}.
+     *<p>
+     * NOTE: use of this method is not recommended, as there are many other
+     * re-configuration methods available.
+     */
+    public ObjectReader with(DeserializationConfig config) {
+        return _with(config);
+    }    
+
+    /**
+     * Method for constructing a new instance with configuration that uses
+     * passed {@link InjectableValues} to provide injectable values.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader with(InjectableValues injectableValues)
+    {
+        if (_injectableValues == injectableValues) {
+            return this;
         }
-        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
-        if (t instanceof IOException) {
-            // Since we have no more information to add, let's not actually wrap..
-            throw (IOException) t;
-        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
-            if (t instanceof RuntimeException) {
-                throw (RuntimeException) t;
+        return _new(this, _config,
+                _valueType, _rootDeserializer, _valueToUpdate,
+                _schema, injectableValues, _dataFormatReaders);
+    }
+
+    /**
+     * Method for constructing a new reader instance with configuration that uses
+     * passed {@link JsonNodeFactory} for constructing {@link JsonNode}
+     * instances.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader with(JsonNodeFactory f) {
+        return _with(_config.with(f));
+    }
+
+    /**
+     * Method for constructing a new reader instance with configuration that uses
+     * passed {@link JsonFactory} for constructing underlying Readers.
+     *<p>
+     * NOTE: only factories that <b>DO NOT REQUIRE SPECIAL MAPPERS</b>
+     * (that is, ones that return <code>false</code> for
+     * {@link JsonFactory#requiresCustomCodec()}) can be used: trying
+     * to use one that requires custom codec will throw exception
+     * 
+     * @since 2.1
+     */
+    public ObjectReader with(JsonFactory f) {
+        if (f == _parserFactory) {
+            return this;
+        }
+        ObjectReader r = _new(this, f);
+        // Also, try re-linking, if possible...
+        if (f.getCodec() == null) {
+            f.setCodec(r);
+        }
+        return r;
+    }
+    
+    /**
+     * Method for constructing a new instance with configuration that
+     * specifies what root name to expect for "root name unwrapping".
+     * See {@link DeserializationConfig#withRootName(String)} for
+     * details.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader withRootName(String rootName) {
+        return _with(_config.withRootName(rootName));
+    }
+
+    /**
+     * @since 2.6
+     */
+    public ObjectReader withRootName(PropertyName rootName) {
+        return _with(_config.withRootName(rootName));
+    }
+    
+    /**
+     * Convenience method that is same as calling:
+     *<code>
+     *   withRootName("")
+     *</code>
+     * which will forcibly prevent use of root name wrapping when writing
+     * values with this {@link ObjectReader}.
+     * 
+     * @since 2.6
+     */
+    public ObjectReader withoutRootName() {
+        return _with(_config.withRootName(PropertyName.NO_NAME));
+    }
+    
+    /**
+     * Method for constructing a new instance with configuration that
+     * passes specified {@link FormatSchema} to {@link JsonParser} that
+     * is constructed for parsing content.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader with(FormatSchema schema)
+    {
+        if (_schema == schema) {
+            return this;
+        }
+        _verifySchemaType(schema);
+        return _new(this, _config, _valueType, _rootDeserializer, _valueToUpdate,
+                schema, _injectableValues, _dataFormatReaders);
+    }
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * to data bind into specified type.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     * 
+     * @since 2.5
+     */
+    public ObjectReader forType(JavaType valueType)
+    {
+        if (valueType != null && valueType.equals(_valueType)) {
+            return this;
+        }
+        JsonDeserializer<Object> rootDeser = _prefetchRootDeserializer(valueType);
+        // type is stored here, no need to make a copy of config
+        DataFormatReaders det = _dataFormatReaders;
+        if (det != null) {
+            det = det.withType(valueType);
+        }
+        return _new(this, _config, valueType, rootDeser,
+                _valueToUpdate, _schema, _injectableValues, det);
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * to data bind into specified type.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     *
+     * @since 2.5
+     */
+    public ObjectReader forType(Class<?> valueType) {
+        return forType(_config.constructType(valueType));
+    }    
+
+    /**
+     * Method for constructing a new reader instance that is configured
+     * to data bind into specified type.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     *
+     * @since 2.5
+     */
+    public ObjectReader forType(TypeReference<?> valueTypeRef) {
+        return forType(_config.getTypeFactory().constructType(valueTypeRef.getType()));
+    }    
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(JavaType)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(JavaType valueType) {
+        return forType(valueType);
+    }
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(Class)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(Class<?> valueType) {
+        return forType(_config.constructType(valueType));
+    }    
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(Class)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(java.lang.reflect.Type valueType) {
+        return forType(_config.getTypeFactory().constructType(valueType));
+    }
+
+    /**
+     * @deprecated since 2.5 Use {@link #forType(TypeReference)} instead
+     */
+    @Deprecated
+    public ObjectReader withType(TypeReference<?> valueTypeRef) {
+        return forType(_config.getTypeFactory().constructType(valueTypeRef.getType()));
+    }    
+
+    /**
+     * Method for constructing a new instance with configuration that
+     * updates passed Object (as root value), instead of constructing 
+     * a new value.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader withValueToUpdate(Object value)
+    {
+        if (value == _valueToUpdate) return this;
+        if (value == null) {
+            // 18-Oct-2016, tatu: Actually, should be allowed, to remove value
+            //   to update, if any
+            return _new(this, _config, _valueType, _rootDeserializer, null,
+                    _schema, _injectableValues, _dataFormatReaders);
+        }
+        JavaType t;
+        
+        /* no real benefit from pre-fetching, as updating readers are much
+         * less likely to be reused, and value type may also be forced
+         * with a later chained call...
+         */
+        if (_valueType == null) {
+            t = _config.constructType(value.getClass());
+        } else {
+            t = _valueType;
+        }
+        return _new(this, _config, t, _rootDeserializer, value,
+                _schema, _injectableValues, _dataFormatReaders);
+    }
+
+    /**
+     * Method for constructing a new instance with configuration that
+     * uses specified View for filtering.
+     *<p>
+     * Note that the method does NOT change state of this reader, but
+     * rather construct and returns a newly configured instance.
+     */
+    public ObjectReader withView(Class<?> activeView) {
+        return _with(_config.withView(activeView));
+    }
+
+    public ObjectReader with(Locale l) {
+        return _with(_config.with(l));
+    }
+
+    public ObjectReader with(TimeZone tz) {
+        return _with(_config.with(tz));
+    }
+
+    public ObjectReader withHandler(DeserializationProblemHandler h) {
+        return _with(_config.withHandler(h));
+    }
+
+    public ObjectReader with(Base64Variant defaultBase64) {
+        return _with(_config.with(defaultBase64));
+    }
+
+    /**
+     * Fluent factory method for constructing a reader that will try to
+     * auto-detect underlying data format, using specified list of
+     * {@link JsonFactory} instances, and default {@link DataFormatReaders} settings
+     * (for customized {@link DataFormatReaders}, you can construct instance yourself).
+     * to construct appropriate {@link JsonParser} for actual parsing.
+     *<p>
+     * Note: since format detection only works with byte sources, it is possible to
+     * get a failure from some 'readValue()' methods. Also, if input cannot be reliably
+     * (enough) detected as one of specified types, an exception will be thrown.
+     *<p>
+     * Note: not all {@link JsonFactory} types can be passed: specifically, ones that
+     * require "custom codec" (like XML factory) will not work. Instead, use
+     * method that takes {@link ObjectReader} instances instead of factories.
+     * 
+     * @param readers Data formats accepted, in decreasing order of priority (that is,
+     *   matches checked in listed order, first match wins)
+     * 
+     * @return Newly configured writer instance
+     * 
+     * @since 2.1
+     */
+    public ObjectReader withFormatDetection(ObjectReader... readers) {
+        return withFormatDetection(new DataFormatReaders(readers));
+    }
+
+    /**
+     * Fluent factory method for constructing a reader that will try to
+     * auto-detect underlying data format, using specified
+     * {@link DataFormatReaders}.
+     *<p>
+     * NOTE: since format detection only works with byte sources, it is possible to
+     * get a failure from some 'readValue()' methods. Also, if input cannot be reliably
+     * (enough) detected as one of specified types, an exception will be thrown.
+     * 
+     * @param readers DataFormatReaders to use for detecting underlying format.
+     * 
+     * @return Newly configured writer instance
+     * 
+     * @since 2.1
+     */
+    public ObjectReader withFormatDetection(DataFormatReaders readers) {
+        return _new(this, _config, _valueType, _rootDeserializer, _valueToUpdate,
+                _schema, _injectableValues, readers);
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader with(ContextAttributes attrs) {
+        return _with(_config.with(attrs));
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader withAttributes(Map<?,?> attrs) {
+        return _with(_config.withAttributes(attrs));
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader withAttribute(Object key, Object value) {
+        return _with( _config.withAttribute(key, value));
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ObjectReader withoutAttribute(Object key) {
+        return _with(_config.withoutAttribute(key));
+    }
+
+    /*
+    /**********************************************************
+    /* Overridable factory methods may override
+    /**********************************************************
+     */
+    
+    protected ObjectReader _with(DeserializationConfig newConfig) {
+        if (newConfig == _config) {
+            return this;
+        }
+        ObjectReader r = _new(this, newConfig);
+        if (_dataFormatReaders != null) {
+            r  = r.withFormatDetection(_dataFormatReaders.with(newConfig));
+        }
+        return r;
+    }
+    
+    /*
+    /**********************************************************
+    /* Simple accessors
+    /**********************************************************
+     */
+    
+    public boolean isEnabled(DeserializationFeature f) {
+        return _config.isEnabled(f);
+    }
+
+    public boolean isEnabled(MapperFeature f) {
+        return _config.isEnabled(f);
+    }
+
+    public boolean isEnabled(JsonParser.Feature f) {
+        return _parserFactory.isEnabled(f);
+    }
+
+    /**
+     * @since 2.2
+     */
+    public DeserializationConfig getConfig() {
+        return _config;
+    }
+    
+    /**
+     * @since 2.1
+     */
+    @Override
+    public JsonFactory getFactory() {
+        return _parserFactory;
+    }
+
+    public TypeFactory getTypeFactory() {
+        return _config.getTypeFactory();
+    }
+
+    /**
+     * @since 2.3
+     */
+    public ContextAttributes getAttributes() {
+        return _config.getAttributes();
+    }
+
+    /**
+     * @since 2.6
+     */
+    public InjectableValues getInjectableValues() {
+        return _injectableValues;
+    }
+
+    /*
+    /**********************************************************
+    /* Deserialization methods; basic ones to support ObjectCodec first
+    /* (ones that take JsonParser)
+    /**********************************************************
+     */
+
+    /**
+     * Method that binds content read using given parser, using
+     * configuration of this reader, including expected result type.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(JsonParser p) throws IOException
+    {
+        return (T) _bind(p, _valueToUpdate);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that expected value type
+     * is specified with the call (instead of currently configured root type).
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T> T readValue(JsonParser p, Class<T> valueType) throws IOException
+    {
+        return (T) forType(valueType).readValue(p);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that expected value type
+     * is specified with the call (instead of currently configured root type).
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T> T readValue(JsonParser p, TypeReference<T> valueTypeRef) throws IOException
+    {
+        return (T) forType(valueTypeRef).readValue(p);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that expected value type
+     * is specified with the call (instead of currently configured root type).
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(JsonParser p, ResolvedType valueType) throws IOException {
+        return (T) forType((JavaType)valueType).readValue(p);
+    }
+
+    /**
+     * Type-safe overloaded method, basically alias for {@link #readValue(JsonParser, ResolvedType)}.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(JsonParser p, JavaType valueType) throws IOException {
+        return (T) forType(valueType).readValue(p);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueType).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    public <T> Iterator<T> readValues(JsonParser p, Class<T> valueType) throws IOException {
+        return forType(valueType).readValues(p);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueTypeRef).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    public <T> Iterator<T> readValues(JsonParser p, TypeReference<T> valueTypeRef) throws IOException {
+        return forType(valueTypeRef).readValues(p);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueType).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @Override
+    public <T> Iterator<T> readValues(JsonParser p, ResolvedType valueType) throws IOException {
+        return readValues(p, (JavaType) valueType);
+    }
+
+    /**
+     * Convenience method that is equivalent to:
+     *<pre>
+     *   withType(valueType).readValues(p);
+     *</pre>
+     *<p>
+     * Method reads a sequence of Objects from parser stream.
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} <b>MUST</b> point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> (one that
+     * contains values to read) but rather to the token following it which is the first
+     * token of the first value to read.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    public <T> Iterator<T> readValues(JsonParser p, JavaType valueType) throws IOException {
+        return forType(valueType).readValues(p);
+    }
+
+    /*
+    /**********************************************************
+    /* TreeCodec impl
+    /**********************************************************
+     */
+
+    @Override
+    public JsonNode createArrayNode() {
+        return _config.getNodeFactory().arrayNode();
+    }
+
+    @Override
+    public JsonNode createObjectNode() {
+        return _config.getNodeFactory().objectNode();
+    }
+
+    @Override
+    public JsonParser treeAsTokens(TreeNode n) {
+        // 05-Dec-2017, tatu: Important! Must clear "valueToUpdate" since we do not
+        //    want update to be applied here, as a side effect
+        ObjectReader codec = withValueToUpdate(null);
+        return new TreeTraversingParser((JsonNode) n, codec);
+    }
+
+    /**
+     * Convenience method that binds content read using given parser, using
+     * configuration of this reader, except that content is bound as
+     * JSON tree instead of configured root value type.
+     * Returns {@link JsonNode} that represents the root of the resulting tree, if there
+     * was content to read, or {@code null} if no more content is accessible
+     * via passed {@link JsonParser}.
+     *<p>
+     * NOTE! Behavior with end-of-input (no more content) differs between this
+     * {@code readTree} method, and all other methods that take input source: latter
+     * will return "missing node", NOT {@code null}
+     *<p>
+     * Note: if an object was specified with {@link #withValueToUpdate}, it
+     * will be ignored.
+     *<p>
+     * NOTE: this method never tries to auto-detect format, since actual
+     * (data-format specific) parser is given.
+     */
+    @SuppressWarnings("unchecked")
+    @Override
+    public <T extends TreeNode> T readTree(JsonParser p) throws IOException {
+        return (T) _bindAsTreeOrNull(p);
+    }
+
+    @Override
+    public void writeTree(JsonGenerator g, TreeNode rootNode) {
+        throw new UnsupportedOperationException();
+    }
+
+    /*
+    /**********************************************************
+    /* Deserialization methods; others similar to what ObjectMapper has
+    /**********************************************************
+     */
+    
+    /**
+     * Method that binds content read from given input source,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(InputStream src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(_dataFormatReaders.findFormat(src), false);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given input source,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(Reader src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given JSON string,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(String src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given byte array,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(byte[] src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(src, 0, src.length);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given byte array,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(byte[] src, int offset, int length)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(src, offset, length);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src, offset, length),
+                false));
+    }
+    
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(File src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(_dataFormatReaders.findFormat(_inputStream(src)), true);
+        }
+
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Method that binds content read from given input source,
+     * using configuration of this reader.
+     * Value return is either newly constructed, or root value that
+     * was specified with {@link #withValueToUpdate(Object)}.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(URL src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return (T) _detectBindAndClose(_dataFormatReaders.findFormat(_inputStream(src)), true);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /**
+     * Convenience method for converting results from given JSON tree into given
+     * value type. Basically short-cut for:
+     *<pre>
+     *   objectReader.readValue(src.traverse())
+     *</pre>
+     */
+    @SuppressWarnings({ "unchecked", "resource" })
+    public <T> T readValue(JsonNode src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return (T) _bindAndClose(_considerFilter(treeAsTokens(src), false));
+    }
+
+    /**
+     * @since 2.8
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T readValue(DataInput src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return (T) _bindAndClose(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /*
+    /**********************************************************
+    /* Deserialization methods; JsonNode ("tree")
+    /**********************************************************
+     */
+    
+    /**
+     * Method that reads content from given input source,
+     * using configuration of this reader, and binds it as JSON Tree.
+     * Returns {@link JsonNode} that represents the root of the resulting tree, if there
+     * was content to read, or "missing node" (instance of {@JsonNode} for which
+     * {@link JsonNode#isMissingNode()} returns true, and behaves otherwise similar to
+     * "null node") if no more content is accessible through passed-in input source.
+     *<p>
+     * NOTE! Behavior with end-of-input (no more content) differs between this
+     * {@code readTree} method, and {@link #readTree(JsonParser)} -- latter returns
+     * {@code null} for "no content" case.
+     *<p>
+     * Note that if an object was specified with a call to
+     * {@link #withValueToUpdate(Object)}
+     * it will just be ignored; result is always a newly constructed
+     * {@link JsonNode} instance.
+     */
+    public JsonNode readTree(InputStream in) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndCloseAsTree(in);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(in), false));
+    }
+    
+    /**
+     * Same as {@link #readTree(InputStream)} except content accessed through
+     * passed-in {@link Reader}
+     */
+    public JsonNode readTree(Reader r) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(r);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(r), false));
+    }
+
+    /**
+     * Same as {@link #readTree(InputStream)} except content read from
+     * passed-in {@link String}
+     */
+    public JsonNode readTree(String json) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(json), false));
+    }
+
+    /**
+     * Same as {@link #readTree(InputStream)} except content read from
+     * passed-in byte array.
+     */
+    public JsonNode readTree(byte[] json) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(json), false));
+    }
+    
+    /**
+     * Same as {@link #readTree(InputStream)} except content read from
+     * passed-in byte array.
+     */
+    public JsonNode readTree(byte[] json, int offset, int len) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(json, offset, len), false));
+    }
+
+    /**
+     * Same as {@link #readTree(InputStream)} except content read using
+     * passed-in {@link DataInput}.
+     */
+    public JsonNode readTree(DataInput src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return _bindAndCloseAsTree(_considerFilter(_parserFactory.createParser(src), false));
+    }
+
+    /*
+    /**********************************************************
+    /* Deserialization methods; reading sequence of values
+    /**********************************************************
+     */
+    
+    /**
+     * Method for reading sequence of Objects from parser stream.
+     *<p>
+     * Sequence can be either root-level "unwrapped" sequence (without surrounding
+     * JSON array), or a sequence contained in a JSON Array.
+     * In either case {@link JsonParser} must point to the first token of
+     * the first element, OR not point to any token (in which case it is advanced
+     * to the next token). This means, specifically, that for wrapped sequences,
+     * parser MUST NOT point to the surrounding <code>START_ARRAY</code> but rather
+     * to the token following it.
+     */
+    public <T> MappingIterator<T> readValues(JsonParser p)
+        throws IOException
+    {
+        DeserializationContext ctxt = createDeserializationContext(p);
+        // false -> do not close as caller gave parser instance
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), false);
+    }
+    
+    /**
+     * Method for reading sequence of Objects from parser stream.
+     *<p>
+     * Sequence can be either wrapped or unwrapped root-level sequence:
+     * wrapped means that the elements are enclosed in JSON Array;
+     * and unwrapped that elements are directly accessed at main level.
+     * Assumption is that iff the first token of the document is
+     * <code>START_ARRAY</code>, we have a wrapped sequence; otherwise
+     * unwrapped. For wrapped sequences, leading <code>START_ARRAY</code>
+     * is skipped, so that for both cases, underlying {@link JsonParser}
+     * will point to what is expected to be the first token of the first
+     * element.
+     *<p>
+     * Note that the wrapped vs unwrapped logic means that it is NOT
+     * possible to use this method for reading an unwrapped sequence
+     * of elements written as JSON Arrays: to read such sequences, one
+     * has to use {@link #readValues(JsonParser)}, making sure parser
+     * points to the first token of the first element (i.e. the second
+     * <code>START_ARRAY</code> which is part of the first element).
+     */
+    public <T> MappingIterator<T> readValues(InputStream src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(_dataFormatReaders.findFormat(src), false);
+        }
+        
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+    
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    @SuppressWarnings("resource")
+    public <T> MappingIterator<T> readValues(Reader src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        JsonParser p = _considerFilter(_parserFactory.createParser(src), true);
+        DeserializationContext ctxt = createDeserializationContext(p);
+        _initForMultiRead(ctxt, p);
+        p.nextToken();
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), true);
+    }
+    
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     * 
+     * @param json String that contains JSON content to parse
+     */
+    @SuppressWarnings("resource")
+    public <T> MappingIterator<T> readValues(String json)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(json);
+        }
+        JsonParser p = _considerFilter(_parserFactory.createParser(json), true);
+        DeserializationContext ctxt = createDeserializationContext(p);
+        _initForMultiRead(ctxt, p);
+        p.nextToken();
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), true);
+    }
+
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    public <T> MappingIterator<T> readValues(byte[] src, int offset, int length)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(_dataFormatReaders.findFormat(src, offset, length), false);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src, offset, length),
+                true));
+    }
+
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    public final <T> MappingIterator<T> readValues(byte[] src)
+            throws IOException {
+        return readValues(src, 0, src.length);
+    }
+    
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     */
+    public <T> MappingIterator<T> readValues(File src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(
+                    _dataFormatReaders.findFormat(_inputStream(src)), false);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+
+    /**
+     * Overloaded version of {@link #readValue(InputStream)}.
+     * 
+     * @param src URL to read to access JSON content to parse.
+     */
+    public <T> MappingIterator<T> readValues(URL src)
+        throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            return _detectBindAndReadValues(
+                    _dataFormatReaders.findFormat(_inputStream(src)), true);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+
+    /**
+     * @since 2.8
+     */
+    public <T> MappingIterator<T> readValues(DataInput src) throws IOException
+    {
+        if (_dataFormatReaders != null) {
+            _reportUndetectableSource(src);
+        }
+        return _bindAndReadValues(_considerFilter(_parserFactory.createParser(src), true));
+    }
+
+    /*
+    /**********************************************************
+    /* Implementation of rest of ObjectCodec methods
+    /**********************************************************
+     */
+
+    @Override
+    public <T> T treeToValue(TreeNode n, Class<T> valueType) throws JsonProcessingException
+    {
+        try {
+            return readValue(treeAsTokens(n), valueType);
+        } catch (JsonProcessingException e) {
+            throw e;
+        } catch (IOException e) { // should not occur, no real i/o...
+            throw JsonMappingException.fromUnexpectedIOE(e);
+        }
+    }    
+
+    @Override
+    public void writeValue(JsonGenerator gen, Object value) throws IOException {
+        throw new UnsupportedOperationException("Not implemented for ObjectReader");
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods, data-binding
+    /**********************************************************
+     */
+
+    /**
+     * Actual implementation of value reading+binding operation.
+     */
+    protected Object _bind(JsonParser p, Object valueToUpdate) throws IOException
+    {
+        /* First: may need to read the next token, to initialize state (either
+         * before first read from parser, or after previous token has been cleared)
+         */
+        Object result;
+        final DeserializationContext ctxt = createDeserializationContext(p);
+        JsonToken t = _initForReading(ctxt, p);
+        if (t == JsonToken.VALUE_NULL) {
+            if (valueToUpdate == null) {
+                result = _findRootDeserializer(ctxt).getNullValue(ctxt);
+            } else {
+                result = valueToUpdate;
+            }
+        } else if (t == JsonToken.END_ARRAY || t == JsonToken.END_OBJECT) {
+            result = valueToUpdate;
+        } else { // pointing to event other than null
+            JsonDeserializer<Object> deser = _findRootDeserializer(ctxt);
+            if (_unwrapRoot) {
+                result = _unwrapAndDeserialize(p, ctxt, _valueType, deser);
+            } else {
+                if (valueToUpdate == null) {
+                    result = deser.deserialize(p, ctxt);
+                } else {
+                    // 20-Mar-2017, tatu: Important! May be different from `valueToUpdate`
+                    //   for immutable Objects like Java arrays; logical result
+                    result = deser.deserialize(p, ctxt, valueToUpdate);
+                }
             }
         }
-        throw ctxt.instantiationException(_beanType.getRawClass(), t);
+        // Need to consume the token too
+        p.clearCurrentToken();
+        if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+            _verifyNoTrailingTokens(p, ctxt, _valueType);
+        }
+        return result;
+    }
+
+    protected Object _bindAndClose(JsonParser p0) throws IOException
+    {
+        try (JsonParser p = p0) {
+            Object result;
+
+            DeserializationContext ctxt = createDeserializationContext(p);
+            JsonToken t = _initForReading(ctxt, p);
+            if (t == JsonToken.VALUE_NULL) {
+                if (_valueToUpdate == null) {
+                    result = _findRootDeserializer(ctxt).getNullValue(ctxt);
+                } else {
+                    result = _valueToUpdate;
+                }
+            } else if (t == JsonToken.END_ARRAY || t == JsonToken.END_OBJECT) {
+                result = _valueToUpdate;
+            } else {
+                JsonDeserializer<Object> deser = _findRootDeserializer(ctxt);
+                if (_unwrapRoot) {
+                    result = _unwrapAndDeserialize(p, ctxt, _valueType, deser);
+                } else {
+                    if (_valueToUpdate == null) {
+                        result = deser.deserialize(p, ctxt);
+                    } else {
+                        deser.deserialize(p, ctxt, _valueToUpdate);
+                        result = _valueToUpdate;                    
+                    }
+                }
+            }
+            if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+                _verifyNoTrailingTokens(p, ctxt, _valueType);
+            }
+            return result;
+        }
+    }
+
+    protected final JsonNode _bindAndCloseAsTree(JsonParser p0) throws IOException {
+        try (JsonParser p = p0) {
+            return _bindAsTree(p);
+        }
+    }
+
+    protected final JsonNode _bindAsTree(JsonParser p) throws IOException
+    {
+        // Need to inline `_initForReading()` due to tree reading handling end-of-input specially
+        _config.initialize(p);
+        if (_schema != null) {
+            p.setSchema(_schema);
+        }
+
+        JsonToken t = p.getCurrentToken();
+        if (t == null) {
+            t = p.nextToken();
+            if (t == null) {
+                return _config.getNodeFactory().missingNode();
+            }
+        }
+        final JsonNode resultNode;
+        if (t == JsonToken.VALUE_NULL) {
+            resultNode = _config.getNodeFactory().nullNode();
+        } else {
+            final DeserializationContext ctxt = createDeserializationContext(p);
+            final JsonDeserializer<Object> deser = _findTreeDeserializer(ctxt);
+            if (_unwrapRoot) {
+                resultNode = (JsonNode) _unwrapAndDeserialize(p, ctxt, JSON_NODE_TYPE, deser);
+            } else {
+                resultNode = (JsonNode) deser.deserialize(p, ctxt);
+                if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+                    _verifyNoTrailingTokens(p, ctxt, JSON_NODE_TYPE);
+                }
+            }
+        }
+        return resultNode;
+    }
+
+    /**
+     * Same as {@link #_bindAsTree} except end-of-input is reported by returning
+     * {@code null}, not "missing node"
+     */
+    protected final JsonNode _bindAsTreeOrNull(JsonParser p) throws IOException
+    {
+        _config.initialize(p);
+        if (_schema != null) {
+            p.setSchema(_schema);
+        }
+        JsonToken t = p.getCurrentToken();
+        if (t == null) {
+            t = p.nextToken();
+            if (t == null) {
+                return null;
+            }
+        }
+        final JsonNode resultNode;
+        if (t == JsonToken.VALUE_NULL) {
+            resultNode = _config.getNodeFactory().nullNode();
+        } else {
+            final DeserializationContext ctxt = createDeserializationContext(p);
+            final JsonDeserializer<Object> deser = _findTreeDeserializer(ctxt);
+            if (_unwrapRoot) {
+                resultNode = (JsonNode) _unwrapAndDeserialize(p, ctxt, JSON_NODE_TYPE, deser);
+            } else {
+                resultNode = (JsonNode) deser.deserialize(p, ctxt);
+                if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+                    _verifyNoTrailingTokens(p, ctxt, JSON_NODE_TYPE);
+                }
+            }
+        }
+        return resultNode;
+    }
+    
+    /**
+     * @since 2.1
+     */
+    protected <T> MappingIterator<T> _bindAndReadValues(JsonParser p) throws IOException
+    {
+        DeserializationContext ctxt = createDeserializationContext(p);
+        _initForMultiRead(ctxt, p);
+        p.nextToken();
+        return _newIterator(p, ctxt, _findRootDeserializer(ctxt), true);
+    }
+
+    protected Object _unwrapAndDeserialize(JsonParser p, DeserializationContext ctxt,
+            JavaType rootType, JsonDeserializer<Object> deser) throws IOException
+    {
+        PropertyName expRootName = _config.findRootName(rootType);
+        // 12-Jun-2015, tatu: Should try to support namespaces etc but...
+        String expSimpleName = expRootName.getSimpleName();
+
+        if (p.getCurrentToken() != JsonToken.START_OBJECT) {
+            ctxt.reportWrongTokenException(rootType, JsonToken.START_OBJECT,
+                    "Current token not START_OBJECT (needed to unwrap root name '%s'), but %s",
+                    expSimpleName, p.getCurrentToken());
+        }
+        if (p.nextToken() != JsonToken.FIELD_NAME) {
+            ctxt.reportWrongTokenException(rootType, JsonToken.FIELD_NAME,
+                    "Current token not FIELD_NAME (to contain expected root name '%s'), but %s", 
+                    expSimpleName, p.getCurrentToken());
+        }
+        String actualName = p.getCurrentName();
+        if (!expSimpleName.equals(actualName)) {
+            ctxt.reportInputMismatch(rootType,
+                    "Root name '%s' does not match expected ('%s') for type %s",
+                    actualName, expSimpleName, rootType);
+        }
+        // ok, then move to value itself....
+        p.nextToken();
+        Object result;
+        if (_valueToUpdate == null) {
+            result = deser.deserialize(p, ctxt);
+        } else {
+            deser.deserialize(p, ctxt, _valueToUpdate);
+            result = _valueToUpdate;                    
+        }
+        // and last, verify that we now get matching END_OBJECT
+        if (p.nextToken() != JsonToken.END_OBJECT) {
+            ctxt.reportWrongTokenException(rootType, JsonToken.END_OBJECT,
+                    "Current token not END_OBJECT (to match wrapper object with root name '%s'), but %s",
+                    expSimpleName, p.getCurrentToken());
+        }
+        if (_config.isEnabled(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)) {
+            _verifyNoTrailingTokens(p, ctxt, _valueType);
+        }
+        return result;
+    }
+
+    /**
+     * Consider filter when creating JsonParser.  
+     */
+    protected JsonParser _considerFilter(final JsonParser p, boolean multiValue) {
+        // 26-Mar-2016, tatu: Need to allow multiple-matches at least if we have
+        //    have a multiple-value read (that is, "readValues()").
+        return ((_filter == null) || FilteringParserDelegate.class.isInstance(p))
+                ? p : new FilteringParserDelegate(p, _filter, false, multiValue);
+    }
+
+    /**
+     * @since 2.9
+     */
+    protected final void _verifyNoTrailingTokens(JsonParser p, DeserializationContext ctxt,
+            JavaType bindType)
+        throws IOException
+    {
+        JsonToken t = p.nextToken();
+        if (t != null) {
+            Class<?> bt = ClassUtil.rawClass(bindType);
+            if (bt == null) {
+                if (_valueToUpdate != null) {
+                    bt = _valueToUpdate.getClass();
+                }
+            }
+            ctxt.reportTrailingTokens(bt, p, t);
+        }
+    }
+
+    /*
+    /**********************************************************
+    /* Internal methods, format auto-detection
+    /**********************************************************
+     */
+    
+    @SuppressWarnings("resource")
+    protected Object _detectBindAndClose(byte[] src, int offset, int length) throws IOException
+    {
+        DataFormatReaders.Match match = _dataFormatReaders.findFormat(src, offset, length);
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        return match.getReader()._bindAndClose(p);
+    }
+
+    @SuppressWarnings({ "resource" })
+    protected Object _detectBindAndClose(DataFormatReaders.Match match, boolean forceClosing)
+        throws IOException
+    {
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        // One more thing: we Own the input stream now; and while it's 
+        // not super clean way to do it, we must ensure closure so:
+        if (forceClosing) {
+            p.enable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
+        }
+        // important: use matching ObjectReader (may not be 'this')
+        return match.getReader()._bindAndClose(p);
+    }
+
+    @SuppressWarnings({ "resource" })
+    protected <T> MappingIterator<T> _detectBindAndReadValues(DataFormatReaders.Match match, boolean forceClosing)
+        throws IOException
+    {
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        // One more thing: we Own the input stream now; and while it's 
+        // not super clean way to do it, we must ensure closure so:
+        if (forceClosing) {
+            p.enable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
+        }
+        // important: use matching ObjectReader (may not be 'this')
+        return match.getReader()._bindAndReadValues(p);
+    }
+    
+    @SuppressWarnings({ "resource" })
+    protected JsonNode _detectBindAndCloseAsTree(InputStream in) throws IOException
+    {
+        DataFormatReaders.Match match = _dataFormatReaders.findFormat(in);
+        if (!match.hasMatch()) {
+            _reportUnkownFormat(_dataFormatReaders, match);
+        }
+        JsonParser p = match.createParserWithMatch();
+        p.enable(JsonParser.Feature.AUTO_CLOSE_SOURCE);
+        return match.getReader()._bindAndCloseAsTree(p);
+    }
+    
+    /**
+     * Method called to indicate that format detection failed to detect format
+     * of given input
+     */
+    protected void _reportUnkownFormat(DataFormatReaders detector, DataFormatReaders.Match match)
+        throws JsonProcessingException
+    {
+        // 17-Aug-2015, tatu: Unfortunately, no parser/generator available so:
+        throw new JsonParseException(null, "Cannot detect format from input, does not look like any of detectable formats "
+                +detector.toString());
+    }
+
+    /*
+    /**********************************************************
+    /* Internal methods, other
+    /**********************************************************
+     */
+
+    /**
+     * @since 2.2
+     */
+    protected void _verifySchemaType(FormatSchema schema)
+    {
+        if (schema != null) {
+            if (!_parserFactory.canUseSchema(schema)) {
+                    throw new IllegalArgumentException("Cannot use FormatSchema of type "+schema.getClass().getName()
+                            +" for format "+_parserFactory.getFormatName());
+            }
+        }
+    }
+
+    /**
+     * Internal helper method called to create an instance of {@link DeserializationContext}
+     * for deserializing a single root value.
+     * Can be overridden if a custom context is needed.
+     */
+    protected DefaultDeserializationContext createDeserializationContext(JsonParser p) {
+        return _context.createInstance(_config, p, _injectableValues);
+    }
+
+    protected InputStream _inputStream(URL src) throws IOException {
+        return src.openStream();
+    }
+
+    protected InputStream _inputStream(File f) throws IOException {
+        return new FileInputStream(f);
+    }
+
+    protected void _reportUndetectableSource(Object src) throws JsonProcessingException
+    {
+        // 17-Aug-2015, tatu: Unfortunately, no parser/generator available so:
+        throw new JsonParseException(null, "Cannot use source of type "
+                +src.getClass().getName()+" with format auto-detection: must be byte- not char-based");
+    }
+
+    /*
+    /**********************************************************
+    /* Helper methods, locating deserializers etc
+    /**********************************************************
+     */
+    
+    /**
+     * Method called to locate deserializer for the passed root-level value.
+     */
+    protected JsonDeserializer<Object> _findRootDeserializer(DeserializationContext ctxt)
+        throws JsonMappingException
+    {
+        if (_rootDeserializer != null) {
+            return _rootDeserializer;
+        }
+
+        // Sanity check: must have actual type...
+        JavaType t = _valueType;
+        if (t == null) {
+            ctxt.reportBadDefinition((JavaType) null,
+                    "No value type configured for ObjectReader");
+        }
+        // First: have we already seen it?
+        JsonDeserializer<Object> deser = _rootDeserializers.get(t);
+        if (deser != null) {
+            return deser;
+        }
+        // Nope: need to ask provider to resolve it
+        deser = ctxt.findRootValueDeserializer(t);
+        if (deser == null) { // can this happen?
+            ctxt.reportBadDefinition(t, "Cannot find a deserializer for type "+t);
+        }
+        _rootDeserializers.put(t, deser);
+        return deser;
+    }
+
+    /**
+     * @since 2.6
+     */
+    protected JsonDeserializer<Object> _findTreeDeserializer(DeserializationContext ctxt)
+        throws JsonMappingException
+    {
+        JsonDeserializer<Object> deser = _rootDeserializers.get(JSON_NODE_TYPE);
+        if (deser == null) {
+            // Nope: need to ask provider to resolve it
+            deser = ctxt.findRootValueDeserializer(JSON_NODE_TYPE);
+            if (deser == null) { // can this happen?
+                ctxt.reportBadDefinition(JSON_NODE_TYPE,
+                        "Cannot find a deserializer for type "+JSON_NODE_TYPE);
+            }
+            _rootDeserializers.put(JSON_NODE_TYPE, deser);
+        }
+        return deser;
+    }
+
+    /**
+     * Method called to locate deserializer ahead of time, if permitted
+     * by configuration. Method also is NOT to throw an exception if
+     * access fails.
+     */
+    protected JsonDeserializer<Object> _prefetchRootDeserializer(JavaType valueType)
+    {
+        if ((valueType == null) || !_config.isEnabled(DeserializationFeature.EAGER_DESERIALIZER_FETCH)) {
+            return null;
+        }
+        // already cached?
+        JsonDeserializer<Object> deser = _rootDeserializers.get(valueType);
+        if (deser == null) {
+            try {
+                // If not, need to resolve; for which we need a temporary context as well:
+                DeserializationContext ctxt = createDeserializationContext(null);
+                deser = ctxt.findRootValueDeserializer(valueType);
+                if (deser != null) {
+                    _rootDeserializers.put(valueType, deser);
+                }
+                return deser;
+            } catch (JsonProcessingException e) {
+                // need to swallow?
+            }
+        }
+        return deser;
     }
 }

@@ -634,8 +634,8 @@ final class NameAnalyzer implements CompilerPass {
         if (ns != null && ns.onlyAffectsClassDef) {
           JsName name = getName(ns.name, false);
           if (name != null) {
-            refNodes.add(new ClassDefiningFunctionNode(
-                            name, n, parent, parent.getParent()));
+          refNodes.add(new ClassDefiningFunctionNode(
+              name, n, parent, parent.getParent()));
           }
         }
       }

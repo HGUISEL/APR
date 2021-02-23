@@ -1,22 +1,16 @@
 Project,D4J ID,Faulty file path,faulty line,FIC_sha,BFIC_sha
-Lang,1,src/main/java/org/apache/commons/lang3/math/NumberUtils.java,468,a2de60407f650fdf4cce938c993bbf0ba6f8bfcf,396a00b5b8a2eeb71de0ad58fe33141a273ba2d7
 Lang,6,src/main/java/org/apache/commons/lang3/text/translate/CharSequenceTranslator.java,95,b4255e6d071dc8d48bfc51037cecb29097b9a49d,a7e90b2ffa23ab60c7022e2f94a12651b4fb8ec0
+Lang,7,src/java/org/apache/commons/lang/math/NumberUtils.java,452,af2f23ee1deb9e05244ca604cd0248dd21227a12,c5e0192ca2586126253871b3c2ad6c4b477a24fc
+Lang,10,src/main/java/org/apache/commons/lang3/time/FastDateParser.java,307,85a7311e94b6e63d99ca342d42465bfc7df06b28,cf7211f9d7d70d56501d8c4c827bf9ce3cac5f0b
 Lang,16,src/java/org/apache/commons/lang/math/NumberUtils.java,458,af2f23ee1deb9e05244ca604cd0248dd21227a12,c5e0192ca2586126253871b3c2ad6c4b477a24fc
-Lang,20,src/java/org/apache/commons/lang/StringUtils.java,3298,b8a3272c957ca51b3908acfcfa53d9fefb2fb764,f67b5d82fc57819363428b02560e7dd0b10b5a78
 Lang,21,src/java/org/apache/commons/lang/time/DateUtils.java,265,2a41c12c95bb41f7b07a270927b27f3bc5098621,9b180253ff79b874edbffb1bc4bf7686d6168efd
 Lang,24,src/java/org/apache/commons/lang/math/NumberUtils.java,1413,61f0f1640387a5e07a4904aa6adec9363ec5e2fc,a8b36a1b04a1f79e45cd28322b372d1e3e2d9b36
 Lang,26,src/java/org/apache/commons/lang/time/FastDateFormat.java,820,9839566cf0eb6d299a61d6354522d6f65ab83af3,18b614c14626fedade91a7c534a9cf7eeccbb17a
 Lang,29,src/main/java/org/apache/commons/lang3/SystemUtils.java,1672,ef9524aed96ca4d195fc390ece625a902fb37f4b,a45b7e63f2d30c028962292f29c69a006c1532ab
 Lang,33,src/java/org/apache/commons/lang/ClassUtils.java,910,68ae1aa3538c72a9967e4f262e01a42113b46b80,41c95a216df1b44f6217a69df1762c0815d6543f
-Lang,34,src/main/java/org/apache/commons/lang3/builder/ToStringStyle.java,148,3f900a7395e31eaa72e0fa2fb43c090e5a8fa4ed,2b3de2ce0c94cb59a7458706a5d365e9f7422242
-Lang,35,src/java/org/apache/commons/lang/ArrayUtils.java,3295,70de8cc81082b1a1bd25be1c0453b3a2adb89b02,7ff22e0f19f41846c27b77ae41f696d820515242
-Lang,46,src/java/org/apache/commons/lang/StringEscapeUtils.java,86,f03e83e74e8a723fd8c8fffc84cc7faaf9494ab4,bf1185e5d96eeb9e6621a6ee20a09d4d96a82749
-Lang,50,src/java/org/apache/commons/lang/time/FastDateFormat.java,285,d3015ae73bfbf0ee970199cd6a1e073fbfd9c7ef,727cb987e4389bd67c74cc5702bbf4b84269bda9
 Lang,53,src/java/org/apache/commons/lang/time/DateUtils.java,645,bb1671667d9085fb76bd06af7f7ad91d2c1c8389,c8fc5f3dff9491b076a1f76ed5a2584908b1db4f
-Lang,56,src/java/org/apache/commons/lang/time/FastDateFormat.java,140,c66659d62dbf69d4c1ccc5c9c50938273436c1b3,5db36decad4ffe41894c81d56021c42f604f31ac
 Lang,57,src/java/org/apache/commons/lang/LocaleUtils.java,223,ddd4f84525178a0722ecbc01229d919d11c526f7,2cb189ef3bb4a6b4c4904ab254059fbe13a9e9d9
 Lang,58,src/java/org/apache/commons/lang/math/NumberUtils.java,454,61f0f1640387a5e07a4904aa6adec9363ec5e2fc,a8b36a1b04a1f79e45cd28322b372d1e3e2d9b36
 Lang,59,src/java/org/apache/commons/lang/text/StrBuilder.java,884,dc03d7c8f81fa7933a095e65860078c1e0c595b8,57696acf0979b0d3a6e69639c14acda8b01ded28
 Lang,60,src/java/org/apache/commons/lang/text/StrBuilder.java,1673,e5bd9a5654ff829b091a5a6c4f8ed6180c3d359b,12796537fc6f3d5d3d3df9fa1027f2f377c30a71
 Lang,61,src/java/org/apache/commons/lang/text/StrBuilder.java,1776,4abacfbf779d2b9ae9dbad8283792ad05f3b84be,bfedc322198338d37a4a31cd57739bdbf8d556cf
-Lang,63,src/java/org/apache/commons/lang/time/DurationFormatUtils.java,306,12796537fc6f3d5d3d3df9fa1027f2f377c30a71,40c38f8cdb404ecc79b70ecea4df532b2cbf037c

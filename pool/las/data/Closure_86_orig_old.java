@@ -2459,6 +2459,9 @@ public final class NodeUtil {
             || isToStringMethodCall(value)
             || locals.apply(value);
       case Token.NEW:
+        // TODO(nicksantos): This needs to be changed so that it
+        // returns true iff we're sure the value was never aliased from inside
+        // the constructor (similar to callHasLocalResult)
         return true;
       case Token.FUNCTION:
       case Token.REGEXP:

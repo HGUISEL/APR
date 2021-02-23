@@ -1,1650 +1,1205 @@
-package com.fasterxml.jackson.databind.deser;
+package org.jsoup.nodes;
 
-import java.io.IOException;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
+import org.jsoup.helper.StringUtil;
+import org.jsoup.helper.Validate;
+import org.jsoup.parser.Parser;
+import org.jsoup.parser.Tag;
+import org.jsoup.select.*;
+
 import java.util.*;
-
-import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonTypeInfo;
-import com.fasterxml.jackson.annotation.ObjectIdGenerator;
-import com.fasterxml.jackson.annotation.ObjectIdGenerators;
-import com.fasterxml.jackson.annotation.ObjectIdResolver;
-import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.core.JsonParser.NumberType;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.deser.impl.*;
-import com.fasterxml.jackson.databind.deser.std.StdDelegatingDeserializer;
-import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
-import com.fasterxml.jackson.databind.exc.IgnoredPropertyException;
-import com.fasterxml.jackson.databind.introspect.*;
-import com.fasterxml.jackson.databind.jsontype.TypeDeserializer;
-import com.fasterxml.jackson.databind.type.ClassKey;
-import com.fasterxml.jackson.databind.util.*;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
- * Base class for <code>BeanDeserializer</code>.
+ * A HTML element consists of a tag name, attributes, and child nodes (including text nodes and
+ * other elements).
+ * 
+ * From an Element, you can extract data, traverse the node graph, and manipulate the HTML.
+ * 
+ * @author Jonathan Hedley, jonathan@hedley.net
  */
-public abstract class BeanDeserializerBase
-    extends StdDeserializer<Object>
-    implements ContextualDeserializer, ResolvableDeserializer,
-        java.io.Serializable // since 2.1
-{
-    private static final long serialVersionUID = 1;
+public class Element extends Node {
+    private Tag tag;
 
-    protected final static PropertyName TEMP_PROPERTY_NAME = new PropertyName("#temporary-name");
-
-    /*
-    /**********************************************************
-    /* Information regarding type being deserialized
-    /**********************************************************
-     */
+    private static final Pattern classSplit = Pattern.compile("\\s+");
 
     /**
-     * Annotations from the bean class: used for accessing
-     * annotations during resolution
-     * (see {@link #resolve}) and
-     * contextualization (see {@link #createContextual})
-     *<p> 
-     * Transient since annotations only used during construction.
+     * Create a new, standalone Element. (Standalone in that is has no parent.)
+     * 
+     * @param tag tag of this element
+     * @param baseUri the base URI
+     * @param attributes initial attributes
+     * @see #appendChild(Node)
+     * @see #appendElement(String)
      */
-    final private transient Annotations _classAnnotations;
-
-    /**
-     * Declared type of the bean this deserializer handles.
-     */
-    final protected JavaType _beanType;
-
-    /**
-     * Requested shape from bean class annotations.
-     */
-    final protected JsonFormat.Shape _serializationShape;
-    
-    /*
-    /**********************************************************
-    /* Configuration for creating value instance
-    /**********************************************************
-     */
-
-    /**
-     * Object that handles details of constructing initial 
-     * bean value (to which bind data to), unless instance
-     * is passed (via updateValue())
-     */
-    protected final ValueInstantiator _valueInstantiator;
-
-    /**
-     * Deserializer that is used iff delegate-based creator is
-     * to be used for deserializing from JSON Object.
-     */
-    protected JsonDeserializer<Object> _delegateDeserializer;
-
-    /**
-     * Deserializer that is used iff array-delegate-based creator
-     * is to be used for deserializing from JSON Object.
-     */
-    protected JsonDeserializer<Object> _arrayDelegateDeserializer;
-
-    /**
-     * If the bean needs to be instantiated using constructor
-     * or factory method
-     * that takes one or more named properties as argument(s),
-     * this creator is used for instantiation.
-     * This value gets resolved during general resolution.
-     */
-    protected PropertyBasedCreator _propertyBasedCreator;
-
-    /**
-     * Flag that is set to mark "non-standard" cases; where either
-     * we use one of non-default creators, or there are unwrapped
-     * values to consider.
-     */
-    protected boolean _nonStandardCreation;
-
-    /**
-     * Flag that indicates that no "special features" whatsoever
-     * are enabled, so the simplest processing is possible.
-     */
-    protected boolean _vanillaProcessing;
-
-    /*
-    /**********************************************************
-    /* Property information, setters
-    /**********************************************************
-     */
-
-    /**
-     * Mapping of property names to properties, built when all properties
-     * to use have been successfully resolved.
-     */
-    final protected BeanPropertyMap _beanProperties;
-
-    /**
-     * List of {@link ValueInjector}s, if any injectable values are
-     * expected by the bean; otherwise null.
-     * This includes injectors used for injecting values via setters
-     * and fields, but not ones passed through constructor parameters.
-     */
-    final protected ValueInjector[] _injectables;
-
-    /**
-     * Fallback setter used for handling any properties that are not
-     * mapped to regular setters. If setter is not null, it will be
-     * called once for each such property.
-     */
-    protected SettableAnyProperty _anySetter;
-
-    /**
-     * In addition to properties that are set, we will also keep
-     * track of recognized but ignorable properties: these will
-     * be skipped without errors or warnings.
-     */
-    final protected Set<String> _ignorableProps;
-
-    /**
-     * Flag that can be set to ignore and skip unknown properties.
-     * If set, will not throw an exception for unknown properties.
-     */
-    final protected boolean _ignoreAllUnknown;
-
-    /**
-     * Flag that indicates that some aspect of deserialization depends
-     * on active view used (if any)
-     */
-    final protected boolean _needViewProcesing;
-    
-    /**
-     * We may also have one or more back reference fields (usually
-     * zero or one).
-     */
-    final protected Map<String, SettableBeanProperty> _backRefs;
-    
-    /*
-    /**********************************************************
-    /* Related handlers
-    /**********************************************************
-     */
-
-    /**
-     * Lazily constructed map used to contain deserializers needed
-     * for polymorphic subtypes.
-     * Note that this is <b>only needed</b> for polymorphic types,
-     * that is, when the actual type is not statically known.
-     * For other types this remains null.
-     */
-    protected transient HashMap<ClassKey, JsonDeserializer<Object>> _subDeserializers;
-
-    /**
-     * If one of properties has "unwrapped" value, we need separate
-     * helper object
-     */
-    protected UnwrappedPropertyHandler _unwrappedPropertyHandler;
-
-    /**
-     * Handler that we need iff any of properties uses external
-     * type id.
-     */
-    protected ExternalTypeHandler _externalTypeIdHandler;
-
-    /**
-     * If an Object Id is to be used for value handled by this
-     * deserializer, this reader is used for handling.
-     */
-    protected final ObjectIdReader _objectIdReader;
-
-    /*
-    /**********************************************************
-    /* Life-cycle, construction, initialization
-    /**********************************************************
-     */
-
-    /**
-     * Constructor used when initially building a deserializer
-     * instance, given a {@link BeanDeserializerBuilder} that
-     * contains configuration.
-     */
-    protected BeanDeserializerBase(BeanDeserializerBuilder builder,
-            BeanDescription beanDesc,
-            BeanPropertyMap properties, Map<String, SettableBeanProperty> backRefs,
-            Set<String> ignorableProps, boolean ignoreAllUnknown,
-            boolean hasViews)
-    {
-        super(beanDesc.getType());
-
-        AnnotatedClass ac = beanDesc.getClassInfo();
-        _classAnnotations = ac.getAnnotations();       
-        _beanType = beanDesc.getType();
-        _valueInstantiator = builder.getValueInstantiator();
+    public Element(Tag tag, String baseUri, Attributes attributes) {
+        super(baseUri, attributes);
         
-        _beanProperties = properties;
-        _backRefs = backRefs;
-        _ignorableProps = ignorableProps;
-        _ignoreAllUnknown = ignoreAllUnknown;
-
-        _anySetter = builder.getAnySetter();
-        List<ValueInjector> injectables = builder.getInjectables();
-        _injectables = (injectables == null || injectables.isEmpty()) ? null
-                : injectables.toArray(new ValueInjector[injectables.size()]);
-        _objectIdReader = builder.getObjectIdReader();
-        _nonStandardCreation = (_unwrappedPropertyHandler != null)
-            || _valueInstantiator.canCreateUsingDelegate()
-            || _valueInstantiator.canCreateUsingArrayDelegate() // new in 2.7
-            || _valueInstantiator.canCreateFromObjectWith()
-            || !_valueInstantiator.canCreateUsingDefault()
-            ;
-
-        // Any transformation we may need to apply?
-        JsonFormat.Value format = beanDesc.findExpectedFormat(null);
-        _serializationShape = (format == null) ? null : format.getShape();
-
-        _needViewProcesing = hasViews;
-        _vanillaProcessing = !_nonStandardCreation
-                && (_injectables == null)
-                && !_needViewProcesing
-                // also, may need to reorder stuff if we expect Object Id:
-                && (_objectIdReader == null)
-                ;
-    }
-
-    protected BeanDeserializerBase(BeanDeserializerBase src) {
-        this(src, src._ignoreAllUnknown);
-    }
-
-    protected BeanDeserializerBase(BeanDeserializerBase src, boolean ignoreAllUnknown)
-    {
-        super(src._beanType);
-        
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-        
-        _beanProperties = src._beanProperties;
-        _backRefs = src._backRefs;
-        _ignorableProps = src._ignorableProps;
-        _ignoreAllUnknown = ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        _objectIdReader = src._objectIdReader;
-        
-        _nonStandardCreation = src._nonStandardCreation;
-        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        _vanillaProcessing = src._vanillaProcessing;
-    }
- 
-    protected BeanDeserializerBase(BeanDeserializerBase src, NameTransformer unwrapper)
-    {
-        super(src._beanType);
-
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-
-        _backRefs = src._backRefs;
-        _ignorableProps = src._ignorableProps;
-        _ignoreAllUnknown = (unwrapper != null) || src._ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        _objectIdReader = src._objectIdReader;
-
-        _nonStandardCreation = src._nonStandardCreation;
-        UnwrappedPropertyHandler uph = src._unwrappedPropertyHandler;
-
-        if (unwrapper != null) {
-            // delegate further unwraps, if any
-            if (uph != null) { // got handler, delegate
-                uph = uph.renameAll(unwrapper);
-            }
-            // and handle direct unwrapping as well:
-            _beanProperties = src._beanProperties.renameAll(unwrapper);
-        } else {
-            _beanProperties = src._beanProperties;
-        }
-        _unwrappedPropertyHandler = uph;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        // probably adds a twist, so:
-        _vanillaProcessing = false;
-    }
-
-    public BeanDeserializerBase(BeanDeserializerBase src, ObjectIdReader oir)
-    {
-        super(src._beanType);
-        
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-        
-        _backRefs = src._backRefs;
-        _ignorableProps = src._ignorableProps;
-        _ignoreAllUnknown = src._ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        
-        _nonStandardCreation = src._nonStandardCreation;
-        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        // then actual changes:
-        _objectIdReader = oir;
-
-        if (oir == null) {
-            _beanProperties = src._beanProperties;
-            _vanillaProcessing = src._vanillaProcessing;
-        } else {
-            /* 18-Nov-2012, tatu: May or may not have annotations for id property;
-             *   but no easy access. But hard to see id property being optional,
-             *   so let's consider required at this point.
-             */
-            ObjectIdValueProperty idProp = new ObjectIdValueProperty(oir, PropertyMetadata.STD_REQUIRED);
-            _beanProperties = src._beanProperties.withProperty(idProp);
-            _vanillaProcessing = false;
-        }
-    }
-
-    public BeanDeserializerBase(BeanDeserializerBase src, Set<String> ignorableProps)
-    {
-        super(src._beanType);
-        
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-        
-        _backRefs = src._backRefs;
-        _ignorableProps = ignorableProps;
-        _ignoreAllUnknown = src._ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        
-        _nonStandardCreation = src._nonStandardCreation;
-        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        _vanillaProcessing = src._vanillaProcessing;
-        _objectIdReader = src._objectIdReader;
-
-        // 01-May-2016, tatu: [databind#1217]: Remove properties from mapping,
-        //    to avoid them being deserialized
-        _beanProperties = src._beanProperties.withoutProperties(ignorableProps);
-    }
-
-    /**
-     * @since 2.8
-     */
-    protected BeanDeserializerBase(BeanDeserializerBase src, BeanPropertyMap beanProps)
-    {
-        super(src._beanType);
-        
-        _classAnnotations = src._classAnnotations;
-        _beanType = src._beanType;
-        
-        _valueInstantiator = src._valueInstantiator;
-        _delegateDeserializer = src._delegateDeserializer;
-        _propertyBasedCreator = src._propertyBasedCreator;
-        
-        _beanProperties = beanProps;
-        _backRefs = src._backRefs;
-        _ignorableProps = src._ignorableProps;
-        _ignoreAllUnknown = src._ignoreAllUnknown;
-        _anySetter = src._anySetter;
-        _injectables = src._injectables;
-        _objectIdReader = src._objectIdReader;
-        
-        _nonStandardCreation = src._nonStandardCreation;
-        _unwrappedPropertyHandler = src._unwrappedPropertyHandler;
-        _needViewProcesing = src._needViewProcesing;
-        _serializationShape = src._serializationShape;
-
-        _vanillaProcessing = src._vanillaProcessing;
+        Validate.notNull(tag);    
+        this.tag = tag;
     }
     
+    /**
+     * Create a new Element from a tag and a base URI.
+     * 
+     * @param tag element tag
+     * @param baseUri the base URI of this element. It is acceptable for the base URI to be an empty
+     *            string, but not null.
+     * @see Tag#valueOf(String)
+     */
+    public Element(Tag tag, String baseUri) {
+        this(tag, baseUri, new Attributes());
+    }
+
     @Override
-    public abstract JsonDeserializer<Object> unwrappingDeserializer(NameTransformer unwrapper);
-
-    public abstract BeanDeserializerBase withObjectIdReader(ObjectIdReader oir);
-
-    public abstract BeanDeserializerBase withIgnorableProperties(Set<String> ignorableProps);
+    public String nodeName() {
+        return tag.getName();
+    }
 
     /**
-     * Mutant factory method that custom sub-classes must override; not left as
-     * abstract to prevent more drastic backwards compatibility problems.
+     * Get the name of the tag for this element. E.g. {@code div}
+     * 
+     * @return the tag name
+     */
+    public String tagName() {
+        return tag.getName();
+    }
+
+    /**
+     * Change the tag of this element. For example, convert a {@code <span>} to a {@code <div>} with
+     * {@code el.tagName("div");}.
      *
-     * @since 2.8
+     * @param tagName new tag name for this element
+     * @return this element, for chaining
      */
-    public BeanDeserializerBase withBeanProperties(BeanPropertyMap props) {
-        throw new UnsupportedOperationException("Class "+getClass().getName()
-                +" does not override `withBeanProperties()`, needs to");
+    public Element tagName(String tagName) {
+        Validate.notEmpty(tagName, "Tag name must not be empty.");
+        tag = Tag.valueOf(tagName);
+        return this;
+    }
+
+    /**
+     * Get the Tag for this element.
+     * 
+     * @return the tag object
+     */
+    public Tag tag() {
+        return tag;
     }
     
     /**
-     * Fluent factory for creating a variant that can handle
-     * POJO output as a JSON Array. Implementations may ignore this request
-     * if no such input is possible.
+     * Test if this element is a block-level element. (E.g. {@code <div> == true} or an inline element
+     * {@code <p> == false}).
      * 
-     * @since 2.1
+     * @return true if block, false if not (and thus inline)
      */
-    protected abstract BeanDeserializerBase asArrayDeserializer();
-
-    /*
-    /**********************************************************
-    /* Validation, post-processing
-    /**********************************************************
-     */
+    public boolean isBlock() {
+        return tag.isBlock();
+    }
 
     /**
-     * Method called to finalize setup of this deserializer,
-     * after deserializer itself has been registered.
-     * This is needed to handle recursive and transitive dependencies.
+     * Get the {@code id} attribute of this element.
+     * 
+     * @return The id attribute, if present, or an empty string if not.
      */
+    public String id() {
+        return attributes.get("id");
+    }
+
+    /**
+     * Set an attribute value on this element. If this element already has an attribute with the
+     * key, its value is updated; otherwise, a new attribute is added.
+     * 
+     * @return this element
+     */
+    public Element attr(String attributeKey, String attributeValue) {
+        super.attr(attributeKey, attributeValue);
+        return this;
+    }
+
+    /**
+     * Get this element's HTML5 custom data attributes. Each attribute in the element that has a key
+     * starting with "data-" is included the dataset.
+     * <p>
+     * E.g., the element {@code <div data-package="jsoup" data-language="Java" class="group">...} has the dataset
+     * {@code package=jsoup, language=java}.
+     * <p>
+     * This map is a filtered view of the element's attribute map. Changes to one map (add, remove, update) are reflected
+     * in the other map.
+     * <p>
+     * You can find elements that have data attributes using the {@code [^data-]} attribute key prefix selector.
+     * @return a map of {@code key=value} custom data attributes.
+     */
+    public Map<String, String> dataset() {
+        return attributes.dataset();
+    }
+
     @Override
-    public void resolve(DeserializationContext ctxt)
-        throws JsonMappingException
-    {
-        ExternalTypeHandler.Builder extTypes = null;
-        // if ValueInstantiator can use "creator" approach, need to resolve it here...
-        SettableBeanProperty[] creatorProps;
+    public final Element parent() {
+        return (Element) parentNode;
+    }
 
-        if (_valueInstantiator.canCreateFromObjectWith()) {
-            creatorProps = _valueInstantiator.getFromObjectArguments(ctxt.getConfig());
+    /**
+     * Get this element's parent and ancestors, up to the document root.
+     * @return this element's stack of parents, closest first.
+     */
+    public Elements parents() {
+        Elements parents = new Elements();
+        accumulateParents(this, parents);
+        return parents;
+    }
 
-            // 21-Jun-2015, tatu: This resolution was duplicated later on and seems like
-            //    it really should be only done at a later point. So commented out in 2.8.
-            //   However, just in case there was a reason for it, leaving commented out
-            //   here instead of immediately removing.
-
-            /*
-            // also: need to try to resolve 'external' type ids...
-            for (SettableBeanProperty prop : creatorProps) {
-                if (prop.hasValueTypeDeserializer()) {
-                    TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
-                    if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
-                        if (extTypes == null) {
-                            extTypes = new ExternalTypeHandler.Builder();
-                        }
-                        extTypes.addExternal(prop, typeDeser);
-                    }
-                }
-            }
-            */
-        } else {
-            creatorProps = null;
+    private static void accumulateParents(Element el, Elements parents) {
+        Element parent = el.parent();
+        if (parent != null && !parent.tagName().equals("#root")) {
+            parents.add(parent);
+            accumulateParents(parent, parents);
         }
+    }
 
-        UnwrappedPropertyHandler unwrapped = null;
+    /**
+     * Get a child element of this element, by its 0-based index number.
+     * <p>
+     * Note that an element can have both mixed Nodes and Elements as children. This method inspects
+     * a filtered list of children that are elements, and the index is based on that filtered list.
+     * </p>
+     * 
+     * @param index the index number of the element to retrieve
+     * @return the child element, if it exists, otherwise throws an {@code IndexOutOfBoundsException}
+     * @see #childNode(int)
+     */
+    public Element child(int index) {
+        return children().get(index);
+    }
 
-        for (SettableBeanProperty origProp : _beanProperties) {
-            SettableBeanProperty prop = origProp;
-
-            // May already have deserializer from annotations, if so, skip:
-            if (!prop.hasValueDeserializer()) {
-                // [databind#125]: allow use of converters
-                JsonDeserializer<?> deser = findConvertingDeserializer(ctxt, prop);
-                if (deser == null) {
-                    deser = findDeserializer(ctxt, prop.getType(), prop);
-                }
-                prop = prop.withValueDeserializer(deser);
-            } else { // may need contextual version
-                JsonDeserializer<Object> deser = prop.getValueDeserializer();
-                /* Important! This is the only place where actually handle "primary"
-                 * property deserializers -- call is different from other places.
-                 */
-                JsonDeserializer<?> cd = ctxt.handlePrimaryContextualization(deser, prop,
-                        prop.getType());
-                if (cd != deser) {
-                    prop = prop.withValueDeserializer(cd);
-                }
-            }
-
-            // Need to link managed references with matching back references
-            prop = _resolveManagedReferenceProperty(ctxt, prop);
-
-            // [databind#351]: need to wrap properties that require object id resolution.
-            if (!(prop instanceof ManagedReferenceProperty)) {
-                prop = _resolvedObjectIdProperty(ctxt, prop);
-            }
-            // Support unwrapped values (via @JsonUnwrapped)
-            SettableBeanProperty u = _resolveUnwrappedProperty(ctxt, prop);
-            if (u != null) {
-                prop = u;
-                if (unwrapped == null) {
-                    unwrapped = new UnwrappedPropertyHandler();
-                }
-                unwrapped.addProperty(prop);
-                /* 12-Dec-2014, tatu: As per [databind#647], we will have problems if
-                 *    the original property is left in place. So let's remove it now.
-                 */
-                _beanProperties.remove(prop);
-                continue;
-            }
-            // non-static inner classes too:
-            prop = _resolveInnerClassValuedProperty(ctxt, prop);
-            if (prop != origProp) {
-                _beanProperties.replace(prop);
-                // [databind#795]: Make sure PropertyBasedCreator's properties stay in sync
-                if (creatorProps != null) {
-                    // 18-May-2015, tatu: _Should_ start with consistent set. But can we really
-                    //   fully count on this? May need to revisit in future; seems to hold for now.
-                    for (int i = 0, len = creatorProps.length; i < len; ++i) {
-                        if (creatorProps[i] == origProp) {
-                            creatorProps[i] = prop;
-                            break;
-                        }
-                        // ... as per above, it is possible we'd need to add this as fallback
-                        // if (but only if) identity check fails?
-                        /*
-                        if (creatorProps[i].getName().equals(prop.getName())) {
-                            creatorProps[i] = prop;
-                            break;
-                        }
-                        */
-                    }
-                }
-            }
-            // one more thing: if this property uses "external property" type inclusion,
-            // it needs different handling altogether
-            if (prop.hasValueTypeDeserializer()) {
-                TypeDeserializer typeDeser = prop.getValueTypeDeserializer();
-                if (typeDeser.getTypeInclusion() == JsonTypeInfo.As.EXTERNAL_PROPERTY) {
-                    if (extTypes == null) {
-                        extTypes = new ExternalTypeHandler.Builder();
-                    }
-                    extTypes.addExternal(prop, typeDeser);
-                    // In fact, remove from list of known properties to simplify later handling
-                    _beanProperties.remove(prop);
-                    continue;
-                }
-            }
+    /**
+     * Get this element's child elements.
+     * <p>
+     * This is effectively a filter on {@link #childNodes()} to get Element nodes.
+     * </p>
+     * @return child elements. If this element has no children, returns an
+     * empty list.
+     * @see #childNodes()
+     */
+    public Elements children() {
+        // create on the fly rather than maintaining two lists. if gets slow, memoize, and mark dirty on change
+        List<Element> elements = new ArrayList<Element>(childNodes.size());
+        for (Node node : childNodes) {
+            if (node instanceof Element)
+                elements.add((Element) node);
         }
-        // "any setter" may also need to be resolved now
-        if (_anySetter != null && !_anySetter.hasValueDeserializer()) {
-            _anySetter = _anySetter.withValueDeserializer(findDeserializer(ctxt,
-                    _anySetter.getType(), _anySetter.getProperty()));
-        }
-        // as well as delegate-based constructor:
-        if (_valueInstantiator.canCreateUsingDelegate()) {
-            JavaType delegateType = _valueInstantiator.getDelegateType(ctxt.getConfig());
-            if (delegateType == null) {
-                throw new IllegalArgumentException("Invalid delegate-creator definition for "+_beanType
-                        +": value instantiator ("+_valueInstantiator.getClass().getName()
-                        +") returned true for 'canCreateUsingDelegate()', but null for 'getDelegateType()'");
-            }
-            _delegateDeserializer = _findDelegateDeserializer(ctxt, delegateType,
-                    _valueInstantiator.getDelegateCreator());
-        }
+        return new Elements(elements);
+    }
 
-        // and array-delegate-based constructor:
-        if (_valueInstantiator.canCreateUsingArrayDelegate()) {
-            JavaType delegateType = _valueInstantiator.getArrayDelegateType(ctxt.getConfig());
-            if (delegateType == null) {
-                throw new IllegalArgumentException("Invalid array-delegate-creator definition for "+_beanType
-                        +": value instantiator ("+_valueInstantiator.getClass().getName()
-                        +") returned true for 'canCreateUsingArrayDelegate()', but null for 'getArrayDelegateType()'");
-            }
-            _arrayDelegateDeserializer = _findDelegateDeserializer(ctxt, delegateType,
-                    _valueInstantiator.getArrayDelegateCreator());
+    /**
+     * Get this element's child text nodes. The list is unmodifiable but the text nodes may be manipulated.
+     * <p>
+     * This is effectively a filter on {@link #childNodes()} to get Text nodes.
+     * @return child text nodes. If this element has no text nodes, returns an
+     * empty list.
+     * </p>
+     * For example, with the input HTML: {@code <p>One <span>Two</span> Three <br> Four</p>} with the {@code p} element selected:
+     * <ul>
+     *     <li>{@code p.text()} = {@code "One Two Three Four"}</li>
+     *     <li>{@code p.ownText()} = {@code "One Three Four"}</li>
+     *     <li>{@code p.children()} = {@code Elements[<span>, <br>]}</li>
+     *     <li>{@code p.childNodes()} = {@code List<Node>["One ", <span>, " Three ", <br>, " Four"]}</li>
+     *     <li>{@code p.textNodes()} = {@code List<TextNode>["One ", " Three ", " Four"]}</li>
+     * </ul>
+     */
+    public List<TextNode> textNodes() {
+        List<TextNode> textNodes = new ArrayList<TextNode>();
+        for (Node node : childNodes) {
+            if (node instanceof TextNode)
+                textNodes.add((TextNode) node);
         }
+        return Collections.unmodifiableList(textNodes);
+    }
 
-        // And now that we know CreatorProperty instances are also resolved can finally create the creator:
-        if (creatorProps != null) {
-            _propertyBasedCreator = PropertyBasedCreator.construct(ctxt, _valueInstantiator, creatorProps);
+    /**
+     * Get this element's child data nodes. The list is unmodifiable but the data nodes may be manipulated.
+     * <p>
+     * This is effectively a filter on {@link #childNodes()} to get Data nodes.
+     * </p>
+     * @return child data nodes. If this element has no data nodes, returns an
+     * empty list.
+     * @see #data()
+     */
+    public List<DataNode> dataNodes() {
+        List<DataNode> dataNodes = new ArrayList<DataNode>();
+        for (Node node : childNodes) {
+            if (node instanceof DataNode)
+                dataNodes.add((DataNode) node);
         }
+        return Collections.unmodifiableList(dataNodes);
+    }
 
-        if (extTypes != null) {
-            // 21-Jun-2016, tatu: related to [databind#999], may need to link type ids too,
-            //    so need to pass collected properties
-            _externalTypeIdHandler = extTypes.build(_beanProperties);
-            // we consider this non-standard, to offline handling
-            _nonStandardCreation = true;
-        }
+    /**
+     * Find elements that match the {@link Selector} CSS query, with this element as the starting context. Matched elements
+     * may include this element, or any of its children.
+     * <p>
+     * This method is generally more powerful to use than the DOM-type {@code getElementBy*} methods, because
+     * multiple filters can be combined, e.g.:
+     * </p>
+     * <ul>
+     * <li>{@code el.select("a[href]")} - finds links ({@code a} tags with {@code href} attributes)
+     * <li>{@code el.select("a[href*=example.com]")} - finds links pointing to example.com (loosely)
+     * </ul>
+     * <p>
+     * See the query syntax documentation in {@link org.jsoup.select.Selector}.
+     * </p>
+     * 
+     * @param cssQuery a {@link Selector} CSS-like query
+     * @return elements that match the query (empty if none match)
+     * @see org.jsoup.select.Selector
+     * @throws Selector.SelectorParseException (unchecked) on an invalid CSS query.
+     */
+    public Elements select(String cssQuery) {
+        return Selector.select(cssQuery, this);
+    }
+    
+    /**
+     * Add a node child node to this element.
+     * 
+     * @param child node to add.
+     * @return this element, so that you can add more child nodes or elements.
+     */
+    public Element appendChild(Node child) {
+        Validate.notNull(child);
+
+        // was - Node#addChildren(child). short-circuits an array create and a loop.
+        reparentChild(child);
+        childNodes.add(child);
+        child.setSiblingIndex(childNodes.size() - 1);
+        return this;
+    }
+
+    /**
+     * Add a node to the start of this element's children.
+     * 
+     * @param child node to add.
+     * @return this element, so that you can add more child nodes or elements.
+     */
+    public Element prependChild(Node child) {
+        Validate.notNull(child);
         
-        _unwrappedPropertyHandler = unwrapped;
-        if (unwrapped != null) { // we consider this non-standard, to offline handling
-            _nonStandardCreation = true;
-        }
-
-        // may need to disable vanilla processing, if unwrapped handling was enabled...
-        _vanillaProcessing = _vanillaProcessing && !_nonStandardCreation;
-    }
-
-    private JsonDeserializer<Object> _findDelegateDeserializer(DeserializationContext ctxt, JavaType delegateType,
-            AnnotatedWithParams delegateCreator) throws JsonMappingException {
-        // Need to create a temporary property to allow contextual deserializers:
-        BeanProperty.Std property = new BeanProperty.Std(TEMP_PROPERTY_NAME,
-                delegateType, null, _classAnnotations, delegateCreator,
-                PropertyMetadata.STD_OPTIONAL);
-
-        TypeDeserializer td = delegateType.getTypeHandler();
-        if (td == null) {
-            td = ctxt.getConfig().findTypeDeserializer(delegateType);
-        }
-        JsonDeserializer<Object> dd = findDeserializer(ctxt, delegateType, property);
-        if (td != null) {
-            td = td.forProperty(property);
-            return new TypeWrappedDeserializer(td, dd);
-        }
-        return dd;
+        addChildren(0, child);
+        return this;
     }
 
 
     /**
-     * Helper method that can be used to see if specified property is annotated
-     * to indicate use of a converter for property value (in case of container types,
-     * it is container type itself, not key or content type).
-     * 
-     * @since 2.2
+     * Inserts the given child nodes into this element at the specified index. Current nodes will be shifted to the
+     * right. The inserted nodes will be moved from their current parent. To prevent moving, copy the nodes first.
+     *
+     * @param index 0-based index to insert children at. Specify {@code 0} to insert at the start, {@code -1} at the
+     * end
+     * @param children child nodes to insert
+     * @return this element, for chaining.
      */
-    protected JsonDeserializer<Object> findConvertingDeserializer(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-        throws JsonMappingException
-    {
-        final AnnotationIntrospector intr = ctxt.getAnnotationIntrospector();
-        if (intr != null) {
-            Object convDef = intr.findDeserializationConverter(prop.getMember());
-            if (convDef != null) {
-                Converter<Object,Object> conv = ctxt.converterInstance(prop.getMember(), convDef);
-                JavaType delegateType = conv.getInputType(ctxt.getTypeFactory());
-                JsonDeserializer<?> ser = ctxt.findContextualValueDeserializer(delegateType, prop);
-                return new StdDelegatingDeserializer<Object>(conv, delegateType, ser);
-            }
-        }
-        return null;
+    public Element insertChildren(int index, Collection<? extends Node> children) {
+        Validate.notNull(children, "Children collection to be inserted must not be null.");
+        int currentSize = childNodeSize();
+        if (index < 0) index += currentSize +1; // roll around
+        Validate.isTrue(index >= 0 && index <= currentSize, "Insert position out of bounds.");
+
+        ArrayList<Node> nodes = new ArrayList<Node>(children);
+        Node[] nodeArray = nodes.toArray(new Node[nodes.size()]);
+        addChildren(index, nodeArray);
+        return this;
     }
     
     /**
-     * Although most of post-processing is done in resolve(), we only get
-     * access to referring property's annotations here; and this is needed
-     * to support per-property ObjectIds.
-     * We will also consider Shape transformations (read from Array) at this
-     * point, since it may come from either Class definition or property.
+     * Create a new element by tag name, and add it as the last child.
+     * 
+     * @param tagName the name of the tag (e.g. {@code div}).
+     * @return the new element, to allow you to add content to it, e.g.:
+     *  {@code parent.appendElement("h1").attr("id", "header").text("Welcome");}
      */
-    @Override
-    public JsonDeserializer<?> createContextual(DeserializationContext ctxt,
-            BeanProperty property) throws JsonMappingException
-    {
-        ObjectIdReader oir = _objectIdReader;
+    public Element appendElement(String tagName) {
+        Element child = new Element(Tag.valueOf(tagName), baseUri());
+        appendChild(child);
+        return child;
+    }
+    
+    /**
+     * Create a new element by tag name, and add it as the first child.
+     * 
+     * @param tagName the name of the tag (e.g. {@code div}).
+     * @return the new element, to allow you to add content to it, e.g.:
+     *  {@code parent.prependElement("h1").attr("id", "header").text("Welcome");}
+     */
+    public Element prependElement(String tagName) {
+        Element child = new Element(Tag.valueOf(tagName), baseUri());
+        prependChild(child);
+        return child;
+    }
+    
+    /**
+     * Create and append a new TextNode to this element.
+     * 
+     * @param text the unencoded text to add
+     * @return this element
+     */
+    public Element appendText(String text) {
+        TextNode node = new TextNode(text, baseUri());
+        appendChild(node);
+        return this;
+    }
+    
+    /**
+     * Create and prepend a new TextNode to this element.
+     * 
+     * @param text the unencoded text to add
+     * @return this element
+     */
+    public Element prependText(String text) {
+        TextNode node = new TextNode(text, baseUri());
+        prependChild(node);
+        return this;
+    }
+    
+    /**
+     * Add inner HTML to this element. The supplied HTML will be parsed, and each node appended to the end of the children.
+     * @param html HTML to add inside this element, after the existing HTML
+     * @return this element
+     * @see #html(String)
+     */
+    public Element append(String html) {
+        Validate.notNull(html);
+
+        List<Node> nodes = Parser.parseFragment(html, this, baseUri());
+        addChildren(nodes.toArray(new Node[nodes.size()]));
+        return this;
+    }
+    
+    /**
+     * Add inner HTML into this element. The supplied HTML will be parsed, and each node prepended to the start of the element's children.
+     * @param html HTML to add inside this element, before the existing HTML
+     * @return this element
+     * @see #html(String)
+     */
+    public Element prepend(String html) {
+        Validate.notNull(html);
         
-        // First: may have an override for Object Id:
-        final AnnotationIntrospector intr = ctxt.getAnnotationIntrospector();
-        final AnnotatedMember accessor = (property == null || intr == null)
-                ? null : property.getMember();
-        if (accessor != null && intr != null) {
-            ObjectIdInfo objectIdInfo = intr.findObjectIdInfo(accessor);
-            if (objectIdInfo != null) { // some code duplication here as well (from BeanDeserializerFactory)
-                // 2.1: allow modifications by "id ref" annotations as well:
-                objectIdInfo = intr.findObjectReferenceInfo(accessor, objectIdInfo);
-                
-                Class<?> implClass = objectIdInfo.getGeneratorType();
-                // Property-based generator is trickier
-                JavaType idType;
-                SettableBeanProperty idProp;
-                ObjectIdGenerator<?> idGen;
-                ObjectIdResolver resolver = ctxt.objectIdResolverInstance(accessor, objectIdInfo);
-                if (implClass == ObjectIdGenerators.PropertyGenerator.class) {
-                    PropertyName propName = objectIdInfo.getPropertyName();
-                    idProp = findProperty(propName);
-                    if (idProp == null) {
-                        throw new IllegalArgumentException("Invalid Object Id definition for "
-                                +handledType().getName()+": can not find property with name '"+propName+"'");
-                    }
-                    idType = idProp.getType();
-                    idGen = new PropertyBasedObjectIdGenerator(objectIdInfo.getScope());
-                } else { // other types need to be simpler
-                    JavaType type = ctxt.constructType(implClass);
-                    idType = ctxt.getTypeFactory().findTypeParameters(type, ObjectIdGenerator.class)[0];
-                    idProp = null;
-                    idGen = ctxt.objectIdGeneratorInstance(accessor, objectIdInfo);
-                }
-                JsonDeserializer<?> deser = ctxt.findRootValueDeserializer(idType);
-                oir = ObjectIdReader.construct(idType, objectIdInfo.getPropertyName(),
-                		idGen, deser, idProp, resolver);
-            }
-        }
-        // either way, need to resolve serializer:
-        BeanDeserializerBase contextual = this;
-        if (oir != null && oir != _objectIdReader) {
-            contextual = contextual.withObjectIdReader(oir);
-        }
-        // And possibly add more properties to ignore
-        if (accessor != null) {
-            JsonIgnoreProperties.Value ignorals = intr.findPropertyIgnorals(accessor);
-            if (ignorals != null) {
-                Set<String> ignored = ignorals.findIgnoredForDeserialization();
-                if (!ignored.isEmpty()) {
-                    Set<String> prev = contextual._ignorableProps;
-                    if ((prev != null) && !prev.isEmpty()) {
-                        ignored = new HashSet<String>(ignored);
-                        ignored.addAll(prev);
-                    }
-                    contextual = contextual.withIgnorableProperties(ignored);
-                }
-            }
-        }
-
-        // One more thing: are we asked to serialize POJO as array?
-        JsonFormat.Value format = findFormatOverrides(ctxt, property, handledType());
-        JsonFormat.Shape shape = null;
-        if (format != null) {
-            if (format.hasShape()) {
-                shape = format.getShape();
-            }
-            // 16-May-2016, tatu: How about per-property case-insensitivity?
-            Boolean B = format.getFeature(JsonFormat.Feature.ACCEPT_CASE_INSENSITIVE_PROPERTIES);
-            if (B != null) {
-                // !!! TODO
-                BeanPropertyMap propsOrig = _beanProperties;
-                BeanPropertyMap props = propsOrig.withCaseInsensitivity(B.booleanValue());
-                if (props != propsOrig) {
-                    contextual = contextual.withBeanProperties(props);
-                }
-            }
-        }
-
-        if (shape == null) {
-            shape = _serializationShape;
-        }
-        if (shape == JsonFormat.Shape.ARRAY) {
-            contextual = contextual.asArrayDeserializer();
-        }
-        return contextual;
+        List<Node> nodes = Parser.parseFragment(html, this, baseUri());
+        addChildren(0, nodes.toArray(new Node[nodes.size()]));
+        return this;
     }
 
     /**
-     * Helper method called to see if given property is part of 'managed' property
-     * pair (managed + back reference), and if so, handle resolution details.
-     */
-    protected SettableBeanProperty _resolveManagedReferenceProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-    {
-        String refName = prop.getManagedReferenceName();
-        if (refName == null) {
-            return prop;
-        }
-        JsonDeserializer<?> valueDeser = prop.getValueDeserializer();
-        SettableBeanProperty backProp = valueDeser.findBackReference(refName);
-        if (backProp == null) {
-            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': no back reference property found from type "
-                    +prop.getType());
-        }
-        // also: verify that type is compatible
-        JavaType referredType = _beanType;
-        JavaType backRefType = backProp.getType();
-        boolean isContainer = prop.getType().isContainerType();
-        if (!backRefType.getRawClass().isAssignableFrom(referredType.getRawClass())) {
-            throw new IllegalArgumentException("Can not handle managed/back reference '"+refName+"': back reference type ("
-                    +backRefType.getRawClass().getName()+") not compatible with managed type ("
-                    +referredType.getRawClass().getName()+")");
-        }
-        return new ManagedReferenceProperty(prop, refName, backProp,
-                _classAnnotations, isContainer);
-    }
-
-    /**
-     * Method that wraps given property with {@link ObjectIdReferenceProperty}
-     * in case where object id resolution is required.
-     */
-    protected SettableBeanProperty _resolvedObjectIdProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop) throws JsonMappingException
-    {
-        ObjectIdInfo objectIdInfo = prop.getObjectIdInfo();
-        JsonDeserializer<Object> valueDeser = prop.getValueDeserializer();
-        ObjectIdReader objectIdReader = valueDeser.getObjectIdReader();
-        if (objectIdInfo == null && objectIdReader == null) {
-            return prop;
-        }
-        return new ObjectIdReferenceProperty(prop, objectIdInfo);
-    }
-
-    /**
-     * Helper method called to see if given property might be so-called unwrapped
-     * property: these require special handling.
-     */
-    protected SettableBeanProperty _resolveUnwrappedProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-    {
-        AnnotatedMember am = prop.getMember();
-        if (am != null) {
-            NameTransformer unwrapper = ctxt.getAnnotationIntrospector().findUnwrappingNameTransformer(am);
-            if (unwrapper != null) {
-                JsonDeserializer<Object> orig = prop.getValueDeserializer();
-                JsonDeserializer<Object> unwrapping = orig.unwrappingDeserializer(unwrapper);
-                if (unwrapping != orig && unwrapping != null) {
-                    // might be cleaner to create new instance; but difficult to do reliably, so:
-                    return prop.withValueDeserializer(unwrapping);
-                }
-            }
-        }
-        return null;
-    }
-    
-    /**
-     * Helper method that will handle gruesome details of dealing with properties
-     * that have non-static inner class as value...
-     */
-    protected SettableBeanProperty _resolveInnerClassValuedProperty(DeserializationContext ctxt,
-            SettableBeanProperty prop)
-    {            
-        /* Should we encounter a property that has non-static inner-class
-         * as value, we need to add some more magic to find the "hidden" constructor...
-         */
-        JsonDeserializer<Object> deser = prop.getValueDeserializer();
-        // ideally wouldn't rely on it being BeanDeserializerBase; but for now it'll have to do
-        if (deser instanceof BeanDeserializerBase) {
-            BeanDeserializerBase bd = (BeanDeserializerBase) deser;
-            ValueInstantiator vi = bd.getValueInstantiator();
-            if (!vi.canCreateUsingDefault()) { // no default constructor
-                Class<?> valueClass = prop.getType().getRawClass();
-                Class<?> enclosing = ClassUtil.getOuterClass(valueClass);
-                // and is inner class of the bean class...
-                if (enclosing != null && enclosing == _beanType.getRawClass()) {
-                    for (Constructor<?> ctor : valueClass.getConstructors()) {
-                        Class<?>[] paramTypes = ctor.getParameterTypes();
-                        if (paramTypes.length == 1 && paramTypes[0] == enclosing) {
-                            if (ctxt.canOverrideAccessModifiers()) {
-                                ClassUtil.checkAndFixAccess(ctor, ctxt.isEnabled(MapperFeature.OVERRIDE_PUBLIC_ACCESS_MODIFIERS));
-                            }
-                            return new InnerClassProperty(prop, ctor);
-                        }
-                    }
-                }
-            }
-        }
-        return prop;
-    }
-
-    /*
-    /**********************************************************
-    /* Public accessors
-    /**********************************************************
-     */
-
-    @Override
-    public boolean isCachable() { return true; }
-
-    @Override
-    public Class<?> handledType() {
-        return _beanType.getRawClass();
-    }
-    
-    /**
-     * Overridden to return true for those instances that are
-     * handling value for which Object Identity handling is enabled
-     * (either via value type or referring property).
+     * Insert the specified HTML into the DOM before this element (as a preceding sibling).
+     *
+     * @param html HTML to add before this element
+     * @return this element, for chaining
+     * @see #after(String)
      */
     @Override
-    public ObjectIdReader getObjectIdReader() {
-        return _objectIdReader;
-    }
-    
-    public boolean hasProperty(String propertyName) {
-        return _beanProperties.find(propertyName) != null;
-    }
-
-    public boolean hasViews() {
-        return _needViewProcesing;
-    }
-    
-    /**
-     * Accessor for checking number of deserialized properties.
-     */
-    public int getPropertyCount() { 
-        return _beanProperties.size();
-    }
-
-    @Override
-    public Collection<Object> getKnownPropertyNames() {
-        ArrayList<Object> names = new ArrayList<Object>();
-        for (SettableBeanProperty prop : _beanProperties) {
-            names.add(prop.getName());
-        }
-        return names;
+    public Element before(String html) {
+        return (Element) super.before(html);
     }
 
     /**
-     * @deprecated Since 2.3, use {@link #handledType()} instead
-     */
-    @Deprecated
-    public final Class<?> getBeanClass() { return _beanType.getRawClass(); }
-
-    @Override
-    public JavaType getValueType() { return _beanType; }
-
-    /**
-     * Accessor for iterating over properties this deserializer uses; with
-     * the exception that properties passed via Creator methods
-     * (specifically, "property-based constructor") are not included,
-     * but can be accessed separate by calling
-     * {@link #creatorProperties}
-     */
-    public Iterator<SettableBeanProperty> properties()
-    {
-        if (_beanProperties == null) {
-            throw new IllegalStateException("Can only call after BeanDeserializer has been resolved");
-        }
-        return _beanProperties.iterator();
-    }
-
-    /**
-     * Accessor for finding properties that represents values to pass
-     * through property-based creator method (constructor or
-     * factory method)
-     * 
-     * @since 2.0
-     */
-    public Iterator<SettableBeanProperty> creatorProperties()
-    {
-        if (_propertyBasedCreator == null) {
-            return Collections.<SettableBeanProperty>emptyList().iterator();
-        }
-        return _propertyBasedCreator.properties().iterator();
-    }
-
-    public SettableBeanProperty findProperty(PropertyName propertyName)
-    {
-        // TODO: start matching full name?
-        return findProperty(propertyName.getSimpleName());
-    }
-    
-    /**
-     * Accessor for finding the property with given name, if POJO
-     * has one. Name used is the external name, i.e. name used
-     * in external data representation (JSON).
-     * 
-     * @since 2.0
-     */
-    public SettableBeanProperty findProperty(String propertyName)
-    {
-        SettableBeanProperty prop = (_beanProperties == null) ?
-                null : _beanProperties.find(propertyName);
-        if (prop == null && _propertyBasedCreator != null) {
-            prop = _propertyBasedCreator.findCreatorProperty(propertyName);
-        }
-        return prop;
-    }
-
-    /**
-     * Alternate find method that tries to locate a property with given
-     * <code>property index</code>.
-     * Note that access by index is not necessarily faster than by name,
-     * since properties are not directly indexable; however, for most
-     * instances difference is not significant as number of properties
-     * is low.
-     * 
-     * @since 2.3
-     */
-    public SettableBeanProperty findProperty(int propertyIndex)
-    {
-        SettableBeanProperty prop = (_beanProperties == null) ?
-                null : _beanProperties.find(propertyIndex);
-        if (prop == null && _propertyBasedCreator != null) {
-            prop = _propertyBasedCreator.findCreatorProperty(propertyIndex);
-        }
-        return prop;
-    }
-    
-    /**
-     * Method needed by {@link BeanDeserializerFactory} to properly link
-     * managed- and back-reference pairs.
+     * Insert the specified node into the DOM before this node (as a preceding sibling).
+     * @param node to add before this element
+     * @return this Element, for chaining
+     * @see #after(Node)
      */
     @Override
-    public SettableBeanProperty findBackReference(String logicalName)
-    {
-        if (_backRefs == null) {
+    public Element before(Node node) {
+        return (Element) super.before(node);
+    }
+
+    /**
+     * Insert the specified HTML into the DOM after this element (as a following sibling).
+     *
+     * @param html HTML to add after this element
+     * @return this element, for chaining
+     * @see #before(String)
+     */
+    @Override
+    public Element after(String html) {
+        return (Element) super.after(html);
+    }
+
+    /**
+     * Insert the specified node into the DOM after this node (as a following sibling).
+     * @param node to add after this element
+     * @return this element, for chaining
+     * @see #before(Node)
+     */
+    @Override
+    public Element after(Node node) {
+        return (Element) super.after(node);
+    }
+
+    /**
+     * Remove all of the element's child nodes. Any attributes are left as-is.
+     * @return this element
+     */
+    public Element empty() {
+        childNodes.clear();
+        return this;
+    }
+
+    /**
+     * Wrap the supplied HTML around this element.
+     *
+     * @param html HTML to wrap around this element, e.g. {@code <div class="head"></div>}. Can be arbitrarily deep.
+     * @return this element, for chaining.
+     */
+    @Override
+    public Element wrap(String html) {
+        return (Element) super.wrap(html);
+    }
+
+    /**
+     * Get a CSS selector that will uniquely select this element.
+     * <p>
+     * If the element has an ID, returns #id;
+     * otherwise returns the parent (if any) CSS selector, followed by {@literal '>'},
+     * followed by a unique selector for the element (tag.class.class:nth-child(n)).
+     * </p>
+     *
+     * @return the CSS Path that can be used to retrieve the element in a selector.
+     */
+    public String cssSelector() {
+        if (id().length() > 0)
+            return "#" + id();
+
+        StringBuilder selector = new StringBuilder(tagName());
+        String classes = StringUtil.join(classNames(), ".");
+        if (classes.length() > 0)
+            selector.append('.').append(classes);
+
+        if (parent() == null || parent() instanceof Document) // don't add Document to selector, as will always have a html node
+            return selector.toString();
+
+        selector.insert(0, " > ");
+        if (parent().select(selector.toString()).size() > 1)
+            selector.append(String.format(
+                ":nth-child(%d)", elementSiblingIndex() + 1));
+
+        return parent().cssSelector() + selector.toString();
+    }
+
+    /**
+     * Get sibling elements. If the element has no sibling elements, returns an empty list. An element is not a sibling
+     * of itself, so will not be included in the returned list.
+     * @return sibling elements
+     */
+    public Elements siblingElements() {
+        if (parentNode == null)
+            return new Elements(0);
+
+        List<Element> elements = parent().children();
+        Elements siblings = new Elements(elements.size() - 1);
+        for (Element el: elements)
+            if (el != this)
+                siblings.add(el);
+        return siblings;
+    }
+
+    /**
+     * Gets the next sibling element of this element. E.g., if a {@code div} contains two {@code p}s, 
+     * the {@code nextElementSibling} of the first {@code p} is the second {@code p}.
+     * <p>
+     * This is similar to {@link #nextSibling()}, but specifically finds only Elements
+     * </p>
+     * @return the next element, or null if there is no next element
+     * @see #previousElementSibling()
+     */
+    public Element nextElementSibling() {
+        if (parentNode == null) return null;
+        List<Element> siblings = parent().children();
+        Integer index = indexInList(this, siblings);
+        Validate.notNull(index);
+        if (siblings.size() > index+1)
+            return siblings.get(index+1);
+        else
             return null;
+    }
+
+    /**
+     * Gets the previous element sibling of this element.
+     * @return the previous element, or null if there is no previous element
+     * @see #nextElementSibling()
+     */
+    public Element previousElementSibling() {
+        if (parentNode == null) return null;
+        List<Element> siblings = parent().children();
+        Integer index = indexInList(this, siblings);
+        Validate.notNull(index);
+        if (index > 0)
+            return siblings.get(index-1);
+        else
+            return null;
+    }
+
+    /**
+     * Gets the first element sibling of this element.
+     * @return the first sibling that is an element (aka the parent's first element child) 
+     */
+    public Element firstElementSibling() {
+        // todo: should firstSibling() exclude this?
+        List<Element> siblings = parent().children();
+        return siblings.size() > 1 ? siblings.get(0) : null;
+    }
+    
+    /**
+     * Get the list index of this element in its element sibling list. I.e. if this is the first element
+     * sibling, returns 0.
+     * @return position in element sibling list
+     */
+    public Integer elementSiblingIndex() {
+       if (parent() == null) return 0;
+       return indexInList(this, parent().children()); 
+    }
+
+    /**
+     * Gets the last element sibling of this element
+     * @return the last sibling that is an element (aka the parent's last element child) 
+     */
+    public Element lastElementSibling() {
+        List<Element> siblings = parent().children();
+        return siblings.size() > 1 ? siblings.get(siblings.size() - 1) : null;
+    }
+    
+    private static <E extends Element> Integer indexInList(Element search, List<E> elements) {
+        Validate.notNull(search);
+        Validate.notNull(elements);
+
+        for (int i = 0; i < elements.size(); i++) {
+            E element = elements.get(i);
+            if (element == search)
+                return i;
         }
-        return _backRefs.get(logicalName);
+        return null;
     }
 
-    public ValueInstantiator getValueInstantiator() {
-        return _valueInstantiator;
-    }
-
-    /*
-    /**********************************************************
-    /* Mutators
-    /**********************************************************
-     */
+    // DOM type methods
 
     /**
-     * Method that can be used to replace an existing property with
-     * a modified one.
-     *<p>
-     * NOTE: only ever use this method if you know what you are doing;
-     * incorrect usage can break deserializer.
-     *
-     * @param original Property to replace
-     * @param replacement Property to replace it with
+     * Finds elements, including and recursively under this element, with the specified tag name.
+     * @param tagName The tag name to search for (case insensitively).
+     * @return a matching unmodifiable list of elements. Will be empty if this element and none of its children match.
+     */
+    public Elements getElementsByTag(String tagName) {
+        Validate.notEmpty(tagName);
+        tagName = tagName.toLowerCase().trim();
+
+        return Collector.collect(new Evaluator.Tag(tagName), this);
+    }
+
+    /**
+     * Find an element by ID, including or under this element.
+     * <p>
+     * Note that this finds the first matching ID, starting with this element. If you search down from a different
+     * starting point, it is possible to find a different element by ID. For unique element by ID within a Document,
+     * use {@link Document#getElementById(String)}
+     * @param id The ID to search for.
+     * @return The first matching element by ID, starting with this element, or null if none found.
+     */
+    public Element getElementById(String id) {
+        Validate.notEmpty(id);
+        
+        Elements elements = Collector.collect(new Evaluator.Id(id), this);
+        if (elements.size() > 0)
+            return elements.get(0);
+        else
+            return null;
+    }
+
+    /**
+     * Find elements that have this class, including or under this element. Case insensitive.
+     * <p>
+     * Elements can have multiple classes (e.g. {@code <div class="header round first">}. This method
+     * checks each class, so you can find the above with {@code el.getElementsByClass("header");}.
      * 
-     * @since 2.1
+     * @param className the name of the class to search for.
+     * @return elements with the supplied class name, empty if none
+     * @see #hasClass(String)
+     * @see #classNames()
      */
-    public void replaceProperty(SettableBeanProperty original,
-            SettableBeanProperty replacement)
-    {
-        _beanProperties.replace(replacement);
+    public Elements getElementsByClass(String className) {
+        Validate.notEmpty(className);
+
+        return Collector.collect(new Evaluator.Class(className), this);
     }
 
-    /*
-    /**********************************************************
-    /* Partial deserializer implementation
-    /**********************************************************
+    /**
+     * Find elements that have a named attribute set. Case insensitive.
+     *
+     * @param key name of the attribute, e.g. {@code href}
+     * @return elements that have this attribute, empty if none
      */
+    public Elements getElementsByAttribute(String key) {
+        Validate.notEmpty(key);
+        key = key.trim().toLowerCase();
+
+        return Collector.collect(new Evaluator.Attribute(key), this);
+    }
 
     /**
-     * General version used when handling needs more advanced
-     * features.
+     * Find elements that have an attribute name starting with the supplied prefix. Use {@code data-} to find elements
+     * that have HTML5 datasets.
+     * @param keyPrefix name prefix of the attribute e.g. {@code data-}
+     * @return elements that have attribute names that start with with the prefix, empty if none.
      */
-    public abstract Object deserializeFromObject(JsonParser p, DeserializationContext ctxt)
-        throws IOException;
+    public Elements getElementsByAttributeStarting(String keyPrefix) {
+        Validate.notEmpty(keyPrefix);
+        keyPrefix = keyPrefix.trim().toLowerCase();
+
+        return Collector.collect(new Evaluator.AttributeStarting(keyPrefix), this);
+    }
+
+    /**
+     * Find elements that have an attribute with the specific value. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param value value of the attribute
+     * @return elements that have this attribute with this value, empty if none
+     */
+    public Elements getElementsByAttributeValue(String key, String value) {
+        return Collector.collect(new Evaluator.AttributeWithValue(key, value), this);
+    }
+
+    /**
+     * Find elements that either do not have this attribute, or have it with a different value. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param value value of the attribute
+     * @return elements that do not have a matching attribute
+     */
+    public Elements getElementsByAttributeValueNot(String key, String value) {
+        return Collector.collect(new Evaluator.AttributeWithValueNot(key, value), this);
+    }
+
+    /**
+     * Find elements that have attributes that start with the value prefix. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param valuePrefix start of attribute value
+     * @return elements that have attributes that start with the value prefix
+     */
+    public Elements getElementsByAttributeValueStarting(String key, String valuePrefix) {
+        return Collector.collect(new Evaluator.AttributeWithValueStarting(key, valuePrefix), this);
+    }
+
+    /**
+     * Find elements that have attributes that end with the value suffix. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param valueSuffix end of the attribute value
+     * @return elements that have attributes that end with the value suffix
+     */
+    public Elements getElementsByAttributeValueEnding(String key, String valueSuffix) {
+        return Collector.collect(new Evaluator.AttributeWithValueEnding(key, valueSuffix), this);
+    }
+
+    /**
+     * Find elements that have attributes whose value contains the match string. Case insensitive.
+     * 
+     * @param key name of the attribute
+     * @param match substring of value to search for
+     * @return elements that have attributes containing this text
+     */
+    public Elements getElementsByAttributeValueContaining(String key, String match) {
+        return Collector.collect(new Evaluator.AttributeWithValueContaining(key, match), this);
+    }
+    
+    /**
+     * Find elements that have attributes whose values match the supplied regular expression.
+     * @param key name of the attribute
+     * @param pattern compiled regular expression to match against attribute values
+     * @return elements that have attributes matching this regular expression
+     */
+    public Elements getElementsByAttributeValueMatching(String key, Pattern pattern) {
+        return Collector.collect(new Evaluator.AttributeWithValueMatching(key, pattern), this);
+        
+    }
+    
+    /**
+     * Find elements that have attributes whose values match the supplied regular expression.
+     * @param key name of the attribute
+     * @param regex regular expression to match against attribute values. You can use <a href="http://java.sun.com/docs/books/tutorial/essential/regex/pattern.html#embedded">embedded flags</a> (such as (?i) and (?m) to control regex options.
+     * @return elements that have attributes matching this regular expression
+     */
+    public Elements getElementsByAttributeValueMatching(String key, String regex) {
+        Pattern pattern;
+        try {
+            pattern = Pattern.compile(regex);
+        } catch (PatternSyntaxException e) {
+            throw new IllegalArgumentException("Pattern syntax error: " + regex, e);
+        }
+        return getElementsByAttributeValueMatching(key, pattern);
+    }
+    
+    /**
+     * Find elements whose sibling index is less than the supplied index.
+     * @param index 0-based index
+     * @return elements less than index
+     */
+    public Elements getElementsByIndexLessThan(int index) {
+        return Collector.collect(new Evaluator.IndexLessThan(index), this);
+    }
+    
+    /**
+     * Find elements whose sibling index is greater than the supplied index.
+     * @param index 0-based index
+     * @return elements greater than index
+     */
+    public Elements getElementsByIndexGreaterThan(int index) {
+        return Collector.collect(new Evaluator.IndexGreaterThan(index), this);
+    }
+    
+    /**
+     * Find elements whose sibling index is equal to the supplied index.
+     * @param index 0-based index
+     * @return elements equal to index
+     */
+    public Elements getElementsByIndexEquals(int index) {
+        return Collector.collect(new Evaluator.IndexEquals(index), this);
+    }
+    
+    /**
+     * Find elements that contain the specified string. The search is case insensitive. The text may appear directly
+     * in the element, or in any of its descendants.
+     * @param searchText to look for in the element's text
+     * @return elements that contain the string, case insensitive.
+     * @see Element#text()
+     */
+    public Elements getElementsContainingText(String searchText) {
+        return Collector.collect(new Evaluator.ContainsText(searchText), this);
+    }
+    
+    /**
+     * Find elements that directly contain the specified string. The search is case insensitive. The text must appear directly
+     * in the element, not in any of its descendants.
+     * @param searchText to look for in the element's own text
+     * @return elements that contain the string, case insensitive.
+     * @see Element#ownText()
+     */
+    public Elements getElementsContainingOwnText(String searchText) {
+        return Collector.collect(new Evaluator.ContainsOwnText(searchText), this);
+    }
+    
+    /**
+     * Find elements whose text matches the supplied regular expression.
+     * @param pattern regular expression to match text against
+     * @return elements matching the supplied regular expression.
+     * @see Element#text()
+     */
+    public Elements getElementsMatchingText(Pattern pattern) {
+        return Collector.collect(new Evaluator.Matches(pattern), this);
+    }
+    
+    /**
+     * Find elements whose text matches the supplied regular expression.
+     * @param regex regular expression to match text against. You can use <a href="http://java.sun.com/docs/books/tutorial/essential/regex/pattern.html#embedded">embedded flags</a> (such as (?i) and (?m) to control regex options.
+     * @return elements matching the supplied regular expression.
+     * @see Element#text()
+     */
+    public Elements getElementsMatchingText(String regex) {
+        Pattern pattern;
+        try {
+            pattern = Pattern.compile(regex);
+        } catch (PatternSyntaxException e) {
+            throw new IllegalArgumentException("Pattern syntax error: " + regex, e);
+        }
+        return getElementsMatchingText(pattern);
+    }
+    
+    /**
+     * Find elements whose own text matches the supplied regular expression.
+     * @param pattern regular expression to match text against
+     * @return elements matching the supplied regular expression.
+     * @see Element#ownText()
+     */
+    public Elements getElementsMatchingOwnText(Pattern pattern) {
+        return Collector.collect(new Evaluator.MatchesOwn(pattern), this);
+    }
+    
+    /**
+     * Find elements whose text matches the supplied regular expression.
+     * @param regex regular expression to match text against. You can use <a href="http://java.sun.com/docs/books/tutorial/essential/regex/pattern.html#embedded">embedded flags</a> (such as (?i) and (?m) to control regex options.
+     * @return elements matching the supplied regular expression.
+     * @see Element#ownText()
+     */
+    public Elements getElementsMatchingOwnText(String regex) {
+        Pattern pattern;
+        try {
+            pattern = Pattern.compile(regex);
+        } catch (PatternSyntaxException e) {
+            throw new IllegalArgumentException("Pattern syntax error: " + regex, e);
+        }
+        return getElementsMatchingOwnText(pattern);
+    }
+    
+    /**
+     * Find all elements under this element (including self, and children of children).
+     * 
+     * @return all elements
+     */
+    public Elements getAllElements() {
+        return Collector.collect(new Evaluator.AllElements(), this);
+    }
+
+    /**
+     * Gets the combined text of this element and all its children. Whitespace is normalized and trimmed.
+     * <p>
+     * For example, given HTML {@code <p>Hello  <b>there</b> now! </p>}, {@code p.text()} returns {@code "Hello there now!"}
+     *
+     * @return unencoded text, or empty string if none.
+     * @see #ownText()
+     * @see #textNodes()
+     */
+    public String text() {
+        final StringBuilder accum = new StringBuilder();
+        new NodeTraversor(new NodeVisitor() {
+            public void head(Node node, int depth) {
+                if (node instanceof TextNode) {
+                    TextNode textNode = (TextNode) node;
+                    appendNormalisedText(accum, textNode);
+                } else if (node instanceof Element) {
+                    Element element = (Element) node;
+                    if (accum.length() > 0 &&
+                        (element.isBlock() || element.tag.getName().equals("br")) &&
+                        !TextNode.lastCharIsWhitespace(accum))
+                        accum.append(" ");
+                }
+            }
+
+            public void tail(Node node, int depth) {
+            }
+        }).traverse(this);
+        return accum.toString().trim();
+    }
+
+    /**
+     * Gets the text owned by this element only; does not get the combined text of all children.
+     * <p>
+     * For example, given HTML {@code <p>Hello <b>there</b> now!</p>}, {@code p.ownText()} returns {@code "Hello now!"},
+     * whereas {@code p.text()} returns {@code "Hello there now!"}.
+     * Note that the text within the {@code b} element is not returned, as it is not a direct child of the {@code p} element.
+     *
+     * @return unencoded text, or empty string if none.
+     * @see #text()
+     * @see #textNodes()
+     */
+    public String ownText() {
+        StringBuilder sb = new StringBuilder();
+        ownText(sb);
+        return sb.toString().trim();
+    }
+
+    private void ownText(StringBuilder accum) {
+        for (Node child : childNodes) {
+            if (child instanceof TextNode) {
+                TextNode textNode = (TextNode) child;
+                appendNormalisedText(accum, textNode);
+            } else if (child instanceof Element) {
+                appendWhitespaceIfBr((Element) child, accum);
+            }
+        }
+    }
+
+    private static void appendNormalisedText(StringBuilder accum, TextNode textNode) {
+        String text = textNode.getWholeText();
+
+        if (preserveWhitespace(textNode.parentNode))
+            accum.append(text);
+        else
+            StringUtil.appendNormalisedWhitespace(accum, text, TextNode.lastCharIsWhitespace(accum));
+    }
+
+    private static void appendWhitespaceIfBr(Element element, StringBuilder accum) {
+        if (element.tag.getName().equals("br") && !TextNode.lastCharIsWhitespace(accum))
+            accum.append(" ");
+    }
+
+    static boolean preserveWhitespace(Node node) {
+        // looks only at this element and one level up, to prevent recursion & needless stack searches
+        if (node != null && node instanceof Element) {
+            Element element = (Element) node;
+            return element.tag.preserveWhitespace() ||
+                element.parent() != null && element.parent().tag.preserveWhitespace();
+        }
+        return false;
+    }
+
+    /**
+     * Set the text of this element. Any existing contents (text or elements) will be cleared
+     * @param text unencoded text
+     * @return this element
+     */
+    public Element text(String text) {
+        Validate.notNull(text);
+
+        empty();
+        TextNode textNode = new TextNode(text, baseUri);
+        appendChild(textNode);
+
+        return this;
+    }
+
+    /**
+     Test if this element has any text content (that is not just whitespace).
+     @return true if element has non-blank text content.
+     */
+    public boolean hasText() {
+        for (Node child: childNodes) {
+            if (child instanceof TextNode) {
+                TextNode textNode = (TextNode) child;
+                if (!textNode.isBlank())
+                    return true;
+            } else if (child instanceof Element) {
+                Element el = (Element) child;
+                if (el.hasText())
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get the combined data of this element. Data is e.g. the inside of a {@code script} tag.
+     * @return the data, or empty string if none
+     *
+     * @see #dataNodes()
+     */
+    public String data() {
+        StringBuilder sb = new StringBuilder();
+
+        for (Node childNode : childNodes) {
+            if (childNode instanceof DataNode) {
+                DataNode data = (DataNode) childNode;
+                sb.append(data.getWholeData());
+            } else if (childNode instanceof Element) {
+                Element element = (Element) childNode;
+                String elementData = element.data();
+                sb.append(elementData);
+            }
+        }
+        return sb.toString();
+    }   
+
+    /**
+     * Gets the literal value of this element's "class" attribute, which may include multiple class names, space
+     * separated. (E.g. on <code>&lt;div class="header gray"&gt;</code> returns, "<code>header gray</code>")
+     * @return The literal class attribute, or <b>empty string</b> if no class attribute set.
+     */
+    public String className() {
+        return attr("class").trim();
+    }
+
+    /**
+     * Get all of the element's class names. E.g. on element {@code <div class="header gray">},
+     * returns a set of two elements {@code "header", "gray"}. Note that modifications to this set are not pushed to
+     * the backing {@code class} attribute; use the {@link #classNames(java.util.Set)} method to persist them.
+     * @return set of classnames, empty if no class attribute
+     */
+    public Set<String> classNames() {
+    	String[] names = classSplit.split(className());
+    	Set<String> classNames = new LinkedHashSet<String>(Arrays.asList(names));
+    	classNames.remove(""); // if classNames() was empty, would include an empty class
+
+        return classNames;
+    }
+
+    /**
+     Set the element's {@code class} attribute to the supplied class names.
+     @param classNames set of classes
+     @return this element, for chaining
+     */
+    public Element classNames(Set<String> classNames) {
+        Validate.notNull(classNames);
+        attributes.put("class", StringUtil.join(classNames, " "));
+        return this;
+    }
+
+    /**
+     * Tests if this element has a class. Case insensitive.
+     * @param className name of class to check for
+     * @return true if it does, false if not
+     */
+    /*
+    Used by common .class selector, so perf tweaked to reduce object creation vs hitting classnames().
+
+    Wiki: 71, 13 (5.4x)
+    CNN: 227, 91 (2.5x)
+    Alterslash: 59, 4 (14.8x)
+    Jsoup: 14, 1 (14x)
+    */
+    public boolean hasClass(String className) {
+        String classAttr = attributes.get("class");
+        if (classAttr.equals("") || classAttr.length() < className.length())
+            return false;
+
+        final String[] classes = classSplit.split(classAttr);
+        for (String name : classes) {
+            if (className.equalsIgnoreCase(name))
+                return true;
+        }
+
+        return false;
+    }
+
+    /**
+     Add a class name to this element's {@code class} attribute.
+     @param className class name to add
+     @return this element
+     */
+    public Element addClass(String className) {
+        Validate.notNull(className);
+
+        Set<String> classes = classNames();
+        classes.add(className);
+        classNames(classes);
+
+        return this;
+    }
+
+    /**
+     Remove a class name from this element's {@code class} attribute.
+     @param className class name to remove
+     @return this element
+     */
+    public Element removeClass(String className) {
+        Validate.notNull(className);
+
+        Set<String> classes = classNames();
+        classes.remove(className);
+        classNames(classes);
+
+        return this;
+    }
+
+    /**
+     Toggle a class name on this element's {@code class} attribute: if present, remove it; otherwise add it.
+     @param className class name to toggle
+     @return this element
+     */
+    public Element toggleClass(String className) {
+        Validate.notNull(className);
+
+        Set<String> classes = classNames();
+        if (classes.contains(className))
+            classes.remove(className);
+        else
+            classes.add(className);
+        classNames(classes);
+
+        return this;
+    }
+    
+    /**
+     * Get the value of a form element (input, textarea, etc).
+     * @return the value of the form element, or empty string if not set.
+     */
+    public String val() {
+        if (tagName().equals("textarea"))
+            return text();
+        else
+            return attr("value");
+    }
+    
+    /**
+     * Set the value of a form element (input, textarea, etc).
+     * @param value value to set
+     * @return this element (for chaining)
+     */
+    public Element val(String value) {
+        if (tagName().equals("textarea"))
+            text(value);
+        else
+            attr("value", value);
+        return this;
+    }
+
+    void outerHtmlHead(StringBuilder accum, int depth, Document.OutputSettings out) {
+        if (accum.length() > 0 && out.prettyPrint() && (tag.formatAsBlock() || (parent() != null && parent().tag().formatAsBlock()) || out.outline()) )
+            indent(accum, depth, out);
+        accum
+                .append("<")
+                .append(tagName());
+        attributes.html(accum, out);
+
+        // selfclosing includes unknown tags, isEmpty defines tags that are always empty
+        if (childNodes.isEmpty() && tag.isSelfClosing()) {
+            if (out.syntax() == Document.OutputSettings.Syntax.html && tag.isEmpty())
+                accum.append('>');
+            else
+                accum.append(" />"); // <img> in html, <img /> in xml
+        }
+        else
+            accum.append(">");
+    }
+
+    void outerHtmlTail(StringBuilder accum, int depth, Document.OutputSettings out) {
+        if (!(childNodes.isEmpty() && tag.isSelfClosing())) {
+            if (out.prettyPrint() && (!childNodes.isEmpty() && (
+                    tag.formatAsBlock() || (out.outline() && (childNodes.size()>1 || (childNodes.size()==1 && !(childNodes.get(0) instanceof TextNode))))
+            )))
+                indent(accum, depth, out);
+            accum.append("</").append(tagName()).append(">");
+        }
+    }
+
+    /**
+     * Retrieves the element's inner HTML. E.g. on a {@code <div>} with one empty {@code <p>}, would return
+     * {@code <p></p>}. (Whereas {@link #outerHtml()} would return {@code <div><p></p></div>}.)
+     * 
+     * @return String of HTML.
+     * @see #outerHtml()
+     */
+    public String html() {
+        StringBuilder accum = new StringBuilder();
+        html(accum);
+        return getOutputSettings().prettyPrint() ? accum.toString().trim() : accum.toString();
+    }
+
+    private void html(StringBuilder accum) {
+        for (Node node : childNodes)
+            node.outerHtml(accum);
+    }
+    
+    /**
+     * Set this element's inner HTML. Clears the existing HTML first.
+     * @param html HTML to parse and set into this element
+     * @return this element
+     * @see #append(String)
+     */
+    public Element html(String html) {
+        empty();
+        append(html);
+        return this;
+    }
+
+    public String toString() {
+        return outerHtml();
+    }
 
     @Override
-    public Object deserializeWithType(JsonParser p, DeserializationContext ctxt,
-            TypeDeserializer typeDeserializer)
-        throws IOException
-    {
-        // 16-Feb-2012, tatu: ObjectId may be used as well... need to check that first
-        if (_objectIdReader != null) {
-            // 05-Aug-2013, tatu: May use native Object Id
-            if (p.canReadObjectId()) {
-                Object id = p.getObjectId();
-                if (id != null) {
-                    Object ob = typeDeserializer.deserializeTypedFromObject(p, ctxt);
-                    return _handleTypedObjectId(p, ctxt, ob, id);
-                }
-            }
-            // or, Object Ids Jackson explicitly sets
-            JsonToken t = p.getCurrentToken();
-            if (t != null) {
-                // Most commonly, a scalar (int id, uuid String, ...)
-                if (t.isScalarValue()) {
-                    return deserializeFromObjectId(p, ctxt);
-                }
-                // but, with 2.5+, a simple Object-wrapped value also legal:
-                if (t == JsonToken.START_OBJECT) {
-                    t = p.nextToken();
-                }
-                if ((t == JsonToken.FIELD_NAME) && _objectIdReader.maySerializeAsObject()
-                        && _objectIdReader.isValidReferencePropertyName(p.getCurrentName(), p)) {
-                    return deserializeFromObjectId(p, ctxt);
-                }
-            }
-        }
-        // In future could check current token... for now this should be enough:
-        return typeDeserializer.deserializeTypedFromObject(p, ctxt);
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        if (!super.equals(o)) return false;
+
+        Element element = (Element) o;
+
+        return tag.equals(element.tag);
     }
 
-    /**
-     * Offlined method called to handle "native" Object Id that has been read
-     * and known to be associated with given deserialized POJO.
-     *
-     * @since 2.3
-     */
-    protected Object _handleTypedObjectId(JsonParser p, DeserializationContext ctxt,
-            Object pojo, Object rawId)
-        throws IOException
-    {
-        // One more challenge: type of id may not be type of property we are expecting
-        // later on; specifically, numeric ids vs Strings.
-        JsonDeserializer<Object> idDeser = _objectIdReader.getDeserializer();
-        final Object id;
-
-        // Ok, this is bit ridiculous; let's see if conversion is needed:
-        if (idDeser.handledType() == rawId.getClass()) {
-            // nope: already same type
-            id = rawId;
-        } else {
-            id = _convertObjectId(p, ctxt, rawId, idDeser);
-        }
-
-        ReadableObjectId roid = ctxt.findObjectId(id, _objectIdReader.generator, _objectIdReader.resolver);
-        roid.bindItem(pojo);
-        // also: may need to set a property value as well
-        SettableBeanProperty idProp = _objectIdReader.idProperty;
-        if (idProp != null) {
-            return idProp.setAndReturn(pojo, id);
-        }
-        return pojo;
-    }
-
-    /**
-     * Helper method we need to do necessary conversion from whatever native object id
-     * type is, into declared type that Jackson internals expect. This may be
-     * simple cast (for String ids), or something more complicated; in latter
-     * case we may need to create bogus content buffer to allow use of
-     * id deserializer.
-     *
-     * @since 2.3
-     */
-    @SuppressWarnings("resource") // TokenBuffers don't need close, nor parser thereof
-    protected Object _convertObjectId(JsonParser p, DeserializationContext ctxt,
-            Object rawId, JsonDeserializer<Object> idDeser) throws IOException
-    {
-        TokenBuffer buf = new TokenBuffer(p, ctxt);
-        if (rawId instanceof String) {
-            buf.writeString((String) rawId);
-        } else if (rawId instanceof Long) {
-            buf.writeNumber(((Long) rawId).longValue());
-        } else if (rawId instanceof Integer) {
-            buf.writeNumber(((Integer) rawId).intValue());
-        } else {
-            // should we worry about UUIDs? They should be fine, right?
-            // 07-Aug-2014, tatu: Maybe, but not necessarily; had issues with
-            //   Smile format; [dataformat-smile#19], possibly related.
-            // 01-Sep-2016, tatu: For non-JSON, might want to consider `writeEmbeddedObject`
-            //   but that won't work for default impl (JSON and most dataformats)
-            buf.writeObject(rawId);
-        }
-        JsonParser bufParser = buf.asParser();
-        bufParser.nextToken();
-        return idDeser.deserialize(bufParser, ctxt);
-    }
-
-    // NOTE: currently only used by standard BeanDeserializer (not Builder-based)
-    /**
-     * Alternative deserialization method used when we expect to see Object Id;
-     * if so, we will need to ensure that the Id is seen before anything
-     * else, to ensure that it is available for solving references,
-     * even if JSON itself is not ordered that way. This may require
-     * buffering in some cases, but usually just a simple lookup to ensure
-     * that ordering is correct.
-     */
-    protected Object deserializeWithObjectId(JsonParser p, DeserializationContext ctxt) throws IOException {
-        return deserializeFromObject(p, ctxt);
-    }
-
-    /**
-     * Method called in cases where it looks like we got an Object Id
-     * to parse and use as a reference.
-     */
-    protected Object deserializeFromObjectId(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        Object id = _objectIdReader.readObjectReference(p, ctxt);
-        ReadableObjectId roid = ctxt.findObjectId(id, _objectIdReader.generator, _objectIdReader.resolver);
-        // do we have it resolved?
-        Object pojo = roid.resolve();
-        if (pojo == null) { // not yet; should wait...
-            throw new UnresolvedForwardReference(p,
-                    "Could not resolve Object Id ["+id+"] (for "+_beanType+").",
-                    p.getCurrentLocation(), roid);
-        }
-        return pojo;
-    }
-
-    protected Object deserializeFromObjectUsingNonDefault(JsonParser p,
-            DeserializationContext ctxt) throws IOException
-    {
-        if (_delegateDeserializer != null) {
-            return _valueInstantiator.createUsingDelegate(ctxt,
-                    _delegateDeserializer.deserialize(p, ctxt));
-        }
-        if (_propertyBasedCreator != null) {
-            return _deserializeUsingPropertyBased(p, ctxt);
-        }
-        // should only occur for abstract types...
-        if (_beanType.isAbstract()) {
-            return ctxt.handleMissingInstantiator(handledType(), p,
-                    "abstract type (need to add/enable type information?)");
-        }
-        return ctxt.handleMissingInstantiator(_beanType.getRawClass(), p,
-                "no suitable constructor found, can not deserialize from Object value (missing default constructor or creator, or perhaps need to add/enable type information?)");
-    }
-
-    protected abstract Object _deserializeUsingPropertyBased(final JsonParser p,
-            final DeserializationContext ctxt)
-        throws IOException, JsonProcessingException;
-
-    @SuppressWarnings("incomplete-switch")
-    public Object deserializeFromNumber(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        // First things first: id Object Id is used, most likely that's it
-        if (_objectIdReader != null) {
-            return deserializeFromObjectId(p, ctxt);
-        }
-
-        switch (p.getNumberType()) {
-        case INT:
-            if (_delegateDeserializer != null) {
-                if (!_valueInstantiator.canCreateFromInt()) {
-                    Object bean = _valueInstantiator.createUsingDelegate(ctxt,
-                            _delegateDeserializer.deserialize(p, ctxt));
-                    if (_injectables != null) {
-                        injectValues(ctxt, bean);
-                    }
-                    return bean;
-                }
-            }
-            return _valueInstantiator.createFromInt(ctxt, p.getIntValue());
-        case LONG:
-            if (_delegateDeserializer != null) {
-                if (!_valueInstantiator.canCreateFromInt()) {
-                    Object bean = _valueInstantiator.createUsingDelegate(ctxt,
-                            _delegateDeserializer.deserialize(p, ctxt));
-                    if (_injectables != null) {
-                        injectValues(ctxt, bean);
-                    }
-                    return bean;
-                }
-            }
-            return _valueInstantiator.createFromLong(ctxt, p.getLongValue());
-        }
-        // actually, could also be BigInteger, so:
-        if (_delegateDeserializer != null) {
-            Object bean = _valueInstantiator.createUsingDelegate(ctxt,
-                    _delegateDeserializer.deserialize(p, ctxt));
-            if (_injectables != null) {
-                injectValues(ctxt, bean);
-            }
-            return bean;
-        }
-        return ctxt.handleMissingInstantiator(handledType(), p,
-                "no suitable creator method found to deserialize from Number value (%s)",
-                p.getNumberValue());
-    }
-
-    public Object deserializeFromString(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        // First things first: id Object Id is used, most likely that's it
-        if (_objectIdReader != null) {
-            return deserializeFromObjectId(p, ctxt);
-        }
-        
-        /* Bit complicated if we have delegating creator; may need to use it,
-         * or might not...
-         */
-        if (_delegateDeserializer != null) {
-            if (!_valueInstantiator.canCreateFromString()) {
-                Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                if (_injectables != null) {
-                    injectValues(ctxt, bean);
-                }
-                return bean;
-            }
-        }
-        return _valueInstantiator.createFromString(ctxt, p.getText());
-    }
-
-    /**
-     * Method called to deserialize POJO value from a JSON floating-point
-     * number.
-     */
-    public Object deserializeFromDouble(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        NumberType t = p.getNumberType();
-        // no separate methods for taking float...
-        if ((t == NumberType.DOUBLE) || (t == NumberType.FLOAT)) {
-            if (_delegateDeserializer != null) {
-                if (!_valueInstantiator.canCreateFromDouble()) {
-                    Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                    if (_injectables != null) {
-                        injectValues(ctxt, bean);
-                    }
-                    return bean;
-                }
-            }
-            return _valueInstantiator.createFromDouble(ctxt, p.getDoubleValue());
-        }
-        // actually, could also be BigDecimal, so:
-        if (_delegateDeserializer != null) {
-            return _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-        }
-        return ctxt.handleMissingInstantiator(handledType(), p,
-                "no suitable creator method found to deserialize from Number value (%s)",
-                p.getNumberValue());
-    }
-
-    /**
-     * Method called to deserialize POJO value from a JSON boolean value (true, false)
-     */
-    public Object deserializeFromBoolean(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        if (_delegateDeserializer != null) {
-            if (!_valueInstantiator.canCreateFromBoolean()) {
-                Object bean = _valueInstantiator.createUsingDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                if (_injectables != null) {
-                    injectValues(ctxt, bean);
-                }
-                return bean;
-            }
-        }
-        boolean value = (p.getCurrentToken() == JsonToken.VALUE_TRUE);
-        return _valueInstantiator.createFromBoolean(ctxt, value);
-    }
-
-    public Object deserializeFromArray(JsonParser p, DeserializationContext ctxt) throws IOException
-    {
-        if (_arrayDelegateDeserializer != null) {
-            try {
-                Object bean = _valueInstantiator.createUsingArrayDelegate(ctxt, _arrayDelegateDeserializer.deserialize(p, ctxt));
-                if (_injectables != null) {
-                    injectValues(ctxt, bean);
-                }
-                return bean;
-            } catch (Exception e) {
-                return wrapInstantiationProblem(e, ctxt);
-            }
-        }
-        // fallback to non-array delegate
-        if (_delegateDeserializer != null) {
-            try {
-                Object bean = _valueInstantiator.createUsingArrayDelegate(ctxt, _delegateDeserializer.deserialize(p, ctxt));
-                if (_injectables != null) {
-                    injectValues(ctxt, bean);
-                }
-                return bean;
-            } catch (Exception e) {
-                wrapInstantiationProblem(e, ctxt);
-                return null;
-            }
-        }
-        if (ctxt.isEnabled(DeserializationFeature.UNWRAP_SINGLE_VALUE_ARRAYS)) {
-            JsonToken t = p.nextToken();
-            if (t == JsonToken.END_ARRAY && ctxt.isEnabled(DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT)) {
-                return null;
-            }
-            final Object value = deserialize(p, ctxt);
-            if (p.nextToken() != JsonToken.END_ARRAY) {
-                handleMissingEndArrayForSingle(p, ctxt);
-            }
-            return value;
-        }
-        if (ctxt.isEnabled(DeserializationFeature.ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT)) {
-            JsonToken t = p.nextToken();
-            if (t == JsonToken.END_ARRAY) {
-                return null;
-            }
-            return ctxt.handleUnexpectedToken(handledType(),
-                    JsonToken.START_ARRAY, p, null);
-        }
-        return ctxt.handleUnexpectedToken(handledType(), p);
-    }
-
-    public Object deserializeFromEmbedded(JsonParser p, DeserializationContext ctxt)
-        throws IOException
-    {
-        // First things first: id Object Id is used, most likely that's it; specifically,
-        // true for UUIDs when written as binary (with Smile, other binary formats)
-        if (_objectIdReader != null) {
-            return deserializeFromObjectId(p, ctxt);
-        }
-
-        // TODO: maybe add support for ValueInstantiator, embedded?
-        
-        return p.getEmbeddedObject();
-    }
-
-    /*
-    /**********************************************************
-    /* Overridable helper methods
-    /**********************************************************
-     */
-
-    protected void injectValues(DeserializationContext ctxt, Object bean)
-        throws IOException
-    {
-        for (ValueInjector injector : _injectables) {
-            injector.inject(ctxt, bean);
-        }
-    }
-    
-    /**
-     * Method called to handle set of one or more unknown properties,
-     * stored in their entirety in given {@link TokenBuffer}
-     * (as field entries, name and value).
-     */
-    @SuppressWarnings("resource")
-    protected Object handleUnknownProperties(DeserializationContext ctxt,
-            Object bean, TokenBuffer unknownTokens)
-        throws IOException
-    {
-        // First: add closing END_OBJECT as marker
-        unknownTokens.writeEndObject();
-
-        // note: buffer does NOT have starting START_OBJECT
-        JsonParser bufferParser = unknownTokens.asParser();
-        while (bufferParser.nextToken() != JsonToken.END_OBJECT) {
-            String propName = bufferParser.getCurrentName();
-            // Unknown: let's call handler method
-            bufferParser.nextToken();
-            handleUnknownProperty(bufferParser, ctxt, bean, propName);
-        }
-        return bean;
-    }
-
-    /**
-     * Helper method called for an unknown property, when using "vanilla"
-     * processing.
-     */
-    protected void handleUnknownVanilla(JsonParser p, DeserializationContext ctxt,
-            Object bean, String propName)
-        throws IOException
-    {
-        if (_ignorableProps != null && _ignorableProps.contains(propName)) {
-            handleIgnoredProperty(p, ctxt, bean, propName);
-        } else if (_anySetter != null) {
-            try {
-               // should we consider return type of any setter?
-                _anySetter.deserializeAndSet(p, ctxt, bean, propName);
-            } catch (Exception e) {
-                wrapAndThrow(e, bean, propName, ctxt);
-            }
-        } else {
-            // Unknown: let's call handler method
-            handleUnknownProperty(p, ctxt, bean, propName);         
-        }
-    }
-
-    /**
-     * Method called when a JSON property is encountered that has not matching
-     * setter, any-setter or field, and thus can not be assigned.
-     */
     @Override
-    protected void handleUnknownProperty(JsonParser p, DeserializationContext ctxt,
-            Object beanOrClass, String propName)
-        throws IOException
-    {
-        if (_ignoreAllUnknown) {
-            p.skipChildren();
-            return;
-        }
-        if (_ignorableProps != null && _ignorableProps.contains(propName)) {
-            handleIgnoredProperty(p, ctxt, beanOrClass, propName);
-        }
-        // Otherwise use default handling (call handler(s); if not
-        // handled, throw exception or skip depending on settings)
-        super.handleUnknownProperty(p, ctxt, beanOrClass, propName);
+    public int hashCode() {
+        int result = super.hashCode();
+        result = 31 * result + (tag != null ? tag.hashCode() : 0);
+        return result;
     }
 
-    /**
-     * Method called when an explicitly ignored property (one specified with a
-     * name to match, either by property annotation or class annotation) is encountered.
-     * 
-     * @since 2.3
-     */
-    protected void handleIgnoredProperty(JsonParser p, DeserializationContext ctxt,
-            Object beanOrClass, String propName)
-        throws IOException
-    {
-        if (ctxt.isEnabled(DeserializationFeature.FAIL_ON_IGNORED_PROPERTIES)) {
-            throw IgnoredPropertyException.from(p, beanOrClass, propName, getKnownPropertyNames());
-        }
-        p.skipChildren();
-    }
-    
-    /**
-     * Method called in cases where we may have polymorphic deserialization
-     * case: that is, type of Creator-constructed bean is not the type
-     * of deserializer itself. It should be a sub-class or implementation
-     * class; either way, we may have more specific deserializer to use
-     * for handling it.
-     *
-     * @param p (optional) If not null, parser that has more properties to handle
-     *   (in addition to buffered properties); if null, all properties are passed
-     *   in buffer
-     */
-    @SuppressWarnings("resource")
-    protected Object handlePolymorphic(JsonParser p, DeserializationContext ctxt,                                          
-            Object bean, TokenBuffer unknownTokens)
-        throws IOException
-    {  
-        // First things first: maybe there is a more specific deserializer available?
-        JsonDeserializer<Object> subDeser = _findSubclassDeserializer(ctxt, bean, unknownTokens);
-        if (subDeser != null) {
-            if (unknownTokens != null) {
-                // need to add END_OBJECT marker first
-                unknownTokens.writeEndObject();
-                JsonParser p2 = unknownTokens.asParser();
-                p2.nextToken(); // to get to first data field
-                bean = subDeser.deserialize(p2, ctxt, bean);
-            }
-            // Original parser may also have some leftovers
-            if (p != null) {
-                bean = subDeser.deserialize(p, ctxt, bean);
-            }
-            return bean;
-        }
-        // nope; need to use this deserializer. Unknowns we've seen so far?
-        if (unknownTokens != null) {
-            bean = handleUnknownProperties(ctxt, bean, unknownTokens);
-        }
-        // and/or things left to process via main parser?
-        if (p != null) {
-            bean = deserialize(p, ctxt, bean);
-        }
-        return bean;
-    }
-    
-    /**
-     * Helper method called to (try to) locate deserializer for given sub-type of
-     * type that this deserializer handles.
-     */
-    protected JsonDeserializer<Object> _findSubclassDeserializer(DeserializationContext ctxt,
-            Object bean, TokenBuffer unknownTokens)
-        throws IOException
-    {  
-        JsonDeserializer<Object> subDeser;
-
-        // First: maybe we have already created sub-type deserializer?
-        synchronized (this) {
-            subDeser = (_subDeserializers == null) ? null : _subDeserializers.get(new ClassKey(bean.getClass()));
-        }
-        if (subDeser != null) {
-            return subDeser;
-        }
-        // If not, maybe we can locate one. First, need provider
-        JavaType type = ctxt.constructType(bean.getClass());
-        /* 30-Jan-2012, tatu: Ideally we would be passing referring
-         *   property; which in theory we could keep track of via
-         *   ResolvableDeserializer (if we absolutely must...).
-         *   But for now, let's not bother.
-         */
-//        subDeser = ctxt.findValueDeserializer(type, _property);
-        subDeser = ctxt.findRootValueDeserializer(type);
-        // Also, need to cache it
-        if (subDeser != null) {
-            synchronized (this) {
-                if (_subDeserializers == null) {
-                    _subDeserializers = new HashMap<ClassKey,JsonDeserializer<Object>>();;
-                }
-                _subDeserializers.put(new ClassKey(bean.getClass()), subDeser);
-            }            
-        }
-        return subDeser;
-    }
-    
-    /*
-    /**********************************************************
-    /* Helper methods for error reporting
-    /**********************************************************
-     */
-
-    /**
-     * Method that will modify caught exception (passed in as argument)
-     * as necessary to include reference information, and to ensure it
-     * is a subtype of {@link IOException}, or an unchecked exception.
-     *<p>
-     * Rules for wrapping and unwrapping are bit complicated; essentially:
-     *<ul>
-     * <li>Errors are to be passed as is (if uncovered via unwrapping)
-     * <li>"Plain" IOExceptions (ones that are not of type
-     *   {@link JsonMappingException} are to be passed as is
-     *</ul>
-     */
-    public void wrapAndThrow(Throwable t, Object bean, String fieldName, DeserializationContext ctxt)
-        throws IOException
-    {
-        // [JACKSON-55] Need to add reference information
-        throw JsonMappingException.wrapWithPath(throwOrReturnThrowable(t, ctxt), bean, fieldName);
-    }
-
-    @Deprecated // since 2.4, not used by core Jackson; only relevant for arrays/Collections
-    public void wrapAndThrow(Throwable t, Object bean, int index, DeserializationContext ctxt) throws IOException {
-        // [JACKSON-55] Need to add reference information
-        throw JsonMappingException.wrapWithPath(throwOrReturnThrowable(t, ctxt), bean, index);
-    }
-
-    private Throwable throwOrReturnThrowable(Throwable t, DeserializationContext ctxt) 
-        throws IOException
-    {
-        /* 05-Mar-2009, tatu: But one nasty edge is when we get
-         *   StackOverflow: usually due to infinite loop. But that
-         *   often gets hidden within an InvocationTargetException...
-         */
-        while (t instanceof InvocationTargetException && t.getCause() != null) {
-            t = t.getCause();
-        }
-        // Errors to be passed as is
-        if (t instanceof Error) {
-            throw (Error) t;
-        }
-        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
-        // Ditto for IOExceptions; except we may want to wrap JSON exceptions
-        if (t instanceof IOException) {
-            if (!wrap || !(t instanceof JsonProcessingException)) {
-                throw (IOException) t;
-            }
-        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
-            if (t instanceof RuntimeException) {
-                throw (RuntimeException) t;
-            }
-        }
-        return t;
-    }
-
-    protected Object wrapInstantiationProblem(Throwable t, DeserializationContext ctxt)
-        throws IOException
-    {
-        while (t instanceof InvocationTargetException && t.getCause() != null) {
-            t = t.getCause();
-        }
-        // Errors and "plain" IOExceptions to be passed as is
-        if (t instanceof Error) {
-            throw (Error) t;
-        }
-        boolean wrap = (ctxt == null) || ctxt.isEnabled(DeserializationFeature.WRAP_EXCEPTIONS);
-        if (t instanceof IOException) {
-            // Since we have no more information to add, let's not actually wrap..
-            throw (IOException) t;
-        } else if (!wrap) { // [JACKSON-407] -- allow disabling wrapping for unchecked exceptions
-            if (t instanceof RuntimeException) {
-                throw (RuntimeException) t;
-            }
-        }
-        return ctxt.handleInstantiationProblem(_beanType.getRawClass(), null, t);
+    @Override
+    public Element clone() {
+        return (Element) super.clone();
     }
 }

@@ -1,323 +1,115 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+package org.jsoup.nodes;
 
-package org.apache.flink.test.recovery;
+import org.jsoup.Connection;
+import org.jsoup.Jsoup;
+import org.jsoup.helper.HttpConnection;
+import org.jsoup.helper.Validate;
+import org.jsoup.parser.Tag;
+import org.jsoup.select.Elements;
 
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.time.Deadline;
-import org.apache.flink.api.common.time.Time;
-import org.apache.flink.api.java.ExecutionEnvironment;
-import org.apache.flink.api.java.io.DiscardingOutputFormat;
-import org.apache.flink.client.program.ClusterClient;
-import org.apache.flink.client.program.ProgramInvocationException;
-import org.apache.flink.client.program.rest.RestClusterClient;
-import org.apache.flink.configuration.AkkaOptions;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.HighAvailabilityOptions;
-import org.apache.flink.configuration.JobManagerOptions;
-import org.apache.flink.configuration.MemorySize;
-import org.apache.flink.configuration.RestOptions;
-import org.apache.flink.configuration.TaskManagerOptions;
-import org.apache.flink.runtime.client.JobStatusMessage;
-import org.apache.flink.runtime.clusterframework.ApplicationStatus;
-import org.apache.flink.runtime.concurrent.FutureUtils;
-import org.apache.flink.runtime.dispatcher.Dispatcher;
-import org.apache.flink.runtime.dispatcher.DispatcherGateway;
-import org.apache.flink.runtime.dispatcher.DispatcherId;
-import org.apache.flink.runtime.dispatcher.MemoryArchivedExecutionGraphStore;
-import org.apache.flink.runtime.entrypoint.component.DefaultDispatcherResourceManagerComponentFactory;
-import org.apache.flink.runtime.entrypoint.component.DispatcherResourceManagerComponent;
-import org.apache.flink.runtime.entrypoint.component.DispatcherResourceManagerComponentFactory;
-import org.apache.flink.runtime.heartbeat.HeartbeatServices;
-import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
-import org.apache.flink.runtime.highavailability.HighAvailabilityServicesUtils;
-import org.apache.flink.runtime.metrics.NoOpMetricRegistry;
-import org.apache.flink.runtime.resourcemanager.StandaloneResourceManagerFactory;
-import org.apache.flink.runtime.rpc.RpcService;
-import org.apache.flink.runtime.rpc.RpcUtils;
-import org.apache.flink.runtime.rpc.akka.AkkaRpcServiceUtils;
-import org.apache.flink.runtime.testingUtils.TestingUtils;
-import org.apache.flink.runtime.util.BlobServerResource;
-import org.apache.flink.runtime.util.LeaderConnectionInfo;
-import org.apache.flink.runtime.util.LeaderRetrievalUtils;
-import org.apache.flink.runtime.util.TestingFatalErrorHandler;
-import org.apache.flink.runtime.webmonitor.retriever.impl.VoidMetricQueryServiceRetriever;
-import org.apache.flink.runtime.zookeeper.ZooKeeperResource;
-import org.apache.flink.test.recovery.AbstractTaskManagerProcessFailureRecoveryTest.TaskExecutorProcessEntryPoint;
-import org.apache.flink.test.util.TestProcessBuilder;
-import org.apache.flink.test.util.TestProcessBuilder.TestProcess;
-import org.apache.flink.util.TestLogger;
-import org.apache.flink.util.function.CheckedSupplier;
-
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
-
-import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.stream.Collectors;
-
-import static org.apache.flink.runtime.testutils.CommonTestUtils.getJavaCommandPath;
-import static org.hamcrest.Matchers.hasSize;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import java.util.List;
 
 /**
- * This test makes sure that jobs are canceled properly in cases where
- * the task manager went down and did not respond to cancel messages.
+ * A HTML Form Element provides ready access to the form fields/controls that are associated with it. It also allows a
+ * form to easily be submitted.
  */
-@SuppressWarnings("serial")
-public class ProcessFailureCancelingITCase extends TestLogger {
+public class FormElement extends Element {
+    private final Elements elements = new Elements();
 
-	@Rule
-	public final BlobServerResource blobServerResource = new BlobServerResource();
+    /**
+     * Create a new, standalone form element.
+     *
+     * @param tag        tag of this element
+     * @param baseUri    the base URI
+     * @param attributes initial attributes
+     */
+    public FormElement(Tag tag, String baseUri, Attributes attributes) {
+        super(tag, baseUri, attributes);
+    }
 
-	@Rule
-	public final ZooKeeperResource zooKeeperResource = new ZooKeeperResource();
+    /**
+     * Get the list of form control elements associated with this form.
+     * @return form controls associated with this element.
+     */
+    public Elements elements() {
+        return elements;
+    }
 
-	@Rule
-	public final TemporaryFolder temporaryFolder = new TemporaryFolder();
+    /**
+     * Add a form control element to this form.
+     * @param element form control to add
+     * @return this form element, for chaining
+     */
+    public FormElement addElement(Element element) {
+        elements.add(element);
+        return this;
+    }
 
-	@Test
-	public void testCancelingOnProcessFailure() throws Exception {
-		final Time timeout = Time.minutes(2L);
+    @Override
+    protected void removeChild(Node out) {
+        super.removeChild(out);
+        elements.remove(out);
+    }
 
-		RestClusterClient<String> clusterClient = null;
-		TestProcess taskManagerProcess = null;
-		final TestingFatalErrorHandler fatalErrorHandler = new TestingFatalErrorHandler();
+    /**
+     * Prepare to submit this form. A Connection object is created with the request set up from the form values. You
+     * can then set up other options (like user-agent, timeout, cookies), then execute it.
+     * @return a connection prepared from the values of this form.
+     * @throws IllegalArgumentException if the form's absolute action URL cannot be determined. Make sure you pass the
+     * document's base URI when parsing.
+     */
+    public Connection submit() {
+        String action = hasAttr("action") ? absUrl("action") : baseUri();
+        Validate.notEmpty(action, "Could not determine a form action URL for submit. Ensure you set a base URI when parsing.");
+        Connection.Method method = attr("method").toUpperCase().equals("POST") ?
+                Connection.Method.POST : Connection.Method.GET;
 
-		Configuration config = new Configuration();
-		config.setString(JobManagerOptions.ADDRESS, "localhost");
-		config.setString(AkkaOptions.ASK_TIMEOUT, "100 s");
-		config.setString(HighAvailabilityOptions.HA_MODE, "zookeeper");
-		config.setString(HighAvailabilityOptions.HA_ZOOKEEPER_QUORUM, zooKeeperResource.getConnectString());
-		config.setString(HighAvailabilityOptions.HA_STORAGE_PATH, temporaryFolder.newFolder().getAbsolutePath());
-		config.setInteger(TaskManagerOptions.NUM_TASK_SLOTS, 2);
-		config.set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.parse("4m"));
-		config.set(TaskManagerOptions.NETWORK_MEMORY_MIN, MemorySize.parse("3200k"));
-		config.set(TaskManagerOptions.NETWORK_MEMORY_MAX, MemorySize.parse("3200k"));
-		config.set(TaskManagerOptions.TASK_HEAP_MEMORY, MemorySize.parse("128m"));
-		config.set(TaskManagerOptions.CPU_CORES, 1.0);
-		config.setInteger(RestOptions.PORT, 0);
+        return Jsoup.connect(action)
+                .data(formData())
+                .method(method);
+    }
 
-		final RpcService rpcService = AkkaRpcServiceUtils.createRpcService("localhost", 0, config);
-		final int jobManagerPort = rpcService.getPort();
-		config.setInteger(JobManagerOptions.PORT, jobManagerPort);
+    /**
+     * Get the data that this form submits. The returned list is a copy of the data, and changes to the contents of the
+     * list will not be reflected in the DOM.
+     * @return a list of key vals
+     */
+    public List<Connection.KeyVal> formData() {
+        ArrayList<Connection.KeyVal> data = new ArrayList<>();
 
-		final DispatcherResourceManagerComponentFactory resourceManagerComponentFactory = DefaultDispatcherResourceManagerComponentFactory.createSessionComponentFactory(
-			StandaloneResourceManagerFactory.INSTANCE);
-		DispatcherResourceManagerComponent dispatcherResourceManagerComponent = null;
+        // iterate the form control elements and accumulate their values
+        for (Element el: elements) {
+            if (!el.tag().isFormSubmittable()) continue; // contents are form listable, superset of submitable
+            if (el.hasAttr("disabled")) continue; // skip disabled form inputs
+            String name = el.attr("name");
+            if (name.length() == 0) continue;
+            String type = el.attr("type");
 
-		final ScheduledExecutorService ioExecutor = TestingUtils.defaultExecutor();
-		final HighAvailabilityServices haServices = HighAvailabilityServicesUtils.createHighAvailabilityServices(
-			config,
-			ioExecutor,
-			HighAvailabilityServicesUtils.AddressResolution.NO_ADDRESS_RESOLUTION);
+            if (type.equalsIgnoreCase("button")) continue; // browsers don't submit these
 
-		try {
-
-			// check that we run this test only if the java command
-			// is available on this machine
-			if (getJavaCommandPath() == null) {
-				System.out.println("---- Skipping Process Failure test : Could not find java executable ----");
-				return;
-			}
-
-			dispatcherResourceManagerComponent = resourceManagerComponentFactory.create(
-				config,
-				ioExecutor,
-				rpcService,
-				haServices,
-				blobServerResource.getBlobServer(),
-				new HeartbeatServices(100L, 1000L),
-				NoOpMetricRegistry.INSTANCE,
-				new MemoryArchivedExecutionGraphStore(),
-				VoidMetricQueryServiceRetriever.INSTANCE,
-				fatalErrorHandler);
-
-			final Map<String, String> keyValues = config.toMap();
-			final ArrayList<String> commands = new ArrayList<>((keyValues.size() << 1) + 8);
-
-			TestProcessBuilder taskManagerProcessBuilder = new TestProcessBuilder(TaskExecutorProcessEntryPoint.class.getName());
-			taskManagerProcessBuilder.addConfigAsMainClassArgs(config);
-
-			taskManagerProcess = taskManagerProcessBuilder.start();
-
-			final Throwable[] errorRef = new Throwable[1];
-
-			// start the test program, which infinitely blocks
-			Runnable programRunner = new Runnable() {
-				@Override
-				public void run() {
-					try {
-						ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment("localhost", 1337, config);
-						env.setParallelism(2);
-						env.setRestartStrategy(RestartStrategies.noRestart());
-
-						env.generateSequence(0, Long.MAX_VALUE)
-
-								.map(new MapFunction<Long, Long>() {
-
-									@Override
-									public Long map(Long value) throws Exception {
-										synchronized (this) {
-											wait();
-										}
-										return 0L;
-									}
-								})
-
-								.output(new DiscardingOutputFormat<Long>());
-
-						env.execute();
-					}
-					catch (Throwable t) {
-						errorRef[0] = t;
-					}
-				}
-			};
-
-			Thread programThread = new Thread(programRunner);
-
-			// kill the TaskManager
-			programThread.start();
-
-			final DispatcherGateway dispatcherGateway = retrieveDispatcherGateway(rpcService, haServices);
-			waitUntilAllSlotsAreUsed(dispatcherGateway, timeout);
-
-			clusterClient = new RestClusterClient<>(config, "standalone");
-
-			final Collection<JobID> jobIds = waitForRunningJobs(clusterClient, timeout);
-
-			assertThat(jobIds, hasSize(1));
-			final JobID jobId = jobIds.iterator().next();
-
-			// kill the TaskManager after the job started to run
-			taskManagerProcess.destroy();
-			taskManagerProcess = null;
-
-			// try to cancel the job
-			clusterClient.cancel(jobId).get();
-
-			// we should see a failure within reasonable time (10s is the ask timeout).
-			// since the CI environment is often slow, we conservatively give it up to 2 minutes,
-			// to fail, which is much lower than the failure time given by the heartbeats ( > 2000s)
-
-			programThread.join(120000);
-
-			assertFalse("The program did not cancel in time (2 minutes)", programThread.isAlive());
-
-			Throwable error = errorRef[0];
-			assertNotNull("The program did not fail properly", error);
-
-			assertTrue(error.getCause() instanceof ProgramInvocationException);
-			// all seems well :-)
-		}
-		catch (Exception e) {
-			printProcessLog("TaskManager", taskManagerProcess.getErrorOutput().toString());
-			throw e;
-		}
-		catch (Error e) {
-			printProcessLog("TaskManager 1", taskManagerProcess.getErrorOutput().toString());
-			throw e;
-		}
-		finally {
-			if (taskManagerProcess != null) {
-				taskManagerProcess.destroy();
-			}
-			if (clusterClient != null) {
-				clusterClient.close();
-			}
-			if (dispatcherResourceManagerComponent != null) {
-				dispatcherResourceManagerComponent.deregisterApplicationAndClose(ApplicationStatus.SUCCEEDED, null);
-			}
-
-			fatalErrorHandler.rethrowError();
-
-			RpcUtils.terminateRpcService(rpcService, Time.seconds(100L));
-
-			haServices.closeAndCleanupAllData();
-		}
-	}
-
-	/**
-	 * Helper method to wait until the {@link Dispatcher} has set its fencing token.
-	 *
-	 * @param rpcService to use to connect to the dispatcher
-	 * @param haServices high availability services to connect to the dispatcher
-	 * @return {@link DispatcherGateway}
-	 * @throws Exception if something goes wrong
-	 */
-	static DispatcherGateway retrieveDispatcherGateway(RpcService rpcService, HighAvailabilityServices haServices) throws Exception {
-		final LeaderConnectionInfo leaderConnectionInfo = LeaderRetrievalUtils.retrieveLeaderConnectionInfo(
-			haServices.getDispatcherLeaderRetriever(),
-			Duration.ofSeconds(10L));
-
-		return rpcService.connect(
-			leaderConnectionInfo.getAddress(),
-			DispatcherId.fromUuid(leaderConnectionInfo.getLeaderSessionId()),
-			DispatcherGateway.class).get();
-	}
-
-	private void waitUntilAllSlotsAreUsed(DispatcherGateway dispatcherGateway, Time timeout) throws ExecutionException, InterruptedException {
-		FutureUtils.retrySuccessfulWithDelay(
-			() -> dispatcherGateway.requestClusterOverview(timeout),
-			Time.milliseconds(50L),
-			Deadline.fromNow(Duration.ofMillis(timeout.toMilliseconds())),
-			clusterOverview -> clusterOverview.getNumTaskManagersConnected() >= 1 &&
-				clusterOverview.getNumSlotsAvailable() == 0 &&
-				clusterOverview.getNumSlotsTotal() == 2,
-			TestingUtils.defaultScheduledExecutor())
-			.get();
-	}
-
-	private Collection<JobID> waitForRunningJobs(ClusterClient<?> clusterClient, Time timeout) throws ExecutionException, InterruptedException {
-		return FutureUtils.retrySuccessfulWithDelay(
-				CheckedSupplier.unchecked(clusterClient::listJobs),
-				Time.milliseconds(50L),
-				Deadline.fromNow(Duration.ofMillis(timeout.toMilliseconds())),
-				jobs -> !jobs.isEmpty(),
-				TestingUtils.defaultScheduledExecutor())
-			.get()
-			.stream()
-			.map(JobStatusMessage::getJobId)
-			.collect(Collectors.toList());
-	}
-
-	private void printProcessLog(String processName, String log) {
-		if (log == null || log.length() == 0) {
-			return;
-		}
-
-		System.out.println("-----------------------------------------");
-		System.out.println(" BEGIN SPAWNED PROCESS LOG FOR " + processName);
-		System.out.println("-----------------------------------------");
-		System.out.println(log);
-		System.out.println("-----------------------------------------");
-		System.out.println("		END SPAWNED PROCESS LOG");
-		System.out.println("-----------------------------------------");
-	}
+            if ("select".equals(el.normalName())) {
+                Elements options = el.select("option[selected]");
+                boolean set = false;
+                for (Element option: options) {
+                    data.add(HttpConnection.KeyVal.create(name, option.val()));
+                    set = true;
+                }
+                if (!set) {
+                    Element option = el.select("option").first();
+                    if (option != null)
+                        data.add(HttpConnection.KeyVal.create(name, option.val()));
+                }
+            } else if ("checkbox".equalsIgnoreCase(type) || "radio".equalsIgnoreCase(type)) {
+                // only add checkbox or radio if they have the checked attribute
+                if (el.hasAttr("checked")) {
+                    final String val = el.val().length() >  0 ? el.val() : "on";
+                    data.add(HttpConnection.KeyVal.create(name, val));
+                }
+            } else {
+                data.add(HttpConnection.KeyVal.create(name, el.val()));
+            }
+        }
+        return data;
+    }
 }

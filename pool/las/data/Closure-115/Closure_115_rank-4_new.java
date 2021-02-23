@@ -1,184 +1,151 @@
-package org.jsoup.nodes;
+package org.jsoup.parser;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.CharsetEncoder;
-import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import org.jsoup.helper.Validate;
+import org.jsoup.nodes.CDataNode;
+import org.jsoup.nodes.Comment;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.DocumentType;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Node;
+import org.jsoup.nodes.TextNode;
+import org.jsoup.nodes.XmlDeclaration;
+
+import java.io.Reader;
+import java.io.StringReader;
+import java.util.List;
 
 /**
- * HTML entities, and escape routines.
- * Source: <a href="http://www.w3.org/TR/html5/named-character-references.html#named-character-references">W3C HTML
- * named character references</a>.
+ * Use the {@code XmlTreeBuilder} when you want to parse XML without any of the HTML DOM rules being applied to the
+ * document.
+ * <p>Usage example: {@code Document xmlDoc = Jsoup.parse(html, baseUrl, Parser.xmlParser());}</p>
+ *
+ * @author Jonathan Hedley
  */
-public class Entities {
-    public enum EscapeMode {
-        /** Restricted entities suitable for XHTML output: lt, gt, amp, apos, and quot only. */
-        xhtml(xhtmlByVal),
-        /** Default HTML output entities. */
-        base(baseByVal),
-        /** Complete HTML entities. */
-        extended(fullByVal);
-
-        private Map<Character, String> map;
-
-        EscapeMode(Map<Character, String> map) {
-            this.map = map;
-        }
-
-        public Map<Character, String> getMap() {
-            return map;
-        }
+public class XmlTreeBuilder extends TreeBuilder {
+    ParseSettings defaultSettings() {
+        return ParseSettings.preserveCase;
     }
 
-    private static final Map<String, Character> full;
-    private static final Map<Character, String> xhtmlByVal;
-    private static final Map<Character, String> baseByVal;
-    private static final Map<Character, String> fullByVal;
-    private static final Pattern unescapePattern = Pattern.compile("&(#(x|X)?([0-9a-fA-F]+)|[a-zA-Z]+\\d*);?");
-    private static final Pattern strictUnescapePattern = Pattern.compile("&(#(x|X)?([0-9a-fA-F]+)|[a-zA-Z]+\\d*);");
+    @Override
+    protected void initialiseParse(Reader input, String baseUri, Parser parser) {
+        super.initialiseParse(input, baseUri, parser);
+        stack.add(doc); // place the document onto the stack. differs from HtmlTreeBuilder (not on stack)
+        doc.outputSettings().syntax(Document.OutputSettings.Syntax.xml);
+    }
 
-    private Entities() {}
+    Document parse(Reader input, String baseUri) {
+        return parse(input, baseUri, new Parser(this));
+    }
+
+    Document parse(String input, String baseUri) {
+        return parse(new StringReader(input), baseUri, new Parser(this));
+    }
+
+    @Override
+    protected boolean process(Token token) {
+        // start tag, end tag, doctype, comment, character, eof
+        switch (token.type) {
+            case StartTag:
+                insert(token.asStartTag());
+                break;
+            case EndTag:
+                popStackToClose(token.asEndTag());
+                break;
+            case Comment:
+                insert(token.asComment());
+                break;
+            case Character:
+                insert(token.asCharacter());
+                break;
+            case Doctype:
+                insert(token.asDoctype());
+                break;
+            case EOF: // could put some normalisation here if desired
+                break;
+            default:
+                Validate.fail("Unexpected token type: " + token.type);
+        }
+        return true;
+    }
+
+    private void insertNode(Node node) {
+        currentElement().appendChild(node);
+    }
+
+    Element insert(Token.StartTag startTag) {
+        Tag tag = Tag.valueOf(startTag.name(), settings);
+        // todo: wonder if for xml parsing, should treat all tags as unknown? because it's not html.
+        Element el = new Element(tag, baseUri, settings.normalizeAttributes(startTag.attributes));
+        insertNode(el);
+        if (startTag.isSelfClosing()) {
+            if (!tag.isKnownTag()) // unknown tag, remember this is self closing for output. see above.
+                tag.setSelfClosing();
+        } else {
+            stack.add(el);
+        }
+        return el;
+    }
+
+    void insert(Token.Comment commentToken) {
+        Comment comment = new Comment(commentToken.getData());
+        Node insert = comment;
+        if (commentToken.bogus && comment.isXmlDeclaration()) {
+            // xml declarations are emitted as bogus comments (which is right for html, but not xml)
+            // so we do a bit of a hack and parse the data as an element to pull the attributes out
+            XmlDeclaration decl = comment.asXmlDeclaration(); // else, we couldn't parse it as a decl, so leave as a comment
+            if (decl != null)
+                insert = decl;
+        }
+        insertNode(insert);
+    }
+
+    void insert(Token.Character token) {
+        final String data = token.getData();
+        insertNode(token.isCData() ? new CDataNode(data) : new TextNode(data));
+    }
+
+    void insert(Token.Doctype d) {
+        DocumentType doctypeNode = new DocumentType(settings.normalizeTag(d.getName()), d.getPublicIdentifier(), d.getSystemIdentifier());
+        doctypeNode.setPubSysKey(d.getPubSysKey());
+        insertNode(doctypeNode);
+    }
 
     /**
-     * Check if the input is a known named entity
-     * @param name the possible entity name (e.g. "lt" or "amp"
-     * @return true if a known named entity
+     * If the stack contains an element with this tag's name, pop up the stack to remove the first occurrence. If not
+     * found, skips.
+     *
+     * @param endTag tag to close
      */
-    public static boolean isNamedEntity(String name) {
-        return full.containsKey(name);
-    }
+    private void popStackToClose(Token.EndTag endTag) {
+        String elName = settings.normalizeTag(endTag.tagName);
+        Element firstFound = null;
 
-    /**
-     * Get the Character value of the named entity
-     * @param name named entity (e.g. "lt" or "amp")
-     * @return the Character value of the named entity (e.g. '<' or '&')
-     */
-    public static Character getCharacterByName(String name) {
-        return full.get(name);
-    }
-    
-    static String escape(String string, Document.OutputSettings out) {
-        return escape(string, out.encoder(), out.escapeMode());
-    }
-
-    static String escape(String string, CharsetEncoder encoder, EscapeMode escapeMode) {
-        StringBuilder accum = new StringBuilder(string.length() * 2);
-        Map<Character, String> map = escapeMode.getMap();
-
-        for (int pos = 0; pos < string.length(); pos++) {
-            Character c = string.charAt(pos);
-            if (map.containsKey(c))
-                accum.append('&').append(map.get(c)).append(';');
-            else if (encoder.canEncode(c))
-                accum.append(c.charValue());
-            else
-                accum.append("&#").append((int) c).append(';');
-        }
-
-        return accum.toString();
-    }
-
-    static String unescape(String string) {
-        return unescape(string, false);
-    }
-
-    /**
-     * Unescape the input string.
-     * @param string
-     * @param strict if "strict" (that is, requires trailing ';' char, otherwise that's optional)
-     * @return
-     */
-    static String unescape(String string, boolean strict) {
-        // todo: change this method to use Tokeniser.consumeCharacterReference
-        if (!string.contains("&"))
-            return string;
-
-        Matcher m = strict? strictUnescapePattern.matcher(string) : unescapePattern.matcher(string); // &(#(x|X)?([0-9a-fA-F]+)|[a-zA-Z]\\d*);?
-        StringBuffer accum = new StringBuffer(string.length()); // pity matcher can't use stringbuilder, avoid syncs
-        // todo: replace m.appendReplacement with own impl, so StringBuilder and quoteReplacement not required
-
-        while (m.find()) {
-            int charval = -1;
-            String num = m.group(3);
-            if (num != null) {
-                try {
-                    int base = m.group(2) != null ? 16 : 10; // 2 is hex indicator
-                    charval = Integer.valueOf(num, base);
-                } catch (NumberFormatException e) {
-                } // skip
-            } else {
-                String name = m.group(1);
-                if (full.containsKey(name))
-                    charval = full.get(name);
-            }
-
-            if (charval != -1 || charval > 0xFFFF) { // out of range
-                String c = Character.toString((char) charval);
-                m.appendReplacement(accum, Matcher.quoteReplacement(c));
-            } else {
-                m.appendReplacement(accum, Matcher.quoteReplacement(m.group(0))); // replace with original string
+        for (int pos = stack.size() -1; pos >= 0; pos--) {
+            Element next = stack.get(pos);
+            if (next.nodeName().equals(elName)) {
+                firstFound = next;
+                break;
             }
         }
-        m.appendTail(accum);
-        return accum.toString();
-    }
+        if (firstFound == null)
+            return; // not found, skip
 
-    // xhtml has restricted entities
-    private static final Object[][] xhtmlArray = {
-            {"quot", 0x00022},
-            {"amp", 0x00026},
-            {"apos", 0x00027},
-            {"lt", 0x0003C},
-            {"gt", 0x0003E}
-    };
-
-    static {
-        xhtmlByVal = new HashMap<Character, String>();
-        baseByVal = toCharacterKey(loadEntities("entities-base.properties")); // most common / default
-        full = loadEntities("entities-full.properties"); // extended and overblown.
-        fullByVal = toCharacterKey(full);
-
-        for (Object[] entity : xhtmlArray) {
-            Character c = Character.valueOf((char) ((Integer) entity[1]).intValue());
-            xhtmlByVal.put(c, ((String) entity[0]));
+        for (int pos = stack.size() -1; pos >= 0; pos--) {
+            Element next = stack.get(pos);
+            stack.remove(pos);
+            if (next == firstFound)
+                break;
         }
     }
 
-    private static Map<String, Character> loadEntities(String filename) {
-        Properties properties = new Properties();
-        Map<String, Character> entities = new HashMap<String, Character>();
-        try {
-            InputStream in = Entities.class.getResourceAsStream(filename);
-            properties.load(in);
-            in.close();
-        } catch (IOException e) {
-            throw new MissingResourceException("Error loading entities resource: " + e.getMessage(), "Entities", filename);
-        }
 
-        for (Map.Entry entry: properties.entrySet()) {
-            Character val = Character.valueOf((char) Integer.parseInt((String) entry.getValue(), 16));
-            String name = (String) entry.getKey();
-            entities.put(name, val);
-        }
-        return entities;
+    List<Node> parseFragment(String inputFragment, String baseUri, Parser parser) {
+        initialiseParse(new StringReader(inputFragment), baseUri, parser);
+        runParser();
+        return doc.childNodes();
     }
 
-    private static Map<Character, String> toCharacterKey(Map<String, Character> inMap) {
-        Map<Character, String> outMap = new HashMap<Character, String>();
-        for (Map.Entry<String, Character> entry: inMap.entrySet()) {
-            Character character = entry.getValue();
-            String name = entry.getKey();
-
-            if (outMap.containsKey(character)) {
-                // dupe, prefer the lower case version
-                if (name.toLowerCase().equals(name))
-                    outMap.put(character, name);
-            } else {
-                outMap.put(character, name);
-            }
-        }
-        return outMap;
+    List<Node> parseFragment(String inputFragment, Element context, String baseUri, Parser parser) {
+        return parseFragment(inputFragment, baseUri, parser);
     }
 }

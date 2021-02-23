@@ -1,12 +1,13 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,207 +15,238 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.pdfbox.pdmodel.interactive.form;
+package org.apache.beam.runners.flink.translation.wrappers.streaming.io;
 
+import static com.google.common.base.Preconditions.checkArgument;
+
+import java.io.BufferedReader;
 import java.io.IOException;
-
-import org.apache.pdfbox.cos.COSDictionary;
-import org.apache.pdfbox.cos.COSName;
-import org.apache.pdfbox.cos.COSNumber;
-import org.apache.pdfbox.cos.COSString;
+import java.io.InputStreamReader;
+import java.io.Serializable;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.util.Collections;
+import java.util.List;
+import java.util.NoSuchElementException;
+import javax.annotation.Nullable;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.io.UnboundedSource;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.joda.time.Instant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * Base class for fields which use "Variable Text".
- * These fields construct an appearance stream dynamically at viewing time.
- *
- * @author Ben Litchfield
- */
-public abstract class PDVariableText extends PDField
-{
+ * An example unbounded Beam source that reads input from a socket.
+ * This is used mainly for testing and debugging.
+ * */
+public class UnboundedSocketSource<CheckpointMarkT extends UnboundedSource.CheckpointMark>
+    extends UnboundedSource<String, CheckpointMarkT> {
 
-    /**
-     * A Q value.
-     */
-    public static final int QUADDING_LEFT = 0;
+  private static final Coder<String> DEFAULT_SOCKET_CODER = StringUtf8Coder.of();
 
-    /**
-     * A Q value.
-     */
-    public static final int QUADDING_CENTERED = 1;
+  private static final long serialVersionUID = 1L;
 
-    /**
-     * A Q value.
-     */
-    public static final int QUADDING_RIGHT = 2;
+  private static final int DEFAULT_CONNECTION_RETRY_SLEEP = 500;
 
-    /**
-     * @see PDField#PDField(PDAcroForm)
-     *
-     * @param theAcroForm The acroform.
-     */
-    PDVariableText(PDAcroForm theAcroForm)
-    {
-        super( theAcroForm );
+  private static final int CONNECTION_TIMEOUT_TIME = 0;
+
+  private final String hostname;
+  private final int port;
+  private final char delimiter;
+  private final long maxNumRetries;
+  private final long delayBetweenRetries;
+
+  public UnboundedSocketSource(String hostname, int port, char delimiter, long maxNumRetries) {
+    this(hostname, port, delimiter, maxNumRetries, DEFAULT_CONNECTION_RETRY_SLEEP);
+  }
+
+  public UnboundedSocketSource(String hostname,
+                               int port,
+                               char delimiter,
+                               long maxNumRetries,
+                               long delayBetweenRetries) {
+    this.hostname = hostname;
+    this.port = port;
+    this.delimiter = delimiter;
+    this.maxNumRetries = maxNumRetries;
+    this.delayBetweenRetries = delayBetweenRetries;
+  }
+
+  public String getHostname() {
+    return this.hostname;
+  }
+
+  public int getPort() {
+    return this.port;
+  }
+
+  public char getDelimiter() {
+    return this.delimiter;
+  }
+
+  public long getMaxNumRetries() {
+    return this.maxNumRetries;
+  }
+
+  public long getDelayBetweenRetries() {
+    return this.delayBetweenRetries;
+  }
+
+  @Override
+  public List<? extends UnboundedSource<String, CheckpointMarkT>> generateInitialSplits(
+      int desiredNumSplits,
+      PipelineOptions options) throws Exception {
+    return Collections.<UnboundedSource<String, CheckpointMarkT>>singletonList(this);
+  }
+
+  @Override
+  public UnboundedReader<String> createReader(PipelineOptions options,
+                                              @Nullable CheckpointMarkT checkpointMark) {
+    return new UnboundedSocketReader(this);
+  }
+
+  @Nullable
+  @Override
+  public Coder getCheckpointMarkCoder() {
+    // Flink and Dataflow have different checkpointing mechanisms.
+    // In our case we do not need a coder.
+    return null;
+  }
+
+  @Override
+  public void validate() {
+    checkArgument(port > 0 && port < 65536, "port is out of range");
+    checkArgument(maxNumRetries >= -1, "maxNumRetries must be zero or larger (num retries), "
+        + "or -1 (infinite retries)");
+    checkArgument(delayBetweenRetries >= 0, "delayBetweenRetries must be zero or positive");
+  }
+
+  @Override
+  public Coder getDefaultOutputCoder() {
+    return DEFAULT_SOCKET_CODER;
+  }
+
+  /**
+   * Unbounded socket reader.
+   */
+  public static class UnboundedSocketReader extends UnboundedSource.UnboundedReader<String>
+      implements Serializable {
+
+    private static final long serialVersionUID = 7526472295622776147L;
+    private static final Logger LOG = LoggerFactory.getLogger(UnboundedSocketReader.class);
+
+    private final UnboundedSocketSource source;
+
+    private Socket socket;
+    private BufferedReader reader;
+
+    private boolean isRunning;
+
+    private String currentRecord;
+
+    public UnboundedSocketReader(UnboundedSocketSource source) {
+      this.source = source;
     }
 
-    /**
-     * Constructor.
-     * 
-     * @param theAcroForm The form that this field is part of.
-     * @param field the PDF object to represent as a field.
-     * @param parentNode the parent node of the node to be created
-     */
-    protected PDVariableText(PDAcroForm theAcroForm, COSDictionary field, PDFieldTreeNode parentNode)
-    {
-        super( theAcroForm, field, parentNode);
+    private void openConnection() throws IOException {
+      this.socket = new Socket();
+      this.socket.connect(new InetSocketAddress(this.source.getHostname(), this.source.getPort()),
+          CONNECTION_TIMEOUT_TIME);
+      this.reader = new BufferedReader(new InputStreamReader(this.socket.getInputStream()));
+      this.isRunning = true;
     }
 
-    /**
-     * Get the default appearance.
-     * 
-     * This is an inheritable attribute.
-     * 
-     * The default appearance contains a set of default graphics and text operators
-     * to define the field’s text size and color.
-     * 
-     * @return the DA element of the dictionary object
-     */
-    public String getDefaultAppearance()
-    {
-        COSString defaultAppearance = (COSString) getInheritableAttribute(COSName.DA);
-        return defaultAppearance.getString();
-    }
+    @Override
+    public boolean start() throws IOException {
+      int attempt = 0;
+      while (!isRunning) {
+        try {
+          openConnection();
+          LOG.info("Connected to server socket " + this.source.getHostname() + ':'
+              + this.source.getPort());
 
-    /**
-     * Set the default appearance.
-     * 
-     * This will set the local default appearance for the variable text field only not 
-     * affecting a default appearance in the parent hierarchy.
-     * 
-     * Providing null as the value will remove the local default appearance.
-     * 
-     * @param daValue a string describing the default appearance
-     */
-    public void setDefaultAppearance(String daValue)
-    {
-        if (daValue != null)
-        {
-            setInheritableAttribute(COSName.DA, new COSString(daValue));
+          return advance();
+        } catch (IOException e) {
+          LOG.info("Lost connection to server socket " + this.source.getHostname() + ':'
+              + this.source.getPort() + ". Retrying in "
+              + this.source.getDelayBetweenRetries() + " msecs...");
+
+          if (this.source.getMaxNumRetries() == -1 || attempt++ < this.source.getMaxNumRetries()) {
+            try {
+              Thread.sleep(this.source.getDelayBetweenRetries());
+            } catch (InterruptedException e1) {
+              e1.printStackTrace();
+            }
+          } else {
+            this.isRunning = false;
+            break;
+          }
         }
-        else
-        {
-            removeInheritableAttribute(COSName.DA);
-        }
-    }
-    
-    /**
-     * Get the default style string.
-     * 
-     * The default style string defines the default style for
-     * rich text fields.
-     * 
-     * @return the DS element of the dictionary object
-     */
-    public String getDefaultStyleString()
-    {
-        COSString defaultStyleString = (COSString) getCOSObject().getDictionaryObject(COSName.DS);
-        return defaultStyleString.getString();
+      }
+      LOG.error("Unable to connect to host " + this.source.getHostname()
+          + " : " + this.source.getPort());
+      return false;
     }
 
-    /**
-     * Set the default style string.
-     * 
-     * Providing null as the value will remove the default style string.
-     * 
-     * @param defaultStyleString a string describing the default style.
-     */
-    public void setDefaultStyleString(String defaultStyleString)
-    {
-        if (defaultStyleString != null)
-        {
-            getCOSObject().setItem(COSName.DS, new COSString(defaultStyleString));
+    @Override
+    public boolean advance() throws IOException {
+      final StringBuilder buffer = new StringBuilder();
+      int data;
+      while (isRunning && (data = reader.read()) != -1) {
+        // check if the string is complete
+        if (data != this.source.getDelimiter()) {
+          buffer.append((char) data);
+        } else {
+          if (buffer.length() > 0 && buffer.charAt(buffer.length() - 1) == '\r') {
+            buffer.setLength(buffer.length() - 1);
+          }
+          this.currentRecord = buffer.toString();
+          buffer.setLength(0);
+          return true;
         }
-        else
-        {
-            getCOSObject().removeItem(COSName.DS);
-        }
-    }    
-
-    /**
-     * This will get the 'quadding' or justification of the text to be displayed.
-     * 
-     * This is an inheritable attribute.
-     * 
-     * 0 - Left(default)<br/>
-     * 1 - Centered<br />
-     * 2 - Right<br />
-     * Please see the QUADDING_CONSTANTS.
-     *
-     * @return The justification of the text strings.
-     */
-    public int getQ()
-    {
-        int retval = 0;
-
-        COSNumber number = (COSNumber)getInheritableAttribute(COSName.Q );
-        
-        if( number != null )
-        {
-            retval = number.intValue();
-        }
-        return retval;
+      }
+      return false;
     }
 
-    /**
-     * This will set the quadding/justification of the text.  See QUADDING constants.
-     *
-     * @param q The new text justification.
-     */
-    public void setQ( int q )
-    {
-        getCOSObject().setInt( COSName.Q, q );
+    @Override
+    public byte[] getCurrentRecordId() throws NoSuchElementException {
+      return new byte[0];
     }
-    
-    /**
-     * Get the fields rich text value.
-     * 
-     * @return the rich text value string
-     * @throws IOException if the field dictionary entry is not a text type
-     */
-    public String getRichTextValue() throws IOException
-    {
-        String string = valueToString(getInheritableAttribute(COSName.RV));
-        if (string != null)
-        {
-            return string;
-        }
-        return "";
+
+    @Override
+    public String getCurrent() throws NoSuchElementException {
+      return this.currentRecord;
     }
-    
-    /**
-     * Set the fields rich text value.
-     * 
-     * <p>
-     * Setting the rich text value will not generate the appearance
-     * for the field.
-     * <br/>
-     * You can set {@link PDAcroForm#setNeedAppearances(Boolean)} to
-     * signal a conforming reader to generate the appearance stream.
-     * </p>
-     * 
-     * Providing null as the value will remove the default style string.
-     * 
-     * @param richTextValue a rich text string
-     */
-    public void setRichTextValue(String richTextValue)
-    {
-        if (richTextValue != null)
-        {
-            getCOSObject().setItem(COSName.RV, new COSString(richTextValue));
-        }
-        else
-        {
-            getCOSObject().removeItem(COSName.RV);
-        }        
+
+    @Override
+    public Instant getCurrentTimestamp() throws NoSuchElementException {
+      return Instant.now();
     }
+
+    @Override
+    public void close() throws IOException {
+      this.reader.close();
+      this.socket.close();
+      this.isRunning = false;
+      LOG.info("Closed connection to server socket at " + this.source.getHostname() + ":"
+          + this.source.getPort() + ".");
+    }
+
+    @Override
+    public Instant getWatermark() {
+      return Instant.now();
+    }
+
+    @Override
+    public CheckpointMark getCheckpointMark() {
+      return null;
+    }
+
+    @Override
+    public UnboundedSource<String, ?> getCurrentSource() {
+      return this.source;
+    }
+  }
 }

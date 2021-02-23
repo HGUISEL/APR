@@ -1,665 +1,761 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * $Header: /home/jerenkrantz/tmp/commons/commons-convert/cvs/home/cvs/jakarta-commons//jxpath/src/java/org/apache/commons/jxpath/ri/model/jdom/JDOMNodePointer.java,v 1.7 2003/01/11 05:41:26 dmitri Exp $
+ * $Revision: 1.7 $
+ * $Date: 2003/01/11 05:41:26 $
+ *
+ * ====================================================================
+ * The Apache Software License, Version 1.1
+ *
+ *
+ * Copyright (c) 1999-2001 The Apache Software Foundation.  All rights
+ * reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The end-user documentation included with the redistribution, if
+ *    any, must include the following acknowlegement:
+ *       "This product includes software developed by the
+ *        Apache Software Foundation (http://www.apache.org/)."
+ *    Alternately, this acknowlegement may appear in the software itself,
+ *    if and wherever such third-party acknowlegements normally appear.
+ *
+ * 4. The names "The Jakarta Project", "Commons", and "Apache Software
+ *    Foundation" must not be used to endorse or promote products derived
+ *    from this software without prior written permission. For written
+ *    permission, please contact apache@apache.org.
+ *
+ * 5. Products derived from this software may not be called "Apache"
+ *    nor may "Apache" appear in their names without prior written
+ *    permission of the Apache Group.
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
+ * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+ * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ * ====================================================================
+ *
+ * This software consists of voluntary contributions made by many
+ * individuals on behalf of the Apache Software Foundation and was
+ * originally based on software copyright (c) 2001, Plotnix, Inc,
+ * <http://www.plotnix.com/>.
+ * For more information on the Apache Software Foundation, please see
+ * <http://www.apache.org/>.
  */
+package org.apache.commons.jxpath.ri.model.jdom;
 
-package org.apache.commons.dbcp2;
-
-import java.net.URL;
-import java.sql.CallableStatement;
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Time;
-import java.sql.Timestamp;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.sql.Ref;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Array;
-import java.util.Calendar;
-import java.io.InputStream;
-import java.io.Reader;
-import java.sql.SQLException;
-/* JDBC_4_ANT_KEY_BEGIN */
-import java.sql.NClob;
-import java.sql.RowId;
-import java.sql.SQLXML;
-/* JDBC_4_ANT_KEY_END */
+
+import org.apache.commons.jxpath.AbstractFactory;
+import org.apache.commons.jxpath.JXPathContext;
+import org.apache.commons.jxpath.JXPathException;
+import org.apache.commons.jxpath.ri.Compiler;
+import org.apache.commons.jxpath.ri.QName;
+import org.apache.commons.jxpath.ri.compiler.NodeNameTest;
+import org.apache.commons.jxpath.ri.compiler.NodeTest;
+import org.apache.commons.jxpath.ri.compiler.NodeTypeTest;
+import org.apache.commons.jxpath.ri.compiler.ProcessingInstructionTest;
+import org.apache.commons.jxpath.ri.model.NodeIterator;
+import org.apache.commons.jxpath.ri.model.NodePointer;
+import org.apache.commons.jxpath.util.TypeUtils;
+import org.jdom.Attribute;
+import org.jdom.CDATA;
+import org.jdom.Comment;
+import org.jdom.Document;
+import org.jdom.Element;
+import org.jdom.Namespace;
+import org.jdom.ProcessingInstruction;
+import org.jdom.Text;
 
 /**
- * A base delegating implementation of {@link CallableStatement}.
- * <p>
- * All of the methods from the {@link CallableStatement} interface
- * simply call the corresponding method on the "delegate"
- * provided in my constructor.
- * <p>
- * Extends AbandonedTrace to implement Statement tracking and
- * logging of code which created the Statement. Tracking the
- * Statement ensures that the Connection which created it can
- * close any open Statement's on Connection close.
+ * A Pointer that points to a DOM node.
  *
- * @author Glenn L. Nielsen
- * @author James House
- * @author Dirk Verbeeck
- * @version $Revision$ $Date$
+ * @author Dmitri Plotnikov
+ * @version $Revision: 1.7 $ $Date: 2003/01/11 05:41:26 $
  */
-public class DelegatingCallableStatement extends DelegatingPreparedStatement
-        implements CallableStatement {
+public class JDOMNodePointer extends NodePointer {
+    private Object node;
+    private Map namespaces;
+    private String defaultNamespace;
+    private String id;
+
+    public static final String XML_NAMESPACE_URI =
+            "http://www.w3.org/XML/1998/namespace";
+    public static final String XMLNS_NAMESPACE_URI =
+            "http://www.w3.org/2000/xmlns/";
+
+    public JDOMNodePointer(Object node, Locale locale) {
+        super(null, locale);
+        this.node = node;
+    }
+
+    public JDOMNodePointer(Object node, Locale locale, String id) {
+        super(null, locale);
+        this.node = node;
+        this.id = id;
+    }
+
+    public JDOMNodePointer(NodePointer parent, Object node) {
+        super(parent);
+        this.node = node;
+    }
+
+    public NodeIterator childIterator(
+        NodeTest test,
+        boolean reverse,
+        NodePointer startWith) 
+    {
+        return new JDOMNodeIterator(this, test, reverse, startWith);
+    }
+
+    public NodeIterator attributeIterator(QName name) {
+        return new JDOMAttributeIterator(this, name);
+    }
+
+    public NodeIterator namespaceIterator() {
+        return new JDOMNamespaceIterator(this);
+    }
+
+    public NodePointer namespacePointer(String prefix) {
+        return new JDOMNamespacePointer(this, prefix);
+    }
+
+    public String getNamespaceURI() {
+        if (node instanceof Element) {
+            Element element = (Element) node;
+            String ns = element.getNamespaceURI();
+            if (ns != null && ns.equals("")) {
+                ns = null;
+            }
+            return ns;
+        }
+        return null;
+    }
+
+    public String getNamespaceURI(String prefix) {
+        if (node instanceof Element) {
+            Element element = (Element) node;
+            Namespace ns = element.getNamespace(prefix);
+            if (ns == null) {
+                return null;
+            }
+            return ns.getURI();
+        }
+        return null;
+    }
+
+    public int compareChildNodePointers(
+        NodePointer pointer1,
+        NodePointer pointer2) 
+    {
+        Object node1 = pointer1.getBaseValue();
+        Object node2 = pointer2.getBaseValue();
+        if (node1 == node2) {
+            return 0;
+        }
+
+        if ((node1 instanceof Attribute) && !(node2 instanceof Attribute)) {
+            return -1;
+        }
+        else if (
+            !(node1 instanceof Attribute) && (node2 instanceof Attribute)) {
+            return 1;
+        }
+        else if (
+            (node1 instanceof Attribute) && (node2 instanceof Attribute)) {
+            List list = ((Element) getNode()).getAttributes();
+            int length = list.size();
+            for (int i = 0; i < length; i++) {
+                Object n = list.get(i);
+                if (n == node1) {
+                    return -1;
+                }
+                else if (n == node2) {
+                    return 1;
+                }
+            }
+            return 0; // Should not happen
+        }
+
+        if (!(node instanceof Element)) {
+            throw new RuntimeException(
+                "JXPath internal error: "
+                    + "compareChildNodes called for "
+                    + node);
+        }
+
+        List children = ((Element) node).getContent();
+        int length = children.size();
+        for (int i = 0; i < length; i++) {
+            Object n = children.get(i);
+            if (n == node1) {
+                return -1;
+            }
+            else if (n == node2) {
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
 
     /**
-     * Create a wrapper for the Statement which traces this
-     * Statement to the Connection which created it and the
-     * code which created it.
-     *
-     * @param c the {@link DelegatingConnection} that created this statement
-     * @param s the {@link CallableStatement} to delegate all calls to
+     * @see org.apache.commons.jxpath.ri.model.NodePointer#getBaseValue()
      */
-    public DelegatingCallableStatement(DelegatingConnection c,
-                                       CallableStatement s) {
-        super(c, s);
+    public Object getBaseValue() {
+        return node;
     }
 
-    public boolean equals(Object obj) {
-    	if (this == obj) return true;
-        CallableStatement delegate = (CallableStatement) getInnermostDelegate();
-        if (delegate == null) {
-            return false;
+    public boolean isCollection() {
+        return false;
+    }
+    
+    public int getLength() {
+        return 1;
+    }    
+
+    public boolean isLeaf() {
+        if (node instanceof Element) {
+            return ((Element) node).getContent().size() == 0;
         }
-        if (obj instanceof DelegatingCallableStatement) {
-            DelegatingCallableStatement s = (DelegatingCallableStatement) obj;
-            return delegate.equals(s.getInnermostDelegate());
+        else if (node instanceof Document) {
+            return ((Document) node).getContent().size() == 0;
+        }
+        return true;
+    }
+
+    /**
+     * @see org.apache.commons.jxpath.ri.model.NodePointer#getName()
+     */
+    public QName getName() {
+        String ns = null;
+        String ln = null;
+        if (node instanceof Element) {
+            ns = ((Element) node).getNamespacePrefix();
+            if (ns != null && ns.equals("")) {
+                ns = null;
+            }
+            ln = ((Element) node).getName();
+        }
+        else if (node instanceof ProcessingInstruction) {
+            ln = ((ProcessingInstruction) node).getTarget();
+        }
+        return new QName(ns, ln);
+    }
+
+    public QName getExpandedName() {
+        return new QName(getNamespaceURI(), getName().getName());
+    }
+
+    /**
+     * @see org.apache.commons.jxpath.ri.model.NodePointer#getNode()
+     */
+    public Object getImmediateNode() {
+        return node;
+    }
+
+    public Object getValue() {
+        if (node instanceof Element) {
+            return ((Element) node).getTextTrim();
+        }
+        else if (node instanceof Comment) {
+            String text = ((Comment) node).getText();
+            if (text != null) {
+                text = text.trim();
+            }
+            return text;
+        }
+        else if (node instanceof Text) {
+            return ((Text) node).getTextTrim();
+        }
+        else if (node instanceof CDATA) {
+            return ((CDATA) node).getTextTrim();
+        }
+        else if (node instanceof ProcessingInstruction) {
+            String text = ((ProcessingInstruction) node).getData();
+            if (text != null) {
+                text = text.trim();
+            }
+            return text;
+        }
+        return null;
+    }
+
+    public void setValue(Object value) {
+        if (node instanceof Text) {
+            String string = (String) TypeUtils.convert(value, String.class);
+            if (string != null && !string.equals("")) {
+                ((Text) node).setText(string);
+            }
+            else {
+                nodeParent(node).removeContent((Text) node);
+            }
         }
         else {
-            return delegate.equals(obj);
+            Element element = (Element) node;
+            element.getContent().clear();
+
+            if (value instanceof Element) {
+                Element valueElement = (Element) value;
+                addContent(valueElement.getContent());
+            }
+            else if (value instanceof Document) {
+                Document valueDocument = (Document) value;
+                addContent(valueDocument.getContent());
+            }
+            else if (value instanceof Text || value instanceof CDATA) {
+                String string = ((Text) value).getText();
+                element.addContent(new Text(string));
+            }
+            else if (value instanceof ProcessingInstruction) {
+                ProcessingInstruction pi =
+                    (ProcessingInstruction) ((ProcessingInstruction) value)
+                        .clone();
+                element.addContent(pi);
+            }
+            else if (value instanceof Comment) {
+                Comment comment = (Comment) ((Comment) value).clone();
+                element.addContent(comment);
+            }
+            else {
+                String string = (String) TypeUtils.convert(value, String.class);
+                if (string != null && !string.equals("")) {
+                    element.addContent(new Text(string));
+                }
+            }
+        }
+    } 
+      
+    private void addContent(List content) {
+        Element element = (Element) node;
+        int count = content.size();
+
+        for (int i = 0; i < count; i++) {
+            Object child = content.get(i);
+            if (child instanceof Element) {
+                child = ((Element) child).clone();
+                element.addContent((Element) child);
+            }
+            else if (child instanceof Text) {
+                child = ((Text) child).clone();
+                element.addContent((Text) child);
+            }
+            else if (node instanceof CDATA) {
+                child = ((CDATA) child).clone();
+                element.addContent((CDATA) child);
+            }
+            else if (node instanceof ProcessingInstruction) {
+                child = ((ProcessingInstruction) child).clone();
+                element.addContent((ProcessingInstruction) child);
+            }
+            else if (node instanceof Comment) {
+                child = ((Comment) child).clone();
+                element.addContent((Comment) child);
+            }
         }
     }
-
-    /** Sets my delegate. */
-    public void setDelegate(CallableStatement s) {
-        super.setDelegate(s);
-        _stmt = s;
+    
+    public boolean testNode(NodeTest test) {
+        return testNode(this, node, test);
     }
 
-    public void registerOutParameter(int parameterIndex, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(int parameterIndex, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( parameterIndex,  sqlType,  scale); } catch (SQLException e) { handleException(e); } }
-
-    public boolean wasNull() throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).wasNull(); } catch (SQLException e) { handleException(e); return false; } }
-
-    public String getString(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean( parameterIndex); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble( parameterIndex); } catch (SQLException e) { handleException(e); return 0; } }
-
-    /** @deprecated */
-    public BigDecimal getBigDecimal(int parameterIndex, int scale) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex,  scale); } catch (SQLException e) { handleException(e); return null; } }
-
-    public byte[] getBytes(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal( parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(int i, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject( i, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(int i) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray( i); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(int parameterIndex, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp( parameterIndex,  cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void registerOutParameter(int paramIndex, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter( paramIndex,  sqlType,  typeName); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, scale); } catch (SQLException e) { handleException(e); } }
-
-    public void registerOutParameter(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).registerOutParameter(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
-
-    public URL getURL(int parameterIndex) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterIndex); } catch (SQLException e) { handleException(e); return null; } }
-
-    public void setURL(String parameterName, URL val) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setURL(parameterName, val); } catch (SQLException e) { handleException(e); } }
-
-    public void setNull(String parameterName, int sqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void setBoolean(String parameterName, boolean x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBoolean(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setByte(String parameterName, byte x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setByte(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setShort(String parameterName, short x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setShort(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setInt(String parameterName, int x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setInt(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setLong(String parameterName, long x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setLong(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setFloat(String parameterName, float x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setFloat(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDouble(String parameterName, double x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDouble(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBigDecimal(String parameterName, BigDecimal x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBigDecimal(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setString(String parameterName, String x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setString(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setBytes(String parameterName, byte [] x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBytes(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setDate(String parameterName, Date x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setAsciiStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setAsciiStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setBinaryStream(String parameterName, InputStream x, int length) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setBinaryStream(parameterName, x, length); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType, int scale) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType, scale); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x, int targetSqlType) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x, targetSqlType); } catch (SQLException e) { handleException(e); } }
-
-    public void setObject(String parameterName, Object x) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setObject(parameterName, x); } catch (SQLException e) { handleException(e); } }
-
-    public void setCharacterStream(String parameterName, Reader reader, int length) throws SQLException
-    { checkOpen(); ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length); }
-
-    public void setDate(String parameterName, Date x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setDate(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTime(String parameterName, Time x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTime(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setTimestamp(String parameterName, Timestamp x, Calendar cal) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setTimestamp(parameterName, x, cal); } catch (SQLException e) { handleException(e); } }
-
-    public void setNull(String parameterName, int sqlType, String typeName) throws SQLException
-    { checkOpen(); try { ((CallableStatement)_stmt).setNull(parameterName, sqlType, typeName); } catch (SQLException e) { handleException(e); } }
-
-    public String getString(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getString(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public boolean getBoolean(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBoolean(parameterName); } catch (SQLException e) { handleException(e); return false; } }
-
-    public byte getByte(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getByte(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public short getShort(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getShort(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public int getInt(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getInt(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public long getLong(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getLong(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public float getFloat(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getFloat(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public double getDouble(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDouble(parameterName); } catch (SQLException e) { handleException(e); return 0; } }
-
-    public byte[] getBytes(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBytes(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public BigDecimal getBigDecimal(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBigDecimal(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Object getObject(String parameterName, Map map) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getObject(parameterName, map); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Ref getRef(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getRef(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Blob getBlob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getBlob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Clob getClob(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getClob(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Array getArray(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getArray(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Date getDate(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getDate(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Time getTime(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTime(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public Timestamp getTimestamp(String parameterName, Calendar cal) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getTimestamp(parameterName, cal); } catch (SQLException e) { handleException(e); return null; } }
-
-    public URL getURL(String parameterName) throws SQLException
-    { checkOpen(); try { return ((CallableStatement)_stmt).getURL(parameterName); } catch (SQLException e) { handleException(e); return null; } }
-
-/* JDBC_4_ANT_KEY_BEGIN */
-
-    public RowId getRowId(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterIndex);
+    public static boolean testNode(
+        NodePointer pointer,
+        Object node,
+        NodeTest test) 
+    {
+        if (test == null) {
+            return true;
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+        else if (test instanceof NodeNameTest) {
+            if (!(node instanceof Element)) {
+                return false;
+            }
+
+            QName testName = ((NodeNameTest) test).getNodeName();
+            String testLocalName = testName.getName();
+            boolean wildcard = testLocalName.equals("*");
+            if (wildcard && testName.getPrefix() == null) {
+                return true;
+            }
+
+            if (wildcard
+                || testLocalName.equals(
+                    JDOMNodePointer.getLocalName((Element) node))) {
+                String testPrefix = testName.getPrefix();
+                String nodePrefix = JDOMNodePointer.getPrefix((Element) node);
+                if (equalStrings(testPrefix, nodePrefix)) {
+                    return true;
+                }
+
+                String testNS = pointer.getNamespaceURI(testPrefix);
+                if (testNS == null) {
+                    return false;
+                }
+                String nodeNS = pointer.getNamespaceURI(nodePrefix);
+                return equalStrings(testNS, nodeNS);
+            }
         }
+        else if (test instanceof NodeTypeTest) {
+            switch (((NodeTypeTest) test).getNodeType()) {
+                case Compiler.NODE_TYPE_NODE :
+                    return node instanceof Element;
+                case Compiler.NODE_TYPE_TEXT :
+                    return (node instanceof Text) || (node instanceof CDATA);
+                case Compiler.NODE_TYPE_COMMENT :
+                    return node instanceof Comment;
+                case Compiler.NODE_TYPE_PI :
+                    return node instanceof ProcessingInstruction;
+            }
+            return false;
+        }
+        else if (test instanceof ProcessingInstructionTest) {
+            if (node instanceof ProcessingInstruction) {
+                String testPI = ((ProcessingInstructionTest) test).getTarget();
+                String nodePI = ((ProcessingInstruction) node).getTarget();
+                return testPI.equals(nodePI);
+            }
+        }
+
+        return false;
     }
 
-    public RowId getRowId(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getRowId(parameterName);
+    private static boolean equalStrings(String s1, String s2) {
+        if (s1 == null && s2 != null) {
+            return false;
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+        if (s1 != null && s2 == null) {
+            return false;
         }
+
+        if (s1 != null && !s1.trim().equals(s2.trim())) {
+            return false;
+        }
+
+        return true;
     }
 
-    public void setRowId(String parameterName, RowId value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setRowId(parameterName, value);
+    public static String getPrefix(Object node) {
+        if (node instanceof Element) {
+            String prefix = ((Element) node).getNamespacePrefix();
+            return (prefix == null || prefix.equals("")) ? null : prefix;
         }
-        catch (SQLException e) {
-            handleException(e);
+        else if (node instanceof Attribute) {
+            String prefix = ((Attribute) node).getNamespacePrefix();
+            return (prefix == null || prefix.equals("")) ? null : prefix;
         }
+        return null;
+    }
+    
+    public static String getLocalName(Object node) {
+        if (node instanceof Element) {
+            return ((Element) node).getName();
+        }
+        else if (node instanceof Attribute) {
+            return ((Attribute) node).getName();
+        }
+        return null;
     }
 
-    public void setNString(String parameterName, String value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNString(parameterName, value);
+    /**
+     * Returns true if the xml:lang attribute for the current node
+     * or its parent has the specified prefix <i>lang</i>.
+     * If no node has this prefix, calls <code>super.isLanguage(lang)</code>.
+     */
+    public boolean isLanguage(String lang) {
+        String current = getLanguage();
+        if (current == null) {
+            return super.isLanguage(lang);
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+        return current.toUpperCase().startsWith(lang.toUpperCase());
     }
 
-    public void setNCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader, length);
+    protected String getLanguage() {
+        Object n = node;
+        while (n != null) {
+            if (n instanceof Element) {
+                Element e = (Element) n;
+                String attr =
+                    e.getAttributeValue("lang", Namespace.XML_NAMESPACE);
+                if (attr != null && !attr.equals("")) {
+                    return attr;
+                }
+            }
+            n = nodeParent(n);
         }
-        catch (SQLException e) {
-            handleException(e);
+        return null;
+    }
+    
+    private Element nodeParent(Object node) {
+        if (node instanceof Element) {
+            return ((Element) node).getParent();
         }
+        else if (node instanceof Text) {
+            return ((Text) node).getParent();
+        }
+        else if (node instanceof CDATA) {
+            return ((CDATA) node).getParent();
+        }
+        else if (node instanceof ProcessingInstruction) {
+            return ((ProcessingInstruction) node).getParent();
+        }
+        else if (node instanceof Comment) {
+            return ((Comment) node).getParent();
+        }
+        return null;
     }
 
-    public void setNClob(String parameterName, NClob value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, value);
+    public NodePointer createChild(
+        JXPathContext context,
+        QName name,
+        int index) 
+    {
+        if (index == WHOLE_COLLECTION) {
+            index = 0;
         }
-        catch (SQLException e) {
-            handleException(e);
+        boolean success =
+            getAbstractFactory(context).createObject(
+                context,
+                this,
+                node,
+                name.toString(),
+                index);
+        if (success) {
+            NodeIterator it =
+                childIterator(new NodeNameTest(name), false, null);
+            if (it != null && it.setPosition(index + 1)) {
+                return it.getNodePointer();
+            }
         }
+        throw new JXPathException(
+            "Factory could not create "
+                + "a child node for path: "
+                + asPath()
+                + "/"
+                + name
+                + "["
+                + (index + 1)
+                + "]");
     }
 
-    public void setClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
+    public NodePointer createChild(
+            JXPathContext context, QName name, int index, Object value)
+    {
+        NodePointer ptr = createChild(context, name, index);
+        ptr.setValue(value);
+        return ptr;
     }
 
-    public void setBlob(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream, length);
+    public NodePointer createAttribute(JXPathContext context, QName name) {
+        if (!(node instanceof Element)) {
+            return super.createAttribute(context, name);
         }
-        catch (SQLException e) {
-            handleException(e);
+
+        Element element = (Element) node;
+        String prefix = name.getPrefix();
+        if (prefix != null) {
+            Namespace ns = element.getNamespace(prefix);
+            if (ns == null) {
+                throw new JXPathException(
+                    "Unknown namespace prefix: " + prefix);
+            }
+            Attribute attr = element.getAttribute(name.getName(), ns);
+            if (attr == null) {
+                element.setAttribute(name.getName(), "", ns);
+            }
         }
+        else {
+            Attribute attr = element.getAttribute(name.getName());
+            if (attr == null) {
+                element.setAttribute(name.getName(), "");
+            }
+        }
+        NodeIterator it = attributeIterator(name);
+        it.setPosition(1);
+        return it.getNodePointer();
     }
 
-    public void setNClob(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader, length);
+    public void remove() {
+        Element parent = nodeParent(node);
+        if (parent == null) {
+            throw new JXPathException("Cannot remove root JDOM node");
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+        parent.getContent().remove(node);
     }
 
-    public NClob getNClob(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterIndex);
+    public String asPath() {
+        if (id != null) {
+            return "id('" + escape(id) + "')";
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+
+        StringBuffer buffer = new StringBuffer();
+        if (parent != null) {
+            buffer.append(parent.asPath());
         }
+        if (node instanceof Element) {
+            // If the parent pointer is not a JDOMNodePointer, it is
+            // the parent's responsibility to produce the node test part
+            // of the path
+            if (parent instanceof JDOMNodePointer) {
+                if (buffer.length() == 0
+                    || buffer.charAt(buffer.length() - 1) != '/') {
+                    buffer.append('/');
+                }
+                buffer.append(getName());
+                buffer.append('[');
+                buffer.append(getRelativePositionByName());
+                buffer.append(']');
+            }
+        }
+        else if (node instanceof Text || node instanceof CDATA) {
+            buffer.append("/text()");
+            buffer.append('[').append(getRelativePositionOfTextNode()).append(
+                ']');
+        }
+        else if (node instanceof ProcessingInstruction) {
+            String target = ((ProcessingInstruction) node).getTarget();
+            buffer.append("/processing-instruction(\'").append(target).append(
+                "')");
+            buffer.append('[').append(getRelativePositionOfPI(target)).append(
+                ']');
+        }
+        return buffer.toString();
     }
 
-    public NClob getNClob(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNClob(parameterName);
+    private String escape(String string) {
+        int index = string.indexOf('\'');
+        while (index != -1) {
+            string =
+                string.substring(0, index)
+                    + "&apos;"
+                    + string.substring(index + 1);
+            index = string.indexOf('\'');
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+        index = string.indexOf('\"');
+        while (index != -1) {
+            string =
+                string.substring(0, index)
+                    + "&quot;"
+                    + string.substring(index + 1);
+            index = string.indexOf('\"');
         }
+        return string;
     }
 
-    public void setSQLXML(String parameterName, SQLXML value) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setSQLXML(parameterName, value);
+    private int getRelativePositionByName() {
+        if (node instanceof Element) {
+            Element parent = ((Element) node).getParent();
+            if (parent == null) {
+                return 1;
+            }
+            List children = parent.getContent();
+            int count = 0;
+            String name = ((Element) node).getQualifiedName();
+            for (int i = 0; i < children.size(); i++) {
+                Object child = children.get(i);
+                if ((child instanceof Element)
+                    && ((Element) child).getQualifiedName().equals(name)) {
+                    count++;
+                }
+                if (child == node) {
+                    break;
+                }
+            }
+            return count;
         }
-        catch (SQLException e) {
-            handleException(e);
-        }
+        return 1;
     }
 
-    public SQLXML getSQLXML(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterIndex);
+    private int getRelativePositionOfTextNode() {
+        Element parent;
+        if (node instanceof Text) {
+            parent = ((Text) node).getParent();
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+        else {
+            parent = ((CDATA) node).getParent();
         }
+        if (parent == null) {
+            return 1;
+        }
+        List children = parent.getContent();
+        int count = 0;
+        for (int i = 0; i < children.size(); i++) {
+            Object child = children.get(i);
+            if (child instanceof Text || child instanceof CDATA) {
+                count++;
+            }
+            if (child == node) {
+                break;
+            }
+        }
+        return count;
     }
 
-    public SQLXML getSQLXML(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getSQLXML(parameterName);
+    private int getRelativePositionOfPI(String target) {
+        Element parent = ((ProcessingInstruction) node).getParent();
+        if (parent == null) {
+            return 1;
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+        List children = parent.getContent();
+        int count = 0;
+        for (int i = 0; i < children.size(); i++) {
+            Object child = children.get(i);
+            if (child instanceof ProcessingInstruction
+                && (target == null
+                    || target.equals(
+                        ((ProcessingInstruction) child).getTarget()))) {
+                count++;
+            }
+            if (child == node) {
+                break;
+            }
         }
+        return count;
     }
 
-    public String getNString(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+    public int hashCode() {
+        return System.identityHashCode(node);
     }
 
-    public String getNString(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNString(parameterName);
+    public boolean equals(Object object) {
+        if (object == this) {
+            return true;
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
+
+        if (!(object instanceof JDOMNodePointer)) {
+            return false;
         }
+
+        JDOMNodePointer other = (JDOMNodePointer) object;
+        return node == other.node;
     }
-
-    public Reader getNCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterIndex);
+    private AbstractFactory getAbstractFactory(JXPathContext context) {
+        AbstractFactory factory = context.getFactory();
+        if (factory == null) {
+            throw new JXPathException(
+                "Factory is not set on the JXPathContext - cannot create path: "
+                    + asPath());
         }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
+        return factory;
     }
-
-    public Reader getNCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getNCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getCharacterStream(int parameterIndex) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterIndex);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public Reader getCharacterStream(String parameterName) throws SQLException {
-        checkOpen();
-        try {
-            return ((CallableStatement)_stmt).getCharacterStream(parameterName);
-        }
-        catch (SQLException e) {
-            handleException(e);
-            return null;
-        }
-    }
-
-    public void setBlob(String parameterName, Blob blob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, blob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setClob(String parameterName, Clob clob) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, clob);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setAsciiStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setBinaryStream(String parameterName, InputStream inputStream, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setCharacterStream(String parameterName, Reader reader, long length) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader, length);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setAsciiStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setAsciiStream(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setBinaryStream(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBinaryStream(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setNCharacterStream(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNCharacterStream(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-
-    public void setClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setBlob(String parameterName, InputStream inputStream) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setBlob(parameterName, inputStream);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }    }
-
-    public void setNClob(String parameterName, Reader reader) throws SQLException {
-        checkOpen();
-        try {
-            ((CallableStatement)_stmt).setNClob(parameterName, reader);
-        }
-        catch (SQLException e) {
-            handleException(e);
-        }
-    }
-/* JDBC_4_ANT_KEY_END */
 }

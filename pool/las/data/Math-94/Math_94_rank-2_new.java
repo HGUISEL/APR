@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -7,7 +7,7 @@
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,556 +15,341 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.phoenix.tx;
-import static org.apache.phoenix.util.TestUtil.INDEX_DATA_SCHEMA;
-import static org.apache.phoenix.util.TestUtil.TEST_PROPERTIES;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+package org.apache.hadoop.hive.ql.optimizer.calcite;
 
-import java.sql.Connection;
-import java.sql.Date;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.Arrays;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Properties;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.client.Admin;
-import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
-import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.Table;
-import org.apache.hadoop.hbase.client.TableDescriptor;
-import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
-import org.apache.hadoop.hbase.coprocessor.RegionObserver;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.phoenix.coprocessor.TephraTransactionalProcessor;
-import org.apache.phoenix.end2end.ParallelStatsDisabledIT;
-import org.apache.phoenix.exception.SQLExceptionCode;
-import org.apache.phoenix.jdbc.PhoenixConnection;
-import org.apache.phoenix.jdbc.PhoenixDatabaseMetaData;
-import org.apache.phoenix.query.QueryConstants;
-import org.apache.phoenix.query.QueryServices;
-import org.apache.phoenix.schema.PTable;
-import org.apache.phoenix.schema.PTableImpl;
-import org.apache.phoenix.schema.PTableKey;
-import org.apache.phoenix.schema.types.PInteger;
-import org.apache.phoenix.transaction.PhoenixTransactionContext;
-import org.apache.phoenix.transaction.PhoenixTransactionProvider;
-import org.apache.phoenix.transaction.PhoenixTransactionProvider.Feature;
-import org.apache.phoenix.transaction.TransactionFactory;
-import org.apache.phoenix.util.ByteUtil;
-import org.apache.phoenix.util.PropertiesUtil;
-import org.apache.phoenix.util.TestUtil;
-import org.junit.Ignore;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
-import org.junit.runners.Parameterized.Parameters;
+import org.apache.calcite.plan.RelOptAbstractTable;
+import org.apache.calcite.plan.RelOptSchema;
+import org.apache.calcite.plan.RelOptUtil.InputFinder;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.logical.LogicalTableScan;
+import org.apache.calcite.rel.type.RelDataType;
+import org.apache.calcite.rex.RexNode;
+import org.apache.calcite.util.ImmutableBitSet;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hive.common.StatsSetupConst;
+import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.hive.ql.exec.ColumnInfo;
+import org.apache.hadoop.hive.ql.metadata.HiveException;
+import org.apache.hadoop.hive.ql.metadata.Partition;
+import org.apache.hadoop.hive.ql.metadata.Table;
+import org.apache.hadoop.hive.ql.optimizer.calcite.translator.ExprNodeConverter;
+import org.apache.hadoop.hive.ql.optimizer.ppr.PartitionPruner;
+import org.apache.hadoop.hive.ql.parse.PrunedPartitionList;
+import org.apache.hadoop.hive.ql.plan.ColStatistics;
+import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
+import org.apache.hadoop.hive.ql.plan.Statistics;
+import org.apache.hadoop.hive.ql.stats.StatsUtils;
 
-import com.google.common.collect.Lists;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableMap.Builder;
 
-@RunWith(Parameterized.class)
-public class ParameterizedTransactionIT extends ParallelStatsDisabledIT {
-    
-    private final String tableDDLOptions;
-    private final String tableDDLOptionsWithoutProvider;
-    private final PhoenixTransactionProvider transactionProvider;
+public class RelOptHiveTable extends RelOptAbstractTable {
+  private final Table                             hiveTblMetadata;
+  private final String                            tblAlias;
+  private final ImmutableList<ColumnInfo>         hiveNonPartitionCols;
+  private final ImmutableMap<Integer, ColumnInfo> hiveNonPartitionColsMap;
+  private final ImmutableMap<Integer, ColumnInfo> hivePartitionColsMap;
+  private final int                               noOfProjs;
+  final HiveConf                                  hiveConf;
 
-    public ParameterizedTransactionIT(Boolean mutable, Boolean columnEncoded, String transactionProvider) {
-        StringBuilder optionBuilder = new StringBuilder();
-        optionBuilder.append("TRANSACTION_PROVIDER='"+transactionProvider+"',");
-        this.transactionProvider = TransactionFactory.Provider.valueOf(transactionProvider).getTransactionProvider();
-        StringBuilder optionBuilder2 = new StringBuilder();
-        if (!columnEncoded) {
-            optionBuilder2.append("COLUMN_ENCODED_BYTES=0,");
-        }
-        if (!mutable) {
-            optionBuilder2.append("IMMUTABLE_ROWS=true,");
-            if (!columnEncoded) {
-                optionBuilder2.append("IMMUTABLE_STORAGE_SCHEME="+PTableImpl.ImmutableStorageScheme.ONE_CELL_PER_COLUMN +",");
-            }
-        }
-        if (optionBuilder2.length() > 0) {
-            optionBuilder2.setLength(optionBuilder2.length()-1);
-            optionBuilder.append(optionBuilder2);
+  private double                                  rowCount        = -1;
+  Map<Integer, ColStatistics>                     hiveColStatsMap = new HashMap<Integer, ColStatistics>();
+  PrunedPartitionList                             partitionList;
+  Map<String, PrunedPartitionList>                partitionCache;
+  AtomicInteger                                   noColsMissingStats;
+
+  protected static final Log                      LOG               = LogFactory
+                                                                        .getLog(RelOptHiveTable.class
+                                                                            .getName());
+
+  public RelOptHiveTable(RelOptSchema calciteSchema, String qualifiedTblName, String tblAlias, RelDataType rowType,
+      Table hiveTblMetadata, List<ColumnInfo> hiveNonPartitionCols,
+      List<ColumnInfo> hivePartitionCols, HiveConf hconf, Map<String, PrunedPartitionList> partitionCache, AtomicInteger noColsMissingStats) {
+    super(calciteSchema, qualifiedTblName, rowType);
+    this.hiveTblMetadata = hiveTblMetadata;
+    this.tblAlias = tblAlias;
+    this.hiveNonPartitionCols = ImmutableList.copyOf(hiveNonPartitionCols);
+    this.hiveNonPartitionColsMap = getColInfoMap(hiveNonPartitionCols, 0);
+    this.hivePartitionColsMap = getColInfoMap(hivePartitionCols, hiveNonPartitionColsMap.size());
+    this.noOfProjs = hiveNonPartitionCols.size() + hivePartitionCols.size();
+    this.hiveConf = hconf;
+    this.partitionCache = partitionCache;
+    this.noColsMissingStats = noColsMissingStats;
+  }
+
+  private static ImmutableMap<Integer, ColumnInfo> getColInfoMap(List<ColumnInfo> hiveCols,
+      int startIndx) {
+    Builder<Integer, ColumnInfo> bldr = ImmutableMap.<Integer, ColumnInfo> builder();
+
+    int indx = startIndx;
+    for (ColumnInfo ci : hiveCols) {
+      bldr.put(indx, ci);
+      indx++;
+    }
+
+    return bldr.build();
+  }
+
+  @Override
+  public boolean isKey(ImmutableBitSet arg0) {
+    return false;
+  }
+
+  @Override
+  public RelNode toRel(ToRelContext context) {
+    return new LogicalTableScan(context.getCluster(), this);
+  }
+
+  @Override
+  public <T> T unwrap(Class<T> arg0) {
+    return arg0.isInstance(this) ? arg0.cast(this) : null;
+  }
+
+  @Override
+  public double getRowCount() {
+    if (rowCount == -1) {
+      if (null == partitionList) {
+        // we are here either unpartitioned table or partitioned table with no predicates
+        computePartitionList(hiveConf, null);
+      }
+      if (hiveTblMetadata.isPartitioned()) {
+        List<Long> rowCounts = StatsUtils.getBasicStatForPartitions(
+            hiveTblMetadata, partitionList.getNotDeniedPartns(),
+            StatsSetupConst.ROW_COUNT);
+        rowCount = StatsUtils.getSumIgnoreNegatives(rowCounts);
+
+      } else {
+        rowCount = StatsUtils.getNumRows(hiveTblMetadata);
+      }
+    }
+
+    if (rowCount == -1)
+      noColsMissingStats.getAndIncrement();
+
+    return rowCount;
+  }
+
+  public Table getHiveTableMD() {
+    return hiveTblMetadata;
+  }
+
+  public String getTableAlias() {
+    // NOTE: Calcite considers tbls to be equal if their names are the same. Hence
+    // we need to provide Calcite the fully qualified table name (dbname.tblname)
+    // and not the user provided aliases.
+    // However in HIVE DB name can not appear in select list; in case of join
+    // where table names differ only in DB name, Hive would require user
+    // introducing explicit aliases for tbl.
+    if (tblAlias == null)
+      return hiveTblMetadata.getTableName();
+    else
+      return tblAlias;
+  }
+
+  private String getColNamesForLogging(Set<String> colLst) {
+    StringBuffer sb = new StringBuffer();
+    boolean firstEntry = true;
+    for (String colName : colLst) {
+      if (firstEntry) {
+        sb.append(colName);
+        firstEntry = false;
+      } else {
+        sb.append(", " + colName);
+      }
+    }
+    return sb.toString();
+  }
+
+  public void computePartitionList(HiveConf conf, RexNode pruneNode) {
+
+    try {
+      if (!hiveTblMetadata.isPartitioned() || pruneNode == null || InputFinder.bits(pruneNode).length() == 0 ) {
+        // there is no predicate on partitioning column, we need all partitions in this case.
+        partitionList = PartitionPruner.prune(hiveTblMetadata, null, conf, getName(), partitionCache);
+        return;
+      }
+
+      // We have valid pruning expressions, only retrieve qualifying partitions
+      ExprNodeDesc pruneExpr = pruneNode.accept(new ExprNodeConverter(getName(), getRowType(), true, getRelOptSchema().getTypeFactory()));
+
+      partitionList = PartitionPruner.prune(hiveTblMetadata, pruneExpr, conf, getName(), partitionCache);
+    } catch (HiveException he) {
+      throw new RuntimeException(he);
+    }
+  }
+
+  private void updateColStats(Set<Integer> projIndxLst) {
+    List<String> nonPartColNamesThatRqrStats = new ArrayList<String>();
+    List<Integer> nonPartColIndxsThatRqrStats = new ArrayList<Integer>();
+    List<String> partColNamesThatRqrStats = new ArrayList<String>();
+    List<Integer> partColIndxsThatRqrStats = new ArrayList<Integer>();
+    Set<String> colNamesFailedStats = new HashSet<String>();
+
+    // 1. Separate required columns to Non Partition and Partition Cols
+    ColumnInfo tmp;
+    for (Integer pi : projIndxLst) {
+      if (hiveColStatsMap.get(pi) == null) {
+        if ((tmp = hiveNonPartitionColsMap.get(pi)) != null) {
+          nonPartColNamesThatRqrStats.add(tmp.getInternalName());
+          nonPartColIndxsThatRqrStats.add(pi);
+        } else if ((tmp = hivePartitionColsMap.get(pi)) != null) {
+          partColNamesThatRqrStats.add(tmp.getInternalName());
+          partColIndxsThatRqrStats.add(pi);
         } else {
-            optionBuilder.setLength(optionBuilder.length()-1);
+          noColsMissingStats.getAndIncrement();
+          String logMsg = "Unable to find Column Index: " + pi + ", in "
+              + hiveTblMetadata.getCompleteName();
+          LOG.error(logMsg);
+          throw new RuntimeException(logMsg);
         }
-        this.tableDDLOptions = optionBuilder.toString();
-        this.tableDDLOptionsWithoutProvider = optionBuilder2.toString();
+      }
     }
-    
-    @Parameters(name="ParameterizedTransactionIT_mutable={0},columnEncoded={1},transactionProvider={2}") // name is used by failsafe as file name in reports
-    public static Collection<Object[]> data() {
-        return TestUtil.filterTxParamData(Arrays.asList(new Object[][] {     
-                 {false, false, "TEPHRA" }, {false, true, "TEPHRA" }, {true, false, "TEPHRA" }, { true, true, "TEPHRA" },
-                 {false, false, "OMID" }, {true, false, "OMID" },
-           }), 2);
-    }
-    
-    @Test
-    public void testReadOwnWrites() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        String selectSql = "SELECT * FROM "+ fullTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.setAutoCommit(false);
-            ResultSet rs = conn.createStatement().executeQuery(selectSql);
-            assertFalse(rs.next());
-            
-            String upsert = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk) VALUES(?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn.prepareStatement(upsert);
-            // upsert two rows
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.execute();
-            TestUtil.setRowKeyColumns(stmt, 2);
-            stmt.execute();
-            
-            // verify rows can be read even though commit has not been called
-            rs = conn.createStatement().executeQuery(selectSql);
-            TestUtil.validateRowKeyColumns(rs, 1);
-            TestUtil.validateRowKeyColumns(rs, 2);
-            assertFalse(rs.next());
-            
-            conn.commit();
-            
-            // verify rows can be read after commit
-            rs = conn.createStatement().executeQuery(selectSql);
-            TestUtil.validateRowKeyColumns(rs, 1);
-            TestUtil.validateRowKeyColumns(rs, 2);
-            assertFalse(rs.next());
-        }
-    }
-    
-    // @Test - disabled, doesn't test anything new. TODO: Fix or remove.
-    public void testTxnClosedCorrecty() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        String selectSql = "SELECT * FROM "+fullTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            String ddl = "create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true";
-            conn.createStatement().execute(ddl);
-            conn.setAutoCommit(false);
-            ResultSet rs = conn.createStatement().executeQuery(selectSql);
-            assertFalse(rs.next());
-            
-            String upsert = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk) VALUES(?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn.prepareStatement(upsert);
-            // upsert two rows
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.execute();
-            TestUtil.setRowKeyColumns(stmt, 2);
-            stmt.execute();
-            
-            // verify rows can be read even though commit has not been called
-            rs = conn.createStatement().executeQuery(selectSql);
-            TestUtil.validateRowKeyColumns(rs, 1);
-            TestUtil.validateRowKeyColumns(rs, 2);
-            // Long currentTx = rs.unwrap(PhoenixResultSet.class).getCurrentRow().getValue(0).getTimestamp();
-            assertFalse(rs.next());
-            
-            conn.close();
-            // start new connection
-            // conn.createStatement().executeQuery(selectSql);
-            // assertFalse("This transaction should not be on the invalid transactions",
-            // txManager.getCurrentState().getInvalid().contains(currentTx));
-        }
-    }
-    
-    @Test
-    public void testAutoCommitQuery() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.setAutoCommit(true);
-            // verify no rows returned with single table
-            ResultSet rs = conn.createStatement().executeQuery("SELECT * FROM " + fullTableName);
-            assertFalse(rs.next());
 
-            // verify no rows returned with multiple tables
-            rs = conn.createStatement().executeQuery("SELECT * FROM " + fullTableName + " x JOIN " + fullTableName + " y ON (x.long_pk = y.int_pk)");
-            assertFalse(rs.next());
-        } 
+    if (null == partitionList) {
+      // We could be here either because its an unpartitioned table or because
+      // there are no pruning predicates on a partitioned table.
+      computePartitionList(hiveConf, null);
     }
-    
-    @Test
-    public void testSelfJoin() throws Exception {
-        String t1 = generateUniqueName();
-        String t2 = generateUniqueName();
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + t1 + " (varchar_pk VARCHAR NOT NULL primary key, a.varchar_col1 VARCHAR, b.varchar_col2 VARCHAR)" + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.createStatement().execute("create table " + t2 + " (varchar_pk VARCHAR NOT NULL primary key, a.varchar_col1 VARCHAR, b.varchar_col1 VARCHAR)" + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            // verify no rows returned
-            ResultSet rs = conn.createStatement().executeQuery("SELECT * FROM " + t1 + " x JOIN " + t1 + " y ON (x.varchar_pk = y.a.varchar_col1)");
-            assertFalse(rs.next());
-            rs = conn.createStatement().executeQuery("SELECT * FROM " + t2 + " x JOIN " + t2 + " y ON (x.varchar_pk = y.a.varchar_col1)");
-            assertFalse(rs.next());
-        } 
-    }
-    
-    private void testRowConflicts(String fullTableName) throws Exception {
-        try (Connection conn1 = DriverManager.getConnection(getUrl());
-                Connection conn2 = DriverManager.getConnection(getUrl())) {
-            conn1.setAutoCommit(false);
-            conn2.setAutoCommit(false);
-            String selectSql = "SELECT * FROM "+fullTableName;
-            conn1.setAutoCommit(false);
-            ResultSet rs = conn1.createStatement().executeQuery(selectSql);
-            boolean immutableRows = conn1.unwrap(PhoenixConnection.class).getTable(new PTableKey(null, fullTableName)).isImmutableRows();
-            assertFalse(rs.next());
-            // upsert row using conn1
-            String upsertSql = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk, a.int_col1) VALUES(?, ?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn1.prepareStatement(upsertSql);
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.setInt(7, 10);
-            stmt.execute();
-            // upsert row using conn2
-            upsertSql = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk, b.int_col2) VALUES(?, ?, ?, ?, ?, ?, ?)";
-            stmt = conn2.prepareStatement(upsertSql);
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.setInt(7, 11);
-            stmt.execute();
-            
-            conn1.commit();
-            //second commit should fail
-            try {
-                conn2.commit();
-                if (!immutableRows) fail();
-            }   
-            catch (SQLException e) {
-                if (immutableRows) fail();
-                assertEquals(e.getErrorCode(), SQLExceptionCode.TRANSACTION_CONFLICT_EXCEPTION.getErrorCode());
-            }
-        }
-    }
-    
-    @Test
-    public void testRowConflictDetected() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        Connection conn = DriverManager.getConnection(getUrl());
-        conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-        testRowConflicts(fullTableName);
-    }
-    
-    @Test
-    public void testNoConflictDetectionForImmutableRows() throws Exception {
-        if (tableDDLOptions.contains("IMMUTABLE_ROWS=true")) {
-            // only need to test this for immutable rows
-            String transTableName = generateUniqueName();
-            String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-            Connection conn = DriverManager.getConnection(getUrl());
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            testRowConflicts(fullTableName);
-        }
-    }
-    
-    @Test
-    public void testNonTxToTxTable() throws Exception {
-        String nonTxTableName = generateUniqueName();
 
-        Connection conn = DriverManager.getConnection(getUrl());
-        conn.createStatement().execute("CREATE TABLE " + nonTxTableName + "(k INTEGER PRIMARY KEY, v VARCHAR)" + tableDDLOptionsWithoutProvider);
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (1)");
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (2, 'a')");
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (3, 'b')");
-        conn.commit();
-        
-        String index = generateUniqueName();
-        conn.createStatement().execute("CREATE INDEX " + index + " ON " + nonTxTableName + "(v)");
-        // Reset empty column value to an empty value like it is pre-transactions
-        Table htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes( nonTxTableName));
-        List<Put>puts = Lists.newArrayList(new Put(PInteger.INSTANCE.toBytes(1)), new Put(PInteger.INSTANCE.toBytes(2)), new Put(PInteger.INSTANCE.toBytes(3)));
-        for (Put put : puts) {
-            put.addColumn(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES, QueryConstants.EMPTY_COLUMN_BYTES, ByteUtil.EMPTY_BYTE_ARRAY);
+    // 2. Obtain Col Stats for Non Partition Cols
+    if (nonPartColNamesThatRqrStats.size() > 0) {
+      List<ColStatistics> hiveColStats;
+
+      if (!hiveTblMetadata.isPartitioned()) {
+        // 2.1 Handle the case for unpartitioned table.
+        hiveColStats = StatsUtils.getTableColumnStats(hiveTblMetadata, hiveNonPartitionCols,
+            nonPartColNamesThatRqrStats);
+
+        // 2.1.1 Record Column Names that we needed stats for but couldn't
+        if (hiveColStats == null) {
+          colNamesFailedStats.addAll(nonPartColNamesThatRqrStats);
+        } else if (hiveColStats.size() != nonPartColNamesThatRqrStats.size()) {
+          Set<String> setOfFiledCols = new HashSet<String>(nonPartColNamesThatRqrStats);
+
+          Set<String> setOfObtainedColStats = new HashSet<String>();
+          for (ColStatistics cs : hiveColStats) {
+            setOfObtainedColStats.add(cs.getColumnName());
+          }
+          setOfFiledCols.removeAll(setOfObtainedColStats);
+
+          colNamesFailedStats.addAll(setOfFiledCols);
         }
-        htable.put(puts);
-        
+      } else {
+        // 2.2 Obtain col stats for partitioned table.
         try {
-            conn.createStatement().execute("ALTER TABLE " + nonTxTableName + " SET TRANSACTIONAL=true,TRANSACTION_PROVIDER='" + transactionProvider + "'");
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                fail();
+          if (partitionList.getNotDeniedPartns().isEmpty()) {
+            // no need to make a metastore call
+            rowCount = 0;
+            hiveColStats = new ArrayList<ColStatistics>();
+            for (String c : nonPartColNamesThatRqrStats) {
+              // add empty stats object for each column
+              hiveColStats.add(new ColStatistics(hiveTblMetadata.getTableName(), c, null));
             }
-        } catch (SQLException e) {
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                assertEquals(SQLExceptionCode.CANNOT_ALTER_TABLE_FROM_NON_TXN_TO_TXNL.getErrorCode(), e.getErrorCode());
-                return;
-            } else {
-                throw e;
+            colNamesFailedStats.clear();
+          } else {
+            Statistics stats = StatsUtils.collectStatistics(hiveConf, partitionList,
+                hiveTblMetadata, hiveNonPartitionCols, nonPartColNamesThatRqrStats,
+                nonPartColNamesThatRqrStats, true, true);
+            rowCount = stats.getNumRows();
+            hiveColStats = new ArrayList<ColStatistics>();
+            for (String c : nonPartColNamesThatRqrStats) {
+              ColStatistics cs = stats.getColumnStatisticsFromColName(c);
+              if (cs != null) {
+                hiveColStats.add(cs);
+              } else {
+                colNamesFailedStats.add(c);
+              }
             }
+          }
+        } catch (HiveException e) {
+          String logMsg = "Collecting stats failed.";
+          LOG.error(logMsg, e);
+          throw new RuntimeException(logMsg, e);
         }
-        
-        htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes( nonTxTableName));
-        assertTrue(htable.getDescriptor().getCoprocessors().contains(TephraTransactionalProcessor.class.getName()));
-        htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes(index));
-        assertTrue(htable.getDescriptor().getCoprocessors().contains(TephraTransactionalProcessor.class.getName()));
+      }
 
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (4, 'c')");
-        ResultSet rs = conn.createStatement().executeQuery("SELECT /*+ NO_INDEX */ k FROM " + nonTxTableName + " WHERE v IS NULL");
-        assertTrue(conn.unwrap(PhoenixConnection.class).getTable(new PTableKey(null,  nonTxTableName)).isTransactional());
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertFalse(rs.next());
-        conn.commit();
-        
-        conn.createStatement().execute("UPSERT INTO " + nonTxTableName + " VALUES (5, 'd')");
-        rs = conn.createStatement().executeQuery("SELECT k FROM " + nonTxTableName);
-        assertTrue(conn.unwrap(PhoenixConnection.class).getTable(new PTableKey(null, index)).isTransactional());
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(2,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(3,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(4,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(5,rs.getInt(1));
-        assertFalse(rs.next());
-        conn.rollback();
-        
-        rs = conn.createStatement().executeQuery("SELECT k FROM " + nonTxTableName);
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(2,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(3,rs.getInt(1));
-        assertTrue(rs.next());
-        assertEquals(4,rs.getInt(1));
-        assertFalse(rs.next());
-    }
-    
-    @Test
-    public void testNonTxToTxTableFailure() throws Exception {
-        if (tableDDLOptions.contains("COLUMN_ENCODED_BYTES")) {
-            // no need to test this with all variations of column encoding
-            return;
+      if (hiveColStats != null && hiveColStats.size() == nonPartColNamesThatRqrStats.size()) {
+        for (int i = 0; i < hiveColStats.size(); i++) {
+          hiveColStatsMap.put(nonPartColIndxsThatRqrStats.get(i), hiveColStats.get(i));
         }
-
-        String nonTxTableName = generateUniqueName();
-
-        Connection conn = DriverManager.getConnection(getUrl());
-        // Put table in SYSTEM schema to prevent attempts to update the cache after we disable SYSTEM.CATALOG
-        conn.createStatement().execute("CREATE TABLE \"SYSTEM\"." + nonTxTableName + "(k INTEGER PRIMARY KEY, v VARCHAR)" + tableDDLOptionsWithoutProvider);
-        conn.createStatement().execute("UPSERT INTO \"SYSTEM\"." + nonTxTableName + " VALUES (1)");
-        conn.commit();
-        // Reset empty column value to an empty value like it is pre-transactions
-        Table htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes("SYSTEM." + nonTxTableName));
-        Put put = new Put(PInteger.INSTANCE.toBytes(1));
-        put.addColumn(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES, QueryConstants.EMPTY_COLUMN_BYTES, ByteUtil.EMPTY_BYTE_ARRAY);
-        htable.put(put);
-        
-        Admin admin = conn.unwrap(PhoenixConnection.class).getQueryServices().getAdmin();
-        admin.disableTable(TableName.valueOf(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME));
-        try {
-            // This will succeed initially in updating the HBase metadata, but then will fail when
-            // the SYSTEM.CATALOG table is attempted to be updated, exercising the code to restore
-            // the coprocessors back to the non transactional ones.
-            conn.createStatement().execute("ALTER TABLE \"SYSTEM\"." + nonTxTableName + " SET TRANSACTIONAL=true,TRANSACTION_PROVIDER='" + transactionProvider + "'");
-            fail();
-        } catch (SQLException e) {
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                assertEquals(SQLExceptionCode.CANNOT_ALTER_TABLE_FROM_NON_TXN_TO_TXNL.getErrorCode(), e.getErrorCode());
-            } else {
-                assertTrue(e.getMessage().contains(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME + " is disabled"));
-            }
-        } finally {
-            admin.enableTable(TableName.valueOf(PhoenixDatabaseMetaData.SYSTEM_CATALOG_NAME));
-            admin.close();
-        }
-        
-        ResultSet rs = conn.createStatement().executeQuery("SELECT k FROM \"SYSTEM\"." + nonTxTableName + " WHERE v IS NULL");
-        assertTrue(rs.next());
-        assertEquals(1,rs.getInt(1));
-        assertFalse(rs.next());
-        
-        htable = conn.unwrap(PhoenixConnection.class).getQueryServices().getTable(Bytes.toBytes("SYSTEM." + nonTxTableName));
-        Class<? extends RegionObserver> clazz = transactionProvider.getCoprocessor();
-        assertFalse(htable.getDescriptor().getCoprocessors().contains(clazz.getName()));
-        assertEquals(1,conn.unwrap(PhoenixConnection.class).getQueryServices().
-                getTableDescriptor(Bytes.toBytes("SYSTEM." + nonTxTableName)).
-                getColumnFamily(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES).getMaxVersions());
-    }
-    
-    @Test
-    public void testCreateTableToBeTransactional() throws Exception {
-        if (tableDDLOptions.contains("COLUMN_ENCODED_BYTES")) {
-            // no need to test this with all variations of column encoding
-            return;
-        }
-
-        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
-        Connection conn = DriverManager.getConnection(getUrl(), props);
-        String t1 = generateUniqueName();
-        String t2 = generateUniqueName();
-        String ddl = "CREATE TABLE " + t1 + " (k varchar primary key)" + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true";
-        conn.createStatement().execute(ddl);
-        PhoenixConnection pconn = conn.unwrap(PhoenixConnection.class);
-        PTable table = pconn.getTable(new PTableKey(null, t1));
-        Table htable = pconn.getQueryServices().getTable(Bytes.toBytes(t1));
-        assertTrue(table.isTransactional());
-        Class<? extends RegionObserver> clazz = transactionProvider.getCoprocessor();
-        assertTrue(htable.getDescriptor().getCoprocessors().contains(clazz.getName()));
-        
-        try {
-            ddl = "ALTER TABLE " + t1 + " SET transactional=false";
-            conn.createStatement().execute(ddl);
-            fail();
-        } catch (SQLException e) {
-            assertEquals(SQLExceptionCode.TX_MAY_NOT_SWITCH_TO_NON_TX.getErrorCode(), e.getErrorCode());
-        }
-
-        Admin admin = pconn.getQueryServices().getAdmin();
-        admin.createTable(TableDescriptorBuilder.newBuilder(TableName.valueOf(t2))
-                .addColumnFamily(ColumnFamilyDescriptorBuilder.of(QueryConstants.DEFAULT_COLUMN_FAMILY_BYTES)).build());
-        try {
-            ddl = "CREATE TABLE " + t2 + " (k varchar primary key) transactional=true,transaction_provider='" + transactionProvider + "'";
-            conn.createStatement().execute(ddl);
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                fail();
-            }
-        } catch (SQLException e) {
-            if (transactionProvider.isUnsupported(Feature.ALTER_NONTX_TO_TX)) {
-                assertEquals(SQLExceptionCode.CANNOT_ALTER_TABLE_FROM_NON_TXN_TO_TXNL.getErrorCode(), e.getErrorCode());
-                return;
-            }
-            throw e;
-        }
-
-        TableDescriptor tableDescriptor = admin.getDescriptor(TableName.valueOf(t2));
-        String str = tableDescriptor.getValue(PhoenixTransactionContext.READ_NON_TX_DATA);
-        assertEquals(Boolean.TRUE.toString(), str);
-        
-        // Should be ok, as HBase metadata should match existing metadata.
-        ddl = "CREATE TABLE IF NOT EXISTS " + t1 + " (k varchar primary key)"; 
-        try {
-            conn.createStatement().execute(ddl);
-            fail();
-        } catch (SQLException e) {
-            assertEquals(SQLExceptionCode.TX_MAY_NOT_SWITCH_TO_NON_TX.getErrorCode(), e.getErrorCode());
-        }
-        ddl += " transactional=true,transaction_provider='" + transactionProvider + "'";
-        conn.createStatement().execute(ddl);
-        table = pconn.getTable(new PTableKey(null, t1));
-        htable = pconn.getQueryServices().getTable(Bytes.toBytes(t1));
-        assertTrue(table.isTransactional());
-        assertTrue(htable.getDescriptor().getCoprocessors().contains(clazz.getName()));
+      }
     }
 
-    @Test
-    public void testCurrentDate() throws Exception {
-        String transTableName = generateUniqueName();
-        String fullTableName = INDEX_DATA_SCHEMA + QueryConstants.NAME_SEPARATOR + transTableName;
-        String selectSql = "SELECT current_date() FROM "+fullTableName;
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            conn.createStatement().execute("create table " + fullTableName + TestUtil.TEST_TABLE_SCHEMA + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-            conn.setAutoCommit(false);
-            ResultSet rs = conn.createStatement().executeQuery(selectSql);
-            assertFalse(rs.next());
-            
-            String upsert = "UPSERT INTO " + fullTableName + "(varchar_pk, char_pk, int_pk, long_pk, decimal_pk, date_pk) VALUES(?, ?, ?, ?, ?, ?)";
-            PreparedStatement stmt = conn.prepareStatement(upsert);
-            // upsert two rows
-            TestUtil.setRowKeyColumns(stmt, 1);
-            stmt.execute();
-            conn.commit();
-            
-            rs = conn.createStatement().executeQuery(selectSql);
-            assertTrue(rs.next());
-            Date date1 = rs.getDate(1);
-            assertFalse(rs.next());
-            
-            Thread.sleep(1000);
-            
-            rs = conn.createStatement().executeQuery(selectSql);
-            assertTrue(rs.next());
-            Date date2 = rs.getDate(1);
-            assertFalse(rs.next());
-            assertTrue("current_date() should change while executing multiple statements", date2.getTime() > date1.getTime());
-        }
-    }
-    
-    
-    @Test
-    public void testParallelUpsertSelect() throws Exception {
-        Properties props = PropertiesUtil.deepCopy(TEST_PROPERTIES);
-        props.setProperty(QueryServices.MUTATE_BATCH_SIZE_BYTES_ATTRIB, Integer.toString(512));
-        props.setProperty(QueryServices.SCAN_CACHE_SIZE_ATTRIB, Integer.toString(3));
-        props.setProperty(QueryServices.SCAN_RESULT_CHUNK_SIZE, Integer.toString(3));
-        Connection conn = DriverManager.getConnection(getUrl(), props);
-        conn.setAutoCommit(false);
-        String fullTableName1 = generateUniqueName();
-        String fullTableName2 = generateUniqueName();
-        String sequenceName = "S_" + generateUniqueName();
-        conn.createStatement().execute("CREATE SEQUENCE " + sequenceName);
-        conn.createStatement().execute("CREATE TABLE " + fullTableName1 + " (pk INTEGER PRIMARY KEY, val INTEGER) SALT_BUCKETS=4, TRANSACTIONAL=true"
-                + (tableDDLOptions.length() > 0 ? "," : "")  + tableDDLOptions);
-        conn.createStatement().execute("CREATE TABLE " + fullTableName2 + " (pk INTEGER PRIMARY KEY, val INTEGER)" );
-
-        for (int i = 0; i < 100; i++) {
-            conn.createStatement().execute("UPSERT INTO " + fullTableName1 + " VALUES (NEXT VALUE FOR " + sequenceName + ", " + (i%10) + ")");
-        }
-        conn.commit();
-        conn.setAutoCommit(true);
-        int upsertCount = conn.createStatement().executeUpdate("UPSERT INTO " + fullTableName2 + " SELECT pk, val FROM " + fullTableName1);
-        assertEquals(100,upsertCount);
-        conn.close();
+    // 3. Obtain Stats for Partition Cols
+    if (colNamesFailedStats.isEmpty() && !partColNamesThatRqrStats.isEmpty()) {
+      ColStatistics cStats = null;
+      for (int i = 0; i < partColNamesThatRqrStats.size(); i++) {
+        cStats = new ColStatistics(hiveTblMetadata.getTableName(),
+            partColNamesThatRqrStats.get(i), hivePartitionColsMap.get(
+                partColIndxsThatRqrStats.get(i)).getTypeName());
+        cStats.setCountDistint(getDistinctCount(partitionList.getPartitions(),partColNamesThatRqrStats.get(i)));
+        hiveColStatsMap.put(partColIndxsThatRqrStats.get(i), cStats);
+      }
     }
 
-    @Test
-    public void testInflightPartialEval() throws SQLException {
-
-        try (Connection conn = DriverManager.getConnection(getUrl())) {
-            String transactTableName = generateUniqueName();
-            Statement stmt = conn.createStatement();
-            stmt.execute("CREATE TABLE " + transactTableName + " (k VARCHAR PRIMARY KEY, v1 VARCHAR, v2 VARCHAR) " + tableDDLOptions + (tableDDLOptions.length() > 0 ? "," : "") + "TRANSACTIONAL=true");
-
-            
-            try (Connection conn1 = DriverManager.getConnection(getUrl()); Connection conn2 = DriverManager.getConnection(getUrl())) {
-                conn1.createStatement().execute("UPSERT INTO " + transactTableName + " VALUES ('a','b','x')");
-                // Select to force uncommitted data to be written
-                ResultSet rs = conn1.createStatement().executeQuery("SELECT * FROM " + transactTableName);
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("b", rs.getString(2));
-                assertFalse(rs.next());
-                
-                conn2.createStatement().execute("UPSERT INTO " + transactTableName + " VALUES ('a','c','x')");
-                // Select to force uncommitted data to be written
-                rs = conn2.createStatement().executeQuery("SELECT * FROM " + transactTableName );
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("c", rs.getString(2));
-                assertFalse(rs.next());
-                
-                // If the AndExpression were to see the uncommitted row from conn2, the filter would
-                // filter the row out early and no longer continue to evaluate other cells due to
-                // the way partial evaluation holds state.
-                rs = conn1.createStatement().executeQuery("SELECT * FROM " +  transactTableName + " WHERE v1 != 'c' AND v2 = 'x'");
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("b", rs.getString(2));
-                assertFalse(rs.next());
-                
-                // Same as above for conn1 data
-                rs = conn2.createStatement().executeQuery("SELECT * FROM " + transactTableName + " WHERE v1 != 'b' AND v2 = 'x'");
-                assertTrue(rs.next());
-                assertEquals("a", rs.getString(1));
-                assertEquals("c", rs.getString(2));
-                assertFalse(rs.next());
-            }
-
-        }
+    // 4. Warn user if we could get stats for required columns
+    if (!colNamesFailedStats.isEmpty()) {
+      String logMsg = "No Stats for " + hiveTblMetadata.getCompleteName() + ", Columns: "
+          + getColNamesForLogging(colNamesFailedStats);
+      LOG.error(logMsg);
+      noColsMissingStats.getAndAdd(colNamesFailedStats.size());
+      throw new RuntimeException(logMsg);
     }
-    
+  }
+
+  private int getDistinctCount(Set<Partition> partitions, String partColName) {
+    Set<String> distinctVals = new HashSet<String>(partitions.size());
+    for (Partition partition : partitions) {
+      distinctVals.add(partition.getSpec().get(partColName));
+    }
+    return distinctVals.size();
+  }
+
+  public List<ColStatistics> getColStat(List<Integer> projIndxLst) {
+    ImmutableList.Builder<ColStatistics> colStatsBldr = ImmutableList.<ColStatistics> builder();
+
+    if (projIndxLst != null) {
+      updateColStats(new HashSet<Integer>(projIndxLst));
+      for (Integer i : projIndxLst) {
+        colStatsBldr.add(hiveColStatsMap.get(i));
+      }
+    } else {
+      List<Integer> pILst = new ArrayList<Integer>();
+      for (Integer i = 0; i < noOfProjs; i++) {
+        pILst.add(i);
+      }
+      updateColStats(new HashSet<Integer>(pILst));
+      for (Integer pi : pILst) {
+        colStatsBldr.add(hiveColStatsMap.get(pi));
+      }
+    }
+
+    return colStatsBldr.build();
+  }
+
+  /*
+   * use to check if a set of columns are all partition columns.
+   * true only if:
+   * - all columns in BitSet are partition
+   * columns.
+   */
+  public boolean containsPartitionColumnsOnly(ImmutableBitSet cols) {
+
+    for (int i = cols.nextSetBit(0); i >= 0; i++, i = cols.nextSetBit(i + 1)) {
+      if (!hivePartitionColsMap.containsKey(i)) {
+        return false;
+      }
+    }
+    return true;
+  }
 }

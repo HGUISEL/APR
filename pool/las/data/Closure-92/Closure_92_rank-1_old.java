@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,30 +16,100 @@
  * limitations under the License.
  */
 
-package tdb.bulkloader2;
+package org.apache.cassandra.db;
 
-import org.apache.jena.atlas.logging.LogCtl ;
-import org.apache.jena.sys.JenaSystem ;
-import org.apache.jena.tdb.store.bulkloader2.ProcIndexCopy ;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
-public class CmdIndexCopy 
+import org.apache.cassandra.io.ICompactSerializer;
+import org.apache.cassandra.net.Message;
+import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.db.marshal.AbstractType;
+import org.apache.cassandra.config.DatabaseDescriptor;
+
+
+public abstract class ReadCommand
 {
-    static {
-        LogCtl.setLog4j();
-        JenaSystem.init();
+    public static final String DO_REPAIR = "READ-REPAIR";
+    public static final byte CMD_TYPE_GET_SLICE_BY_NAMES = 1;
+    public static final byte CMD_TYPE_GET_SLICE = 2;
+
+    public static final String EMPTY_CF = "";
+    
+    private static ReadCommandSerializer serializer = new ReadCommandSerializer();
+
+    public static ReadCommandSerializer serializer()
+    {
+        return serializer;
     }
 
-    public static void main(String... argv) {
-        if ( argv.length != 4 ) {
-            System.err.println("Usage: Location1 Index1 Location2 Index2");
-            System.exit(1);
-        }
+    public Message makeReadMessage() throws IOException
+    {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        DataOutputStream dos = new DataOutputStream(bos);
+        ReadCommand.serializer().serialize(this, dos);
+        return new Message(StorageService.getLocalStorageEndPoint(), StorageService.readStage_, StorageService.readVerbHandler_, bos.toByteArray());
+    }
 
-        String locationStr1 = argv[0] ;
-        String indexName1 = argv[1] ;
-        String locationStr2 = argv[2] ;
-        String indexName2 = argv[3] ;
-        ProcIndexCopy.exec(locationStr1, indexName1, locationStr2, indexName2);
+    public final String table;
+    public final String key;
+    private boolean isDigestQuery = false;    
+    protected final byte commandType;
+
+    protected ReadCommand(String table, String key, byte cmdType)
+    {
+        this.table = table;
+        this.key = key;
+        this.commandType = cmdType;
+    }
+    
+    public boolean isDigestQuery()
+    {
+        return isDigestQuery;
+    }
+
+    public void setDigestQuery(boolean isDigestQuery)
+    {
+        this.isDigestQuery = isDigestQuery;
+    }
+
+    public abstract String getColumnFamilyName();
+    
+    public abstract ReadCommand copy();
+
+    public abstract Row getRow(Table table) throws IOException;
+
+    protected AbstractType getComparator()
+    {
+        return DatabaseDescriptor.getComparator(table, getColumnFamilyName());
     }
 }
 
+class ReadCommandSerializer implements ICompactSerializer<ReadCommand>
+{
+    private static final Map<Byte, ReadCommandSerializer> CMD_SERIALIZER_MAP = new HashMap<Byte, ReadCommandSerializer>(); 
+    static 
+    {
+        CMD_SERIALIZER_MAP.put(ReadCommand.CMD_TYPE_GET_SLICE_BY_NAMES, new SliceByNamesReadCommandSerializer());
+        CMD_SERIALIZER_MAP.put(ReadCommand.CMD_TYPE_GET_SLICE, new SliceFromReadCommandSerializer());
+    }
+
+
+    public void serialize(ReadCommand rm, DataOutputStream dos) throws IOException
+    {
+        dos.writeByte(rm.commandType);
+        ReadCommandSerializer ser = CMD_SERIALIZER_MAP.get(rm.commandType);
+        ser.serialize(rm, dos);
+    }
+
+    public ReadCommand deserialize(DataInputStream dis) throws IOException
+    {
+        byte msgType = dis.readByte();
+        return CMD_SERIALIZER_MAP.get(msgType).deserialize(dis);
+    }
+        
+}

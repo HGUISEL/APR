@@ -5,817 +5,1302 @@
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.openejb.config;
 
-import org.apache.openejb.OpenEJBException;
-import org.apache.openejb.config.sys.JaxbOpenejb;
-import org.apache.openejb.config.sys.Resources;
-import org.apache.openejb.core.webservices.WsdlResolver;
-import org.apache.openejb.jee.ApplicationClient;
-import org.apache.openejb.jee.Beans;
-import org.apache.openejb.jee.Connector;
-import org.apache.openejb.jee.Connector10;
-import org.apache.openejb.jee.EjbJar;
-import org.apache.openejb.jee.FacesConfig;
-import org.apache.openejb.jee.HandlerChains;
-import org.apache.openejb.jee.JavaWsdlMapping;
-import org.apache.openejb.jee.JaxbJavaee;
-import org.apache.openejb.jee.Listener;
-import org.apache.openejb.jee.TldTaglib;
-import org.apache.openejb.jee.WebApp;
-import org.apache.openejb.jee.Webservices;
-import org.apache.openejb.jee.bval.ValidationConfigType;
-import org.apache.openejb.jee.jpa.EntityMappings;
-import org.apache.openejb.jee.jpa.fragment.PersistenceFragment;
-import org.apache.openejb.jee.jpa.fragment.PersistenceUnitFragment;
-import org.apache.openejb.jee.jpa.unit.JaxbPersistenceFactory;
-import org.apache.openejb.jee.jpa.unit.Persistence;
-import org.apache.openejb.jee.jpa.unit.PersistenceUnit;
-import org.apache.openejb.jee.oejb2.GeronimoEjbJarType;
-import org.apache.openejb.jee.oejb2.JaxbOpenejbJar2;
-import org.apache.openejb.jee.oejb2.OpenejbJarType;
-import org.apache.openejb.jee.oejb3.JaxbOpenejbJar3;
-import org.apache.openejb.jee.oejb3.OpenejbJar;
-import org.apache.openejb.loader.IO;
-import org.apache.openejb.util.LengthInputStream;
-import org.apache.openejb.util.LogCategory;
-import org.apache.openejb.util.Logger;
-import org.apache.openejb.util.Saxs;
-import org.apache.openejb.util.URLs;
-import org.xml.sax.Attributes;
-import org.xml.sax.InputSource;
-import org.xml.sax.SAXException;
-import org.xml.sax.helpers.DefaultHandler;
+package org.apache.commons.dbcp2;
 
-import javax.wsdl.Definition;
-import javax.wsdl.factory.WSDLFactory;
-import javax.wsdl.xml.WSDLReader;
-import javax.xml.bind.JAXBElement;
-import javax.xml.bind.JAXBException;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.parsers.SAXParser;
-import javax.xml.parsers.SAXParserFactory;
-import java.io.ByteArrayInputStream;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.util.Iterator;
-import java.util.List;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.ResultSet;
+/* JDBC_4_ANT_KEY_BEGIN */
+import java.sql.RowIdLifetime;
+/* JDBC_4_ANT_KEY_END */
+import java.sql.SQLException;
 
-public class ReadDescriptors implements DynamicDeployer {
-    public static final Logger logger = Logger.getInstance(LogCategory.OPENEJB_STARTUP, ReadDescriptors.class);
+/**
+ * <p>A base delegating implementation of {@link DatabaseMetaData}.</p>
+ * 
+ * <p>Methods that create {@link ResultSet} objects are wrapped to
+ * create {@link DelegatingResultSet} objects and the remaining methods
+ * simply call the corresponding method on the "delegate"
+ * provided in the constructor.</p>
+ */
+public class DelegatingDatabaseMetaData implements DatabaseMetaData {
 
-    @SuppressWarnings({"unchecked"})
-    public AppModule deploy(AppModule appModule) throws OpenEJBException {
-        for (EjbModule ejbModule : appModule.getEjbModules()) {
+    /** My delegate {@link DatabaseMetaData} */
+    protected DatabaseMetaData _meta;
+    
+    /** The connection that created me. **/
+    protected DelegatingConnection _conn = null;
 
-            if (ejbModule.getEjbJar() == null) {
-                readEjbJar(ejbModule, appModule);
-            }
-
-            if (ejbModule.getOpenejbJar() == null) {
-                readOpenejbJar(ejbModule);
-            }
-
-            if (ejbModule.getBeans() == null) {
-                readBeans(ejbModule, appModule);
-            }
-
-            readValidationConfigType(ejbModule);
-            readCmpOrm(ejbModule);
-            readResourcesXml(ejbModule);
-        }
-
-        for (ClientModule clientModule : appModule.getClientModules()) {
-            readAppClient(clientModule, appModule);
-            readValidationConfigType(clientModule);
-            readResourcesXml(clientModule);
-        }
-
-        for (ConnectorModule connectorModule : appModule.getConnectorModules()) {
-            readConnector(connectorModule, appModule);
-            readValidationConfigType(connectorModule);
-            readResourcesXml(connectorModule);
-        }
-
-        for (WebModule webModule : appModule.getWebModules()) {
-            readWebApp(webModule, appModule);
-            readValidationConfigType(webModule);
-            readResourcesXml(webModule);
-        }
-
-        List<Object> persistenceUrls = (List<Object>) appModule.getAltDDs().get("persistence.xml");
-        if (persistenceUrls != null) {
-            for (Object persistenceUrl : persistenceUrls) {
-                final boolean url = persistenceUrl instanceof URL;
-                final Source source = getSource(persistenceUrl);
-
-                final String moduleName;
-                final String path;
-                final String rootUrl;
-                if (url) {
-                    final URL pUrl = (URL) persistenceUrl;
-                    File file = URLs.toFile(pUrl);
-                    path = file.getAbsolutePath();
-
-                    if (file.getName().endsWith("persistence.xml")) {
-                        final String parent = file.getParentFile().getName();
-                        if (parent.equalsIgnoreCase("WEB-INF") || parent.equalsIgnoreCase("META-INF")) {
-                            file = file.getParentFile().getParentFile();
-                        } else { // we don't really know so simply go back (users will often put persistence.xml in root resource folder with arquillian)
-                            file = file.getParentFile();
-                        }
-                    }
-                    moduleName = file.toURI().toString();
-
-                    String tmpRootUrl = moduleName;
-
-                    String extForm = pUrl.toExternalForm();
-                    if (extForm.contains("WEB-INF/classes/META-INF/")) {
-                        tmpRootUrl = extForm.substring(0, extForm.indexOf("/META-INF"));
-                    }
-                    if (tmpRootUrl.endsWith(".war")) {
-                        tmpRootUrl = tmpRootUrl.substring(0, tmpRootUrl.length() - ".war".length());
-                    }
-                    rootUrl = tmpRootUrl;
-                } else {
-                    moduleName = "";
-                    rootUrl = "";
-                    path = null;
-                }
-
-                try {
-                    Persistence persistence = JaxbPersistenceFactory.getPersistence(Persistence.class, source.get());
-                    PersistenceModule persistenceModule = new PersistenceModule(appModule, rootUrl, persistence);
-                    persistenceModule.getWatchedResources().add(moduleName);
-                    if (url && "file".equals(((URL) persistenceUrl).getProtocol())) {
-                        persistenceModule.getWatchedResources().add(path);
-                    }
-                    appModule.addPersistenceModule(persistenceModule);
-                } catch (Exception e1) {
-                    DeploymentLoader.logger.error("Unable to load Persistence Unit from EAR: " + appModule.getJarLocation() + ", module: " + moduleName + ". Exception: " + e1.getMessage(), e1);
-                }
-            }
-        }
-
-        final List<URL> persistenceFragmentUrls = (List<URL>) appModule.getAltDDs().get("persistence-fragment.xml");
-        if (persistenceFragmentUrls != null) {
-            for (URL persistenceFragmentUrl : persistenceFragmentUrls) {
-                try {
-                    final PersistenceFragment persistenceFragment = JaxbPersistenceFactory.getPersistence(PersistenceFragment.class, persistenceFragmentUrl);
-                    // merging
-                    for (PersistenceUnitFragment fragmentUnit : persistenceFragment.getPersistenceUnitFragment()) {
-                        for (PersistenceModule persistenceModule : appModule.getPersistenceModules()) {
-                            final Persistence persistence = persistenceModule.getPersistence();
-                            for (PersistenceUnit unit : persistence.getPersistenceUnit()) {
-                                if (!fragmentUnit.getName().equals(unit.getName())) {
-                                    continue;
-                                }
-
-                                if (!persistenceFragment.getVersion().equals(persistence.getVersion())) {
-                                    logger.error("persistence unit version and fragment version are different, fragment will be ignored");
-                                    continue;
-                                }
-
-                                if ("file".equals(persistenceFragmentUrl.getProtocol())) {
-                                    persistenceModule.getWatchedResources().add(URLs.toFile(persistenceFragmentUrl).getAbsolutePath());
-                                }
-
-                                for (String clazz : fragmentUnit.getClazz()) {
-                                    if (!unit.getClazz().contains(clazz)) {
-                                        logger.info("Adding class " + clazz + " to persistence unit " + fragmentUnit.getName());
-                                        unit.getClazz().add(clazz);
-                                    }
-                                }
-                                for (String mappingFile : fragmentUnit.getMappingFile()) {
-                                    if (!unit.getMappingFile().contains(mappingFile)) {
-                                        logger.info("Adding mapping file " + mappingFile + " to persistence unit " + fragmentUnit.getName());
-                                        unit.getMappingFile().add(mappingFile);
-                                    }
-                                }
-                                for (String jarFile : fragmentUnit.getJarFile()) {
-                                    if (!unit.getJarFile().contains(jarFile)) {
-                                        logger.info("Adding jar file " + jarFile + " to persistence unit " + fragmentUnit.getName());
-                                        unit.getJarFile().add(jarFile);
-                                    }
-                                }
-                                if (fragmentUnit.isExcludeUnlistedClasses()) {
-                                    unit.setExcludeUnlistedClasses(true);
-                                    logger.info("Excluding unlisted classes for persistence unit " + fragmentUnit.getName());
-                                } // else let the main persistence unit decide
-                            }
-                        }
-                    }
-                } catch (Exception e1) {
-                    DeploymentLoader.logger.error("Unable to load Persistence Unit Fragment from EAR: " + appModule.getJarLocation() + ", fragment: " + persistenceFragmentUrl.toString() + ". Exception: " + e1.getMessage(), e1);
-                }
-            }
-        }
-
-        return appModule;
-
+    public DelegatingDatabaseMetaData(DelegatingConnection c,
+            DatabaseMetaData m) {
+        super();
+        _conn = c;
+        _meta = m;
     }
 
-    private static URL getUrl(Module module, String name) {
-        URL url = (URL) module.getAltDDs().get(name);
-        if (url == null && module.getClassLoader() != null) {
-            url = module.getClassLoader().getResource("META-INF/" + name);
-            if (url != null) {
-                module.getAltDDs().put(name, url);
-            }
+    public DatabaseMetaData getDelegate() {
+        return _meta;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+    	if (this == obj) return true;
+        DatabaseMetaData delegate = getInnermostDelegate();
+        if (delegate == null) {
+            return false;
         }
-        return url;
+        if (obj instanceof DelegatingDatabaseMetaData) {
+            DelegatingDatabaseMetaData s = (DelegatingDatabaseMetaData) obj;
+            return delegate.equals(s.getInnermostDelegate());
+        }
+        else {
+            return delegate.equals(obj);
+        }
+    }
+
+    @Override
+    public int hashCode() {
+        Object obj = getInnermostDelegate();
+        if (obj == null) {
+            return 0;
+        }
+        return obj.hashCode();
     }
 
     /**
-     * All the readFooXml(URL) methods could simply use this method
-     * @param module
-     * @param name
-     * @return
+     * If my underlying {@link ResultSet} is not a
+     * <tt>DelegatingResultSet</tt>, returns it,
+     * otherwise recursively invokes this method on
+     * my delegate.
+     * <p>
+     * Hence this method will return the first
+     * delegate that is not a <tt>DelegatingResultSet</tt>,
+     * or <tt>null</tt> when no non-<tt>DelegatingResultSet</tt>
+     * delegate can be found by transversing this chain.
+     * <p>
+     * This method is useful when you may have nested
+     * <tt>DelegatingResultSet</tt>s, and you want to make
+     * sure to obtain a "genuine" {@link ResultSet}.
      */
-    private static Source getSource(Module module, String name) {
-        Object o = module.getAltDDs().get(name);
-        if (o != null) return getSource(o);
-
-        if (module.getClassLoader() != null) {
-            URL url = module.getClassLoader().getResource("META-INF/" + name);
-            if (url != null) {
-                module.getAltDDs().put(name, url);
+    public DatabaseMetaData getInnermostDelegate() {
+        DatabaseMetaData m = _meta;
+        while(m != null && m instanceof DelegatingDatabaseMetaData) {
+            m = ((DelegatingDatabaseMetaData)m).getDelegate();
+            if(this == m) {
+                return null;
             }
-
-            return new UrlSource(url);
         }
-        return null;
+        return m;
     }
-
-    public static void readResourcesXml(Module module) {
-        URL url = getUrl(module, "resources.xml");
-        if (url != null) {
-            try {
-                final Resources openejb = JaxbOpenejb.unmarshal(Resources.class, IO.read(url));
-                module.initResources(openejb);
-            } catch (Exception e) {
-                logger.warning("can't read " + url.toString() + " to load resources for module " + module.toString(), e);
-            }
+    
+    protected void handleException(SQLException e) throws SQLException {
+        if (_conn != null) {
+            _conn.handleException(e);
+        }
+        else {
+            throw e;
         }
     }
 
-    private void readValidationConfigType(Module module) throws OpenEJBException {
-        if (module.getValidationConfig() != null) {
-            return;
-        }
+    @Override
+    public boolean allProceduresAreCallable() throws SQLException {
+        { try { return _meta.allProceduresAreCallable(); }
+          catch (SQLException e) { handleException(e); return false; } }
+    }
 
-        final Source value = getSource(module.getAltDDs().get("validation.xml"));
-        if (value != null) {
-            try {
-                ValidationConfigType validationConfigType = JaxbOpenejb.unmarshal(ValidationConfigType.class, ((Source) value).get(), false);
-                module.setValidationConfig(validationConfigType);
-            } catch (Exception e) {
-                logger.warning("can't read validation.xml to construct a validation factory, it will be ignored");
-            }
+    @Override
+    public boolean allTablesAreSelectable() throws SQLException {
+        { try { return _meta.allTablesAreSelectable(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean dataDefinitionCausesTransactionCommit() throws SQLException {
+        { try { return _meta.dataDefinitionCausesTransactionCommit(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean dataDefinitionIgnoredInTransactions() throws SQLException {
+        { try { return _meta.dataDefinitionIgnoredInTransactions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean deletesAreDetected(int type) throws SQLException {
+        { try { return _meta.deletesAreDetected(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean doesMaxRowSizeIncludeBlobs() throws SQLException {
+        { try { return _meta.doesMaxRowSizeIncludeBlobs(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public ResultSet getAttributes(String catalog, String schemaPattern,
+            String typeNamePattern, String attributeNamePattern)
+            throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,_meta.getAttributes(
+                    catalog, schemaPattern, typeNamePattern,
+                    attributeNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
         }
     }
 
-    private void readOpenejbJar(EjbModule ejbModule) throws OpenEJBException {
-        Source source = getSource(ejbModule.getAltDDs().get("openejb-jar.xml"));
-
-        if (source != null) {
-            try {
-                // Attempt to parse it first as a v3 descriptor
-                OpenejbJar openejbJar = JaxbOpenejbJar3.unmarshal(OpenejbJar.class, source.get()).postRead();
-                ejbModule.setOpenejbJar(openejbJar);
-            } catch (final Exception v3ParsingException) {
-                // Attempt to parse it second as a v2 descriptor
-                OpenejbJar openejbJar = new OpenejbJar();
-                ejbModule.setOpenejbJar(openejbJar);
-
-                try {
-                    JAXBElement element = (JAXBElement) JaxbOpenejbJar2.unmarshal(OpenejbJarType.class, source.get());
-                    OpenejbJarType o2 = (OpenejbJarType) element.getValue();
-                    ejbModule.getAltDDs().put("openejb-jar.xml", o2);
-
-                    GeronimoEjbJarType g2 = OpenEjb2Conversion.convertToGeronimoOpenejbXml(o2);
-
-                    ejbModule.getAltDDs().put("geronimo-openejb.xml", g2);
-                } catch (final Exception v2ParsingException) {
-                    // Now we have to determine which error to throw; the v3 file exception or the fallback v2 file exception.
-                    final Exception[] realIssue = {v3ParsingException};
-
-                    try {
-                        SAXParserFactory factory = Saxs.namespaceAwareFactory();
-                        SAXParser parser = factory.newSAXParser();
-                        parser.parse(source.get(), new DefaultHandler() {
-                            public void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException {
-                                if (localName.equals("environment")) {
-                                    realIssue[0] = v2ParsingException;
-                                    throw new SAXException("Throw exception to stop parsing");
-                                }
-                                if (uri == null) return;
-                                if (uri.contains("openejb-jar-2.") || uri.contains("geronimo.apache.org/xml/ns")) {
-                                    realIssue[0] = v2ParsingException;
-                                    throw new SAXException("Throw exception to stop parsing");
-                                }
-                            }
-                        });
-                    } catch (Exception dontCare) {
-                    }
-
-                    String filePath = "<error: could not be written>";
-                    try {
-                        File tempFile = File.createTempFile("openejb-jar-", ".xml");
-                        try {
-                            IO.copy(source.get(), tempFile);
-                        } catch (IOException e) {
-                        }
-                        filePath = tempFile.getAbsolutePath();
-                    } catch (IOException e) {
-                    }
-
-                    Exception e = realIssue[0];
-                    if (e instanceof SAXException) {
-                        throw new OpenEJBException("Cannot parse the openejb-jar.xml. Xml content written to: "+filePath, e);
-                    } else if (e instanceof JAXBException) {
-                        throw new OpenEJBException("Cannot unmarshall the openejb-jar.xml. Xml content written to: "+filePath, e);
-                    } else if (e instanceof IOException) {
-                        throw new OpenEJBException("Cannot read the openejb-jar.xml.", e);
-                    } else {
-                        throw new OpenEJBException("Encountered unknown error parsing the openejb-jar.xml.", e);
-                    }
-                }
-            }
+    @Override
+    public ResultSet getBestRowIdentifier(String catalog, String schema,
+            String table, int scope, boolean nullable) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getBestRowIdentifier(catalog, schema, table, scope,
+                            nullable));
         }
-
-        Source source1 = getSource(ejbModule.getAltDDs().get("geronimo-openejb.xml"));
-        if (source1 != null) {
-            try {
-                GeronimoEjbJarType geronimoEjbJarType = null;
-                Object o = JaxbOpenejbJar2.unmarshal(GeronimoEjbJarType.class, source1.get());
-                if (o instanceof GeronimoEjbJarType) {
-                    geronimoEjbJarType = (GeronimoEjbJarType) o;
-                } else if (o instanceof JAXBElement) {
-                    JAXBElement element = (JAXBElement) o;
-                    geronimoEjbJarType = (GeronimoEjbJarType) element.getValue();
-                }
-                if (geronimoEjbJarType != null) {
-                    Object nested = geronimoEjbJarType.getOpenejbJar();
-                    if (nested != null && nested instanceof OpenejbJar) {
-                        OpenejbJar existingOpenejbJar = ejbModule.getOpenejbJar();
-                        if (existingOpenejbJar == null || existingOpenejbJar.getEjbDeploymentCount() <= 0) {
-                            OpenejbJar openejbJar = (OpenejbJar) nested;
-                            ejbModule.getAltDDs().put("openejb-jar.xml", openejbJar);
-                            ejbModule.setOpenejbJar(openejbJar);
-                        }
-                    }
-                    ejbModule.getAltDDs().put("geronimo-openejb.xml", geronimoEjbJarType);
-                }
-            } catch (Exception e) {
-                throw new OpenEJBException("Failed parsing geronimo-openejb.xml", e);
-            }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
         }
-
     }
 
-    private void readAppClient(ClientModule clientModule, AppModule appModule) throws OpenEJBException {
-        if (clientModule.getApplicationClient() != null) return;
+    @Override
+    public String getCatalogSeparator() throws SQLException {
+        { try { return _meta.getCatalogSeparator(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
 
-        Object data = clientModule.getAltDDs().get("application-client.xml");
-        if (data instanceof ApplicationClient) {
-            clientModule.setApplicationClient((ApplicationClient) data);
-        } else if (data instanceof URL) {
-            URL url = (URL) data;
-            ApplicationClient applicationClient = readApplicationClient(url);
-            clientModule.setApplicationClient(applicationClient);
+    @Override
+    public String getCatalogTerm() throws SQLException {
+        { try { return _meta.getCatalogTerm(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getCatalogs() throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getCatalogs());
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getColumnPrivileges(String catalog, String schema,
+            String table, String columnNamePattern) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getColumnPrivileges(catalog, schema, table,
+                            columnNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getColumns(String catalog, String schemaPattern,
+            String tableNamePattern, String columnNamePattern)
+            throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getColumns(catalog, schemaPattern, tableNamePattern,
+                            columnNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public Connection getConnection() throws SQLException {
+        return _conn;
+    }
+
+    @Override
+    public ResultSet getCrossReference(String parentCatalog,
+            String parentSchema, String parentTable, String foreignCatalog,
+            String foreignSchema, String foreignTable) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getCrossReference(parentCatalog, parentSchema,
+                            parentTable, foreignCatalog, foreignSchema,
+                            foreignTable));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public int getDatabaseMajorVersion() throws SQLException {
+        { try { return _meta.getDatabaseMajorVersion(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getDatabaseMinorVersion() throws SQLException {
+        { try { return _meta.getDatabaseMinorVersion(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public String getDatabaseProductName() throws SQLException {
+        { try { return _meta.getDatabaseProductName(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public String getDatabaseProductVersion() throws SQLException {
+        { try { return _meta.getDatabaseProductVersion(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public int getDefaultTransactionIsolation() throws SQLException {
+        { try { return _meta.getDefaultTransactionIsolation(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getDriverMajorVersion() {return _meta.getDriverMajorVersion();}
+
+    @Override
+    public int getDriverMinorVersion() {return _meta.getDriverMinorVersion();}
+
+    @Override
+    public String getDriverName() throws SQLException {
+        { try { return _meta.getDriverName(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public String getDriverVersion() throws SQLException {
+        { try { return _meta.getDriverVersion(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getExportedKeys(String catalog, String schema, String table)
+            throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getExportedKeys(catalog, schema, table));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public String getExtraNameCharacters() throws SQLException {
+        { try { return _meta.getExtraNameCharacters(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public String getIdentifierQuoteString() throws SQLException {
+        { try { return _meta.getIdentifierQuoteString(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getImportedKeys(String catalog, String schema, String table)
+            throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getImportedKeys(catalog, schema, table));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getIndexInfo(String catalog, String schema, String table,
+            boolean unique, boolean approximate) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getIndexInfo(catalog, schema, table, unique,
+                            approximate));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public int getJDBCMajorVersion() throws SQLException {
+        { try { return _meta.getJDBCMajorVersion(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getJDBCMinorVersion() throws SQLException {
+        { try { return _meta.getJDBCMinorVersion(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxBinaryLiteralLength() throws SQLException {
+        { try { return _meta.getMaxBinaryLiteralLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxCatalogNameLength() throws SQLException {
+        { try { return _meta.getMaxCatalogNameLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxCharLiteralLength() throws SQLException {
+        { try { return _meta.getMaxCharLiteralLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxColumnNameLength() throws SQLException {
+        { try { return _meta.getMaxColumnNameLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxColumnsInGroupBy() throws SQLException {
+        { try { return _meta.getMaxColumnsInGroupBy(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxColumnsInIndex() throws SQLException {
+        { try { return _meta.getMaxColumnsInIndex(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxColumnsInOrderBy() throws SQLException {
+        { try { return _meta.getMaxColumnsInOrderBy(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxColumnsInSelect() throws SQLException {
+        { try { return _meta.getMaxColumnsInSelect(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxColumnsInTable() throws SQLException {
+        { try { return _meta.getMaxColumnsInTable(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxConnections() throws SQLException {
+        { try { return _meta.getMaxConnections(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxCursorNameLength() throws SQLException {
+        { try { return _meta.getMaxCursorNameLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxIndexLength() throws SQLException {
+        { try { return _meta.getMaxIndexLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxProcedureNameLength() throws SQLException {
+        { try { return _meta.getMaxProcedureNameLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxRowSize() throws SQLException {
+        { try { return _meta.getMaxRowSize(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxSchemaNameLength() throws SQLException {
+        { try { return _meta.getMaxSchemaNameLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxStatementLength() throws SQLException {
+        { try { return _meta.getMaxStatementLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxStatements() throws SQLException {
+        { try { return _meta.getMaxStatements(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxTableNameLength() throws SQLException {
+        { try { return _meta.getMaxTableNameLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxTablesInSelect() throws SQLException {
+        { try { return _meta.getMaxTablesInSelect(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public int getMaxUserNameLength() throws SQLException {
+        { try { return _meta.getMaxUserNameLength(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public String getNumericFunctions() throws SQLException {
+        { try { return _meta.getNumericFunctions(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getPrimaryKeys(String catalog, String schema, String table)
+            throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getPrimaryKeys(catalog, schema, table));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getProcedureColumns(String catalog, String schemaPattern,
+            String procedureNamePattern, String columnNamePattern)
+            throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getProcedureColumns(catalog, schemaPattern,
+                            procedureNamePattern, columnNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public String getProcedureTerm() throws SQLException {
+        { try { return _meta.getProcedureTerm(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getProcedures(String catalog, String schemaPattern,
+            String procedureNamePattern) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getProcedures(catalog, schemaPattern,
+                            procedureNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public int getResultSetHoldability() throws SQLException {
+        { try { return _meta.getResultSetHoldability(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public String getSQLKeywords() throws SQLException {
+        { try { return _meta.getSQLKeywords(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public int getSQLStateType() throws SQLException {
+        { try { return _meta.getSQLStateType(); }
+        catch (SQLException e) { handleException(e); return 0; } }
+    }
+
+    @Override
+    public String getSchemaTerm() throws SQLException {
+        { try { return _meta.getSchemaTerm(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getSchemas() throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getSchemas());
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public String getSearchStringEscape() throws SQLException {
+        { try { return _meta.getSearchStringEscape(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public String getStringFunctions() throws SQLException {
+        { try { return _meta.getStringFunctions(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getSuperTables(String catalog, String schemaPattern,
+            String tableNamePattern) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getSuperTables(catalog, schemaPattern,
+                            tableNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getSuperTypes(String catalog, String schemaPattern,
+            String typeNamePattern) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getSuperTypes(catalog, schemaPattern,
+                            typeNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public String getSystemFunctions() throws SQLException {
+        { try { return _meta.getSystemFunctions(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getTablePrivileges(String catalog, String schemaPattern,
+            String tableNamePattern) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getTablePrivileges(catalog, schemaPattern,
+                            tableNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getTableTypes() throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getTableTypes());
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getTables(String catalog, String schemaPattern,
+            String tableNamePattern, String[] types) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getTables(catalog, schemaPattern, tableNamePattern,
+                            types));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public String getTimeDateFunctions() throws SQLException {
+        { try { return _meta.getTimeDateFunctions(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getTypeInfo() throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getTypeInfo());
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public ResultSet getUDTs(String catalog, String schemaPattern,
+            String typeNamePattern, int[] types) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getUDTs(catalog, schemaPattern, typeNamePattern,
+                            types));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public String getURL() throws SQLException {
+        { try { return _meta.getURL(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public String getUserName() throws SQLException {
+        { try { return _meta.getUserName(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
+    }
+
+    @Override
+    public ResultSet getVersionColumns(String catalog, String schema,
+            String table) throws SQLException {
+        _conn.checkOpen();
+        try {
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getVersionColumns(catalog, schema, table));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
+    }
+
+    @Override
+    public boolean insertsAreDetected(int type) throws SQLException {
+        { try { return _meta.insertsAreDetected(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean isCatalogAtStart() throws SQLException {
+        { try { return _meta.isCatalogAtStart(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean isReadOnly() throws SQLException {
+        { try { return _meta.isReadOnly(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean locatorsUpdateCopy() throws SQLException {
+        { try { return _meta.locatorsUpdateCopy(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean nullPlusNonNullIsNull() throws SQLException {
+        { try { return _meta.nullPlusNonNullIsNull(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean nullsAreSortedAtEnd() throws SQLException {
+        { try { return _meta.nullsAreSortedAtEnd(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean nullsAreSortedAtStart() throws SQLException {
+        { try { return _meta.nullsAreSortedAtStart(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean nullsAreSortedHigh() throws SQLException {
+        { try { return _meta.nullsAreSortedHigh(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean nullsAreSortedLow() throws SQLException {
+        { try { return _meta.nullsAreSortedLow(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean othersDeletesAreVisible(int type) throws SQLException {
+        { try { return _meta.othersDeletesAreVisible(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean othersInsertsAreVisible(int type) throws SQLException {
+        { try { return _meta.othersInsertsAreVisible(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean othersUpdatesAreVisible(int type) throws SQLException {
+        { try { return _meta.othersUpdatesAreVisible(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean ownDeletesAreVisible(int type) throws SQLException {
+        { try { return _meta.ownDeletesAreVisible(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean ownInsertsAreVisible(int type) throws SQLException {
+        { try { return _meta.ownInsertsAreVisible(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean ownUpdatesAreVisible(int type) throws SQLException {
+        { try { return _meta.ownUpdatesAreVisible(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean storesLowerCaseIdentifiers() throws SQLException {
+        { try { return _meta.storesLowerCaseIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean storesLowerCaseQuotedIdentifiers() throws SQLException {
+        { try { return _meta.storesLowerCaseQuotedIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean storesMixedCaseIdentifiers() throws SQLException {
+        { try { return _meta.storesMixedCaseIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean storesMixedCaseQuotedIdentifiers() throws SQLException {
+        { try { return _meta.storesMixedCaseQuotedIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean storesUpperCaseIdentifiers() throws SQLException {
+        { try { return _meta.storesUpperCaseIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean storesUpperCaseQuotedIdentifiers() throws SQLException {
+        { try { return _meta.storesUpperCaseQuotedIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean supportsANSI92EntryLevelSQL() throws SQLException {
+        { try { return _meta.supportsANSI92EntryLevelSQL(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    @Override
+    public boolean supportsANSI92FullSQL() throws SQLException {
+        { try { return _meta.supportsANSI92FullSQL(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsANSI92IntermediateSQL() throws SQLException {
+        { try { return _meta.supportsANSI92IntermediateSQL(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsAlterTableWithAddColumn() throws SQLException {
+        { try { return _meta.supportsAlterTableWithAddColumn(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsAlterTableWithDropColumn() throws SQLException {
+        { try { return _meta.supportsAlterTableWithDropColumn(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsBatchUpdates() throws SQLException {
+        { try { return _meta.supportsBatchUpdates(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsCatalogsInDataManipulation() throws SQLException {
+        { try { return _meta.supportsCatalogsInDataManipulation(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsCatalogsInIndexDefinitions() throws SQLException {
+        { try { return _meta.supportsCatalogsInIndexDefinitions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsCatalogsInPrivilegeDefinitions() throws SQLException {
+        { try { return _meta.supportsCatalogsInPrivilegeDefinitions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsCatalogsInProcedureCalls() throws SQLException {
+        { try { return _meta.supportsCatalogsInProcedureCalls(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsCatalogsInTableDefinitions() throws SQLException {
+        { try { return _meta.supportsCatalogsInTableDefinitions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsColumnAliasing() throws SQLException {
+        { try { return _meta.supportsColumnAliasing(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsConvert() throws SQLException {
+        { try { return _meta.supportsConvert(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsConvert(int fromType, int toType)
+            throws SQLException {
+        { try { return _meta.supportsConvert(fromType, toType); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsCoreSQLGrammar() throws SQLException {
+        { try { return _meta.supportsCoreSQLGrammar(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsCorrelatedSubqueries() throws SQLException {
+        { try { return _meta.supportsCorrelatedSubqueries(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsDataDefinitionAndDataManipulationTransactions()
+            throws SQLException {
+        { try { return _meta.supportsDataDefinitionAndDataManipulationTransactions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsDataManipulationTransactionsOnly()
+            throws SQLException {
+        { try { return _meta.supportsDataManipulationTransactionsOnly(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsDifferentTableCorrelationNames() throws SQLException {
+        { try { return _meta.supportsDifferentTableCorrelationNames(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsExpressionsInOrderBy() throws SQLException {
+        { try { return _meta.supportsExpressionsInOrderBy(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsExtendedSQLGrammar() throws SQLException {
+        { try { return _meta.supportsExtendedSQLGrammar(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsFullOuterJoins() throws SQLException {
+        { try { return _meta.supportsFullOuterJoins(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsGetGeneratedKeys() throws SQLException {
+        { try { return _meta.supportsGetGeneratedKeys(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsGroupBy() throws SQLException {
+        { try { return _meta.supportsGroupBy(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsGroupByBeyondSelect() throws SQLException {
+        { try { return _meta.supportsGroupByBeyondSelect(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsGroupByUnrelated() throws SQLException {
+        { try { return _meta.supportsGroupByUnrelated(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsIntegrityEnhancementFacility() throws SQLException {
+        { try { return _meta.supportsIntegrityEnhancementFacility(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsLikeEscapeClause() throws SQLException {
+        { try { return _meta.supportsLikeEscapeClause(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsLimitedOuterJoins() throws SQLException {
+        { try { return _meta.supportsLimitedOuterJoins(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsMinimumSQLGrammar() throws SQLException {
+        { try { return _meta.supportsMinimumSQLGrammar(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsMixedCaseIdentifiers() throws SQLException {
+        { try { return _meta.supportsMixedCaseIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsMixedCaseQuotedIdentifiers() throws SQLException {
+        { try { return _meta.supportsMixedCaseQuotedIdentifiers(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsMultipleOpenResults() throws SQLException {
+        { try { return _meta.supportsMultipleOpenResults(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsMultipleResultSets() throws SQLException {
+        { try { return _meta.supportsMultipleResultSets(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsMultipleTransactions() throws SQLException {
+        { try { return _meta.supportsMultipleTransactions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsNamedParameters() throws SQLException {
+        { try { return _meta.supportsNamedParameters(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsNonNullableColumns() throws SQLException {
+        { try { return _meta.supportsNonNullableColumns(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsOpenCursorsAcrossCommit() throws SQLException {
+        { try { return _meta.supportsOpenCursorsAcrossCommit(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsOpenCursorsAcrossRollback() throws SQLException {
+        { try { return _meta.supportsOpenCursorsAcrossRollback(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsOpenStatementsAcrossCommit() throws SQLException {
+        { try { return _meta.supportsOpenStatementsAcrossCommit(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsOpenStatementsAcrossRollback() throws SQLException {
+        { try { return _meta.supportsOpenStatementsAcrossRollback(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsOrderByUnrelated() throws SQLException {
+        { try { return _meta.supportsOrderByUnrelated(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsOuterJoins() throws SQLException {
+        { try { return _meta.supportsOuterJoins(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsPositionedDelete() throws SQLException {
+        { try { return _meta.supportsPositionedDelete(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsPositionedUpdate() throws SQLException {
+        { try { return _meta.supportsPositionedUpdate(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsResultSetConcurrency(int type, int concurrency)
+            throws SQLException {
+        { try { return _meta.supportsResultSetConcurrency(type, concurrency); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsResultSetHoldability(int holdability)
+            throws SQLException {
+        { try { return _meta.supportsResultSetHoldability(holdability); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsResultSetType(int type) throws SQLException {
+        { try { return _meta.supportsResultSetType(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSavepoints() throws SQLException {
+        { try { return _meta.supportsSavepoints(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSchemasInDataManipulation() throws SQLException {
+        { try { return _meta.supportsSchemasInDataManipulation(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSchemasInIndexDefinitions() throws SQLException {
+        { try { return _meta.supportsSchemasInIndexDefinitions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSchemasInPrivilegeDefinitions() throws SQLException {
+        { try { return _meta.supportsSchemasInPrivilegeDefinitions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSchemasInProcedureCalls() throws SQLException {
+        { try { return _meta.supportsSchemasInProcedureCalls(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSchemasInTableDefinitions() throws SQLException {
+        { try { return _meta.supportsSchemasInTableDefinitions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSelectForUpdate() throws SQLException {
+        { try { return _meta.supportsSelectForUpdate(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsStatementPooling() throws SQLException {
+        { try { return _meta.supportsStatementPooling(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsStoredProcedures() throws SQLException {
+        { try { return _meta.supportsStoredProcedures(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSubqueriesInComparisons() throws SQLException {
+        { try { return _meta.supportsSubqueriesInComparisons(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSubqueriesInExists() throws SQLException {
+        { try { return _meta.supportsSubqueriesInExists(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSubqueriesInIns() throws SQLException {
+        { try { return _meta.supportsSubqueriesInIns(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsSubqueriesInQuantifieds() throws SQLException {
+        { try { return _meta.supportsSubqueriesInQuantifieds(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsTableCorrelationNames() throws SQLException {
+        { try { return _meta.supportsTableCorrelationNames(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsTransactionIsolationLevel(int level)
+            throws SQLException {
+        { try { return _meta.supportsTransactionIsolationLevel(level); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsTransactions() throws SQLException {
+        { try { return _meta.supportsTransactions(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsUnion() throws SQLException {
+        { try { return _meta.supportsUnion(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsUnionAll() throws SQLException {
+        { try { return _meta.supportsUnionAll(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean updatesAreDetected(int type) throws SQLException {
+        { try { return _meta.updatesAreDetected(type); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean usesLocalFilePerTable() throws SQLException {
+        { try { return _meta.usesLocalFilePerTable(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean usesLocalFiles() throws SQLException {
+        { try { return _meta.usesLocalFiles(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    /* JDBC_4_ANT_KEY_BEGIN */
+
+    public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        return iface.isAssignableFrom(getClass()) || _meta.isWrapperFor(iface);
+    }
+
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+        if (iface.isAssignableFrom(getClass())) {
+            return iface.cast(this);
+        } else if (iface.isAssignableFrom(_meta.getClass())) {
+            return iface.cast(_meta);
         } else {
-            if (!clientModule.isEjbModuleGenerated()) {
-                DeploymentLoader.logger.debug("No application-client.xml found assuming annotations present: " + appModule.getJarLocation() + ", module: " + clientModule.getModuleId());
-                clientModule.setApplicationClient(new ApplicationClient());
-            }
+            return _meta.unwrap(iface);
         }
     }
-
-    public void readEjbJar(EjbModule ejbModule, AppModule appModule) throws OpenEJBException {
-        if (ejbModule.getEjbJar() != null) return;
-
-        final Source data = getSource(ejbModule.getAltDDs().get("ejb-jar.xml"));
-        if (data != null) {
-            try {
-                EjbJar ejbJar = readEjbJar(data.get());
-                ejbModule.setEjbJar(ejbJar);
-            } catch (IOException e) {
-                throw new OpenEJBException(e);
-            }
-        } else {
-            DeploymentLoader.logger.debug("No ejb-jar.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + ejbModule.getModuleId());
-            ejbModule.setEjbJar(new EjbJar());
-        }
+    
+    public RowIdLifetime getRowIdLifetime() throws SQLException {
+        { try { return _meta.getRowIdLifetime(); }
+        catch (SQLException e) { handleException(e); throw new AssertionError(); } }
     }
 
-    private static void checkDuplicatedByBeansXml(final List<String> list, final List<String> duplicated) {
-        final Iterator<String> it = list.iterator();
-        while (it.hasNext()) {
-            final String str = it.next();
-            if (list.indexOf(str) != list.lastIndexOf(str)) {
-                duplicated.add(str);
-            }
-        }
-    }
-
-    public static void checkDuplicatedByBeansXml(final Beans beans, final Beans complete) {
-        checkDuplicatedByBeansXml(beans.getAlternativeClasses(), complete.getDuplicatedAlternatives().getClasses());
-        checkDuplicatedByBeansXml(beans.getAlternativeStereotypes(), complete.getDuplicatedAlternatives().getStereotypes());
-        checkDuplicatedByBeansXml(beans.getDecorators(), complete.getDuplicatedDecorators());
-        checkDuplicatedByBeansXml(beans.getInterceptors(), complete.getDuplicatedInterceptors());
-    }
-
-    private void readBeans(EjbModule ejbModule, AppModule appModule) throws OpenEJBException {
-        if (ejbModule.getBeans() != null) return;
-
-        final Object raw = ejbModule.getAltDDs().get("beans.xml");
-        final Source data = getSource(raw);
-        if (data != null) {
-            try {
-                Beans beans = readBeans(data.get());
-                checkDuplicatedByBeansXml(beans, beans);
-                ejbModule.setBeans(beans);
-            } catch (IOException e) {
-                throw new OpenEJBException(e);
-            }
-        } else if (raw instanceof Beans) {
-            ejbModule.setBeans((Beans) raw);
-        } else {
-//            DeploymentLoader.logger.debug("No beans.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + ejbModule.getModuleId());
-//            ejbModule.setBeans(new Beans());
-        }
-    }
-
-    private void readCmpOrm(EjbModule ejbModule) throws OpenEJBException {
-        Object data = ejbModule.getAltDDs().get("openejb-cmp-orm.xml");
-        if (data == null || data instanceof EntityMappings) {
-            return;
-        } else if (data instanceof URL) {
-            URL url = (URL) data;
-            try {
-                EntityMappings entitymappings = (EntityMappings) JaxbJavaee.unmarshalJavaee(EntityMappings.class, IO.read(url));
-                ejbModule.getAltDDs().put("openejb-cmp-orm.xml", entitymappings);
-            } catch (SAXException e) {
-                throw new OpenEJBException("Cannot parse the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-            } catch (JAXBException e) {
-                throw new OpenEJBException("Cannot unmarshall the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-            } catch (IOException e) {
-                throw new OpenEJBException("Cannot read the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-            } catch (Exception e) {
-                throw new OpenEJBException("Encountered unknown error parsing the openejb-cmp-orm.xml file: " + url.toExternalForm(), e);
-            }
-        }
-    }
-
-    private void readConnector(ConnectorModule connectorModule, AppModule appModule) throws OpenEJBException {
-        if (connectorModule.getConnector() != null) return;
-
-        Object data = connectorModule.getAltDDs().get("ra.xml");
-        if (data instanceof Connector) {
-            connectorModule.setConnector((Connector) data);
-        } else if (data instanceof URL) {
-            URL url = (URL) data;
-            Connector connector = readConnector(url);
-            connectorModule.setConnector(connector);
-        } else {
-            DeploymentLoader.logger.debug("No ra.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + connectorModule.getModuleId());
-            connectorModule.setConnector(new Connector());
-        }
-    }
-
-    private void readWebApp(WebModule webModule, AppModule appModule) throws OpenEJBException {
-        if (webModule.getWebApp() != null) return;
-
-        Object data = webModule.getAltDDs().get("web.xml");
-        if (data instanceof WebApp) {
-            webModule.setWebApp((WebApp) data);
-        } else if (data instanceof URL) {
-            URL url = (URL) data;
-            WebApp webApp = readWebApp(url);
-            webModule.setWebApp(webApp);
-        } else {
-            DeploymentLoader.logger.debug("No web.xml found assuming annotated beans present: " + appModule.getJarLocation() + ", module: " + webModule.getModuleId());
-            webModule.setWebApp(new WebApp());
-        }
-    }
-
-    public static ApplicationClient readApplicationClient(URL url) throws OpenEJBException {
-        ApplicationClient applicationClient;
+    public ResultSet getSchemas(String catalog, String schemaPattern)
+    throws SQLException {
+        _conn.checkOpen();
         try {
-            applicationClient = (ApplicationClient) JaxbJavaee.unmarshalJavaee(ApplicationClient.class, IO.read(url));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the application-client.xml file: "+ url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the application-client.xml file: "+ url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the application-client.xml file: "+ url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the application-client.xml file: "+ url.toExternalForm(), e);
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getSchemas(catalog, schemaPattern));
         }
-        return applicationClient;
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
+        }
     }
 
-    public static EjbJar readEjbJar(final InputStream is) throws OpenEJBException {
+    public boolean autoCommitFailureClosesAllResultSets() throws SQLException {
+        { try { return _meta.autoCommitFailureClosesAllResultSets(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public boolean supportsStoredFunctionsUsingCallSyntax() throws SQLException {
+        { try { return _meta.supportsStoredFunctionsUsingCallSyntax(); }
+        catch (SQLException e) { handleException(e); return false; } }
+    }
+
+    public ResultSet getClientInfoProperties() throws SQLException {
+        _conn.checkOpen();
         try {
-            final String content = IO.slurp(is);
-            if (isEmptyEjbJar(new ByteArrayInputStream(content.getBytes()))) {
-                final String id = getId(new ByteArrayInputStream(content.getBytes()));
-                return new EjbJar(id);
-            }
-            return (EjbJar) JaxbJavaee.unmarshalJavaee(EjbJar.class, new ByteArrayInputStream(content.getBytes()));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the ejb-jar.xml"); // file: " + url.toExternalForm(), e);
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getClientInfoProperties());
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
         }
     }
 
-    public static Beans readBeans(final InputStream inputStream) throws OpenEJBException {
+    public ResultSet getFunctions(String catalog, String schemaPattern,
+            String functionNamePattern) throws SQLException {
+        _conn.checkOpen();
         try {
-            final String content = IO.slurp(inputStream);
-            if (isEmptyBeansXml(new ByteArrayInputStream(content.getBytes()))) return new Beans();
-            return (Beans) JaxbJavaee.unmarshalJavaee(Beans.class, new ByteArrayInputStream(content.getBytes()));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the beans.xml");// file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the beans.xml");// file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the beans.xml");// file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the beans.xml");// file: " + url.toExternalForm(), e);
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getFunctions(catalog, schemaPattern,
+                            functionNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
         }
     }
 
-    private static boolean isEmptyEjbJar(final InputStream is) throws IOException, ParserConfigurationException, SAXException {
-        return isEmpty(is, "ejb-jar");
-    }
-
-    private static boolean isEmptyBeansXml(final InputStream is) throws IOException, ParserConfigurationException, SAXException {
-        return isEmpty(is, "beans");
-    }
-
-    private static boolean isEmpty(final InputStream is, final String rootElement) throws IOException, ParserConfigurationException, SAXException {
-        final LengthInputStream in = new LengthInputStream(is);
-        InputSource inputSource = new InputSource(in);
-
-        SAXParser parser = Saxs.namespaceAwareFactory().newSAXParser();
-
+    public ResultSet getFunctionColumns(String catalog, String schemaPattern,
+            String functionNamePattern, String columnNamePattern)
+            throws SQLException {
+        _conn.checkOpen();
         try {
-            parser.parse(inputSource, new DefaultHandler(){
-                public void startElement(String uri, String localName, String qName, Attributes att) throws SAXException {
-                    if (!localName.equals(rootElement)) throw new SAXException(localName);
-                }
-
-                public InputSource resolveEntity(String publicId, String systemId) throws IOException, SAXException {
-                    return new InputSource(new ByteArrayInputStream(new byte[0]));
-                }
-            });
-            return true;
-        } catch (SAXException e) {
-            return in.getLength() == 0;
+            return DelegatingResultSet.wrapResultSet(_conn,
+                    _meta.getFunctionColumns(catalog, schemaPattern,
+                            functionNamePattern, columnNamePattern));
+        }
+        catch (SQLException e) {
+            handleException(e);
+            throw new AssertionError();
         }
     }
 
-    private static String getId(final InputStream is) {
-        final String[] id = {null};
+    /* JDBC_4_ANT_KEY_END */
 
-        try {
-            final LengthInputStream in = new LengthInputStream(is);
-            InputSource inputSource = new InputSource(in);
-
-            SAXParser parser = Saxs.namespaceAwareFactory().newSAXParser();
-
-            parser.parse(inputSource, new DefaultHandler() {
-                public void startElement(String uri, String localName, String qName, Attributes att) throws SAXException {
-                    id[0] = att.getValue("id");
-                }
-
-                public InputSource resolveEntity(String publicId, String systemId) throws IOException, SAXException {
-                    return new InputSource(new ByteArrayInputStream(new byte[0]));
-                }
-            });
-        } catch (Exception e) {
-        }
-
-        return id[0];
-    }
-
-    public static Webservices readWebservices(URL url) throws OpenEJBException {
-        Webservices webservices;
-        try {
-            webservices = (Webservices) JaxbJavaee.unmarshalJavaee(Webservices.class, IO.read(url));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
-        }
-        return webservices;
-    }
-
-    public static HandlerChains readHandlerChains(URL url) throws OpenEJBException {
-        HandlerChains handlerChains;
-        try {
-            handlerChains = (HandlerChains) JaxbJavaee.unmarshalHandlerChains(HandlerChains.class, IO.read(url));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the webservices.xml file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the webservices.xml file: " + url.toExternalForm(), e);
-        }
-        return handlerChains;
-    }
-
-    public static JavaWsdlMapping readJaxrpcMapping(URL url) throws OpenEJBException {
-        JavaWsdlMapping wsdlMapping;
-        try {
-            wsdlMapping = (JavaWsdlMapping) JaxbJavaee.unmarshalJavaee(JavaWsdlMapping.class, IO.read(url));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the JaxRPC mapping file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the JaxRPC mapping file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the JaxRPC mapping file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the JaxRPC mapping file: " + url.toExternalForm(), e);
-        }
-        return wsdlMapping;
-    }
-
-    public static Definition readWsdl(URL url) throws OpenEJBException {
-        Definition definition;
-        try {
-            WSDLFactory factory = WSDLFactory.newInstance();
-            WSDLReader reader = factory.newWSDLReader();
-            reader.setFeature("javax.wsdl.verbose", true);
-            reader.setFeature("javax.wsdl.importDocuments", true);
-            WsdlResolver wsdlResolver = new WsdlResolver(new URL(url, ".").toExternalForm(), new InputSource(IO.read(url)));
-            definition = reader.readWSDL(wsdlResolver);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the wsdl file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the wsdl file: " + url.toExternalForm(), e);
-        }
-        return definition;
-    }
-
-    public static Connector readConnector(URL url) throws OpenEJBException {
-        Connector connector;
-        try {
-            connector = (Connector) JaxbJavaee.unmarshalJavaee(Connector.class, IO.read(url));
-        } catch (JAXBException e) {
-            try {
-                Connector10 connector10 = (Connector10) JaxbJavaee.unmarshalJavaee(Connector10.class, IO.read(url));
-                connector = Connector.newConnector(connector10);
-            } catch (ParserConfigurationException e1) {
-                throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
-            } catch (SAXException e1) {
-                throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
-            } catch (JAXBException e1) {
-                throw new OpenEJBException("Cannot unmarshall the ra.xml file: " + url.toExternalForm(), e);
-            } catch (IOException e1) {
-                throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
-            }
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the ra.xml file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the ra.xml file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the ra.xml file: " + url.toExternalForm(), e);
-        }
-        return connector;
-    }
-
-    public static WebApp readWebApp(URL url) throws OpenEJBException {
-        WebApp webApp;
-        try {
-            webApp = (WebApp) JaxbJavaee.unmarshalJavaee(WebApp.class, IO.read(url));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the web.xml file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the web.xml file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the web.xml file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the web.xml file: " + url.toExternalForm(), e);
-        }
-        return webApp;
-    }
-
-    public static TldTaglib readTldTaglib(URL url) throws OpenEJBException {
-        // TOMEE-164 Optimization on reading built-in tld files
-        if (url.getPath().contains("jstl-1.2.jar")) return new TldTaglib();
-        if (url.getPath().contains("myfaces-impl")) {
-            final TldTaglib taglib = new TldTaglib();
-            final Listener listener = new Listener();
-            listener.setListenerClass("org.apache.myfaces.webapp.StartupServletContextListener");
-            taglib.getListener().add(listener);
-            return taglib;
-        }
-
-        TldTaglib tldTaglib;
-        try {
-            tldTaglib = (TldTaglib) JaxbJavaee.unmarshalTaglib(TldTaglib.class, IO.read(url));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the JSP tag library definition file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the JSP tag library definition file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the JSP tag library definition file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the JSP tag library definition file: " + url.toExternalForm(), e);
-        }
-        return tldTaglib;
-    }
-
-    public static FacesConfig readFacesConfig(URL url) throws OpenEJBException {
-        try {
-            final Source src = getSource(url);
-            if (src == null) {
-                return new FacesConfig();
-            }
-
-            final String content = IO.slurp(src.get());
-            if (isEmpty(new ByteArrayInputStream(content.getBytes()), "faces-config")) {
-                return new FacesConfig();
-            }
-     		return  (FacesConfig) JaxbJavaee.unmarshalJavaee(FacesConfig.class, new ByteArrayInputStream(content.getBytes()));
-        } catch (SAXException e) {
-            throw new OpenEJBException("Cannot parse the faces configuration file: " + url.toExternalForm(), e);
-        } catch (JAXBException e) {
-            throw new OpenEJBException("Cannot unmarshall the faces configuration file: " + url.toExternalForm(), e);
-        } catch (IOException e) {
-            throw new OpenEJBException("Cannot read the faces configuration file: " + url.toExternalForm(), e);
-        } catch (Exception e) {
-            throw new OpenEJBException("Encountered unknown error parsing the faces configuration file: " + url.toExternalForm(), e);
-        }
-    }
-
-    private static Source getSource(Object o) {
-        if (o instanceof Source) {
-            return (Source) o;
-        }
-
-        if (o instanceof URL) {
-            return new UrlSource((URL) o);
-        }
-
-        if (o instanceof String) {
-            return new StringSource((String) o);
-        }
-
-        return null;
-    }
-
-    public interface Source {
-        InputStream get() throws IOException;
-    }
-
-    public static class UrlSource implements Source {
-        private final URL url;
-
-        public UrlSource(URL url) {
-            this.url = url;
-        }
-
-        @Override
-        public InputStream get() throws IOException {
-            return IO.read(url);
-        }
-    }
-
-    public static class StringSource implements Source {
-        private byte[] bytes;
-
-        public StringSource(String content) {
-            bytes = content.getBytes();
-        }
-
-        @Override
-        public InputStream get() throws IOException {
-            return new ByteArrayInputStream(bytes);
-        }
-    }
 }

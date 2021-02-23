@@ -113,6 +113,10 @@ class FunctionRewriter implements CompilerPass {
     return (root != null) ? root.removeFirstChild() : null;
   }
 
+  private static boolean isReduceableFunctionExpression(Node n) {
+    return NodeUtil.isFunctionExpression(n);
+  }
+
   /**
    * Information needed to apply a reduction.
    */
@@ -300,7 +304,7 @@ class FunctionRewriter implements CompilerPass {
 
     @Override
     public Node reduce(Node node) {
-      if (!NodeUtil.isFunctionExpression(node)) {
+      if (!isReduceableFunctionExpression(node)) {
         return node;
       }
 
@@ -360,7 +364,7 @@ class FunctionRewriter implements CompilerPass {
 
     @Override
     public Node reduce(Node node) {
-      if (!NodeUtil.isFunctionExpression(node)) {
+      if (!isReduceableFunctionExpression(node)) {
         return node;
       }
 
@@ -414,7 +418,7 @@ class FunctionRewriter implements CompilerPass {
 
     @Override
     public Node reduce(Node node) {
-      if (!NodeUtil.isFunctionExpression(node)) {
+      if (!isReduceableFunctionExpression(node)) {
         return node;
       }
 
@@ -476,7 +480,7 @@ class FunctionRewriter implements CompilerPass {
 
     @Override
     public Node reduce(Node node) {
-      if (!NodeUtil.isFunctionExpression(node)) {
+      if (!isReduceableFunctionExpression(node)) {
         return node;
       }
 

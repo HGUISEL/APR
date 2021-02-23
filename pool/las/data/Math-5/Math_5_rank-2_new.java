@@ -1,4 +1,8 @@
-package org.mockito.internal.configuration.injection;
+/*
+ * Copyright (c) 2007 Mockito contributors
+ * This program is made available under the terms of the MIT License.
+ */
+package org.mockito.internal.configuration.injection.filter;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -13,7 +17,7 @@ public class TypeBasedCandidateFilter implements MockCandidateFilter {
         this.next = next;
     }
 
-    public Injecter filterCandidate(Collection<Object> mocks, Field field, Object fieldInstance) {
+    public OngoingInjecter filterCandidate(Collection<Object> mocks, Field field, List<Field> fields, Object fieldInstance) {
         List<Object> mockTypeMatches = new ArrayList<Object>();
         for (Object mock : mocks) {
             if (field.getType().isAssignableFrom(mock.getClass())) {
@@ -21,6 +25,6 @@ public class TypeBasedCandidateFilter implements MockCandidateFilter {
             }
         }
 
-        return next.filterCandidate(mockTypeMatches, field, fieldInstance);
+        return next.filterCandidate(mockTypeMatches, field, fields, fieldInstance);
     }
 }

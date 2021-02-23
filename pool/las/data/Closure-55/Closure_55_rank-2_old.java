@@ -1,12 +1,11 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements. See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
+ * Copyright 2003-2007 the original author or authors.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,1101 +13,931 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.kafka.streams;
+package org.codehaus.groovy.classgen;
 
-import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.CommonClientConfigs;
-import org.apache.kafka.clients.admin.AdminClientConfig;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.config.AbstractConfig;
-import org.apache.kafka.common.config.ConfigDef;
-import org.apache.kafka.common.config.ConfigDef.Importance;
-import org.apache.kafka.common.config.ConfigDef.Type;
-import org.apache.kafka.common.config.ConfigException;
-import org.apache.kafka.common.config.TopicConfig;
-import org.apache.kafka.common.metrics.Sensor;
-import org.apache.kafka.common.serialization.Serde;
-import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.streams.errors.DeserializationExceptionHandler;
-import org.apache.kafka.streams.errors.LogAndFailExceptionHandler;
-import org.apache.kafka.streams.errors.ProductionExceptionHandler;
-import org.apache.kafka.streams.errors.DefaultProductionExceptionHandler;
-import org.apache.kafka.streams.errors.StreamsException;
-import org.apache.kafka.streams.processor.DefaultPartitionGrouper;
-import org.apache.kafka.streams.processor.FailOnInvalidTimestamp;
-import org.apache.kafka.streams.processor.TimestampExtractor;
-import org.apache.kafka.streams.processor.internals.StreamsPartitionAssignor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import groovy.lang.GroovyClassLoader;
+import groovy.lang.GroovyObject;
+import groovy.lang.MetaClass;
+import org.codehaus.groovy.ast.*;
+import org.codehaus.groovy.ast.expr.*;
+import org.codehaus.groovy.ast.stmt.BlockStatement;
+import org.codehaus.groovy.ast.stmt.ExpressionStatement;
+import org.codehaus.groovy.ast.stmt.ReturnStatement;
+import org.codehaus.groovy.ast.stmt.Statement;
+import org.codehaus.groovy.syntax.RuntimeParserException;
+import org.codehaus.groovy.syntax.Token;
+import org.codehaus.groovy.syntax.Types;
+import org.objectweb.asm.Label;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
-
-import static org.apache.kafka.common.config.ConfigDef.Range.atLeast;
-import static org.apache.kafka.common.config.ConfigDef.Range.between;
-import static org.apache.kafka.common.config.ConfigDef.ValidString.in;
-import static org.apache.kafka.common.requests.IsolationLevel.READ_COMMITTED;
+import java.lang.ref.SoftReference;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.*;
 
 /**
- * Configuration for a {@link KafkaStreams} instance.
- * Can also be used to configure the Kafka Streams internal {@link KafkaConsumer}, {@link KafkaProducer} and {@link AdminClient}.
- * To avoid consumer/producer/admin property conflicts, you should prefix those properties using
- * {@link #consumerPrefix(String)}, {@link #producerPrefix(String)} and {@link #adminClientPrefix(String)}, respectively.
- * <p>
- * Example:
- * <pre>{@code
- * // potentially wrong: sets "metadata.max.age.ms" to 1 minute for producer AND consumer
- * Properties streamsProperties = new Properties();
- * streamsProperties.put(ConsumerConfig.METADATA_MAX_AGE_CONFIG, 60000);
- * // or
- * streamsProperties.put(ProducerConfig.METADATA_MAX_AGE_CONFIG, 60000);
+ * Verifies the AST node and adds any defaulted AST code before
+ * bytecode generation occurs.
  *
- * // suggested:
- * Properties streamsProperties = new Properties();
- * // sets "metadata.max.age.ms" to 1 minute for consumer only
- * streamsProperties.put(StreamsConfig.consumerPrefix(ConsumerConfig.METADATA_MAX_AGE_CONFIG), 60000);
- * // sets "metadata.max.age.ms" to 1 minute for producer only
- * streamsProperties.put(StreamsConfig.producerPrefix(ProducerConfig.METADATA_MAX_AGE_CONFIG), 60000);
- *
- * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
- * }</pre>
- *
- * This instance can also be used to pass in custom configurations to different modules (e.g. passing a special config in your customized serde class).
- * The consumer/producer/admin prefix can also be used to distinguish these custom config values passed to different clients with the same config name.
- * * Example:
- * <pre>{@code
- * Properties streamsProperties = new Properties();
- * // sets "my.custom.config" to "foo" for consumer only
- * streamsProperties.put(StreamsConfig.consumerPrefix("my.custom.config"), "foo");
- * // sets "my.custom.config" to "bar" for producer only
- * streamsProperties.put(StreamsConfig.producerPrefix("my.custom.config"), "bar");
- * // sets "my.custom.config2" to "boom" for all clients universally
- * streamsProperties.put("my.custom.config2", "boom");
- *
- * // as a result, inside producer's serde class configure(..) function,
- * // users can now read both key-value pairs "my.custom.config" -> "foo"
- * // and "my.custom.config2" -> "boom" from the config map
- * StreamsConfig streamsConfig = new StreamsConfig(streamsProperties);
- * }</pre>
- *
- * When increasing both {@link ProducerConfig#RETRIES_CONFIG} and {@link ProducerConfig#MAX_BLOCK_MS_CONFIG} to be more resilient to non-available brokers you should also
- * consider increasing {@link ConsumerConfig#MAX_POLL_INTERVAL_MS_CONFIG} using the following guidance:
- * <pre>
- *     max.poll.interval.ms > min ( max.block.ms, (retries +1) * request.timeout.ms )
- * </pre>
- *
- *
- * Kafka Streams requires at least the following properties to be set:
- * <ul>
- *  <li>{@link #APPLICATION_ID_CONFIG "application.id"}</li>
- *  <li>{@link #BOOTSTRAP_SERVERS_CONFIG "bootstrap.servers"}</li>
- * </ul>
- *
- * By default, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
- * <ul>
- *   <li>{@link ConsumerConfig#ENABLE_AUTO_COMMIT_CONFIG "enable.auto.commit"} (false) - Streams client will always disable/turn off auto committing</li>
- * </ul>
- *
- * If {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} is set to {@link #EXACTLY_ONCE "exactly_once"}, Kafka Streams does not allow users to overwrite the following properties (Streams setting shown in parentheses):
- * <ul>
- *   <li>{@link ConsumerConfig#ISOLATION_LEVEL_CONFIG "isolation.level"} (read_committed) - Consumers will always read committed data only</li>
- *   <li>{@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG "enable.idempotence"} (true) - Producer will always have idempotency enabled</li>
- *   <li>{@link ProducerConfig#MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION "max.in.flight.requests.per.connection"} (5) - Producer will always have one in-flight request per connection</li>
- * </ul>
- *
- *
- * @see KafkaStreams#KafkaStreams(org.apache.kafka.streams.Topology, Properties)
- * @see ConsumerConfig
- * @see ProducerConfig
+ * @author <a href="mailto:james@coredevelopers.net">James Strachan</a>
+ * @version $Revision$
  */
-public class StreamsConfig extends AbstractConfig {
-
-    private final static Logger log = LoggerFactory.getLogger(StreamsConfig.class);
-
-    private static final ConfigDef CONFIG;
-
-    private final boolean eosEnabled;
-    private final static long DEFAULT_COMMIT_INTERVAL_MS = 30000L;
-    private final static long EOS_DEFAULT_COMMIT_INTERVAL_MS = 100L;
-
-    /**
-     * Prefix used to provide default topic configs to be applied when creating internal topics.
-     * These should be valid properties from {@link org.apache.kafka.common.config.TopicConfig TopicConfig}.
-     * It is recommended to use {@link #topicPrefix(String)}.
-     */
-    // TODO: currently we cannot get the full topic configurations and hence cannot allow topic configs without the prefix,
-    //       this can be lifted once kafka.log.LogConfig is completely deprecated by org.apache.kafka.common.config.TopicConfig
-    public static final String TOPIC_PREFIX = "topic.";
-
-    /**
-     * Prefix used to isolate {@link KafkaConsumer consumer} configs from other client configs.
-     * It is recommended to use {@link #consumerPrefix(String)} to add this prefix to {@link ConsumerConfig consumer
-     * properties}.
-     */
-    public static final String CONSUMER_PREFIX = "consumer.";
-
-    /**
-     * Prefix used to override {@link KafkaConsumer consumer} configs for the main consumer client from
-     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
-     * 1. main.consumer.[config-name]
-     * 2. consumer.[config-name]
-     * 3. [config-name]
-     */
-    public static final String MAIN_CONSUMER_PREFIX = "main.consumer.";
-
-    /**
-     * Prefix used to override {@link KafkaConsumer consumer} configs for the restore consumer client from
-     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
-     * 1. restore.consumer.[config-name]
-     * 2. consumer.[config-name]
-     * 3. [config-name]
-     */
-    public static final String RESTORE_CONSUMER_PREFIX = "restore.consumer.";
-
-    /**
-     * Prefix used to override {@link KafkaConsumer consumer} configs for the global consumer client from
-     * the general consumer client configs. The override precedence is the following (from highest to lowest precedence):
-     * 1. global.consumer.[config-name]
-     * 2. consumer.[config-name]
-     * 3. [config-name]
-     */
-    public static final String GLOBAL_CONSUMER_PREFIX = "global.consumer.";
-
-    /**
-     * Prefix used to isolate {@link KafkaProducer producer} configs from other client configs.
-     * It is recommended to use {@link #producerPrefix(String)} to add this prefix to {@link ProducerConfig producer
-     * properties}.
-     */
-    public static final String PRODUCER_PREFIX = "producer.";
-
-    /**
-     * Prefix used to isolate {@link org.apache.kafka.clients.admin.AdminClient admin} configs from other client configs.
-     * It is recommended to use {@link #adminClientPrefix(String)} to add this prefix to {@link ProducerConfig producer
-     * properties}.
-     */
-    public static final String ADMIN_CLIENT_PREFIX = "admin.";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.0.x}.
-     */
-    public static final String UPGRADE_FROM_0100 = "0.10.0";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.1.x}.
-     */
-    public static final String UPGRADE_FROM_0101 = "0.10.1";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.10.2.x}.
-     */
-    public static final String UPGRADE_FROM_0102 = "0.10.2";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 0.11.0.x}.
-     */
-    public static final String UPGRADE_FROM_0110 = "0.11.0";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.0.x}.
-     */
-    public static final String UPGRADE_FROM_10 = "1.0";
-
-    /**
-     * Config value for parameter {@link #UPGRADE_FROM_CONFIG "upgrade.from"} for upgrading an application from version {@code 1.1.x}.
-     */
-    public static final String UPGRADE_FROM_11 = "1.1";
-
-    /**
-     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for at-least-once processing guarantees.
-     */
-    public static final String AT_LEAST_ONCE = "at_least_once";
-
-    /**
-     * Config value for parameter {@link #PROCESSING_GUARANTEE_CONFIG "processing.guarantee"} for exactly-once processing guarantees.
-     */
-    public static final String EXACTLY_ONCE = "exactly_once";
-
-    /** {@code application.id} */
-    public static final String APPLICATION_ID_CONFIG = "application.id";
-    private static final String APPLICATION_ID_DOC = "An identifier for the stream processing application. Must be unique within the Kafka cluster. It is used as 1) the default client-id prefix, 2) the group-id for membership management, 3) the changelog topic prefix.";
-
-    /**{@code user.endpoint} */
-    public static final String APPLICATION_SERVER_CONFIG = "application.server";
-    private static final String APPLICATION_SERVER_DOC = "A host:port pair pointing to an embedded user defined endpoint that can be used for discovering the locations of state stores within a single KafkaStreams application";
-
-    /** {@code bootstrap.servers} */
-    public static final String BOOTSTRAP_SERVERS_CONFIG = CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG;
-
-    /** {@code buffered.records.per.partition} */
-    public static final String BUFFERED_RECORDS_PER_PARTITION_CONFIG = "buffered.records.per.partition";
-    private static final String BUFFERED_RECORDS_PER_PARTITION_DOC = "The maximum number of records to buffer per partition.";
-
-    /** {@code cache.max.bytes.buffering} */
-    public static final String CACHE_MAX_BYTES_BUFFERING_CONFIG = "cache.max.bytes.buffering";
-    private static final String CACHE_MAX_BYTES_BUFFERING_DOC = "Maximum number of memory bytes to be used for buffering across all threads";
-
-    /** {@code client.id} */
-    public static final String CLIENT_ID_CONFIG = CommonClientConfigs.CLIENT_ID_CONFIG;
-    private static final String CLIENT_ID_DOC = "An ID prefix string used for the client IDs of internal consumer, producer and restore-consumer," +
-        " with pattern '<client.id>-StreamThread-<threadSequenceNumber>-<consumer|producer|restore-consumer>'.";
-
-    /** {@code commit.interval.ms} */
-    public static final String COMMIT_INTERVAL_MS_CONFIG = "commit.interval.ms";
-    private static final String COMMIT_INTERVAL_MS_DOC = "The frequency with which to save the position of the processor." +
-        " (Note, if 'processing.guarantee' is set to '" + EXACTLY_ONCE + "', the default value is " + EOS_DEFAULT_COMMIT_INTERVAL_MS + "," +
-        " otherwise the default value is " + DEFAULT_COMMIT_INTERVAL_MS + ".";
-
-    /** {@code connections.max.idle.ms} */
-    public static final String CONNECTIONS_MAX_IDLE_MS_CONFIG = CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_CONFIG;
-
-    /**
-     * {@code default.deserialization.exception.handler}
-     */
-    public static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.deserialization.exception.handler";
-    private static final String DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.DeserializationExceptionHandler</code> interface.";
-
-    /**
-     * {@code default.production.exception.handler}
-     */
-    public static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG = "default.production.exception.handler";
-    private static final String DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC = "Exception handling class that implements the <code>org.apache.kafka.streams.errors.ProductionExceptionHandler</code> interface.";
-
-    /**
-     * {@code default.windowed.key.serde.inner}
-     */
-    public static final String DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS = "default.windowed.key.serde.inner";
-
-    /**
-     * {@code default.windowed.value.serde.inner}
-     */
-    public static final String DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS = "default.windowed.value.serde.inner";
-
-    /** {@code default key.serde} */
-    public static final String DEFAULT_KEY_SERDE_CLASS_CONFIG = "default.key.serde";
-    private static final String DEFAULT_KEY_SERDE_CLASS_DOC = " Default serializer / deserializer class for key that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
-            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
-            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
-
-    /** {@code default value.serde} */
-    public static final String DEFAULT_VALUE_SERDE_CLASS_CONFIG = "default.value.serde";
-    private static final String DEFAULT_VALUE_SERDE_CLASS_DOC = "Default serializer / deserializer class for value that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface. "
-            + "Note when windowed serde class is used, one needs to set the inner serde class that implements the <code>org.apache.kafka.common.serialization.Serde</code> interface via '"
-            + DEFAULT_WINDOWED_KEY_SERDE_INNER_CLASS + "' or '" + DEFAULT_WINDOWED_VALUE_SERDE_INNER_CLASS + "' as well";
-
-    /** {@code default.timestamp.extractor} */
-    public static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG = "default.timestamp.extractor";
-    private static final String DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC = "Default timestamp extractor class that implements the <code>org.apache.kafka.streams.processor.TimestampExtractor</code> interface.";
-
-    /** {@code metadata.max.age.ms} */
-    public static final String METADATA_MAX_AGE_CONFIG = CommonClientConfigs.METADATA_MAX_AGE_CONFIG;
-
-    /** {@code metrics.num.samples} */
-    public static final String METRICS_NUM_SAMPLES_CONFIG = CommonClientConfigs.METRICS_NUM_SAMPLES_CONFIG;
-
-    /** {@code metrics.record.level} */
-    public static final String METRICS_RECORDING_LEVEL_CONFIG = CommonClientConfigs.METRICS_RECORDING_LEVEL_CONFIG;
-
-    /** {@code metric.reporters} */
-    public static final String METRIC_REPORTER_CLASSES_CONFIG = CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG;
-
-    /** {@code metrics.sample.window.ms} */
-    public static final String METRICS_SAMPLE_WINDOW_MS_CONFIG = CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_CONFIG;
-
-    /** {@code num.standby.replicas} */
-    public static final String NUM_STANDBY_REPLICAS_CONFIG = "num.standby.replicas";
-    private static final String NUM_STANDBY_REPLICAS_DOC = "The number of standby replicas for each task.";
-
-    /** {@code num.stream.threads} */
-    public static final String NUM_STREAM_THREADS_CONFIG = "num.stream.threads";
-    private static final String NUM_STREAM_THREADS_DOC = "The number of threads to execute stream processing.";
-
-    /** {@code partition.grouper} */
-    public static final String PARTITION_GROUPER_CLASS_CONFIG = "partition.grouper";
-    private static final String PARTITION_GROUPER_CLASS_DOC = "Partition grouper class that implements the <code>org.apache.kafka.streams.processor.PartitionGrouper</code> interface.";
-
-    /** {@code poll.ms} */
-    public static final String POLL_MS_CONFIG = "poll.ms";
-    private static final String POLL_MS_DOC = "The amount of time in milliseconds to block waiting for input.";
-
-    /** {@code processing.guarantee} */
-    public static final String PROCESSING_GUARANTEE_CONFIG = "processing.guarantee";
-    private static final String PROCESSING_GUARANTEE_DOC = "The processing guarantee that should be used. Possible values are <code>" + AT_LEAST_ONCE + "</code> (default) and <code>" + EXACTLY_ONCE + "</code>. " +
-        "Note that exactly-once processing requires a cluster of at least three brokers by default what is the recommended setting for production; for development you can change this, by adjusting broker setting `transaction.state.log.replication.factor`.";
-
-    /** {@code receive.buffer.bytes} */
-    public static final String RECEIVE_BUFFER_CONFIG = CommonClientConfigs.RECEIVE_BUFFER_CONFIG;
-
-    /** {@code reconnect.backoff.ms} */
-    public static final String RECONNECT_BACKOFF_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MS_CONFIG;
-
-    /** {@code reconnect.backoff.max} */
-    public static final String RECONNECT_BACKOFF_MAX_MS_CONFIG = CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_CONFIG;
-
-    /** {@code replication.factor} */
-    public static final String REPLICATION_FACTOR_CONFIG = "replication.factor";
-    private static final String REPLICATION_FACTOR_DOC = "The replication factor for change log topics and repartition topics created by the stream processing application.";
-
-    /** {@code request.timeout.ms} */
-    public static final String REQUEST_TIMEOUT_MS_CONFIG = CommonClientConfigs.REQUEST_TIMEOUT_MS_CONFIG;
-
-    /** {@code retries} */
-    public static final String RETRIES_CONFIG = CommonClientConfigs.RETRIES_CONFIG;
-
-    /** {@code retry.backoff.ms} */
-    public static final String RETRY_BACKOFF_MS_CONFIG = CommonClientConfigs.RETRY_BACKOFF_MS_CONFIG;
-
-    /** {@code rocksdb.config.setter} */
-    public static final String ROCKSDB_CONFIG_SETTER_CLASS_CONFIG = "rocksdb.config.setter";
-    private static final String ROCKSDB_CONFIG_SETTER_CLASS_DOC = "A Rocks DB config setter class or class name that implements the <code>org.apache.kafka.streams.state.RocksDBConfigSetter</code> interface";
-
-    /** {@code security.protocol} */
-    public static final String SECURITY_PROTOCOL_CONFIG = CommonClientConfigs.SECURITY_PROTOCOL_CONFIG;
-
-    /** {@code send.buffer.bytes} */
-    public static final String SEND_BUFFER_CONFIG = CommonClientConfigs.SEND_BUFFER_CONFIG;
-
-    /** {@code state.cleanup.delay} */
-    public static final String STATE_CLEANUP_DELAY_MS_CONFIG = "state.cleanup.delay.ms";
-    private static final String STATE_CLEANUP_DELAY_MS_DOC = "The amount of time in milliseconds to wait before deleting state when a partition has migrated. Only state directories that have not been modified for at least state.cleanup.delay.ms will be removed";
-
-    /** {@code state.dir} */
-    public static final String STATE_DIR_CONFIG = "state.dir";
-    private static final String STATE_DIR_DOC = "Directory location for state store.";
-
-    /** {@code upgrade.from} */
-    public static final String UPGRADE_FROM_CONFIG = "upgrade.from";
-    public static final String UPGRADE_FROM_DOC = "Allows upgrading from versions 0.10.0/0.10.1/0.10.2/0.11.0/1.0/1.1 to version 1.2 (or newer) in a backward compatible way. " +
-        "When upgrading from 1.2 to a newer version it is not required to specify this config." +
-        "Default is null. Accepted values are \"" + UPGRADE_FROM_0100 + "\", \"" + UPGRADE_FROM_0101 + "\", \"" + UPGRADE_FROM_0102 + "\", \"" + UPGRADE_FROM_0110 + "\", \"" + UPGRADE_FROM_10 + "\", \"" + UPGRADE_FROM_11 + "\" (for upgrading from the corresponding old version).";
-
-    /** {@code windowstore.changelog.additional.retention.ms} */
-    public static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG = "windowstore.changelog.additional.retention.ms";
-    private static final String WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC = "Added to a windows maintainMs to ensure data is not deleted from the log prematurely. Allows for clock drift. Default is 1 day";
-
-    private static final String[] NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS = new String[] {ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG};
-    private static final String[] NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS = new String[] {ConsumerConfig.ISOLATION_LEVEL_CONFIG};
-    private static final String[] NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS = new String[] {ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG,
-                                                                                        ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION};
-
-    static {
-        CONFIG = new ConfigDef()
-
-            // HIGH
-
-            .define(APPLICATION_ID_CONFIG, // required with no default value
-                    Type.STRING,
-                    Importance.HIGH,
-                    APPLICATION_ID_DOC)
-            .define(BOOTSTRAP_SERVERS_CONFIG, // required with no default value
-                    Type.LIST,
-                    Importance.HIGH,
-                    CommonClientConfigs.BOOTSTRAP_SERVERS_DOC)
-            .define(REPLICATION_FACTOR_CONFIG,
-                    Type.INT,
-                    1,
-                    Importance.HIGH,
-                    REPLICATION_FACTOR_DOC)
-            .define(STATE_DIR_CONFIG,
-                    Type.STRING,
-                    "/tmp/kafka-streams",
-                    Importance.HIGH,
-                    STATE_DIR_DOC)
-
-            // MEDIUM
-
-            .define(CACHE_MAX_BYTES_BUFFERING_CONFIG,
-                    Type.LONG,
-                    10 * 1024 * 1024L,
-                    atLeast(0),
-                    Importance.MEDIUM,
-                    CACHE_MAX_BYTES_BUFFERING_DOC)
-            .define(CLIENT_ID_CONFIG,
-                    Type.STRING,
-                    "",
-                    Importance.MEDIUM,
-                    CLIENT_ID_DOC)
-            .define(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
-                    Type.CLASS,
-                    LogAndFailExceptionHandler.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_DOC)
-            .define(DEFAULT_KEY_SERDE_CLASS_CONFIG,
-                    Type.CLASS,
-                    Serdes.ByteArraySerde.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_KEY_SERDE_CLASS_DOC)
-            .define(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG,
-                    Type.CLASS,
-                    DefaultProductionExceptionHandler.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_DOC)
-            .define(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG,
-                    Type.CLASS,
-                    FailOnInvalidTimestamp.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_DOC)
-            .define(DEFAULT_VALUE_SERDE_CLASS_CONFIG,
-                    Type.CLASS,
-                    Serdes.ByteArraySerde.class.getName(),
-                    Importance.MEDIUM,
-                    DEFAULT_VALUE_SERDE_CLASS_DOC)
-            .define(NUM_STANDBY_REPLICAS_CONFIG,
-                    Type.INT,
-                    0,
-                    Importance.MEDIUM,
-                    NUM_STANDBY_REPLICAS_DOC)
-            .define(NUM_STREAM_THREADS_CONFIG,
-                    Type.INT,
-                    1,
-                    Importance.MEDIUM,
-                    NUM_STREAM_THREADS_DOC)
-            .define(PROCESSING_GUARANTEE_CONFIG,
-                    Type.STRING,
-                    AT_LEAST_ONCE,
-                    in(AT_LEAST_ONCE, EXACTLY_ONCE),
-                    Importance.MEDIUM,
-                    PROCESSING_GUARANTEE_DOC)
-            .define(SECURITY_PROTOCOL_CONFIG,
-                    Type.STRING,
-                    CommonClientConfigs.DEFAULT_SECURITY_PROTOCOL,
-                    Importance.MEDIUM,
-                    CommonClientConfigs.SECURITY_PROTOCOL_DOC)
-
-            // LOW
-
-            .define(APPLICATION_SERVER_CONFIG,
-                    Type.STRING,
-                    "",
-                    Importance.LOW,
-                    APPLICATION_SERVER_DOC)
-            .define(BUFFERED_RECORDS_PER_PARTITION_CONFIG,
-                    Type.INT,
-                    1000,
-                    Importance.LOW,
-                    BUFFERED_RECORDS_PER_PARTITION_DOC)
-            .define(COMMIT_INTERVAL_MS_CONFIG,
-                    Type.LONG,
-                    DEFAULT_COMMIT_INTERVAL_MS,
-                    Importance.LOW,
-                    COMMIT_INTERVAL_MS_DOC)
-            .define(CONNECTIONS_MAX_IDLE_MS_CONFIG,
-                    ConfigDef.Type.LONG,
-                    9 * 60 * 1000L,
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.CONNECTIONS_MAX_IDLE_MS_DOC)
-            .define(METADATA_MAX_AGE_CONFIG,
-                    ConfigDef.Type.LONG,
-                    5 * 60 * 1000L,
-                    atLeast(0),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.METADATA_MAX_AGE_DOC)
-            .define(METRICS_NUM_SAMPLES_CONFIG,
-                    Type.INT,
-                    2,
-                    atLeast(1),
-                    Importance.LOW,
-                    CommonClientConfigs.METRICS_NUM_SAMPLES_DOC)
-            .define(METRIC_REPORTER_CLASSES_CONFIG,
-                    Type.LIST,
-                    "",
-                    Importance.LOW,
-                    CommonClientConfigs.METRIC_REPORTER_CLASSES_DOC)
-            .define(METRICS_RECORDING_LEVEL_CONFIG,
-                    Type.STRING,
-                    Sensor.RecordingLevel.INFO.toString(),
-                    in(Sensor.RecordingLevel.INFO.toString(), Sensor.RecordingLevel.DEBUG.toString()),
-                    Importance.LOW,
-                    CommonClientConfigs.METRICS_RECORDING_LEVEL_DOC)
-            .define(METRICS_SAMPLE_WINDOW_MS_CONFIG,
-                    Type.LONG,
-                    30000L,
-                    atLeast(0),
-                    Importance.LOW,
-                    CommonClientConfigs.METRICS_SAMPLE_WINDOW_MS_DOC)
-            .define(PARTITION_GROUPER_CLASS_CONFIG,
-                    Type.CLASS,
-                    DefaultPartitionGrouper.class.getName(),
-                    Importance.LOW,
-                    PARTITION_GROUPER_CLASS_DOC)
-            .define(POLL_MS_CONFIG,
-                    Type.LONG,
-                    100L,
-                    Importance.LOW,
-                    POLL_MS_DOC)
-            .define(RECEIVE_BUFFER_CONFIG,
-                    Type.INT,
-                    32 * 1024,
-                    atLeast(0),
-                    Importance.LOW,
-                    CommonClientConfigs.RECEIVE_BUFFER_DOC)
-            .define(RECONNECT_BACKOFF_MS_CONFIG,
-                    Type.LONG,
-                    50L,
-                    atLeast(0L),
-                    Importance.LOW,
-                    CommonClientConfigs.RECONNECT_BACKOFF_MS_DOC)
-            .define(RECONNECT_BACKOFF_MAX_MS_CONFIG,
-                    Type.LONG,
-                    1000L,
-                    atLeast(0L),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.RECONNECT_BACKOFF_MAX_MS_DOC)
-            .define(RETRIES_CONFIG,
-                    Type.INT,
-                    0,
-                    between(0, Integer.MAX_VALUE),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.RETRIES_DOC)
-            .define(RETRY_BACKOFF_MS_CONFIG,
-                    Type.LONG,
-                    100L,
-                    atLeast(0L),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.RETRY_BACKOFF_MS_DOC)
-            .define(REQUEST_TIMEOUT_MS_CONFIG,
-                    Type.INT,
-                    40 * 1000,
-                    atLeast(0),
-                    ConfigDef.Importance.LOW,
-                    CommonClientConfigs.REQUEST_TIMEOUT_MS_DOC)
-            .define(ROCKSDB_CONFIG_SETTER_CLASS_CONFIG,
-                    Type.CLASS,
-                    null,
-                    Importance.LOW,
-                    ROCKSDB_CONFIG_SETTER_CLASS_DOC)
-            .define(SEND_BUFFER_CONFIG,
-                    Type.INT,
-                    128 * 1024,
-                    atLeast(0),
-                    Importance.LOW,
-                    CommonClientConfigs.SEND_BUFFER_DOC)
-            .define(STATE_CLEANUP_DELAY_MS_CONFIG,
-                    Type.LONG,
-                    10 * 60 * 1000L,
-                    Importance.LOW,
-                    STATE_CLEANUP_DELAY_MS_DOC)
-            .define(UPGRADE_FROM_CONFIG,
-                    ConfigDef.Type.STRING,
-                    null,
-                    in(null, UPGRADE_FROM_0100, UPGRADE_FROM_0101, UPGRADE_FROM_0102, UPGRADE_FROM_0110, UPGRADE_FROM_10, UPGRADE_FROM_11),
-                    Importance.LOW,
-                    UPGRADE_FROM_DOC)
-            .define(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG,
-                    Type.LONG,
-                    24 * 60 * 60 * 1000L,
-                    Importance.LOW,
-                    WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_DOC);
+public class Verifier implements GroovyClassVisitor, Opcodes {
+
+    public static final String __TIMESTAMP = "__timeStamp";
+    public static final String __TIMESTAMP__ = "__timeStamp__239_neverHappen";
+	private ClassNode classNode;
+    private MethodNode methodNode;
+
+    public ClassNode getClassNode() {
+        return classNode;
     }
 
-    // this is the list of configs for underlying clients
-    // that streams prefer different default values
-    private static final Map<String, Object> PRODUCER_DEFAULT_OVERRIDES;
-    static {
-        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>();
-        tempProducerDefaultOverrides.put(ProducerConfig.LINGER_MS_CONFIG, "100");
-        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, 10);
-
-        PRODUCER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
-    }
-
-    private static final Map<String, Object> PRODUCER_EOS_OVERRIDES;
-    static {
-        final Map<String, Object> tempProducerDefaultOverrides = new HashMap<>(PRODUCER_DEFAULT_OVERRIDES);
-        tempProducerDefaultOverrides.put(ProducerConfig.RETRIES_CONFIG, Integer.MAX_VALUE);
-        tempProducerDefaultOverrides.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
-
-        PRODUCER_EOS_OVERRIDES = Collections.unmodifiableMap(tempProducerDefaultOverrides);
-    }
-
-    private static final Map<String, Object> CONSUMER_DEFAULT_OVERRIDES;
-    static {
-        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>();
-        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1000");
-        tempConsumerDefaultOverrides.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        tempConsumerDefaultOverrides.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        tempConsumerDefaultOverrides.put("internal.leave.group.on.close", false);
-        // MAX_POLL_INTERVAL_MS_CONFIG needs to be large for streams to handle cases when
-        // streams is recovering data from state stores. We may set it to Integer.MAX_VALUE since
-        // the streams code itself catches most exceptions and acts accordingly without needing
-        // this timeout. Note however that deadlocks are not detected (by definition) so we
-        // are losing the ability to detect them by setting this value to large. Hopefully
-        // deadlocks happen very rarely or never.
-        tempConsumerDefaultOverrides.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, Integer.toString(Integer.MAX_VALUE));
-        CONSUMER_DEFAULT_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
-    }
-
-    private static final Map<String, Object> CONSUMER_EOS_OVERRIDES;
-    static {
-        final Map<String, Object> tempConsumerDefaultOverrides = new HashMap<>(CONSUMER_DEFAULT_OVERRIDES);
-        tempConsumerDefaultOverrides.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, READ_COMMITTED.name().toLowerCase(Locale.ROOT));
-        CONSUMER_EOS_OVERRIDES = Collections.unmodifiableMap(tempConsumerDefaultOverrides);
-    }
-
-    public static class InternalConfig {
-        public static final String TASK_MANAGER_FOR_PARTITION_ASSIGNOR = "__task.manager.instance__";
+    public MethodNode getMethodNode() {
+        return methodNode;
     }
 
     /**
-     * Prefix a property with {@link #CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #CONSUMER_PREFIX} + {@code consumerProp}
+     * add code to implement GroovyObject
+     * @param node
      */
-    public static String consumerPrefix(final String consumerProp) {
-        return CONSUMER_PREFIX + consumerProp;
-    }
+    public void visitClass(final ClassNode node) {
+        this.classNode = node;
 
-    /**
-     * Prefix a property with {@link #MAIN_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig main consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #MAIN_CONSUMER_PREFIX} + {@code consumerProp}
-     */
-    public static String mainConsumerPrefix(final String consumerProp) {
-        return MAIN_CONSUMER_PREFIX + consumerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #RESTORE_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig restore consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #RESTORE_CONSUMER_PREFIX} + {@code consumerProp}
-     */
-    public static String restoreConsumerPrefix(final String consumerProp) {
-        return RESTORE_CONSUMER_PREFIX + consumerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #GLOBAL_CONSUMER_PREFIX}. This is used to isolate {@link ConsumerConfig global consumer configs}
-     * from other client configs.
-     *
-     * @param consumerProp the consumer property to be masked
-     * @return {@link #GLOBAL_CONSUMER_PREFIX} + {@code consumerProp}
-     */
-    public static String globalConsumerPrefix(final String consumerProp) {
-        return GLOBAL_CONSUMER_PREFIX + consumerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #PRODUCER_PREFIX}. This is used to isolate {@link ProducerConfig producer configs}
-     * from other client configs.
-     *
-     * @param producerProp the producer property to be masked
-     * @return PRODUCER_PREFIX + {@code producerProp}
-     */
-    public static String producerPrefix(final String producerProp) {
-        return PRODUCER_PREFIX + producerProp;
-    }
-
-    /**
-     * Prefix a property with {@link #ADMIN_CLIENT_PREFIX}. This is used to isolate {@link AdminClientConfig admin configs}
-     * from other client configs.
-     *
-     * @param adminClientProp the admin client property to be masked
-     * @return ADMIN_CLIENT_PREFIX + {@code adminClientProp}
-     */
-    public static String adminClientPrefix(final String adminClientProp) {
-        return ADMIN_CLIENT_PREFIX + adminClientProp;
-    }
-
-    /**
-     * Prefix a property with {@link #TOPIC_PREFIX}
-     * used to provide default topic configs to be applied when creating internal topics.
-     *
-     * @param topicProp the topic property to be masked
-     * @return TOPIC_PREFIX + {@code topicProp}
-     */
-    public static String topicPrefix(final String topicProp) {
-        return TOPIC_PREFIX + topicProp;
-    }
-
-    /**
-     * Return a copy of the config definition.
-     *
-     * @return a copy of the config definition
-     */
-    public static ConfigDef configDef() {
-        return new ConfigDef(CONFIG);
-    }
-
-    /**
-     * Create a new {@code StreamsConfig} using the given properties.
-     *
-     * @param props properties that specify Kafka Streams and internal consumer/producer configuration
-     */
-    public StreamsConfig(final Map<?, ?> props) {
-        super(CONFIG, props);
-        eosEnabled = EXACTLY_ONCE.equals(getString(PROCESSING_GUARANTEE_CONFIG));
-    }
-
-    @Override
-    protected Map<String, Object> postProcessParsedConfig(final Map<String, Object> parsedValues) {
-        final Map<String, Object> configUpdates =
-            CommonClientConfigs.postProcessReconnectBackoffConfigs(this, parsedValues);
-
-        final boolean eosEnabled = EXACTLY_ONCE.equals(parsedValues.get(PROCESSING_GUARANTEE_CONFIG));
-        if (eosEnabled && !originals().containsKey(COMMIT_INTERVAL_MS_CONFIG)) {
-            log.debug("Using {} default value of {} as exactly once is enabled.",
-                    COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
-            configUpdates.put(COMMIT_INTERVAL_MS_CONFIG, EOS_DEFAULT_COMMIT_INTERVAL_MS);
+        if ((classNode.getModifiers() & Opcodes.ACC_INTERFACE) >0) {
+            //interfaces have no constructors, but this code expects one,
+            //so create a dummy and don't add it to the class node
+            ConstructorNode dummy = new ConstructorNode(0,null);
+            addInitialization(node, dummy);
+            node.visitContents(this);
+            return;
         }
 
-        return configUpdates;
-    }
-
-    private Map<String, Object> getCommonConsumerConfigs() {
-        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(CONSUMER_PREFIX, ConsumerConfig.configNames());
-
-        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS);
-        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_CONSUMER_EOS_CONFIGS);
-
-        final Map<String, Object> consumerProps = new HashMap<>(eosEnabled ? CONSUMER_EOS_OVERRIDES : CONSUMER_DEFAULT_OVERRIDES);
-        consumerProps.putAll(getClientCustomProps());
-        consumerProps.putAll(clientProvidedProps);
-
-        // bootstrap.servers should be from StreamsConfig
-        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
-
-        return consumerProps;
-    }
-
-    private void checkIfUnexpectedUserSpecifiedConsumerConfig(final Map<String, Object> clientProvidedProps, final String[] nonConfigurableConfigs) {
-        // Streams does not allow users to configure certain consumer/producer configurations, for example,
-        // enable.auto.commit. In cases where user tries to override such non-configurable
-        // consumer/producer configurations, log a warning and remove the user defined value from the Map.
-        // Thus the default values for these consumer/producer configurations that are suitable for
-        // Streams will be used instead.
-        final Object maxInflightRequests = clientProvidedProps.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
-        if (eosEnabled && maxInflightRequests != null && 5 < (int) maxInflightRequests) {
-            throw new ConfigException(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + " can't exceed 5 when using the idempotent producer");
+        ClassNode[] classNodes = classNode.getInterfaces();
+        List interfaces = new ArrayList();
+        for (int i = 0; i < classNodes.length; i++) {
+            ClassNode classNode = classNodes[i];
+            interfaces.add(classNode.getName());
         }
-        for (final String config: nonConfigurableConfigs) {
-            if (clientProvidedProps.containsKey(config)) {
-                final String eosMessage =  PROCESSING_GUARANTEE_CONFIG + " is set to " + EXACTLY_ONCE + ". Hence, ";
-                final String nonConfigurableConfigMessage = "Unexpected user-specified %s config: %s found. %sUser setting (%s) will be ignored and the Streams default setting (%s) will be used ";
+        Set interfaceSet = new HashSet(interfaces);
+        if (interfaceSet.size() != interfaces.size()) {
+            throw new RuntimeParserException("Duplicate interfaces in implements list: " + interfaces, classNode);
+        }
 
-                if (CONSUMER_DEFAULT_OVERRIDES.containsKey(config)) {
-                    if (!clientProvidedProps.get(config).equals(CONSUMER_DEFAULT_OVERRIDES.get(config))) {
-                        log.warn(String.format(nonConfigurableConfigMessage, "consumer", config, "", clientProvidedProps.get(config),  CONSUMER_DEFAULT_OVERRIDES.get(config)));
-                        clientProvidedProps.remove(config);
+        addDefaultParameterMethods(node);
+        addDefaultParameterConstructors(node);
+
+        String _myClassFieldName = "$myClass";
+        while (node.getField(_myClassFieldName) != null)
+          _myClassFieldName = _myClassFieldName + "$";
+        final String myClassFieldName = _myClassFieldName;
+
+        final String classInternalName = BytecodeHelper.getClassInternalName(node);
+
+//        FieldNode myClassField = node.addField(myClassFieldName, ACC_PRIVATE|ACC_STATIC, ClassHelper.CLASS_Type, new ClassExpression(node));
+//        myClassField.setSynthetic(true);
+
+        String _staticMetaClassFieldName = "$staticMetaClass";
+        while (node.getField(_staticMetaClassFieldName) != null)
+          _staticMetaClassFieldName = _staticMetaClassFieldName + "$";
+        final String staticMetaClassFieldName = _staticMetaClassFieldName;
+
+        FieldNode staticMetaClassField = node.addField(staticMetaClassFieldName, ACC_PUBLIC|ACC_STATIC, ClassHelper.make(SoftReference.class,false), null);
+        staticMetaClassField.setSynthetic(true);
+
+        List getStaticMetaClassCode = new LinkedList();
+        getStaticMetaClassCode.add( new BytecodeInstruction(){
+            public void visit(MethodVisitor mv) {
+                mv.visitFieldInsn(GETSTATIC, classInternalName, staticMetaClassFieldName, "Ljava/lang/ref/SoftReference;");
+                mv.visitVarInsn(ASTORE, 1);
+                mv.visitVarInsn(ALOAD, 1);
+                Label l0 = new Label();
+                mv.visitJumpInsn(IFNULL, l0);
+                mv.visitVarInsn(ALOAD, 1);
+                mv.visitMethodInsn(INVOKEVIRTUAL, "java/lang/ref/SoftReference", "get", "()Ljava/lang/Object;");
+                mv.visitTypeInsn(CHECKCAST, "groovy/lang/MetaClass");
+                mv.visitInsn(DUP);
+                mv.visitVarInsn(ASTORE, 1);
+                Label l1 = new Label();
+                mv.visitJumpInsn(IFNONNULL, l1);
+                mv.visitLabel(l0);
+                mv.visitVarInsn(ALOAD, 0);
+                mv.visitMethodInsn(INVOKESTATIC, "org/codehaus/groovy/runtime/InvokerHelper", "getMetaClass", "(Ljava/lang/Object;)Lgroovy/lang/MetaClass;");
+                mv.visitVarInsn(ASTORE, 1);
+                mv.visitTypeInsn(NEW, "java/lang/ref/SoftReference");
+                mv.visitInsn(DUP);
+                mv.visitVarInsn(ALOAD, 1);
+                mv.visitMethodInsn(INVOKESPECIAL, "java/lang/ref/SoftReference", "<init>", "(Ljava/lang/Object;)V");
+                mv.visitFieldInsn(PUTSTATIC, classInternalName, staticMetaClassFieldName, "Ljava/lang/ref/SoftReference;");
+                mv.visitLabel(l1);
+                mv.visitVarInsn(ALOAD, 1);
+                mv.visitInsn(ARETURN);
+            }
+        });
+        node.addSyntheticMethod(
+            "$getStaticMetaClass",
+            ACC_PROTECTED,
+            ClassHelper.make(MetaClass.class),
+            Parameter.EMPTY_ARRAY,
+            ClassNode.EMPTY_ARRAY,
+            new BytecodeSequence(getStaticMetaClassCode)
+        );
+
+        if (!node.isDerivedFromGroovyObject()) {
+            node.addInterface(ClassHelper.make(GroovyObject.class));
+
+            PropertyNode metaClassProperty =
+                node.addProperty("metaClass", ACC_PUBLIC, ClassHelper.METACLASS_TYPE, new BytecodeExpression() {
+                    public void visit(MethodVisitor mv) {
+                        mv.visitVarInsn(ALOAD, 0);
+                        mv.visitInsn(DUP);
+                        mv.visitMethodInsn(INVOKEVIRTUAL,classInternalName,"$getStaticMetaClass","()Lgroovy/lang/MetaClass;");
+                        mv.visitFieldInsn(PUTFIELD, classInternalName,"metaClass","Lgroovy/lang/MetaClass;");
+                        mv.visitVarInsn(ALOAD, 0);
+                        mv.visitFieldInsn(GETFIELD, classInternalName,"metaClass","Lgroovy/lang/MetaClass;");
                     }
-                } else if (eosEnabled) {
-                    if (CONSUMER_EOS_OVERRIDES.containsKey(config)) {
-                        if (!clientProvidedProps.get(config).equals(CONSUMER_EOS_OVERRIDES.get(config))) {
-                            log.warn(String.format(nonConfigurableConfigMessage,
-                                    "consumer", config, eosMessage, clientProvidedProps.get(config), CONSUMER_EOS_OVERRIDES.get(config)));
-                            clientProvidedProps.remove(config);
-                        }
-                    } else if (PRODUCER_EOS_OVERRIDES.containsKey(config)) {
-                        if (!clientProvidedProps.get(config).equals(PRODUCER_EOS_OVERRIDES.get(config))) {
-                            log.warn(String.format(nonConfigurableConfigMessage,
-                                    "producer", config, eosMessage, clientProvidedProps.get(config), PRODUCER_EOS_OVERRIDES.get(config)));
-                            clientProvidedProps.remove(config);
-                        }
+
+                    public ClassNode getType() {
+                        return ClassHelper.METACLASS_TYPE;
                     }
+                }, null, null);
+            metaClassProperty.setSynthetic(true);
+            FieldNode metaClassField = metaClassProperty.getField();
+            metaClassField.setModifiers(metaClassField.getModifiers() | ACC_TRANSIENT);
+
+            List getMetaClassCode = new LinkedList();
+            getMetaClassCode.add( new BytecodeInstruction(){
+                public void visit(MethodVisitor mv) {
+                    Label nullLabel = new Label();
+
+                    mv.visitVarInsn(ALOAD, 0);
+                    mv.visitFieldInsn(GETFIELD, classInternalName,"metaClass","Lgroovy/lang/MetaClass;");
+                    mv.visitInsn(DUP);
+                    mv.visitJumpInsn(IFNULL, nullLabel);
+                    mv.visitInsn(ARETURN);
+
+                    mv.visitLabel(nullLabel);
+                    mv.visitInsn(POP);
+                    mv.visitVarInsn(ALOAD, 0);
+                    mv.visitInsn(DUP);
+                    mv.visitMethodInsn(INVOKEVIRTUAL,classInternalName,"$getStaticMetaClass","()Lgroovy/lang/MetaClass;");
+                    mv.visitFieldInsn(PUTFIELD, classInternalName,"metaClass","Lgroovy/lang/MetaClass;");
+                    mv.visitVarInsn(ALOAD, 0);
+                    mv.visitFieldInsn(GETFIELD, classInternalName,"metaClass","Lgroovy/lang/MetaClass;");
+                    mv.visitInsn(ARETURN);
+                }
+            });
+            node.addSyntheticMethod(
+                "getMetaClass",
+                ACC_PUBLIC,
+                ClassHelper.make(MetaClass.class),
+                Parameter.EMPTY_ARRAY,
+                ClassNode.EMPTY_ARRAY,
+                new BytecodeSequence(getMetaClassCode)
+            );
+
+            // @todo we should check if the base class implements the invokeMethod method
+
+            // let's add the invokeMethod implementation
+            ClassNode superClass = node.getSuperClass();
+            boolean addDelegateObject =
+                (node instanceof InnerClassNode && superClass.equals(ClassHelper.CLOSURE_TYPE))
+                    || superClass.equals(ClassHelper.GSTRING_TYPE);
+
+            // don't do anything as the base class implements the invokeMethod
+            if (!addDelegateObject) {
+
+                List invokeMethodCode = new LinkedList();
+                invokeMethodCode.add( new BytecodeInstruction(){
+                    public void visit(MethodVisitor mv) {
+                        mv.visitVarInsn(ALOAD, 0);
+                        mv.visitMethodInsn(INVOKEVIRTUAL, classInternalName, "getMetaClass", "()Lgroovy/lang/MetaClass;");
+                        mv.visitVarInsn(ALOAD, 0);
+                        mv.visitVarInsn(ALOAD, 1);
+                        mv.visitVarInsn(ALOAD, 2);
+                        mv.visitMethodInsn(INVOKEINTERFACE, "groovy/lang/MetaObjectProtocol", "invokeMethod", "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;");
+                        mv.visitInsn(ARETURN);
+                    }
+                });
+                node.addSyntheticMethod(
+                    "invokeMethod",
+                    ACC_PUBLIC,
+                    ClassHelper.OBJECT_TYPE,
+                    new Parameter[] {
+                        new Parameter(ClassHelper.STRING_TYPE, "method"),
+                        new Parameter(ClassHelper.OBJECT_TYPE, "arguments")
+                    },
+                    ClassNode.EMPTY_ARRAY,
+                    new BytecodeSequence(invokeMethodCode)
+                );
+
+
+                if (!node.isScript()) {
+                    List getPropertyCode = new LinkedList();
+                    getPropertyCode.add( new BytecodeInstruction(){
+                        public void visit(MethodVisitor mv) {
+                            mv.visitVarInsn(ALOAD, 0);
+                            mv.visitMethodInsn(INVOKEVIRTUAL, classInternalName, "getMetaClass", "()Lgroovy/lang/MetaClass;");
+                            mv.visitVarInsn(ALOAD, 0);
+                            mv.visitVarInsn(ALOAD, 1);
+                            mv.visitMethodInsn(INVOKEINTERFACE, "groovy/lang/MetaClass", "getProperty", "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;");
+                            mv.visitInsn(ARETURN);
+                        }
+                    });
+                    node.addSyntheticMethod(
+                        "getProperty",
+                        ACC_PUBLIC|ACC_SYNTHETIC,
+                        ClassHelper.OBJECT_TYPE,
+                        new Parameter[] { new Parameter(ClassHelper.STRING_TYPE, "property")},
+                        ClassNode.EMPTY_ARRAY,
+                        new BytecodeSequence(getPropertyCode)
+                    );
+
+                    List setPropertyCode = new LinkedList();
+                    setPropertyCode.add( new BytecodeInstruction(){
+                        public void visit(MethodVisitor mv) {
+                            mv.visitVarInsn(ALOAD, 0);
+                            mv.visitMethodInsn(INVOKEVIRTUAL, classInternalName, "getMetaClass", "()Lgroovy/lang/MetaClass;");
+                            mv.visitVarInsn(ALOAD, 0);
+                            mv.visitVarInsn(ALOAD, 1);
+                            mv.visitVarInsn(ALOAD, 2);
+                            mv.visitMethodInsn(INVOKEINTERFACE, "groovy/lang/MetaClass", "setProperty", "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;)V");
+                            mv.visitInsn(RETURN);
+                        }
+                    });
+                    node.addSyntheticMethod(
+                        "setProperty",
+                        ACC_PUBLIC,
+                        ClassHelper.VOID_TYPE,
+                        new Parameter[] {
+                            new Parameter(ClassHelper.STRING_TYPE, "property"),
+                            new Parameter(ClassHelper.OBJECT_TYPE, "value")
+                        },
+                        ClassNode.EMPTY_ARRAY,
+                        new BytecodeSequence(setPropertyCode)
+                    );
                 }
             }
-
-        }
-    }
-
-    /**
-     * Get the configs to the {@link KafkaConsumer consumer}.
-     * Properties using the prefix {@link #CONSUMER_PREFIX} will be used in favor over their non-prefixed versions
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     *
-     * @param groupId      consumer groupId
-     * @param clientId     clientId
-     * @return Map of the consumer configuration.
-     * @Deprecated use {@link StreamsConfig#getMainConsumerConfigs(String, String)}
-     */
-    @Deprecated
-    public Map<String, Object> getConsumerConfigs(final String groupId,
-                                                  final String clientId) {
-        return getMainConsumerConfigs(groupId, clientId);
-    }
-
-    /**
-     * Get the configs to the {@link KafkaConsumer main consumer}.
-     * Properties using the prefix {@link #MAIN_CONSUMER_PREFIX} will be used in favor over
-     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
-     * (read the override precedence ordering in {@link #MAIN_CONSUMER_PREFIX)
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     * If not specified by {@link #MAIN_CONSUMER_PREFIX}, main consumer will share the general consumer configs
-     * prefixed by {@link #CONSUMER_PREFIX}.
-     *
-     * @param groupId      consumer groupId
-     * @param clientId     clientId
-     * @return Map of the consumer configuration.
-     */
-    public Map<String, Object> getMainConsumerConfigs(final String groupId,
-                                                      final String clientId) {
-        Map<String, Object> consumerProps = getCommonConsumerConfigs();
-
-        // Get main consumer override configs
-        Map<String, Object> mainConsumerProps = originalsWithPrefix(MAIN_CONSUMER_PREFIX);
-        for (Map.Entry<String, Object> entry: mainConsumerProps.entrySet()) {
-            consumerProps.put(entry.getKey(), entry.getValue());
         }
 
-        // add client id with stream client id prefix, and group id
-        consumerProps.put(APPLICATION_ID_CONFIG, groupId);
-        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-        consumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-consumer");
+        if (node.getDeclaredConstructors().isEmpty()) {
+            ConstructorNode constructor = new ConstructorNode(ACC_PUBLIC, null);
+            constructor.setSynthetic(true);
+            node.addConstructor(constructor);
+        }
 
-        // add configs required for stream partition assignor
-        consumerProps.put(UPGRADE_FROM_CONFIG, getString(UPGRADE_FROM_CONFIG));
-        consumerProps.put(REPLICATION_FACTOR_CONFIG, getInt(REPLICATION_FACTOR_CONFIG));
-        consumerProps.put(APPLICATION_SERVER_CONFIG, getString(APPLICATION_SERVER_CONFIG));
-        consumerProps.put(NUM_STANDBY_REPLICAS_CONFIG, getInt(NUM_STANDBY_REPLICAS_CONFIG));
-        consumerProps.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, StreamsPartitionAssignor.class.getName());
-        consumerProps.put(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG, getLong(WINDOW_STORE_CHANGE_LOG_ADDITIONAL_RETENTION_MS_CONFIG));
+        if (!(node instanceof InnerClassNode)) {// add a static timestamp field to the class
+            addTimeStamp(node);
+        }
 
-        // add admin retries configs for creating topics
-        final AdminClientConfig adminClientDefaultConfig = new AdminClientConfig(getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames()));
-        consumerProps.put(adminClientPrefix(AdminClientConfig.RETRIES_CONFIG), adminClientDefaultConfig.getInt(AdminClientConfig.RETRIES_CONFIG));
+        addInitialization(node);
+        checkReturnInObjectInitializer(node.getObjectInitializerStatements());
+        node.getObjectInitializerStatements().clear();
+        addCovariantMethods(node);
+        node.visitContents(this);
+    }
 
-        // verify that producer batch config is no larger than segment size, then add topic configs required for creating topics
-        final Map<String, Object> topicProps = originalsWithPrefix(TOPIC_PREFIX, false);
+    protected void addTimeStamp(ClassNode node) {
+        FieldNode timeTagField = new FieldNode(
+                Verifier.__TIMESTAMP,
+                Modifier.PUBLIC | Modifier.STATIC,
+                ClassHelper.Long_TYPE,
+                //"",
+                node,
+                new ConstantExpression(new Long(System.currentTimeMillis())));
+        // alternatively , FieldNode timeTagField = SourceUnit.createFieldNode("public static final long __timeStamp = " + System.currentTimeMillis() + "L");
+        timeTagField.setSynthetic(true);
+        node.addField(timeTagField);
 
-        if (topicProps.containsKey(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG))) {
-            final int segmentSize = Integer.parseInt(topicProps.get(topicPrefix(TopicConfig.SEGMENT_INDEX_BYTES_CONFIG)).toString());
-            final Map<String, Object> producerProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
-            final int batchSize;
-            if (producerProps.containsKey(ProducerConfig.BATCH_SIZE_CONFIG)) {
-                batchSize = Integer.parseInt(producerProps.get(ProducerConfig.BATCH_SIZE_CONFIG).toString());
-            } else {
-                final ProducerConfig producerDefaultConfig = new ProducerConfig(new Properties());
-                batchSize = producerDefaultConfig.getInt(ProducerConfig.BATCH_SIZE_CONFIG);
+        timeTagField = new FieldNode(
+                Verifier.__TIMESTAMP__ + String.valueOf(System.currentTimeMillis()),
+                Modifier.PUBLIC | Modifier.STATIC,
+                ClassHelper.Long_TYPE,
+                //"",
+                node,
+                new ConstantExpression(new Long(0)));
+        // alternatively , FieldNode timeTagField = SourceUnit.createFieldNode("public static final long __timeStamp = " + System.currentTimeMillis() + "L");
+        timeTagField.setSynthetic(true);
+        node.addField(timeTagField);
+    }
+
+    private void checkReturnInObjectInitializer(List init) {
+        CodeVisitorSupport cvs = new CodeVisitorSupport() {
+            public void visitReturnStatement(ReturnStatement statement) {
+                throw new RuntimeParserException("'return' is not allowed in object initializer",statement);
             }
+        };
+        for (Iterator iterator = init.iterator(); iterator.hasNext();) {
+            Statement stm = (Statement) iterator.next();
+            stm.visit(cvs);
+        }
+    }
 
-            if (segmentSize < batchSize) {
-                throw new IllegalArgumentException(String.format("Specified topic segment size %d is is smaller than the configured producer batch size %d, this will cause produced batch not able to be appended to the topic",
-                        segmentSize,
-                        batchSize));
+    public void visitConstructor(ConstructorNode node) {
+        CodeVisitorSupport checkSuper = new CodeVisitorSupport() {
+            boolean firstMethodCall = true;
+            String type=null;
+            public void visitMethodCallExpression(MethodCallExpression call) {
+                if (!firstMethodCall) return;
+                firstMethodCall = false;
+                String name = call.getMethodAsString();
+                // the name might not be null if the method name is a GString for example
+                if (name==null) return;
+                if (!name.equals("super") && !name.equals("this")) return;
+                type=name;
+                call.getArguments().visit(this);
+                type=null;
+            }
+            public void visitVariableExpression(VariableExpression expression) {
+                if (type==null) return;
+                String name = expression.getName();
+                if (!name.equals("this") && !name.equals("super")) return;
+                throw new RuntimeParserException("cannot reference "+name+" inside of "+type+"(....) before supertype constructor has been called",expression);
+            }
+        };
+        Statement s = node.getCode();
+        //todo why can a statement can be null?
+        if (s == null) return;
+        s.visit(checkSuper);
+    }
+
+    public void visitMethod(MethodNode node) {
+        this.methodNode = node;
+        Statement statement = node.getCode();
+        if (!node.isVoidMethod()) {
+            if (statement instanceof ExpressionStatement) {
+                ExpressionStatement expStmt = (ExpressionStatement) statement;
+                node.setCode(new ReturnStatement(expStmt.getExpression()));
+            }
+            else if (statement instanceof BlockStatement) {
+                BlockStatement block = (BlockStatement) statement;
+
+                // let's copy the list so we create a new block
+                List list = new ArrayList(block.getStatements());
+                if (!list.isEmpty()) {
+                    int idx = list.size() - 1;
+                    Statement last = (Statement) list.get(idx);
+                    if (last instanceof ExpressionStatement) {
+                        ExpressionStatement expStmt = (ExpressionStatement) last;
+                        list.set(idx, new ReturnStatement(expStmt));
+                    }
+                    else if (!(last instanceof ReturnStatement)) {
+                        list.add(new ReturnStatement(ConstantExpression.NULL));
+                    }
+                }
+                else {
+                    list.add(new ReturnStatement(ConstantExpression.NULL));
+                }
+
+                node.setCode(new BlockStatement(filterStatements(list),block.getVariableScope()));
             }
         }
-
-        consumerProps.putAll(topicProps);
-
-        return consumerProps;
-    }
-
-    /**
-     * Get the configs for the {@link KafkaConsumer restore-consumer}.
-     * Properties using the prefix {@link #RESTORE_CONSUMER_PREFIX} will be used in favor over
-     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
-     * (read the override precedence ordering in {@link #RESTORE_CONSUMER_PREFIX)
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     * If not specified by {@link #RESTORE_CONSUMER_PREFIX}, restore consumer will share the general consumer configs
-     * prefixed by {@link #CONSUMER_PREFIX}.
-     *
-     * @param clientId clientId
-     * @return Map of the restore consumer configuration.
-     */
-    public Map<String, Object> getRestoreConsumerConfigs(final String clientId) {
-        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
-
-        // Get restore consumer override configs
-        Map<String, Object> restoreConsumerProps = originalsWithPrefix(RESTORE_CONSUMER_PREFIX);
-        for (Map.Entry<String, Object> entry: restoreConsumerProps.entrySet()) {
-            baseConsumerProps.put(entry.getKey(), entry.getValue());
+        else if (!node.isAbstract()) {
+        	BlockStatement newBlock = new BlockStatement();
+            if (statement instanceof BlockStatement) {
+                newBlock.addStatements(filterStatements(((BlockStatement)statement).getStatements()));
+            }
+            else {
+                newBlock.addStatement(filterStatement(statement));
+            }
+            newBlock.addStatement(ReturnStatement.RETURN_NULL_OR_VOID);
+            node.setCode(newBlock);
         }
-
-        // no need to set group id for a restore consumer
-        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
-        // add client id with stream client id prefix
-        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-restore-consumer");
-        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-
-        return baseConsumerProps;
-    }
-
-    /**
-     * Get the configs for the {@link KafkaConsumer global consumer}.
-     * Properties using the prefix {@link #GLOBAL_CONSUMER_PREFIX} will be used in favor over
-     * the properties prefixed with {@link #CONSUMER_PREFIX} and the non-prefixed versions
-     * (read the override precedence ordering in {@link #GLOBAL_CONSUMER_PREFIX)
-     * except in the case of {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     * If not specified by {@link #GLOBAL_CONSUMER_PREFIX}, global consumer will share the general consumer configs
-     * prefixed by {@link #CONSUMER_PREFIX}.
-     *
-     * @param clientId clientId
-     * @return Map of the global consumer configuration.
-     */
-    public Map<String, Object> getGlobalConsumerConfigs(final String clientId) {
-        Map<String, Object> baseConsumerProps = getCommonConsumerConfigs();
-
-        // Get global consumer override configs
-        Map<String, Object> globalConsumerProps = originalsWithPrefix(GLOBAL_CONSUMER_PREFIX);
-        for (Map.Entry<String, Object> entry: globalConsumerProps.entrySet()) {
-            baseConsumerProps.put(entry.getKey(), entry.getValue());
+        if (node.getName().equals("main") && node.isStatic()) {
+            Parameter[] params = node.getParameters();
+            if (params.length == 1) {
+                Parameter param = params[0];
+                if (param.getType() == null || param.getType()==ClassHelper.OBJECT_TYPE) {
+                    param.setType(ClassHelper.STRING_TYPE.makeArray());
+                }
+            }
         }
-
-        // no need to set group id for a global consumer
-        baseConsumerProps.remove(ConsumerConfig.GROUP_ID_CONFIG);
-        // add client id with stream client id prefix
-        baseConsumerProps.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-global-consumer");
-        baseConsumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-
-        return baseConsumerProps;
+        statement = node.getCode();
+        if (statement!=null) statement.visit(new VerifierCodeVisitor(this));
     }
 
-    /**
-     * Get the configs for the {@link KafkaProducer producer}.
-     * Properties using the prefix {@link #PRODUCER_PREFIX} will be used in favor over their non-prefixed versions
-     * except in the case of {@link ProducerConfig#BOOTSTRAP_SERVERS_CONFIG} where we always use the non-prefixed
-     * version as we only support reading/writing from/to the same Kafka Cluster.
-     *
-     * @param clientId clientId
-     * @return Map of the producer configuration.
-     */
-    public Map<String, Object> getProducerConfigs(final String clientId) {
-        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(PRODUCER_PREFIX, ProducerConfig.configNames());
-
-        checkIfUnexpectedUserSpecifiedConsumerConfig(clientProvidedProps, NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS);
-
-        // generate producer configs from original properties and overridden maps
-        final Map<String, Object> props = new HashMap<>(eosEnabled ? PRODUCER_EOS_OVERRIDES : PRODUCER_DEFAULT_OVERRIDES);
-        props.putAll(getClientCustomProps());
-        props.putAll(clientProvidedProps);
-
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, originals().get(BOOTSTRAP_SERVERS_CONFIG));
-        // add client id with stream client id prefix
-        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-producer");
-
-        return props;
+    public void visitField(FieldNode node) {
+    }
+    
+    private boolean methodNeedsReplacement(MethodNode m) {
+        // no method found, we need to replace
+        if (m==null) return true;
+        // method is in current class, nothing to be done
+        if (m.getDeclaringClass()==this.getClassNode()) return false;
+        // do not overwrite final
+        if ((m.getModifiers()&ACC_FINAL)!=0) return false;
+        return true;
     }
 
-    /**
-     * Get the configs for the {@link org.apache.kafka.clients.admin.AdminClient admin client}.
-     * @param clientId clientId
-     * @return Map of the admin client configuration.
-     */
-    public Map<String, Object> getAdminConfigs(final String clientId) {
-        final Map<String, Object> clientProvidedProps = getClientPropsWithPrefix(ADMIN_CLIENT_PREFIX, AdminClientConfig.configNames());
+    public void visitProperty(PropertyNode node) {
+        String name = node.getName();
+        FieldNode field = node.getField();
 
-        final Map<String, Object> props = new HashMap<>();
-        props.putAll(getClientCustomProps());
-        props.putAll(clientProvidedProps);
+        String getterName = "get" + capitalize(name);
+        String setterName = "set" + capitalize(name);
 
-        // add client id with stream client id prefix
-        props.put(CommonClientConfigs.CLIENT_ID_CONFIG, clientId + "-admin");
-
-        return props;
-    }
-
-    private Map<String, Object> getClientPropsWithPrefix(final String prefix,
-                                                         final Set<String> configNames) {
-        final Map<String, Object> props = clientProps(configNames, originals());
-        props.putAll(originalsWithPrefix(prefix));
-        return props;
-    }
-
-    /**
-     * Get a map of custom configs by removing from the originals all the Streams, Consumer, Producer, and AdminClient configs.
-     * Prefixed properties are also removed because they are already added by {@link #getClientPropsWithPrefix(String, Set)}.
-     * This allows to set a custom property for a specific client alone if specified using a prefix, or for all
-     * when no prefix is used.
-     *
-     * @return a map with the custom properties
-     */
-    private Map<String, Object> getClientCustomProps() {
-        final Map<String, Object> props = originals();
-        props.keySet().removeAll(CONFIG.names());
-        props.keySet().removeAll(ConsumerConfig.configNames());
-        props.keySet().removeAll(ProducerConfig.configNames());
-        props.keySet().removeAll(AdminClientConfig.configNames());
-        props.keySet().removeAll(originalsWithPrefix(CONSUMER_PREFIX, false).keySet());
-        props.keySet().removeAll(originalsWithPrefix(PRODUCER_PREFIX, false).keySet());
-        props.keySet().removeAll(originalsWithPrefix(ADMIN_CLIENT_PREFIX, false).keySet());
-        return props;
-    }
-
-    /**
-     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_KEY_SERDE_CLASS_CONFIG key Serde
-     * class}.
-     *
-     * @return an configured instance of key Serde class
-     */
-    public Serde defaultKeySerde() {
-        Object keySerdeConfigSetting = get(DEFAULT_KEY_SERDE_CLASS_CONFIG);
-        try {
-            Serde<?> serde = getConfiguredInstance(DEFAULT_KEY_SERDE_CLASS_CONFIG, Serde.class);
-            serde.configure(originals(), true);
-            return serde;
-        } catch (final Exception e) {
-            throw new StreamsException(
-                String.format("Failed to configure key serde %s", keySerdeConfigSetting), e);
+        Statement getterBlock = node.getGetterBlock();
+        if (getterBlock == null) {
+            MethodNode getter = classNode.getGetterMethod(getterName);
+            if (!node.isPrivate() && methodNeedsReplacement(getter)) {
+                getterBlock = createGetterBlock(node, field);
+            }
         }
-    }
-
-    /**
-     * Return an {@link Serde#configure(Map, boolean) configured} instance of {@link #DEFAULT_VALUE_SERDE_CLASS_CONFIG value
-     * Serde class}.
-     *
-     * @return an configured instance of value Serde class
-     */
-    public Serde defaultValueSerde() {
-        Object valueSerdeConfigSetting = get(DEFAULT_VALUE_SERDE_CLASS_CONFIG);
-        try {
-            Serde<?> serde = getConfiguredInstance(DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serde.class);
-            serde.configure(originals(), false);
-            return serde;
-        } catch (final Exception e) {
-            throw new StreamsException(
-                String.format("Failed to configure value serde %s", valueSerdeConfigSetting), e);
-        }
-    }
-
-    public TimestampExtractor defaultTimestampExtractor() {
-        return getConfiguredInstance(DEFAULT_TIMESTAMP_EXTRACTOR_CLASS_CONFIG, TimestampExtractor.class);
-    }
-
-    public DeserializationExceptionHandler defaultDeserializationExceptionHandler() {
-        return getConfiguredInstance(DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG, DeserializationExceptionHandler.class);
-    }
-
-    public ProductionExceptionHandler defaultProductionExceptionHandler() {
-        return getConfiguredInstance(DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG, ProductionExceptionHandler.class);
-    }
-
-    /**
-     * Override any client properties in the original configs with overrides
-     *
-     * @param configNames The given set of configuration names.
-     * @param originals   The original configs to be filtered.
-     * @return client config with any overrides
-     */
-    private Map<String, Object> clientProps(final Set<String> configNames,
-                                            final Map<String, Object> originals) {
-        // iterate all client config names, filter out non-client configs from the original
-        // property map and use the overridden values when they are not specified by users
-        final Map<String, Object> parsed = new HashMap<>();
-        for (final String configName: configNames) {
-            if (originals.containsKey(configName)) {
-                parsed.put(configName, originals.get(configName));
+        Statement setterBlock = node.getSetterBlock();
+        if (setterBlock == null) {
+            MethodNode setter = classNode.getSetterMethod(setterName);
+            if ( !node.isPrivate() && 
+                 (node.getModifiers()&ACC_FINAL)==0 && 
+                 methodNeedsReplacement(setter)) 
+            {
+                setterBlock = createSetterBlock(node, field);
             }
         }
 
-        return parsed;
+        if (getterBlock != null) {
+            MethodNode getter =
+                new MethodNode(getterName, node.getModifiers(), node.getType(), Parameter.EMPTY_ARRAY, ClassNode.EMPTY_ARRAY, getterBlock);
+            getter.setSynthetic(true);
+            classNode.addMethod(getter);
+            visitMethod(getter);
+
+            if (ClassHelper.boolean_TYPE==node.getType() || ClassHelper.Boolean_TYPE==node.getType()) {
+                String secondGetterName = "is" + capitalize(name);
+                MethodNode secondGetter =
+                    new MethodNode(secondGetterName, node.getModifiers(), node.getType(), Parameter.EMPTY_ARRAY, ClassNode.EMPTY_ARRAY, getterBlock);
+                secondGetter.setSynthetic(true);
+                classNode.addMethod(secondGetter);
+                visitMethod(secondGetter);
+            }
+        }
+        if (setterBlock != null) {
+            Parameter[] setterParameterTypes = { new Parameter(node.getType(), "value")};
+            MethodNode setter =
+                new MethodNode(setterName, node.getModifiers(), ClassHelper.VOID_TYPE, setterParameterTypes, ClassNode.EMPTY_ARRAY, setterBlock);
+            setter.setSynthetic(true);
+            classNode.addMethod(setter);
+            visitMethod(setter);
+        }
     }
 
-    public static void main(final String[] args) {
-        System.out.println(CONFIG.toHtmlTable());
+    // Implementation methods
+    //-------------------------------------------------------------------------
+    
+    private interface DefaultArgsAction {
+        void call(ArgumentListExpression arguments, Parameter[] newParams, MethodNode method);
     }
+    
+    /**
+     * Creates a new helper method for each combination of default parameter expressions 
+     */
+    protected void addDefaultParameterMethods(final ClassNode node) {
+        List methods = new ArrayList(node.getMethods());
+        addDefaultParameters(methods, new DefaultArgsAction(){
+            public void call(ArgumentListExpression arguments, Parameter[] newParams, MethodNode method) {
+                MethodCallExpression expression = new MethodCallExpression(VariableExpression.THIS_EXPRESSION, method.getName(), arguments);
+                expression.setImplicitThis(true);
+                Statement code = null;
+                if (method.isVoidMethod()) {
+                    code = new ExpressionStatement(expression);
+                } else {
+                    code = new ReturnStatement(expression);
+                }
+                node.addMethod(method.getName(), method.getModifiers(), method.getReturnType(), newParams, method.getExceptions(), code);
+            }
+        });
+    }
+    
+    protected void addDefaultParameterConstructors(final ClassNode node) {
+        List methods = new ArrayList(node.getDeclaredConstructors());
+        addDefaultParameters(methods, new DefaultArgsAction(){
+            public void call(ArgumentListExpression arguments, Parameter[] newParams, MethodNode method) {
+                ConstructorNode ctor = (ConstructorNode) method;
+                ConstructorCallExpression expression = new ConstructorCallExpression(ClassNode.THIS, arguments);
+                Statement code = new ExpressionStatement(expression);
+                node.addConstructor(ctor.getModifiers(), newParams, ctor.getExceptions(), code);
+            }
+        });
+    }
+
+    /**
+     * Creates a new helper method for each combination of default parameter expressions 
+     */
+    protected void addDefaultParameters(List methods, DefaultArgsAction action) {
+        for (Iterator iter = methods.iterator(); iter.hasNext();) {
+            MethodNode method = (MethodNode) iter.next();
+            if (method.hasDefaultValue()) {
+                Parameter[] parameters = method.getParameters();
+                int counter = 0;
+                List paramValues = new ArrayList();
+                int size = parameters.length;
+                for (int i = size - 1; i >= 0; i--) {
+                    Parameter parameter = parameters[i];
+                    if (parameter != null && parameter.hasInitialExpression()) {
+                        paramValues.add(Integer.valueOf(i));
+                        paramValues.add(parameter.getInitialExpression());
+                        counter++;
+                    }
+                }
+
+                for (int j = 1; j <= counter; j++) {
+                    Parameter[] newParams =  new Parameter[parameters.length - j];
+                    ArgumentListExpression arguments = new ArgumentListExpression();
+                    int index = 0;
+                    int k = 1;
+                    for (int i = 0; i < parameters.length; i++) {
+                        if (k > counter - j && parameters[i] != null && parameters[i].hasInitialExpression()) {
+                            arguments.addExpression(parameters[i].getInitialExpression());
+                            k++;
+                        }
+                        else if (parameters[i] != null && parameters[i].hasInitialExpression()) {
+                            newParams[index++] = parameters[i];
+                            arguments.addExpression(new VariableExpression(parameters[i].getName()));
+                            k++;
+                        }
+                        else {
+                            newParams[index++] = parameters[i];
+                            arguments.addExpression(new VariableExpression(parameters[i].getName()));
+                        }
+                    }
+                    if (parameters.length>0 && parameters[parameters.length-1].getType().isArray()) {
+                        // vargs call... better expand the argument:
+                        Expression exp = arguments.getExpression(parameters.length-1);
+                        SpreadExpression se = new SpreadExpression(exp);
+                        arguments.getExpressions().set(parameters.length-1, se);
+                    }
+                    action.call(arguments,newParams,method);
+                }
+                
+                for (int i = 0; i < parameters.length; i++) {
+                    // remove default expression
+                    parameters[i].setInitialExpression(null);
+                }
+            }
+        }
+    }
+
+    protected void addClosureCode(InnerClassNode node) {
+        // add a new invoke
+    }
+
+    protected void addInitialization(ClassNode node) {
+        for (Iterator iter = node.getDeclaredConstructors().iterator(); iter.hasNext();) {
+            addInitialization(node, (ConstructorNode) iter.next());
+        }
+    }
+
+    protected void addInitialization(ClassNode node, ConstructorNode constructorNode) {
+        Statement firstStatement = constructorNode.getFirstStatement();
+        ConstructorCallExpression first = getFirstIfSpecialConstructorCall(firstStatement);
+        
+        // in case of this(...) let the other constructor do the intit
+        if (first!=null && first.isThisCall()) return;
+        
+        List statements = new ArrayList();
+        List staticStatements = new ArrayList();
+        for (Iterator iter = node.getFields().iterator(); iter.hasNext();) {
+            addFieldInitialization(statements, staticStatements, (FieldNode) iter.next());
+        }
+        statements.addAll(node.getObjectInitializerStatements());
+        if (!statements.isEmpty()) {
+            Statement code = constructorNode.getCode();
+            BlockStatement block = new BlockStatement();
+            List otherStatements = block.getStatements();
+            if (code instanceof BlockStatement) {
+                block = (BlockStatement) code;
+                otherStatements=block.getStatements();
+            }
+            else if (code != null) {
+                otherStatements.add(code);
+            }
+            if (!otherStatements.isEmpty()) {
+                if (first!=null) {
+                    // it is super(..) since this(..) is already covered
+                    otherStatements.remove(0);
+                    statements.add(0, firstStatement);
+                } 
+                statements.addAll(otherStatements);
+            }
+            constructorNode.setCode(new BlockStatement(statements, block.getVariableScope()));
+        }
+
+        if (!staticStatements.isEmpty()) {
+            node.addStaticInitializerStatements(staticStatements,true);
+        }
+    }
+
+    private ConstructorCallExpression getFirstIfSpecialConstructorCall(Statement code) {
+        if (code == null || !(code instanceof ExpressionStatement)) return null;
+
+        Expression expression = ((ExpressionStatement)code).getExpression();
+        if (!(expression instanceof ConstructorCallExpression)) return null;
+        ConstructorCallExpression cce = (ConstructorCallExpression) expression;
+        if (cce.isSpecialCall()) return cce;
+        return null;
+    }
+
+    protected void addFieldInitialization(
+        List list,
+        List staticList,
+        FieldNode fieldNode) {
+        Expression expression = fieldNode.getInitialExpression();
+        if (expression != null) {
+            ExpressionStatement statement =
+                new ExpressionStatement(
+                    new BinaryExpression(
+                        new FieldExpression(fieldNode),
+                        Token.newSymbol(Types.EQUAL, fieldNode.getLineNumber(), fieldNode.getColumnNumber()),
+                        expression));
+            if (fieldNode.isStatic()) {
+                staticList.add(statement);
+            }
+            else {
+                list.add(statement);
+            }
+        }
+    }
+
+    /**
+     * Capitalizes the start of the given bean property name
+     */
+    public static String capitalize(String name) {
+        return name.substring(0, 1).toUpperCase() + name.substring(1, name.length());
+    }
+
+    protected Statement createGetterBlock(PropertyNode propertyNode, FieldNode field) {
+        Expression expression = new FieldExpression(field);
+        return new ReturnStatement(expression);
+    }
+
+    protected Statement createSetterBlock(PropertyNode propertyNode, FieldNode field) {
+        Expression expression = new FieldExpression(field);
+        return new ExpressionStatement(
+            new BinaryExpression(expression, Token.newSymbol(Types.EQUAL, 0, 0), new VariableExpression("value")));
+    }
+
+    /**
+     * Filters the given statements
+     */
+    protected List filterStatements(List list) {
+        List answer = new ArrayList(list.size());
+        for (Iterator iter = list.iterator(); iter.hasNext();) {
+            answer.add(filterStatement((Statement) iter.next()));
+        }
+        return answer;
+    }
+
+    protected Statement filterStatement(Statement statement) {
+        if (statement instanceof ExpressionStatement) {
+            ExpressionStatement expStmt = (ExpressionStatement) statement;
+            Expression expression = expStmt.getExpression();
+            if (expression instanceof ClosureExpression) {
+                ClosureExpression closureExp = (ClosureExpression) expression;
+                if (!closureExp.isParameterSpecified()) {
+                    return closureExp.getCode();
+                }
+            }
+        }
+        return statement;
+    }
+
+    public void visitGenericType(GenericsType genericsType) {
+
+    }
+
+    public static long getTimestamp (Class clazz) {
+        if (clazz.getClassLoader() instanceof GroovyClassLoader.InnerLoader) {
+            GroovyClassLoader.InnerLoader innerLoader = (GroovyClassLoader.InnerLoader) clazz.getClassLoader();
+            return innerLoader.getTimeStamp();
+        }
+
+        final Field[] fields = clazz.getFields();
+        for (int i = 0; i != fields.length; ++i ) {
+           if (Modifier.isStatic(fields[i].getModifiers())) {
+               final String name = fields[i].getName();
+               if (name.startsWith(__TIMESTAMP__)) {
+                 try {
+                     return Long.decode(name.substring(__TIMESTAMP__.length())).longValue();
+                 }
+                 catch (NumberFormatException e) {
+                     return Long.MAX_VALUE;
+                 }
+             }
+           }
+        }
+        return Long.MAX_VALUE;
+    }
+    
+    protected void addCovariantMethods(ClassNode classNode) {
+        Map methodsToAdd = new HashMap();
+        List declaredMethods = new ArrayList(classNode.getMethods());
+        Map genericsSpec = new HashMap();
+        
+        // remove staic methods from declaredMethods
+        for (Iterator methodsIterator = declaredMethods.iterator(); methodsIterator.hasNext();) {
+            MethodNode m = (MethodNode) methodsIterator.next();
+            if (m.isStatic()) methodsIterator.remove();
+        }
+        
+        addCovariantMethods(classNode, declaredMethods, methodsToAdd, genericsSpec);
+       
+        for (Iterator it = methodsToAdd.values().iterator(); it.hasNext();) {
+            MethodNode method = (MethodNode) it.next();
+            classNode.addMethod(method);
+        }
+    }
+    
+    private void addCovariantMethods(ClassNode classNode, List declaredMethods, Map methodsToAdd, Map oldGenericsSpec) {
+        ClassNode sn = classNode.getUnresolvedSuperClass(false);
+        if (sn!=null) {
+            Map genericsSpec = createGenericsSpec(sn,oldGenericsSpec);
+            for (Iterator it = declaredMethods.iterator(); it.hasNext();) {
+                MethodNode method = (MethodNode) it.next();
+                if (method.isStatic()) continue;
+                storeMissingCovariantMethods(sn,method,methodsToAdd,genericsSpec);
+            }
+            addCovariantMethods(sn.redirect(),declaredMethods,methodsToAdd,genericsSpec);
+        }
+        
+        ClassNode[] interfaces = classNode.getInterfaces();
+        for (int i=0; i<interfaces.length; i++) {
+            Map genericsSpec = createGenericsSpec(interfaces[i],oldGenericsSpec);
+            for (Iterator it = declaredMethods.iterator(); it.hasNext();) {
+                MethodNode method = (MethodNode) it.next();
+                if (method.isStatic()) continue;
+                storeMissingCovariantMethods(interfaces[i],method,methodsToAdd,genericsSpec);
+            }
+            addCovariantMethods(interfaces[i],declaredMethods,methodsToAdd,genericsSpec);
+        }
+        
+    }
+    
+    private MethodNode getCovariantImplementation(final MethodNode oldMethod, final MethodNode overridingMethod, Map genericsSpec) {
+        // method name
+        if (!oldMethod.getName().equals(overridingMethod.getName())) return null;
+
+        // parameters
+        boolean normalEqualParameters = equalParametersNormal(overridingMethod,oldMethod);
+        boolean genericEqualParameters = equalParametersWithGenerics(overridingMethod,oldMethod,genericsSpec);
+        if (!normalEqualParameters && !genericEqualParameters) return null;
+
+        // return type
+        ClassNode mr = overridingMethod.getReturnType();
+        ClassNode omr = oldMethod.getReturnType();
+        boolean equalReturnType = mr.equals(omr);
+        if (equalReturnType && normalEqualParameters) return null;
+
+        // if we reach this point we have at last one parameter or return type, that
+        // is different in its specified form. That means we have to create a bridge method!
+        ClassNode testmr = correctToGenericsSpec(genericsSpec,omr);
+        if (!mr.isDerivedFrom(testmr)) {
+            throw new RuntimeParserException(
+                    "the return type is incompatible with "+
+                    oldMethod.getTypeDescriptor()+
+                    " in "+oldMethod.getDeclaringClass().getName(),
+                    overridingMethod);
+        }
+        if ((oldMethod.getModifiers()&ACC_FINAL)!=0) {
+            throw new RuntimeParserException(
+                    "cannot override final method "+
+                    oldMethod.getTypeDescriptor()+
+                    " in "+oldMethod.getDeclaringClass().getName(),
+                    overridingMethod);
+        }
+        if (oldMethod.isStatic() != overridingMethod.isStatic()){
+            throw new RuntimeParserException(
+                    "cannot override method "+
+                    oldMethod.getTypeDescriptor()+
+                    " in "+oldMethod.getDeclaringClass().getName()+
+                    " with disparate static modifier",
+                    overridingMethod);
+        }
+        
+        MethodNode newMethod = new MethodNode(
+                oldMethod.getName(),
+                overridingMethod.getModifiers() | ACC_SYNTHETIC | ACC_BRIDGE,
+                oldMethod.getReturnType().getPlainNodeReference(),
+                cleanParameters(oldMethod.getParameters()),
+                oldMethod.getExceptions(),
+                null
+        );
+        List instructions = new ArrayList(1);
+        instructions.add (
+                new BytecodeInstruction() {
+                    public void visit(MethodVisitor mv) {
+                        BytecodeHelper helper = new BytecodeHelper(mv);
+                        mv.visitVarInsn(ALOAD,0);
+                        Parameter[] para = oldMethod.getParameters();
+                        Parameter[] goal = overridingMethod.getParameters();
+                        for (int i = 0; i < para.length; i++) {
+                            helper.load(para[i].getType(), i+1);
+                            if (!para[i].getType().equals(goal[i].getType())) {
+                                helper.doCast(goal[i].getType());
+                            }
+                        }
+                        mv.visitMethodInsn(
+                                INVOKEVIRTUAL, 
+                                BytecodeHelper.getClassInternalName(classNode),
+                                overridingMethod.getName(),
+                                BytecodeHelper.getMethodDescriptor(overridingMethod.getReturnType(), overridingMethod.getParameters()));
+                        helper.doReturn(oldMethod.getReturnType());
+                    }
+                }
+
+        );
+        newMethod.setCode(new BytecodeSequence(instructions));
+        return newMethod;
+    }
+    
+    private Parameter[] cleanParameters(Parameter[] parameters) {
+        Parameter[] params = new Parameter[parameters.length];
+        for (int i = 0; i < params.length; i++) {
+            params[i] = new Parameter(parameters[i].getType().getPlainNodeReference(),parameters[i].getName());
+        }
+        return params;
+    }
+
+    private void storeMissingCovariantMethods(ClassNode current, MethodNode method, Map methodsToAdd, Map genericsSpec) {
+        List methods = current.getMethods();
+        for (Iterator sit = methods.iterator(); sit.hasNext();) {
+            MethodNode toOverride = (MethodNode) sit.next();
+            MethodNode bridgeMethod = getCovariantImplementation(toOverride,method,genericsSpec);
+            if (bridgeMethod==null) continue;
+            methodsToAdd.put (bridgeMethod.getTypeDescriptor(),bridgeMethod);
+            return;
+        }
+    }
+    
+    private ClassNode correctToGenericsSpec(Map genericsSpec, GenericsType type) {
+        ClassNode ret = null;
+        if (type.isPlaceholder()){
+            String name = type.getName();
+            ret = (ClassNode) genericsSpec.get(name);
+        }
+        if (ret==null) ret = type.getType();
+        return ret;
+    }
+    
+    private ClassNode correctToGenericsSpec(Map genericsSpec, ClassNode type) {
+        if (type.isGenericsPlaceHolder()){
+            String name = type.getGenericsTypes()[0].getName();
+            type = (ClassNode) genericsSpec.get(name);
+        }
+        if (type==null) type = ClassHelper.OBJECT_TYPE;
+        return type;
+    }
+    
+    private boolean equalParametersNormal(MethodNode m1, MethodNode m2) {
+        Parameter[] p1 = m1.getParameters();
+        Parameter[] p2 = m2.getParameters();
+        if (p1.length!=p2.length) return false;
+        for (int i = 0; i < p2.length; i++) {
+            ClassNode type = p2[i].getType();
+            ClassNode parameterType = p1[i].getType();
+            if (!parameterType.equals(type)) return false;
+        }
+        return true;
+    }
+
+    private boolean equalParametersWithGenerics(MethodNode m1, MethodNode m2, Map genericsSpec) {
+        Parameter[] p1 = m1.getParameters();
+        Parameter[] p2 = m2.getParameters();
+        if (p1.length!=p2.length) return false;
+        for (int i = 0; i < p2.length; i++) {
+            ClassNode type = p2[i].getType();
+            ClassNode genericsType = correctToGenericsSpec(genericsSpec,type);
+            ClassNode parameterType = p1[i].getType();
+            if (!parameterType.equals(genericsType)) return false;
+        }
+        return true;
+    }
+    
+    private Map createGenericsSpec(ClassNode current, Map oldSpec) {
+        Map ret = new HashMap(oldSpec);
+        // ret contains the type specs, what we now need is the type spec for the 
+        // current class. To get that we first apply the type parameters to the 
+        // current class and then use the type names of the current class to reset 
+        // the map. Example:
+        //   class A<V,W,X>{}
+        //   class B<T extends Number> extends A<T,Long,String> {}
+        // first we have:    T->Number
+        // we apply it to A<T,Long,String> -> A<Number,Long,String>
+        // resulting in:     V->Number,W->Long,X->String
+
+        GenericsType[] sgts = current.getGenericsTypes();
+        if (sgts!=null) {
+            ClassNode[] spec = new ClassNode[sgts.length];
+            for (int i = 0; i < spec.length; i++) {
+                spec[i]=correctToGenericsSpec(ret, sgts[i]);
+            }
+            GenericsType[] newGts = current.redirect().getGenericsTypes();
+            if (newGts==null) return ret;
+            ret.clear();
+            for (int i = 0; i < spec.length; i++) {
+                ret.put(newGts[i].getName(), spec[i]);
+            }            
+        }
+        return ret;
+    }
+
 }
