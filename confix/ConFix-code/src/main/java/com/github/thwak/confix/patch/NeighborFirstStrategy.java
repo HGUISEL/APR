@@ -85,6 +85,8 @@ public class NeighborFirstStrategy extends ConcretizationStrategy {
 			currLoc = loc;
 			tried.clear();
 		}
+		// 새로운 체인지거나 새로운 위치인 경우에는 tried.clear()
+		
 		info.cMethods.add(C_METHOD_NEIGHBOR);
 		if (!hasReqs) {
 			Node copied = TreeUtils.deepCopy(c.type.equals(Change.INSERT) ? c.node : c.location);

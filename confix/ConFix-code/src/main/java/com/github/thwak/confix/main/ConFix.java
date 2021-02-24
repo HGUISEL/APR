@@ -167,7 +167,7 @@ public class ConFix {
 				break;
 			}
 				
-
+			
 			// ======= STEP 2-3. Select Change Information ======= //
 			System.out.println("\n// ======= STEP 2-3. Select Change Information ======= //");
 			Change change = pStrategy.selectChange();
