@@ -1,0 +1,15 @@
+Class:org.apache.commons.lang3.math.NumberUtils
+update
+startsWith
+to
+endsWith
+at line 452
+Applied Change
+	Change Information: 
+			type: update
+			location code: method0
+			to
+			location value: method0
+from
+0:
+5

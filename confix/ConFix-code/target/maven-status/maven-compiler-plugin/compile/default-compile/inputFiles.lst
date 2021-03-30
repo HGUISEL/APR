@@ -62,6 +62,7 @@
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/coverage/CoverageInfo.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/coverage/CoverageManager.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/tree/StructuralPropertyDesc.java
+/home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/util/VariableStatementCollection.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/ConcretizationStrategy.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/CodePool.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/util/IOUtils.java

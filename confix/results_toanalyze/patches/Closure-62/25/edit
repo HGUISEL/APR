@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.LightweightMessageFormatter
+update
+charno < sourceExcerpt.length()
+to
+charno <= sourceExcerpt.length()
+at line 98
+Applied Change
+	Change Information: 
+			type: update
+			location code: null
+			to
+			location value: <=
+from
+0:
+1

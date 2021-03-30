@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.ProcessClosurePrimitives
+update
+indexOf
+to
+lastIndexOf
+at line 789
+Applied Change
+	Change Information: 
+			type: update
+			location code: method0
+			to
+			location value: method0
+from
+0:
+4

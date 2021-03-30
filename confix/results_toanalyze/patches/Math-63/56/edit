@@ -1,0 +1,14 @@
+Class:org.apache.commons.math.util.MathUtils
+insert
+x > 0L
+at Insert Before
+MethodInvocation::null
+org.apache.commons.math.util.MathUtils:417
+Context:
+Applied Change
+	Change Information: 
+			type: insert
+			code: null
+from
+0:
+1

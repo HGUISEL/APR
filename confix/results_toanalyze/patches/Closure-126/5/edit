@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.MinimizeExitPoints
+update
+hasFinally
+to
+isFunctionDeclaration
+at line 141
+Applied Change
+	Change Information: 
+			type: update
+			location code: method0
+			to
+			location value: method0
+from
+0:
+7

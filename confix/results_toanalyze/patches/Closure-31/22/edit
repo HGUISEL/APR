@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.Compiler
+update
+options.skipAllPasses
+to
+options.removeUnusedPrototypePropertiesInExterns
+at line 1285
+Applied Change
+	Change Information: 
+			type: update
+			location code: var0
+			to
+			location value: var0
+from
+0:
+18

@@ -87,6 +87,7 @@ public class Materials {
 		if(!methods.containsKey(absSignature))
 			methods.put(absSignature, new HashSet<Method>());
 		methods.get(absSignature).add(m);
+		
 		if(mb != null){
 			Set<String> importNames = new HashSet<>();
 			ITypeBinding declType = mb.getDeclaringClass();

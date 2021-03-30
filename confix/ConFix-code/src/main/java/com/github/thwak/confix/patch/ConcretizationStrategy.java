@@ -21,12 +21,15 @@ import org.eclipse.jdt.core.dom.IBinding;
 import org.eclipse.jdt.core.dom.IMethodBinding;
 import org.eclipse.jdt.core.dom.ITypeBinding;
 import org.eclipse.jdt.core.dom.IVariableBinding;
+import org.eclipse.jdt.core.dom.InfixExpression;
 import org.eclipse.jdt.core.dom.ImportDeclaration;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
 import org.eclipse.jdt.core.dom.MethodInvocation;
 import org.eclipse.jdt.core.dom.Modifier;
 import org.eclipse.jdt.core.dom.Name;
 import org.eclipse.jdt.core.dom.PrimitiveType;
+import org.eclipse.jdt.core.dom.PostfixExpression;
+import org.eclipse.jdt.core.dom.PrefixExpression;
 import org.eclipse.jdt.core.dom.QualifiedName;
 import org.eclipse.jdt.core.dom.QualifiedType;
 import org.eclipse.jdt.core.dom.SimpleType;
@@ -55,6 +58,8 @@ public class ConcretizationStrategy {
 	public Random r;
 	public Set<String> importNames;
 	public Set<String> declaredTypeNames;
+	public List<String> simpleNameList;
+	public int simpleNameListIndex;
 
 	public ConcretizationStrategy(Random r) {
 		global = new Materials();
@@ -188,9 +193,9 @@ public class ConcretizationStrategy {
 							}
 						}
 
-						System.out.println("here");
+						// System.out.println("here");
 						for (IMethodBinding mb : tb.getDeclaredMethods()) {
-							System.out.println(mb.getName());
+							// System.out.println(mb.getName());
 							if (Modifier.isPublic(mb.getModifiers()) && !Modifier.isStatic(mb.getModifiers())
 									&& !mb.isConstructor()) {
 								materials.addMethod(mb);
@@ -238,14 +243,14 @@ public class ConcretizationStrategy {
 					}
 					break;
 				case IBinding.METHOD:
-					System.out.println("Find method");
+					// System.out.println("Find method");
 					if (n.astNode instanceof Name) {
 						Name name = (Name) n.astNode;
-						System.out.println("name: " + name);
+						// System.out.println("name: " + name);
 						IMethodBinding mb = (IMethodBinding) name.resolveBinding();
-						System.out.println("resolve binding null: " + (mb == null));
+						// System.out.println("resolve binding null: " + (mb == null));
 						if (mb != null && !mb.isConstructor()) {
-							System.out.println("resolved method name: " + mb.getName());
+							// System.out.println("resolved method name: " + mb.getName());
 							materials.addMethod(mb);
 						}
 					}
@@ -373,8 +378,8 @@ public class ConcretizationStrategy {
 	 *         information in {@code loc}, {@code false} otherwise.
 	 */
 	public boolean instCheck(Change change, TargetLocation loc) {
-		System.out.println("\n		===== instCheck Begins =====");
-		System.out.println("	" + change.toString());
+		// System.out.println("\n		===== instCheck Begins =====");
+		// System.out.println("	" + change.toString());
 
 		if (change.type.equals(Change.UPDATE) && change.node.type == loc.node.type && change.node.children.size() > 0) {
 			if (change.node.hashString == null) {
@@ -383,7 +388,9 @@ public class ConcretizationStrategy {
 			if (loc.node.hashString == null) {
 				loc.node.hashString = TreeUtils.getTypeHash(loc.node);
 			}
-			return change.node.hashString.equals(loc.node.hashString);
+			// 2021.03.22 Jeon commented out hashStrting comparison
+			// return change.node.hashString.equals(loc.node.hashString);
+			return true;
 		}
 		Requirements reqs = change.requirements;
 
@@ -453,9 +460,9 @@ public class ConcretizationStrategy {
 					}
 				} else {
 					VariableType newReturnType = MVTManager.generateType(loc.getType());
-					System.out.println("		variable type : " + newReturnType.toString());
+					// System.out.println("		variable type : " + newReturnType.toString());
 					Method m = (Method) reqs.methods.get(absSignature).toArray()[0];
-					System.out.println("		method : " + m.toString());
+					// System.out.println("		method : " + m.toString());
 					Method newMethod = new Method(m.name, m.declaringClass, newReturnType);
 					newMethod.parameters.addAll(m.parameters);
 					absSignature = newMethod.getAbstractSignature();
@@ -463,9 +470,9 @@ public class ConcretizationStrategy {
 			}
 			if (!materials.methods.containsKey(absSignature)) {
 				Set<String> mtd = materials.methods.keySet();
-				System.out.println("		materials.methods: \n");
+				// System.out.println("		materials.methods: \n");
 				for (String key : mtd)
-					System.out.println("		" + key);
+					// System.out.println("		" + key);
 				System.out.println(" 		- return false : No methods of abstract signature - " + absSignature);
 				return false;
 			} else {
@@ -496,10 +503,17 @@ public class ConcretizationStrategy {
 	 * @return an instance of {@code ASTNode} can be used to modify an AST.
 	 */
 	public ASTNode instantiate(Change c, TargetLocation loc, PatchInfo info) {
+		// System.out.println("==========================================");
+		// System.out.println("c.node.type: " + c.node.type);
+		// System.out.println("loc.node.type: " + loc.node.type);
+		// System.out.println("c.node.kind: " + c.node.kind);
+		// System.out.println("loc.node.kind: " + loc.node.kind);
+		// System.out.println("==========================================");
 		info.cMethods.add(C_METHOD_TC);
 		// If the change is an update in intermediate node,
 		// copy all values from loc except for updated value.
-		if (c.type.equals(Change.UPDATE) && c.node.children.size() > 0) {
+		if ((c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE))  && c.node.children.size() > 0) {
+			// System.out.println("inter!!!");
 			return updateIntermediate(c, loc);
 		}
 
@@ -512,6 +526,8 @@ public class ConcretizationStrategy {
 
 		// Assign methods.
 		if (reqs.methods.size() > 0) {
+		// System.out.println("Method");
+			
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == loc.node.kind) {
 				for (Set<Method> cMethods : reqs.methods.values()) {
 					if (cMethods.size() > 0) {
@@ -572,16 +588,16 @@ public class ConcretizationStrategy {
 			} else {
 				for (String absSignature : reqs.methods.keySet()) {
 					Set<Method> cMethods = reqs.methods.get(absSignature);
-					System.out.print("methods null? : ");
-					System.out.println((materials.methods == null));
-					System.out.print("\n\n====== Traverse Methods =====");
-					System.out.print(materials.methods.size());
+					// System.out.print("methods null? : ");
+					// System.out.println((materials.methods == null));
+					// System.out.print("\n\n====== Traverse Methods =====");
+					// System.out.print(materials.methods.size());
 					for (String key : materials.methods.keySet()) {
 						Set<Method> mtd = materials.methods.get(key);
-						System.out.println(key);
-						// mtd.forEach(m -> {
-						// System.out.println(" Value : " + m.toString());
-						// });
+						// System.out.println(key);
+						// // mtd.forEach(m -> {
+						// // System.out.println(" Value : " + m.toString());
+						// // });
 					}
 					System.out.print("====== End Traversing Methods =====\n\n");
 					Set<Method> locMethods = new HashSet<>(materials.methods.get(absSignature));
@@ -615,6 +631,7 @@ public class ConcretizationStrategy {
 
 		// For variable updates, match variable types.
 		if (c.type.equals(Change.UPDATE) && c.node.kind == Node.K_VARIABLE) {
+			System.out.println("Variable");
 			if (c.requirements.variables.size() == 1) {
 				VariableType t = (VariableType) c.requirements.variables.keySet().toArray()[0];
 				if (!t.isJSL) {
@@ -633,6 +650,7 @@ public class ConcretizationStrategy {
 		// Assign types.
 		VariableType t = null;
 		if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == Node.K_TYPE) {
+			System.out.println("Type");
 			t = MVTManager.generateType(loc.getType());
 		}
 		if (!assignTypes(typeMap, reqs, materials, false, t)) {
@@ -648,6 +666,7 @@ public class ConcretizationStrategy {
 		}
 
 		if (c.type.equals(Change.REPLACE)) {
+			System.out.println("replace!!!");
 			// In case of replace, keep declared variable names unchanged.
 			List<Node> locNodes = TreeUtils.traverse(loc.node);
 			List<Node> cNodes = TreeUtils.traverse(c.node);
@@ -660,6 +679,7 @@ public class ConcretizationStrategy {
 				}
 			}
 		} else {
+			System.out.println("replace else!!!");
 			int count = reqs.declaredVariables.size();
 			for (String oldValue : reqs.declaredVariables) {
 				String newValue = oldValue;
@@ -673,6 +693,7 @@ public class ConcretizationStrategy {
 
 		// Field assignments.
 		if (reqs.fields.size() > 0) {
+			System.out.println("Assignment");
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == Node.K_VARIABLE) {
 				VariableType type = MVTManager.generateType(loc.getType());
 				Set<Variable> locFields = new HashSet<>();
@@ -784,6 +805,7 @@ public class ConcretizationStrategy {
 
 		// Other variables.
 		if (reqs.variables.size() > 0) {
+			System.out.println("Other Varialbles");
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == loc.node.kind) {
 				String oldName = loc.node.value;
 				VariableType type = MVTManager.generateType(loc.getType());
@@ -916,8 +938,23 @@ public class ConcretizationStrategy {
 				}
 			}
 		}
+
+
 		AST ast = loc.node.astNode.getAST();
 		ASTNode astNode = null;
+
+		String d;
+		d = astNode == null ? "null" : "not null";
+
+		// System.out.println(d);
+
+
+		// if(change.type.equals(Change.UPDATE) && loc.node.parent.astNode.getNodeType() == loc.node.parent.astNode.METHOD_INVOCATION){
+		// 	copied.value = simpleNameList.get(simpleNameListIndex++);
+		// 	if(simpleNameListIndex == simpleNameList.size())
+		// 		simpleNameListIndex = 0;
+		// }
+
 		astNode = TreeUtils.generateNode(copied, ast);
 
 
@@ -944,16 +981,25 @@ public class ConcretizationStrategy {
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
 		List<Node> locNodes = TreeUtils.traverse(loc.node);
-		if (nodes.size() != locNodes.size())
-			return null;
-		for (int i = 1; i < nodes.size(); i++) {
-			Node node = nodes.get(i);
-			Node locNode = locNodes.get(i);
-			node.value = locNode.value;
-		}
+		// if (nodes.size() != locNodes.size())
+		// 	return null;
+		// for (int i = 1; i < nodes.size(); i++) {
+		// 	Node node = nodes.get(i);
+		// 	Node locNode = locNodes.get(i);
+		// 	node.value = locNode.value;
+		// }
 		AST ast = loc.node.astNode.getAST();
 		ASTNode astNode = null;
-		astNode = TreeUtils.generateNode(copied, ast);
+		// if(c.location.type.equals)
+		// TargetLocation newloc = new TargetLocation(loc.className, loc.kind, loc.context, loc.node, loc.desc);
+		// newloc.node.label = c.location.label;
+		// newloc.node.value = c.location.value;
+
+		if(c.location.label.contains("fixExpression"))
+			astNode = TreeUtils.generateNode(copied, ast, loc.node);
+		else
+			astNode = TreeUtils.generateNode(copied,ast);
+		// astNode = TreeUtils.generateNode(copied, ast);
 		return astNode;
 	}
 

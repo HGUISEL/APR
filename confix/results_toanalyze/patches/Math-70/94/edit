@@ -1,0 +1,14 @@
+Class:org.apache.commons.math.analysis.solvers.BisectionSolver
+insert
+f
+at Insert Before
+SimpleName::min
+org.apache.commons.math.analysis.solvers.BisectionSolver:72
+Context:
+Applied Change
+	Change Information: 
+			type: insert
+			code: var0
+from
+0:
+1

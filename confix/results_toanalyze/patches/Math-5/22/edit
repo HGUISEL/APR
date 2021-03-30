@@ -1,0 +1,15 @@
+Class:org.apache.commons.math3.complex.Complex
+update
+NaN
+to
+INF
+at line 305
+Applied Change
+	Change Information: 
+			type: update
+			location code: var0
+			to
+			location value: var0
+from
+0:
+10

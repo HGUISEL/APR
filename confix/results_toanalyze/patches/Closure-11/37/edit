@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.TypeCheck
+replace
+n.getJSType()
+with
+topScope.getParent()
+at line 1314
+Applied Change
+	Change Information: 
+			type: replace
+			location code: var0.method0()
+			with
+			code: var0.method0()
+from
+0:
+3

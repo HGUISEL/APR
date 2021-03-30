@@ -1,0 +1,15 @@
+Class:org.apache.commons.math3.optimization.linear.SimplexTableau
+replace
+maxUlps
+with
+Double.valueOf(epsilon)
+at line 338
+Applied Change
+	Change Information: 
+			type: replace
+			location code: var0
+			with
+			code: var0.method0(var1)
+from
+0:
+2

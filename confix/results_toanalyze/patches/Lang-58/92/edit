@@ -1,0 +1,15 @@
+Class:org.apache.commons.lang.math.NumberUtils
+update
+substring
+to
+valueOf
+at line 454
+Applied Change
+	Change Information: 
+			type: update
+			location code: method0
+			to
+			location value: method0
+from
+0:
+25

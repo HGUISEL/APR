@@ -16,7 +16,7 @@ def main(argv):
     target_bug_list.sort()
 
     for target_bug in target_bug_list:
-        # target_bug="Math-85"
+        target_bug="Math-82"
         target_project, target_id = target_bug.split('-')
 
 
@@ -74,7 +74,7 @@ def main(argv):
 
         # rm -rf ${PROJ_NAME_LIST[$i]}-${j}
 
-        # break
+        break
 
 
 if __name__ == '__main__':

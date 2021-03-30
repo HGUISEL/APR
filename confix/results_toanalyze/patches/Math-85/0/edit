@@ -1,0 +1,11 @@
+Class:org.apache.commons.math.analysis.solvers.UnivariateRealSolverUtils
+delete
+fb
+at line 198
+Applied Change
+	Change Information: 
+			type: delete
+			code: var0
+from
+0:
+3

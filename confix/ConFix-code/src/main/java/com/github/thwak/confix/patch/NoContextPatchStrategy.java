@@ -31,6 +31,7 @@ public class NoContextPatchStrategy extends PatchStrategy {
 	public TargetLocation selectLocation() {
 		if (currLocIndex < locations.size()) {
 			LocEntry e = locations.get(currLocIndex);
+			// TE
 			if (e.changeIds == null) {
 				e.changeIds = findCandidateChanges(e.loc);
 				appendLoc(e);

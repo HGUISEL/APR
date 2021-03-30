@@ -1,0 +1,14 @@
+Class:com.google.javascript.jscomp.TypeCheck
+insert
+type.isEmptyType()
+at Insert After
+NullLiteral::null
+com.google.javascript.jscomp.TypeCheck:1661
+Context:
+Applied Change
+	Change Information: 
+			type: insert
+			code: var0.method0()
+from
+0:
+5

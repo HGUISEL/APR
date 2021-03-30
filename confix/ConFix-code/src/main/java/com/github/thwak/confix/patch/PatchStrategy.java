@@ -236,6 +236,7 @@ public class PatchStrategy {
 	public TargetLocation selectLocation() {
 		if (currLocIndex < locations.size()) {
 			LocEntry e = locations.get(currLocIndex);
+			// TE
 			if (e.changeIds == null) {
 				e.changeIds = findCandidateChanges(e.loc);
 				if (e.changeIds.size() > 0)
@@ -293,24 +294,32 @@ public class PatchStrategy {
 				}
 				switch (c.type) {
 					case Change.UPDATE:
-						if (c.node.hashString.equals(loc.node.hashString)) {
+						System.out.println(" ==== node hash ==== ");
+						System.out.println(c.node.hashString);
+						System.out.println(" ==== loc hash ==== ");
+						System.out.println(loc.node.hashString);
+						// 2021.03.19 Jeon, No comparison of hashString
+						if(true){
+						// if (c.node.hashString.equals(loc.node.hashString)) {
 							if (c.node.isStatement) {
 								candidates.add(id);
 							} else if (c.node.kind == loc.node.kind) {
 								if (c.node.normalized) {
 									candidates.add(id);
-								} else if (loc.isCompatible(c) && c.node.value.equals(loc.node.value)) {
+								} else if (loc.isCompatible(c)) { // TE: value 확인 안하기
 									candidates.add(id);
+								} else{
+									System.out.println("==== else here ===");
 								}
 							}
 						}
 						break;
 					case Change.REPLACE:
 						if (c.node.isStatement || !c.node.isStatement && loc.isCompatible(c)) {
-							if (c.node.hashString.equals(loc.node.hashString)) {
-								if (valueMatched(c.node, loc.node))
+							// if (c.node.hashString.equals(loc.node.hashString)) {
+							// 	if (valueMatched(c.node, loc.node)) // TE: value 확인 안 하기
 									candidates.add(id);
-							}
+							// }
 						}
 						break;
 					case Change.DELETE:

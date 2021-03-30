@@ -25,6 +25,12 @@ import org.eclipse.jdt.internal.compiler.env.ICompilationUnit;
 import org.eclipse.jdt.internal.compiler.impl.CompilerOptions;
 import org.eclipse.jdt.internal.compiler.problem.DefaultProblemFactory;
 
+import org.apache.commons.exec.CommandLine;
+import org.apache.commons.exec.DefaultExecutor;
+import org.apache.commons.exec.ExecuteException;
+import org.apache.commons.exec.ExecuteWatchdog;
+import org.apache.commons.exec.PumpStreamHandler;
+
 import com.github.thwak.confix.tree.Parser;
 import com.github.thwak.confix.util.IOUtils;
 
@@ -66,6 +72,69 @@ public class Compiler {
 	}
 
 	public boolean compile(File f, String targetPath, String classPath, String source, String target) {
+
+		// CommandLine command = CommandLine.parse("javac");
+		// // command.addArgument("-Xms512m");
+		// // command.addArgument("-Xmx2048m");
+		// command.addArgument("-classpath");
+		// command.addArgument(classPath);
+		// // command.addArgument("-Duser.timezone=" + TZ_INFO);
+		// // command.addArgument("-Duser.language=en");
+		// command.addArgument(" -d ");
+		// command.addArgument(targetPath);
+
+		// // command.addArgument(" -extdirs  \"\"");
+		// // //command.append(target);
+		// // command.addArgument(" ");
+		// command.addArgument(f.getAbsolutePath());
+
+		// // command.addArgument(SAMPLE_TEST_RUNNER);
+		// // command.addArgument(testClassName);
+		// // command.addArgument("sample");
+		// // command.addArgument("false");
+
+		// ExecuteWatchdog watchdog = new ExecuteWatchdog(100000);
+		// DefaultExecutor executor = new DefaultExecutor();
+		// executor.setWatchdog(watchdog);
+
+		// ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+		// executor.setExitValue(0);
+		// executor.setStreamHandler(new PumpStreamHandler(out));
+
+		// System.out.println("This is the command:"+command.toString());
+
+		// try {
+		// 	executor.execute(command);
+		// 	if (DEBUG)
+		// 		System.out.println(out.toString());
+		// } catch (ExecuteException e) {
+		// 	// System.err.println("Exit Value:" + e.getExitValue());
+		// 	e.printStackTrace();
+		// 	// System.out.println("Error while running test class " + testClassName);
+		// 	// System.err.println(out.toString());
+		// 	// TestListener testListener = new TestListener();
+		// 	// testListener.failedTests.add(testClassName + "#" + "all");
+		// 	// listener.update(testListener);
+		// } catch (IOException e) {
+		// 	e.printStackTrace();
+		// 	// TestListener testListener = new TestListener();
+		// 	// testListener.failedTests.add(testClassName + "#" + "all");
+		// 	// listener.update(testListener);
+		// }
+
+		// // TestListener testListener = new TestListener();
+		// // testListener = readTestResult();
+		// // listener.update(testListener);
+
+		// return true;
+
+
+
+
+		// TE original code below
+		// source, target은 자바 버전 정보, 그러나 쓰이지 않는다.
+
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
 		PrintWriter outWriter = new PrintWriter(out);
@@ -75,10 +144,12 @@ public class Compiler {
 		command.append(classPath);
 		command.append(" -d ");
 		command.append(targetPath);
+		command.append(" -source ");
+		command.append(source);
+		command.append(" -target ");
+		command.append(target);
 		command.append(" -bootclasspath /usr/lib/jvm/java-8-openjdk-amd64/jre/lib/rt.jar");
-		// command.append(source);
 		command.append(" -extdirs  \"\"");
-		// command.append(target);
 		command.append(" ");
 		command.append(f.getAbsolutePath());
 		String cmd = command.toString();

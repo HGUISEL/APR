@@ -352,6 +352,7 @@ public class TreeUtils {
 		ASTNode astNode = ast.createInstance(n.type);
 		if(astNode instanceof SimpleName
 				|| astNode instanceof QualifiedName){
+			// TE: TODO 더 유연하게 바꾸기	
 			astNode = ast.newName(n.value);
 		}else if(astNode instanceof SimpleType
 				|| astNode instanceof QualifiedType){
@@ -363,6 +364,40 @@ public class TreeUtils {
 			updateValue(astNode, n);
 		}
 		for(Node child : n.children){
+			ASTNode childNode = generateNode(child, ast);
+			StructuralPropertyDescriptor descriptor = child.desc.getDescriptor();
+			if(descriptor.isChildListProperty()){
+				List<ASTNode> list = (List<ASTNode>)astNode.getStructuralProperty(descriptor);
+				list.add(childNode);
+			}else{
+				try {
+					astNode.setStructuralProperty(descriptor, childNode);
+				} catch (Exception e) {
+					return null;
+				}
+			}
+		}
+		if(n.isStatement && astNode instanceof Expression)
+			astNode = ast.newExpressionStatement((Expression)astNode);
+		return astNode;
+	}
+
+	public static ASTNode generateNode(Node n, AST ast, Node locNode){
+		ASTNode astNode = ast.createInstance(n.type);
+		if(astNode instanceof SimpleName
+				|| astNode instanceof QualifiedName){
+			// TE: TODO 더 유연하게 바꾸기	
+			astNode = ast.newName(n.value);
+		}else if(astNode instanceof SimpleType
+				|| astNode instanceof QualifiedType){
+			astNode = ast.newSimpleType(ast.newName(n.value));
+		}else if(astNode instanceof ArrayType){
+			//Remove the dimension created as default.
+			((ArrayType)astNode).dimensions().remove(0);
+		}else{
+			updateValue(astNode, n);
+		}
+		for(Node child : locNode.children){
 			ASTNode childNode = generateNode(child, ast);
 			StructuralPropertyDescriptor descriptor = child.desc.getDescriptor();
 			if(descriptor.isChildListProperty()){

@@ -1,0 +1,15 @@
+Class:org.apache.commons.math.analysis.solvers.BaseSecantSolver
+update
+x
+to
+DEFAULT_ABSOLUTE_ACCURACY
+at line 187
+Applied Change
+	Change Information: 
+			type: update
+			location code: var0
+			to
+			location value: var0
+from
+0:
+39

@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.ProcessClosurePrimitives
+update
+namespace
+to
+MISSING_PROVIDE_ERROR.key
+at line 789
+Applied Change
+	Change Information: 
+			type: update
+			location code: var0
+			to
+			location value: var0
+from
+0:
+7

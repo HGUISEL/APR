@@ -132,6 +132,10 @@ public class ConFix {
 		pStrategy.finishUpdate();
 		IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
 
+		//요기서 타겟 코드 안에 있는 모든 variable declaration 찾아서 type과 mapping 시켜놓기
+		
+
+
 		// ======= STEP 2. Generate Patch Candidates ======= //
 		System.out.println("\n// ======= STEP 2. Generate Patch Candidates ======= //");
 		while (candidateNum <= patchCount) {
@@ -148,6 +152,8 @@ public class ConFix {
 				locNum++;
 				locChangeCount = 0;
 			}
+
+			
 
 			// ======= STEP 2-2. Create Patcher ======= //
 			System.out.println("\n// ======= STEP 2-2. Create Patcher ======= //");
@@ -166,7 +172,8 @@ public class ConFix {
 				// continue ;
 				break;
 			}
-				
+
+
 			
 			// ======= STEP 2-3. Select Change Information ======= //
 			System.out.println("\n// ======= STEP 2-3. Select Change Information ======= //");
@@ -180,11 +187,20 @@ public class ConFix {
 				continue;
 			}
 
+			//이 때 Patcher 안의 cStrategy안의 materials에 우리가 필요로 하는 재료를 더 넣어줘야 한다.
+			if(change.type.equals(Change.UPDATE) && loc.node.parent.astNode.getNodeType() == loc.node.parent.astNode.METHOD_INVOCATION){
+				// loc이 어떤 타입의 필드 메소드인지 파악
+				// 해당 타입의 모든 필드 메소드를 리스트로 만들어 cStrategy 객체에 넣어준다 + 인덱스 초기화.
+				// apply가 실행될 때마다 index 증가, 
+				// generate node하기 직전에 copied의 value를 list[index]의 값으로 바꾼다.
+			}	
+
 			// ======= STEP 2-4. Apply Change Information to Create Patch Candidate =======
 			// //
 			System.out.println("\n// ======= STEP 2-4. Apply Change Information to Create Patch Candidate ======= //");
 			Set<String> candidates = new HashSet<>();
 			do {
+				success = false;
 				PatchInfo info = new PatchInfo(targetClass, change, loc);
 				try {
 					returnCode = patcher.apply(loc, change, info);
@@ -193,6 +209,8 @@ public class ConFix {
 					System.out.println(loc);
 					System.out.println("Applied Change");
 					System.out.println(change);
+					System.out.println("Applied new code");
+					// System.out.println(info.repairs.get(0).newCode);
 					System.out.println("Return Code");
 					System.out.println(returnCode);
 				} catch (Exception e) {
@@ -273,9 +291,36 @@ public class ConFix {
 					System.out.println("Time Budget is passed.");
 					break;
 				}
+
+
+				// if(change == null || change.type.equals("delete") )
+				//  	break;
+
+				// String nodeType = change.node.label.split("::")[0];
+				// String locationType = change.location.label.split("::")[0];
+				// String locType = loc.node.label.split("::")[0];
+
+				// if(change.type.equals(Change.INSERT) || change.type.equals(Change.DELETE)){
+				// 	if(nodeType.contains("fixExpression"))
+				// 		break;
+				// }				
+				// else if(change.type.equals(Change.REPLACE) || change.type.equals(Change.UPDATE)){
+				// 	if(locType.contains("fixExpression"));
+				// 		break;
+				// 	// if(locationType.contains("fixExpression"))
+				// 	// 	break;
+				// }
+
+				
+				
+				
+				
+
 			} while (trial < maxTrials);
 
-			if (success || terminate || returnCode == Patcher.C_NO_FIXLOC)
+			// 여기서 success 없애면 다른 change로도 계속해서 패치 생성 시도해볼 수 있음
+			//if (success || terminate || returnCode == Patcher.C_NO_FIXLOC)
+			if (terminate || returnCode == Patcher.C_NO_FIXLOC)
 				break;
 		}
 
@@ -571,7 +616,7 @@ public class ConFix {
 		int lastDotIndex = targetClass.lastIndexOf('.');
 		String packageName = targetClass.substring(0, lastDotIndex);
 		String fileName = targetClass.substring(lastDotIndex + 1) + ".java";
-		// String candidatePath = candidateDir + File.separator + "candidate_"+candidateNum + File.separator;
+		//String candidatePath = candidateDir + File.separator + "candidate_"+candidateNum + File.separator;
 		String candidatePath = candidateDir + File.separator + "candidate"+ File.separator;
 		String packagePath = candidatePath + packageName.replaceAll("\\.", File.separator + File.separator);
 		File dir = new File(packagePath);

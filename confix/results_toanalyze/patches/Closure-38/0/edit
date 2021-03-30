@@ -1,0 +1,11 @@
+Class:com.google.javascript.jscomp.CodeConsumer
+delete
+x < 0
+at line 245
+Applied Change
+	Change Information: 
+			type: delete
+			code: null
+from
+0:
+1

@@ -60,6 +60,7 @@ public class Tester {
 
 			try {
 				executor.execute(command);
+				// TE
 				if (DEBUG)
 					System.out.println(out.toString());
 			} catch (ExecuteException e) {

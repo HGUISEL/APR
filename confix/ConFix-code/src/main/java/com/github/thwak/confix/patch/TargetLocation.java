@@ -80,16 +80,29 @@ public class TargetLocation {
 
 	public boolean isCompatible(Change c) {
 		Requirements reqs = c.requirements;
+		// Add sout - 2021.03.19 Jeon
+
+		// System.out.println("=========== Check compatibility ===========");
+		// System.out.println(c.toString());
 		if(c.node.type == ASTNode.SIMPLE_NAME
 				|| c.node.type == ASTNode.QUALIFIED_NAME
 				|| c.node.type == ASTNode.SIMPLE_TYPE
-				|| c.node.type == ASTNode.QUALIFIED_TYPE)
+				|| c.node.type == ASTNode.QUALIFIED_TYPE
+				|| c.location.type == ASTNode.INFIX_EXPRESSION){
+					// System.out.println("type is compatible: " + c.node.type);
+					return true;		
+				}
+			
+		else if(compatibleTypes.size() == 0){
+			System.out.println("compatible type size is zero");
 			return true;
-		else if(compatibleTypes.size() == 0)
-			return true;
+		}
+			
 		for(ITypeBinding tb : compatibleTypes) {
-			if(reqs.isCompatible(tb))
+			if(reqs.isCompatible(tb)){
+				System.out.println("Compatible type found from TypeBiding");
 				return true;
+			}
 		}
 		return false;
 	}

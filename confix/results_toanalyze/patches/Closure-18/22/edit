@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.Compiler
+update
+options.dependencyOptions.needsManagement() && options.closurePass
+to
+options.dependencyOptions.needsManagement() || options.closurePass
+at line 1288
+Applied Change
+	Change Information: 
+			type: update
+			location code: null
+			to
+			location value: ||
+from
+0:
+1
