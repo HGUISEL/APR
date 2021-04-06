@@ -473,7 +473,7 @@ public class ConcretizationStrategy {
 				// System.out.println("		materials.methods: \n");
 				for (String key : mtd)
 					// System.out.println("		" + key);
-				System.out.println(" 		- return false : No methods of abstract signature - " + absSignature);
+				// System.out.println(" 		- return false : No methods of abstract signature - " + absSignature);
 				return false;
 			} else {
 				count = materials.methods.get(absSignature).size();
@@ -482,14 +482,13 @@ public class ConcretizationStrategy {
 				}
 				if (reqs.methods.containsKey(absSignature) && reqs.methods.get(absSignature).size() > count) {
 
-					System.out.println(
-							"		- return false: Not enough methods of abstract signature - " + absSignature);
+					// System.out.println( "		- return false: Not enough methods of abstract signature - " + absSignature);
 					return false;
 				}
 			}
 		}
 
-		System.out.println("		- return true : This change is acceptable!");
+		// System.out.println("		- return true : This change is acceptable!");
 		return true;
 	}
 
