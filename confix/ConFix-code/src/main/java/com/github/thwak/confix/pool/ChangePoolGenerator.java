@@ -1,253 +1,194 @@
 package com.github.thwak.confix.pool;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Arrays ;
-
-import org.eclipse.jdt.core.dom.ASTNode;
-import org.eclipse.jdt.core.dom.MethodDeclaration;
-
 import com.github.thwak.confix.tree.Node;
 import com.github.thwak.confix.util.IOUtils;
-
+import org.eclipse.jdt.core.dom.ASTNode;
+import org.eclipse.jdt.core.dom.MethodDeclaration;
 import script.ScriptGenerator;
 import script.model.EditOp;
 import script.model.EditScript;
 import tree.Tree;
 import tree.TreeBuilder;
 
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
 public class ChangePoolGenerator {
-	public ChangePool pool;
-	public List<Integer> changeList = new ArrayList<Integer>();
-	public List<String> postfixList = new ArrayList<String>(Arrays.asList("++", "--"));
-	public List<String> infixList = new ArrayList<String>(Arrays.asList("==", "!=", "<", "<=", ">", ">=", "&&", "||", "+", "-", "*", "%", "/", "+=", "-=")) ;
-	public List<String> prefixList = new ArrayList<String>(Arrays.asList("!", "++", "--"));
-	public List<String> fixList;
+    public ChangePool pool;
+    public List<Integer> changeList = new ArrayList<Integer>();
+    public List<String> postfixList = new ArrayList<String>(Arrays.asList("++", "--"));
+    public List<String> infixList = new ArrayList<String>(Arrays.asList("==", "!=", "<", "<=", ">", ">=", "&&", "||", "+", "-", "*", "%", "/", "+=", "-="));
+    public List<String> prefixList = new ArrayList<String>(Arrays.asList("!", "++", "--"));
+    public List<String> fixList = null;
+    private Context context;
 
-	public ChangePoolGenerator() {
+    public ChangePoolGenerator() {
 		pool = new ChangePool();
-	}
+    }
 
-	public void collect(Script script) {
-		// System.out.println(script.toString()) ;
-		Integer newChangeHash;
-		Change revChange;
+    public void collect(Script script) {
+        Integer newChangeHash;
+        Change revChange = null;
 
-		for (Change c : script.changes.keySet()) {
-			ContextIdentifier identifier = pool.getIdentifier();
-			List<EditOp> ops = script.changes.get(c);
-			for (EditOp op : ops) {
-				Context context = identifier.getContext(op);
-				updateMethod(c);
+        for (Change c : script.changes.keySet()) {
+            ContextIdentifier identifier = pool.getIdentifier();
+            List<EditOp> ops = script.changes.get(c);
+            for (EditOp op : ops) {
+				context = identifier.getContext(op);
+                updateMethod(c);
 
-				revChange = null;
+                String nodeType = c.node.label.split("::")[0]; // for Insert and Delete
+                String locationType = c.location.label.split("::")[0]; // for Replace and Update
 
-				String nodeType = c.node.label.split("::")[0]; // for Insert and Delete
-				String locationType = c.location.label.split("::")[0]; // for Replace and Update
+                if (c.type.equals(Change.INSERT) || c.type.equals(Change.DELETE)) {
 
-				fixList = null;
-
-				switch (c.type) {
-					case Change.INSERT:
-					case CHANGE.DELETE:
-					if(nodeType.equals("InfixExpression"))
+                    if (nodeType.equals("InfixExpression")) {
 						fixList = infixList;
-					else if(nodeType.equals("PostfixExpression"))
-						fixList = postfixList ;
-					else if(nodeType.equals("PrefixExpression"))
+                    } else if (nodeType.equals("PostfixExpression")) {
+						fixList = postfixList;
+                    } else if (nodeType.equals("PrefixExpression")) {
 						fixList = prefixList;
-					
-					if(fixList == null)
-						break;
+                    }
 
-					case Change.INSERT:
-						revChange = new Change(c.id, Change.DELETE, c.node, c.location); // to revert operation
+                    String reverseChangeType = c.type.equals(Change.INSERT) ? Change.DELETE : Change.INSERT;
+                    revChange = cloneChange(c, reverseChangeType, c.location.value, locationType, true);
+                    addNewChange(revChange);
 
-						for(String newInfix : fixList){
-							Change cloneChange = new Change(c.id, Change.DELETE, c.node, c.location) ;
-							cloneChange.node.label = locationType+ "::"+newInfix;
-							cloneChange.node.value = newInfix ;
+                } else {
+                    if (locationType.equals("InfixExpression")) {
+						fixList = infixList;
+                    } else if (locationType.equals("PostExpression")) {
+						fixList = postfixList;
+                    } else if (locationType.equals("PrefixExpression")) {
+						fixList = prefixList;
+                    }
+                }
 
-							newChangeHash = new Integer((cloneChange.type+cloneChange.node.label+cloneChange.location.label).toString().hashCode());
-							if (changeList.contains(newChangeHash))
-								continue;
+                if (fixList != null) {
+                    switch (c.type) {
+                        case Change.INSERT:
+                        case Change.DELETE:
+                            for (String newInfix : fixList) {
+                                Change change = cloneChange(c, c.type, newInfix, locationType, true);
+                                addNewChange(change);
+                            }
+                            break;
 
-							pool.add(context, cloneChange);
-							changeList.add(newChangeHash);
+                        case Change.UPDATE:
+                        case Change.REPLACE:
+                            for (String newInfix : fixList) {
+                                Change change = cloneChange(c, c.type, newInfix, locationType, false);
+                                addNewChange(change);
 
-							System.out.println("Added Change type: " + cloneChange.type);
-							System.out.println("Added Change node: " + cloneChange.node.label);
-							System.out.println("Added Change location: " + cloneChange.location.label);
-							System.out.println("Added Change Context: " + context.toString()+"\n");
-						}
-						break;
-					case Change.DELETE:
-						revChange = new Change(c.id, Change.INSERT, c.node, c.location);  // to revert operation
-						
-						for(String newInfix : fixList){
-							Change cloneChange = new Change(c.id, Change.INSERT, c.node, c.location) ;
-							cloneChange.node.label = locationType+ "::"+newInfix;
-							cloneChange.node.value = newInfix ;
+                                if (c.type.equals(Change.REPLACE)) {
+                                    change = cloneChange(c, Change.UPDATE, newInfix, locationType, false);
+                                    addNewChange(change);
+                                }
+                            }
+                            break;
+                    }
+                }
 
-							newChangeHash = new Integer((cloneChange.type+cloneChange.node.label+cloneChange.location.label).toString().hashCode());
-							if (changeList.contains(newChangeHash))
-								continue;
-
-							pool.add(context, cloneChange);
-							changeList.add(newChangeHash);
-
-							System.out.println("Added Change type: " + cloneChange.type);
-							System.out.println("Added Change node: " + cloneChange.node.label);
-							System.out.println("Added Change location: " + cloneChange.location.label);
-							System.out.println("Added Change Context: " + context.toString()+"\n");
-						}
-						break;
-
-					case Change.UPDATE:
-					case Change.REPLACE:
-					if(locationType.equals("InfixExpression"))
-							fixList = infixList;
-						else if(locationType.equals("PostExpression"))
-							fixList = postfixList ;
-						else if(locationType.equals("PrefixExpression"))
-							fixList = prefixList;
-
-						if(fixList == null)
-							break;
-
-					case Change.UPDATE:
-							
-						for(String newInfix : fixList){
-							Change cloneChange = new Change(c.id, Change.UPDATE, c.node, c.location) ;
-							cloneChange.location.label = locationType+ "::"+newInfix;
-							cloneChange.location.value = newInfix ;
-
-							newChangeHash = new Integer((cloneChange.type+cloneChange.node.label+cloneChange.location.label).toString().hashCode());
-							if (changeList.contains(newChangeHash))
-								continue;
-
-							pool.add(context, cloneChange);
-							changeList.add(newChangeHash);
-
-							System.out.println("Added Change type: " + cloneChange.type);
-							System.out.println("Added Change node: " + cloneChange.node.label);
-							System.out.println("Added Change location: " + cloneChange.location.label);
-							System.out.println("Added Change Context: " + context.toString()+"\n");
-
-							System.out.println("This is change to string\n" + cloneChange + "\n");
-
-						}
-						
-
-						break;
-					case Change.REPLACE:
-					
-						for(String newInfix : fixList){
-							Change cloneChange = new Change(c.id, Change.UPDATE, c.node, c.location) ;
-							cloneChange.location.label = locationType+ "::"+newInfix;
-							cloneChange.location.value = newInfix ;
-
-							newChangeHash = new Integer((cloneChange.type+cloneChange.node.label+cloneChange.location.label).toString().hashCode());
-							if (changeList.contains(newChangeHash))
-								continue;
-
-							pool.add(context, cloneChange);
-							changeList.add(newChangeHash);
-
-							System.out.println("Added Change type: " + cloneChange.type);
-							System.out.println("Added Change node: " + cloneChange.node.label);
-							System.out.println("Added Change location: " + cloneChange.location.label);
-							System.out.println("Added Change Context: " + context.toString()+"\n");
-
-							System.out.println("This is change to string\n" + cloneChange + "\n");
-						}
-						
-						break;
-
-				}
-
-
-	
-
-				if(revChange != null){ // If proper reverted change is made
-					newChangeHash = new Integer((revChange.type+revChange.node.label+revChange.location.label).toString().hashCode());
-					if (changeList.contains(newChangeHash))
-						continue;
-					pool.add(context, revChange);
-					changeList.add(newChangeHash);
-
-					System.out.println("Added Change type: " + revChange.type);
-					System.out.println("Added Change node: " + revChange.node.label);
-					System.out.println("Added Change location: " + revChange.location.label);
-					System.out.println("Added Change Context: " + context.toString()+"\n");
-				}
-
-				
-
-
-				newChangeHash = new Integer((c.type+c.node.label+c.location.label).toString().hashCode());
-				if (changeList.contains(newChangeHash))
-					continue;
+                newChangeHash = createHash(c);
+                if (changeList.contains(newChangeHash)) {
+                    continue;
+                }
+				changeList.add(newChangeHash);
 				pool.add(context, c);
+                printGeneratedChange(c);
+            }
+        }
+    }
 
-				System.out.println("Added Change type: " + c.type);
-				System.out.println("Added Change node: " + c.node.label);
-				System.out.println("Added Change location: " + c.location.label);
-				System.out.println("Added Change Context: " + context.toString()+"\n");
-			}
-			
-		}
-	}
+    private void addNewChange(Change change) {
+        if (change != null) {
+			pool.add(context, change);
+            printGeneratedChange(change);
+        }
+    }
 
-	private void updateMethod(Change c) {
-		Node n = c.node;
-		while (n.parent != null && n.parent.type != ASTNode.METHOD_DECLARATION) {
-			n = n.parent;
-		}
-		StringBuffer sb = new StringBuffer(c.id);
-		if (n.parent == null)
-			sb.append(":");
-		else {
-			sb.append(":");
-			if (n.parent.astNode != null) {
-				MethodDeclaration md = (MethodDeclaration) n.parent.astNode;
-				sb.append(md.getName().toString());
-			}
-			sb.append(":");
-			sb.append(n.parent.startPos);
-		}
-		c.id = sb.toString();
-	}
+    private Integer createHash(Change change) {
+        return (change.type + change.node.label + change.location.label).toString().hashCode();
+    }
 
-	public void collect(List<File> bugFiles, List<File> cleanFiles) {
-		try {
-			for (int i = 0; i < bugFiles.size(); i++) {
+    private Change cloneChange(Change change, String operator, String infix, String locationType, boolean isInsertOrDelete) {
+        Integer newChangeHash = 0;
+        Change cloneChange = new Change(change.id, operator, change.node, change.location);
+        if (isInsertOrDelete) {
+            cloneChange.node.label = locationType + "::" + infix;
+            cloneChange.node.value = infix;
+        } else {
+            cloneChange.location.label = locationType + "::" + infix;
+            cloneChange.location.value = infix;
+        }
 
-				if(bugFiles.get(i) == null || cleanFiles.get(i) == null)
-					continue;
+        newChangeHash = createHash(cloneChange);
+        if (changeList.contains(newChangeHash)) {
+            return null;
+        }
 
-				// Generate EditScript from before and after.
-				String oldCode = IOUtils.readFile(bugFiles.get(i));
-				String newCode = IOUtils.readFile(cleanFiles.get(i));
+		changeList.add(newChangeHash);
+        return cloneChange;
+    }
 
-				Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i));
-				Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i));
+    private void printGeneratedChange(Change c) {
+        System.out.println("Added Change type: " + c.type);
+        System.out.println("Added Change node: " + c.node.label);
+        System.out.println("Added Change location: " + c.location.label);
+    }
 
-				if(before == null || after == null)
-					System.out.println("Tree is null");
+    private void updateMethod(Change c) {
+        Node n = c.node;
+        while (n.parent != null && n.parent.type != ASTNode.METHOD_DECLARATION) {
+            n = n.parent;
+        }
+        StringBuffer sb = new StringBuffer(c.id);
+        if (n.parent == null) {
+            sb.append(":");
+        } else {
+            sb.append(":");
+            if (n.parent.astNode != null) {
+                MethodDeclaration md = (MethodDeclaration) n.parent.astNode;
+                sb.append(md.getName().toString());
+            }
+            sb.append(":");
+            sb.append(n.parent.startPos);
+        }
+        c.id = sb.toString();
+    }
 
-				EditScript editScript = ScriptGenerator.generateScript(before, after);
-				// Convert EditScript to Script.
-				editScript = Converter.filter(editScript);
-				EditScript combined = Converter.combineEditOps(editScript);
-				Script script = Converter.convert("0", combined, oldCode, newCode);
-				collect(script);
-			}
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
-	}
+    public void collect(List<File> bugFiles, List<File> cleanFiles) {
+        try {
+            for (int i = 0; i < bugFiles.size(); i++) {
+
+                if (bugFiles.get(i) == null || cleanFiles.get(i) == null) {
+                    continue;
+                }
+
+                // Generate EditScript from before and after.
+                String oldCode = IOUtils.readFile(bugFiles.get(i));
+                String newCode = IOUtils.readFile(cleanFiles.get(i));
+
+                Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i));
+                Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i));
+
+                if (before == null || after == null) {
+                    System.out.println("Tree is null");
+                }
+
+                EditScript editScript = ScriptGenerator.generateScript(before, after);
+                // Convert EditScript to Script.
+                editScript = Converter.filter(editScript);
+                EditScript combined = Converter.combineEditOps(editScript);
+                Script script = Converter.convert("0", combined, oldCode, newCode);
+                collect(script);
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 }
 
