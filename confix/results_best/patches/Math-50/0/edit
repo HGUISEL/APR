@@ -1,0 +1,15 @@
+Class:org.apache.commons.math.analysis.solvers.BaseSecantSolver
+update
+x == x1
+to
+x > x1
+at line 187
+Applied Change
+	Change Information: 
+			type: update
+			location code: null
+			to
+			location value: >
+from
+0:
+1

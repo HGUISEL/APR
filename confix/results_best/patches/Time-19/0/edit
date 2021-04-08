@@ -1,0 +1,15 @@
+Class:org.joda.time.DateTimeZone
+update
+offsetLocal > 0
+to
+offsetLocal >= 0
+at line 900
+Applied Change
+	Change Information: 
+			type: update
+			location code: null
+			to
+			location value: >=
+from
+0:
+1

@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.LightweightMessageFormatter
+replace
+sourceExcerpt
+with
+new StringBuilder(error.sourceName)
+at line 98
+Applied Change
+	Change Information: 
+			type: replace
+			location code: var0
+			with
+			code: new Type0(var0)
+from
+0:
+3

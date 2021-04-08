@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.TypeCheck
+update
+n.getJSType() != null
+to
+n.getJSType() == null
+at line 1314
+Applied Change
+	Change Information: 
+			type: update
+			location code: null
+			to
+			location value: ==
+from
+0:
+2

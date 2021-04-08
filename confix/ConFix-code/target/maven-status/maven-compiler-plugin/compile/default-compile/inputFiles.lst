@@ -2,7 +2,6 @@
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/StrategyFactory.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/Requirements.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/tree/CodeVisitor.java
-/home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/TCVFLStrategy.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/ChangePoolGenerator.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/PNTContextIdentifier.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/coverage/CoverageAnalyzer.java
@@ -31,16 +30,15 @@
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/FixLocationIdentifier.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/coverage/TestResult.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/PatchUtils.java
-/home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/NeighborFirstStrategy.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/RepairAction.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/PTLRHContextIdentifier.java
-/home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/HashMatchStrategy.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/tree/compiler/CompilationUnitImpl.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/coverage/SingleTestClassRunner.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/VariableType.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/Patcher.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/junit/SampleSuiteMethod.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/tree/compiler/Compiler.java
+/home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/config/Property.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/MVTManager.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/CodeFragment.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/PatchStrategy.java
@@ -54,8 +52,6 @@
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/Script.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/Change.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/TokenVector.java
-/home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/FLFreqPatchStrategy.java
-/home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/TestedFirstPatchStrategy.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/TargetLocation.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/patch/NoContextPatchStrategy.java
 /home/goodtaeeun/APR_Projects/APR/confix/ConFix-code/src/main/java/com/github/thwak/confix/pool/ChangeOrigin.java

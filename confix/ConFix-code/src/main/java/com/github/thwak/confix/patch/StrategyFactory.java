@@ -20,15 +20,6 @@ public class StrategyFactory {
 		key = key.toLowerCase();
 		System.out.println("key: " + key);
 		switch (key) {
-			case "flfreq":
-				strategy = new FLFreqPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
-						sourceDir, compileClassPathEntries);
-				break;
-			case "tested-first":
-				System.out.println("we are using tested-first");
-				strategy = new TestedFirstPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
-						sourceDir, compileClassPathEntries);
-				break;
 			case "noctx":
 				strategy = new NoContextPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
 						sourceDir, compileClassPathEntries);
@@ -59,21 +50,6 @@ public class StrategyFactory {
 		String packageName = getPackageName(className);
 		key = key.toLowerCase();
 		switch (key) {
-			case "tcvfl":
-				strategy = new TCVFLStrategy(info, r);
-				break;
-			case "hash-match":
-				if (codePools.containsKey(className)) {
-					strategy = new HashMatchStrategy(srcDir, codePools.get(className), pkgCodePools.get(packageName),
-							r);
-				} else {
-					strategy = new HashMatchStrategy(srcDir, r);
-				}
-				break;
-			case "neighbor":
-				System.out.println("we are using neighbor");
-				strategy = new NeighborFirstStrategy(r);
-				break;
 			case "tc":
 			default:
 				strategy = new ConcretizationStrategy(r); // Default Type-compatible strategy

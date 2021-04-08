@@ -1,0 +1,15 @@
+Class:com.google.javascript.jscomp.LightweightMessageFormatter
+update
+sourceExcerpt
+to
+error.sourceName
+at line 98
+Applied Change
+	Change Information: 
+			type: update
+			location code: var0
+			to
+			location value: var0
+from
+0:
+5

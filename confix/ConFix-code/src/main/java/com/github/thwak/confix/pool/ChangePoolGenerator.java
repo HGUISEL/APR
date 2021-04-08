@@ -44,23 +44,26 @@ public class ChangePoolGenerator {
 
 				revChange = null;
 
-				String nodeType = c.node.label.split("::")[0];
-				String locationType = c.location.label.split("::")[0];
+				String nodeType = c.node.label.split("::")[0]; // for Insert and Delete
+				String locationType = c.location.label.split("::")[0]; // for Replace and Update
 
 				fixList = null;
 
 				switch (c.type) {
 					case Change.INSERT:
-						revChange = new Change(c.id, Change.DELETE, c.node, c.location);
-						if(nodeType.equals("InfixExpression"))
-							fixList = infixList;
-						else if(nodeType.equals("PostfixExpression"))
-							fixList = postfixList ;
-						else if(nodeType.equals("PrefixExpression"))
-							fixList = prefixList;
-						
-						if(fixList == null)
-							break;
+					case CHANGE.DELETE:
+					if(nodeType.equals("InfixExpression"))
+						fixList = infixList;
+					else if(nodeType.equals("PostfixExpression"))
+						fixList = postfixList ;
+					else if(nodeType.equals("PrefixExpression"))
+						fixList = prefixList;
+					
+					if(fixList == null)
+						break;
+
+					case Change.INSERT:
+						revChange = new Change(c.id, Change.DELETE, c.node, c.location); // to revert operation
 
 						for(String newInfix : fixList){
 							Change cloneChange = new Change(c.id, Change.DELETE, c.node, c.location) ;
@@ -81,16 +84,7 @@ public class ChangePoolGenerator {
 						}
 						break;
 					case Change.DELETE:
-						revChange = new Change(c.id, Change.INSERT, c.node, c.location);
-						if(nodeType.equals("InfixExpression"))
-							fixList = infixList;
-						else if(nodeType.equals("PostExpression"))
-							fixList = postfixList ;
-						else if(nodeType.equals("PrefixExpression"))
-							fixList = prefixList;
-
-						if(fixList == null)
-							break;
+						revChange = new Change(c.id, Change.INSERT, c.node, c.location);  // to revert operation
 						
 						for(String newInfix : fixList){
 							Change cloneChange = new Change(c.id, Change.INSERT, c.node, c.location) ;
@@ -112,16 +106,18 @@ public class ChangePoolGenerator {
 						break;
 
 					case Change.UPDATE:
-					
-						if(locationType.equals("InfixExpression"))
+					case Change.REPLACE:
+					if(locationType.equals("InfixExpression"))
 							fixList = infixList;
 						else if(locationType.equals("PostExpression"))
 							fixList = postfixList ;
 						else if(locationType.equals("PrefixExpression"))
 							fixList = prefixList;
-						
+
 						if(fixList == null)
 							break;
+
+					case Change.UPDATE:
 							
 						for(String newInfix : fixList){
 							Change cloneChange = new Change(c.id, Change.UPDATE, c.node, c.location) ;
@@ -147,22 +143,11 @@ public class ChangePoolGenerator {
 
 						break;
 					case Change.REPLACE:
-					if(locationType.equals("InfixExpression"))
-							fixList = infixList;
-						else if(locationType.equals("PostExpression"))
-							fixList = postfixList ;
-						else if(locationType.equals("PrefixExpression"))
-							fixList = prefixList;
-
-						if(fixList == null)
-							break;
-						
+					
 						for(String newInfix : fixList){
 							Change cloneChange = new Change(c.id, Change.UPDATE, c.node, c.location) ;
 							cloneChange.location.label = locationType+ "::"+newInfix;
 							cloneChange.location.value = newInfix ;
-
-							
 
 							newChangeHash = new Integer((cloneChange.type+cloneChange.node.label+cloneChange.location.label).toString().hashCode());
 							if (changeList.contains(newChangeHash))
@@ -186,14 +171,12 @@ public class ChangePoolGenerator {
 
 	
 
-				if(revChange != null){
+				if(revChange != null){ // If proper reverted change is made
 					newChangeHash = new Integer((revChange.type+revChange.node.label+revChange.location.label).toString().hashCode());
 					if (changeList.contains(newChangeHash))
 						continue;
-
 					pool.add(context, revChange);
 					changeList.add(newChangeHash);
-
 
 					System.out.println("Added Change type: " + revChange.type);
 					System.out.println("Added Change node: " + revChange.node.label);
@@ -207,11 +190,8 @@ public class ChangePoolGenerator {
 				newChangeHash = new Integer((c.type+c.node.label+c.location.label).toString().hashCode());
 				if (changeList.contains(newChangeHash))
 					continue;
-
-				// pool.add(context, c);
-				// changeList.add(newChangeHash);
-
 				pool.add(context, c);
+
 				System.out.println("Added Change type: " + c.type);
 				System.out.println("Added Change node: " + c.node.label);
 				System.out.println("Added Change location: " + c.location.label);
@@ -242,23 +222,15 @@ public class ChangePoolGenerator {
 	}
 
 	public void collect(List<File> bugFiles, List<File> cleanFiles) {
-		System.out.println("bugFiles size: "+bugFiles.size());
-		System.out.println("cleanFiles size: "+cleanFiles.size());
 		try {
 			for (int i = 0; i < bugFiles.size(); i++) {
 
 				if(bugFiles.get(i) == null || cleanFiles.get(i) == null)
 					continue;
 
-				System.out.println("buggy file : "+bugFiles.get(i).getName());
-				System.out.println("clean file : "+cleanFiles.get(i).getName());
-
 				// Generate EditScript from before and after.
 				String oldCode = IOUtils.readFile(bugFiles.get(i));
 				String newCode = IOUtils.readFile(cleanFiles.get(i));
-
-				// System.out.println("First letter of old code: "+oldCode.charAt(0));
-				// System.out.println("First letter of new code: "+newCode.charAt(0));
 
 				Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i));
 				Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i));
