@@ -9,6 +9,8 @@ import com.github.thwak.confix.coverage.CoverageManager;
 import com.github.thwak.confix.pool.ChangePool;
 import com.github.thwak.confix.pool.CodePool;
 
+import static com.github.thwak.confix.config.Property.*;
+
 public class StrategyFactory {
 
 	public static Map<String, CodePool> codePools = new HashMap<>();
@@ -21,25 +23,17 @@ public class StrategyFactory {
 		System.out.println("key: " + key);
 		switch (key) {
 			case "noctx":
-				strategy = new NoContextPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
+				if(flmetric.equals("perfect"))
+					strategy = new NoContextPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
+						sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
+				else
+					strategy = new NoContextPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
 						sourceDir, compileClassPathEntries);
 				break;
 			default:
 				strategy = new PatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey, sourceDir,
 						compileClassPathEntries);
 		}
-		return strategy;
-	}
-
-	public static PatchStrategy getPatchStrategy(String key, CoverageManager coverage, ChangePool pool, Random r,
-			String flMetric, String cStrategyKey, String sourceDir, String[] compileClassPathEntries,
-			String pFaultyClass, int pFaultyLine) {
-		PatchStrategy strategy = null;
-		key = key.toLowerCase();
-
-		strategy = new NoContextPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
-				sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
-
 		return strategy;
 	}
 

@@ -193,9 +193,7 @@ public class ConcretizationStrategy {
 							}
 						}
 
-						// System.out.println("here");
 						for (IMethodBinding mb : tb.getDeclaredMethods()) {
-							// System.out.println(mb.getName());
 							if (Modifier.isPublic(mb.getModifiers()) && !Modifier.isStatic(mb.getModifiers())
 									&& !mb.isConstructor()) {
 								materials.addMethod(mb);
@@ -243,10 +241,8 @@ public class ConcretizationStrategy {
 					}
 					break;
 				case IBinding.METHOD:
-					// System.out.println("Find method");
 					if (n.astNode instanceof Name) {
 						Name name = (Name) n.astNode;
-						// System.out.println("name: " + name);
 						IMethodBinding mb = (IMethodBinding) name.resolveBinding();
 						// System.out.println("resolve binding null: " + (mb == null));
 						if (mb != null && !mb.isConstructor()) {
@@ -378,8 +374,6 @@ public class ConcretizationStrategy {
 	 *         information in {@code loc}, {@code false} otherwise.
 	 */
 	public boolean instCheck(Change change, TargetLocation loc) {
-		// System.out.println("\n		===== instCheck Begins =====");
-		// System.out.println("	" + change.toString());
 
 		if (change.type.equals(Change.UPDATE) && change.node.type == loc.node.type && change.node.children.size() > 0) {
 			if (change.node.hashString == null) {
@@ -388,7 +382,7 @@ public class ConcretizationStrategy {
 			if (loc.node.hashString == null) {
 				loc.node.hashString = TreeUtils.getTypeHash(loc.node);
 			}
-			// 2021.03.22 Jeon commented out hashStrting comparison
+			// 2021.03.22 Jeon commented out hashStrting comparison, always return true
 			// return change.node.hashString.equals(loc.node.hashString);
 			return true;
 		}
@@ -399,7 +393,8 @@ public class ConcretizationStrategy {
 			count--; // Deduct one for an update.
 		}
 		if (reqs.types.size() > materials.types.size() && reqs.genericTypes.size() > count) {
-			System.out.println("		- return false: Not enough types.");
+			if(DEBUG)
+				System.out.println("		- return false: Not enough types.");
 			return false;
 		}
 
@@ -421,8 +416,8 @@ public class ConcretizationStrategy {
 						if (v.name.equals(loc.node.value))
 							count--;
 				if (reqs.variables.containsKey(type) && reqs.variables.get(type).size() > count) {
-
-					System.out.println("		- return false: Not enough variables of type - " + type);
+					if(DEBUG)
+						System.out.println("		- return false: Not enough variables of type - " + type);
 					return false;
 				}
 			}
@@ -442,8 +437,8 @@ public class ConcretizationStrategy {
 						if (f.name.equals(loc.node.value))
 							count--;
 				if (reqs.fields.containsKey(type) && reqs.fields.get(type).size() > count) {
-
-					System.out.println("		- return false: Not enough fields of type - " + type);
+					if(DEBUG)
+						System.out.println("		- return false: Not enough fields of type - " + type);
 					return false;
 				}
 			}
@@ -460,20 +455,15 @@ public class ConcretizationStrategy {
 					}
 				} else {
 					VariableType newReturnType = MVTManager.generateType(loc.getType());
-					// System.out.println("		variable type : " + newReturnType.toString());
 					Method m = (Method) reqs.methods.get(absSignature).toArray()[0];
-					// System.out.println("		method : " + m.toString());
 					Method newMethod = new Method(m.name, m.declaringClass, newReturnType);
 					newMethod.parameters.addAll(m.parameters);
 					absSignature = newMethod.getAbstractSignature();
 				}
 			}
 			if (!materials.methods.containsKey(absSignature)) {
-				Set<String> mtd = materials.methods.keySet();
-				// System.out.println("		materials.methods: \n");
-				for (String key : mtd)
-					// System.out.println("		" + key);
-				// System.out.println(" 		- return false : No methods of abstract signature - " + absSignature);
+				if(DEBUG)
+					System.out.println(" 		- return false : No methods of abstract signature - " + absSignature);
 				return false;
 			} else {
 				count = materials.methods.get(absSignature).size();
@@ -482,13 +472,14 @@ public class ConcretizationStrategy {
 				}
 				if (reqs.methods.containsKey(absSignature) && reqs.methods.get(absSignature).size() > count) {
 
-					// System.out.println( "		- return false: Not enough methods of abstract signature - " + absSignature);
+					if(DEBUG)
+						System.out.println( "		- return false: Not enough methods of abstract signature - " + absSignature);
 					return false;
 				}
 			}
 		}
-
-		// System.out.println("		- return true : This change is acceptable!");
+		if(DEBUG)
+			System.out.println("		- return true : This change is acceptable!");
 		return true;
 	}
 
@@ -525,7 +516,6 @@ public class ConcretizationStrategy {
 
 		// Assign methods.
 		if (reqs.methods.size() > 0) {
-		// System.out.println("Method");
 			
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == loc.node.kind) {
 				for (Set<Method> cMethods : reqs.methods.values()) {
@@ -910,6 +900,9 @@ public class ConcretizationStrategy {
 
 		importNames.removeAll(declaredTypeNames);
 
+
+		// 2021.04.8 TE
+		// instantiate 내용을 요약해서 여기에 적어놓기
 		Node copied = TreeUtils
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
@@ -945,15 +938,6 @@ public class ConcretizationStrategy {
 		String d;
 		d = astNode == null ? "null" : "not null";
 
-		// System.out.println(d);
-
-
-		// if(change.type.equals(Change.UPDATE) && loc.node.parent.astNode.getNodeType() == loc.node.parent.astNode.METHOD_INVOCATION){
-		// 	copied.value = simpleNameList.get(simpleNameListIndex++);
-		// 	if(simpleNameListIndex == simpleNameList.size())
-		// 		simpleNameListIndex = 0;
-		// }
-
 		astNode = TreeUtils.generateNode(copied, ast);
 
 
@@ -980,6 +964,7 @@ public class ConcretizationStrategy {
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
 		List<Node> locNodes = TreeUtils.traverse(loc.node);
+		// 2021.04.8 TE commented out this seemingly meaningless code
 		// if (nodes.size() != locNodes.size())
 		// 	return null;
 		// for (int i = 1; i < nodes.size(); i++) {
@@ -987,18 +972,14 @@ public class ConcretizationStrategy {
 		// 	Node locNode = locNodes.get(i);
 		// 	node.value = locNode.value;
 		// }
+		// This code does not use 'node' at all
 		AST ast = loc.node.astNode.getAST();
 		ASTNode astNode = null;
-		// if(c.location.type.equals)
-		// TargetLocation newloc = new TargetLocation(loc.className, loc.kind, loc.context, loc.node, loc.desc);
-		// newloc.node.label = c.location.label;
-		// newloc.node.value = c.location.value;
 
 		if(c.location.label.contains("fixExpression"))
 			astNode = TreeUtils.generateNode(copied, ast, loc.node);
 		else
 			astNode = TreeUtils.generateNode(copied,ast);
-		// astNode = TreeUtils.generateNode(copied, ast);
 		return astNode;
 	}
 

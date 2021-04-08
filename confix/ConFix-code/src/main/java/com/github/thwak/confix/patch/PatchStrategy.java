@@ -294,30 +294,30 @@ public class PatchStrategy {
 				}
 				switch (c.type) {
 					case Change.UPDATE:
-						System.out.println(" ==== node hash ==== ");
-						System.out.println(c.node.hashString);
-						System.out.println(" ==== loc hash ==== ");
-						System.out.println(loc.node.hashString);
+						if(DEBUG){
+							System.out.println(" ==== node hash ==== ");
+							System.out.println(c.node.hashString);
+							System.out.println(" ==== loc hash ==== ");
+							System.out.println(loc.node.hashString);
+						}
+						
 						// 2021.03.19 Jeon, No comparison of hashString
-						if(true){
 						// if (c.node.hashString.equals(loc.node.hashString)) {
+						if(true){
 							if (c.node.isStatement) {
 								candidates.add(id);
 							} else if (c.node.kind == loc.node.kind) {
-								if (c.node.normalized) {
+								if (c.node.normalized || loc.isCompatible(c)) {
 									candidates.add(id);
-								} else if (loc.isCompatible(c)) { // TE: value 확인 안하기
-									candidates.add(id);
-								} else{
-									System.out.println("==== else here ===");
 								}
 							}
 						}
 						break;
 					case Change.REPLACE:
 						if (c.node.isStatement || !c.node.isStatement && loc.isCompatible(c)) {
+							// 2021.03.19 TE, No comparison of hashString nor value
 							// if (c.node.hashString.equals(loc.node.hashString)) {
-							// 	if (valueMatched(c.node, loc.node)) // TE: value 확인 안 하기
+							// 	if (valueMatched(c.node, loc.node)) 
 									candidates.add(id);
 							// }
 						}

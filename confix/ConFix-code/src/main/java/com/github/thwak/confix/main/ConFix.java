@@ -62,13 +62,9 @@ public class ConFix {
 
         // ======= STEP 1-2. Create Patch Strategy ======= //
         PatchStrategy pStrategy;
-        if (flMetric.compareTo("perfect") == 0) {
-            pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
-                    cStrategyKey, sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
-        } else {
-            pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+        pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
                     cStrategyKey, sourceDir, compileClassPathEntries);
-        }
+
         pStrategy.finishUpdate();
         IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
 
