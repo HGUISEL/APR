@@ -903,6 +903,10 @@ public class ConcretizationStrategy {
 
 		// 2021.04.8 TE
 		// instantiate 내용을 요약해서 여기에 적어놓기
+		// All the process above was to make three maps. varMapping, typeMapping, methodMapping
+		// Now, we traverse all nodes in the change's tree strucure(which is the structure of the location to fix)
+		// Then, we assign the value of each nodes with the maps we previously made.
+		// Using the structure with the updated values, we make an astNode to return, which is the result of instantiate().
 		Node copied = TreeUtils
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
@@ -934,9 +938,6 @@ public class ConcretizationStrategy {
 
 		AST ast = loc.node.astNode.getAST();
 		ASTNode astNode = null;
-
-		String d;
-		d = astNode == null ? "null" : "not null";
 
 		astNode = TreeUtils.generateNode(copied, ast);
 

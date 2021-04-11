@@ -23,7 +23,7 @@ public class StrategyFactory {
 		System.out.println("key: " + key);
 		switch (key) {
 			case "noctx":
-				if(flmetric.equals("perfect"))
+				if(flMetric.equals("perfect"))
 					strategy = new NoContextPatchStrategy(coverage, pool, pool.getIdentifier(), r, flMetric, cStrategyKey,
 						sourceDir, compileClassPathEntries, pFaultyClass, pFaultyLine);
 				else

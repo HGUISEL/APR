@@ -352,7 +352,7 @@ public class TreeUtils {
 		ASTNode astNode = ast.createInstance(n.type);
 		if(astNode instanceof SimpleName
 				|| astNode instanceof QualifiedName){
-			// TE: TODO 더 유연하게 바꾸기	
+			// TODO: SimpleName의 경우, 단순히 그 값을 갖다쓰는게 아니고, 더 유연하게 다른 유사한 값을 찾아서 쓸 수 있도록 바꾸기	
 			astNode = ast.newName(n.value);
 		}else if(astNode instanceof SimpleType
 				|| astNode instanceof QualifiedType){
@@ -382,11 +382,18 @@ public class TreeUtils {
 		return astNode;
 	}
 
+	/**
+	 * 2021.04.12 TE
+	 * This method is currently only used in updateIntermediate() in ConcretizationStrategy.
+	 * This method is for update in infix expressions.
+	 * The original generateNode generates an AST node with the child structure of the AST node from the Change.
+	 * However, this new overridden method generates an AST node with child structure identical to the fix location, only with a different infix symbol
+	 */
 	public static ASTNode generateNode(Node n, AST ast, Node locNode){
 		ASTNode astNode = ast.createInstance(n.type);
 		if(astNode instanceof SimpleName
 				|| astNode instanceof QualifiedName){
-			// TE: TODO 더 유연하게 바꾸기	
+			// TODO: SimpleName의 경우, 단순히 그 값을 갖다쓰는게 아니고, 더 유연하게 다른 유사한 값을 찾아서 쓸 수 있도록 바꾸기	
 			astNode = ast.newName(n.value);
 		}else if(astNode instanceof SimpleType
 				|| astNode instanceof QualifiedType){

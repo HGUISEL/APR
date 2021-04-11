@@ -18,6 +18,7 @@ import com.github.thwak.confix.util.IndexMap;
 
 public class PatchStrategy {
 
+	private static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("confix.debug", "false"));
 	protected Random r;
 	protected CoverageManager manager;
 	protected ChangePool pool;
