@@ -26,7 +26,7 @@ public class ChangePoolGenerator {
     private Context context;
 
     public ChangePoolGenerator() {
-		pool = new ChangePool();
+        pool = new ChangePool();
     }
 
     public void collect(Script script) {
@@ -37,7 +37,7 @@ public class ChangePoolGenerator {
             ContextIdentifier identifier = pool.getIdentifier();
             List<EditOp> ops = script.changes.get(c);
             for (EditOp op : ops) {
-				context = identifier.getContext(op);
+                context = identifier.getContext(op);
                 updateMethod(c);
 
                 String nodeType = c.node.label.split("::")[0]; // for Insert and Delete
@@ -46,11 +46,11 @@ public class ChangePoolGenerator {
                 if (c.type.equals(Change.INSERT) || c.type.equals(Change.DELETE)) {
 
                     if (nodeType.equals("InfixExpression")) {
-						fixList = infixList;
+                        fixList = infixList;
                     } else if (nodeType.equals("PostfixExpression")) {
-						fixList = postfixList;
+                        fixList = postfixList;
                     } else if (nodeType.equals("PrefixExpression")) {
-						fixList = prefixList;
+                        fixList = prefixList;
                     }
 
                     String reverseChangeType = c.type.equals(Change.INSERT) ? Change.DELETE : Change.INSERT;
@@ -59,11 +59,11 @@ public class ChangePoolGenerator {
 
                 } else {
                     if (locationType.equals("InfixExpression")) {
-						fixList = infixList;
+                        fixList = infixList;
                     } else if (locationType.equals("PostExpression")) {
-						fixList = postfixList;
+                        fixList = postfixList;
                     } else if (locationType.equals("PrefixExpression")) {
-						fixList = prefixList;
+                        fixList = prefixList;
                     }
                 }
 
@@ -96,8 +96,8 @@ public class ChangePoolGenerator {
                 if (changeList.contains(newChangeHash)) {
                     continue;
                 }
-				changeList.add(newChangeHash);
-				pool.add(context, c);
+                changeList.add(newChangeHash);
+                pool.add(c);
                 printGeneratedChange(c);
             }
         }
@@ -105,13 +105,13 @@ public class ChangePoolGenerator {
 
     private void addNewChange(Change change) {
         if (change != null) {
-			pool.add(context, change);
+            pool.add(change);
             printGeneratedChange(change);
         }
     }
 
     private Integer createHash(Change change) {
-        return (change.type + change.node.label + change.location.label).toString().hashCode();
+        return (change.type + change.node.label + change.location.label).hashCode();
     }
 
     private Change cloneChange(Change change, String operator, String infix, String locationType, boolean isInsertOrDelete) {
@@ -130,7 +130,7 @@ public class ChangePoolGenerator {
             return null;
         }
 
-		changeList.add(newChangeHash);
+        changeList.add(newChangeHash);
         return cloneChange;
     }
 

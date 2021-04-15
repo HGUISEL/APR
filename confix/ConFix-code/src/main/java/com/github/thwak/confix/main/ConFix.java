@@ -8,6 +8,7 @@ import com.github.thwak.confix.pool.Change;
 import com.github.thwak.confix.pool.ChangePoolGenerator;
 import com.github.thwak.confix.tree.compiler.Compiler;
 import com.github.thwak.confix.util.IOUtils;
+import org.eclipse.jdt.core.dom.ASTNode;
 
 import java.io.File;
 import java.util.HashSet;
@@ -63,7 +64,7 @@ public class ConFix {
         // ======= STEP 1-2. Create Patch Strategy ======= //
         PatchStrategy pStrategy;
         pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
-                    cStrategyKey, sourceDir, compileClassPathEntries);
+                cStrategyKey, sourceDir, compileClassPathEntries);
 
         pStrategy.finishUpdate();
         IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
@@ -101,7 +102,7 @@ public class ConFix {
             }
 
             // TODO: Method Invocation의 SimpleName을 수정할 수 있는 재료 수집
-            if (change.type.equals(Change.UPDATE) && loc.node.parent.astNode.getNodeType() == loc.node.parent.astNode.METHOD_INVOCATION) {
+            if (change.type.equals(Change.UPDATE) && loc.node.parent.astNode.getNodeType() == ASTNode.METHOD_INVOCATION) {
                 /**
                  * 2021.04.06 TE & YH
                  * 1. loc이 var.method 형태일 때, var 의 타입 확인
@@ -286,7 +287,7 @@ public class ConFix {
         pool.maxLoadCount = maxPoolLoad;
         System.out.println("Pool Generation Done.");
     }
-    
+
     private static boolean isTimeBudgetPassed(long startTime) {
         if (timeBudget < 0) {
             return false;
