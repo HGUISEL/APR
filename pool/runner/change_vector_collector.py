@@ -31,14 +31,16 @@ def main(argv):
     
     
     for i in range(len(projects)):
-
-        os.system(cvc_path+" -g -u "+ real_projects[i]
+        ## Run change-vector-collector, -g means to use gumtree to generate change vectors
+        os.system(cvc_path+" -g"
+                +" -u "+ real_projects[i]  ## url option is modified to take in project names
                 +" -i "+root+"/pool/outputs/commit_collector/"+projects[i]+"_BFIC.csv"
                 +" -o "+root+"/pool/outputs/change_vector_collector/")
                 
         print("Finished Extracting Change Vectors from "+projects[i])
 
 
+    ## combine change vector info of each project into single csv file.
     os.system("cat "+root+"/pool/outputs/change_vector_collector/X_*"
             +    " > "+root+"/pool/simfin/testset/X_test.csv ;"
             + "cat "+root+"/pool/outputs/change_vector_collector/Y_*"
