@@ -1,3 +1,5 @@
+// TODO: logic to get field method names of primitive type variables.
+
 // package com.github.thwak.confix.util;
 
 // import org.eclipse.jdt.core.JavaCore;
@@ -107,7 +109,7 @@
 //                 parentCollectionMap.putIfAbsent(node, new HashSet<ASTNode>());
 //                 Set<ASTNode> parentSet = parentCollectionMap.get(node);
 //                 parentSet.add(parentNode);
-                
+
 //                 if (node.getNodeType() == 42) {
 //                 	SimpleName s = (SimpleName) node;
 //                 	System.out.println(s.getFullyQualifiedName());
@@ -117,8 +119,7 @@
 // //                	System.out.println("de");
 //                 }
 
-                 
-                
+
 //                 parentCollectionMap.put(node, parentSet);
 //                 return super.preVisit2(node);
 //             }

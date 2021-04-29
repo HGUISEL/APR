@@ -1,12 +1,17 @@
 package com.github.thwak.confix.main;
 
 import com.github.thwak.confix.config.Property;
-import com.github.thwak.confix.coverage.TestResult;
-import com.github.thwak.confix.coverage.Tester;
-import com.github.thwak.confix.patch.*;
-import com.github.thwak.confix.pool.Change;
-import com.github.thwak.confix.pool.ChangePoolGenerator;
-import com.github.thwak.confix.tree.compiler.Compiler;
+import com.github.thwak.confix.diff.compiler.Compiler;
+import com.github.thwak.confix.patch.PatchApplier;
+import com.github.thwak.confix.patch.models.PatchInfo;
+import com.github.thwak.confix.patch.models.TargetLocation;
+import com.github.thwak.confix.patch.strategy.PatchStrategy;
+import com.github.thwak.confix.patch.strategy.StrategyGenerator;
+import com.github.thwak.confix.patch.utils.PatchUtils;
+import com.github.thwak.confix.pool.changes.Change;
+import com.github.thwak.confix.pool.changes.ChangePoolGenerator;
+import com.github.thwak.confix.tester.valiation.TestResult;
+import com.github.thwak.confix.tester.valiation.Tester;
 import com.github.thwak.confix.util.IOUtils;
 import org.eclipse.jdt.core.dom.ASTNode;
 
@@ -48,7 +53,7 @@ public class ConFix {
         boolean success = false;
         boolean terminate = false;
         String targetClass = null;
-        Patcher patcher = null;
+        PatchApplier patchApplier = null;
 
         // ======= STEP 0. Set Properties ======= //
         new Property("confix.properties");
@@ -63,7 +68,7 @@ public class ConFix {
 
         // ======= STEP 1-2. Create Patch Strategy ======= //
         PatchStrategy pStrategy;
-        pStrategy = StrategyFactory.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
+        pStrategy = StrategyGenerator.getPatchStrategy(pStrategyKey, coverage, pool, randomSeed, flMetric,
                 cStrategyKey, sourceDir, compileClassPathEntries);
 
         pStrategy.finishUpdate();
@@ -85,8 +90,8 @@ public class ConFix {
             }
 
             // ======= STEP 2-2. Create Patcher ======= //
-            patcher = pStrategy.patcher();
-            if (patcher == null) {
+            patchApplier = pStrategy.patcher();
+            if (patchApplier == null) {
                 break;
             }
 
@@ -118,7 +123,7 @@ public class ConFix {
                 success = false;
                 PatchInfo info = new PatchInfo(targetClass, change, loc);
                 try {
-                    returnCode = patcher.apply(loc, change, info);
+                    returnCode = patchApplier.apply(loc, change, info);
                     if (DEBUG) {
                         //TE
                         System.out.println("Fix Location");
@@ -147,19 +152,19 @@ public class ConFix {
                         System.out.println(change);
                         e.printStackTrace();
                     }
-                    returnCode = Patcher.C_NOT_APPLIED;
+                    returnCode = PatchApplier.C_NOT_APPLIED;
                 }
                 trial++;
 
 
-                if (returnCode != Patcher.C_NOT_INST && returnCode == Patcher.C_APPLIED) {
+                if (returnCode != PatchApplier.C_NOT_INST && returnCode == PatchApplier.C_APPLIED) {
                     System.out.println("\nPatch Candidate-" + candidateCount + " is generated.");
                     if (change != null && !change.equals(prevApplied)) {
                         prevApplied = change;
                         appliedCount++;
                     }
                     String editText = PatchUtils.getEditText(info, pool);
-                    String newSource = patcher.getNewSource();
+                    String newSource = patchApplier.getNewSource();
                     String candidateFileName = storeCandidate(newSource, editText, targetClass, change, candidateCount);
 
                     // ======= STEP 2-5. Verify Patch Candidate ======= //
@@ -187,9 +192,9 @@ public class ConFix {
 
                     candidateCount++;
 
-                } else if (returnCode == Patcher.C_NO_FIXLOC) {
+                } else if (returnCode == PatchApplier.C_NO_FIXLOC) {
                     break;
-                } else if (returnCode == Patcher.C_NO_CHANGE) {
+                } else if (returnCode == PatchApplier.C_NO_CHANGE) {
                     break;
                 }
 
@@ -222,7 +227,7 @@ public class ConFix {
 
             } while (trial < maxTrials);
 
-            if (terminate || returnCode == Patcher.C_NO_FIXLOC) {
+            if (terminate || returnCode == PatchApplier.C_NO_FIXLOC) {
                 break;
             }
         }

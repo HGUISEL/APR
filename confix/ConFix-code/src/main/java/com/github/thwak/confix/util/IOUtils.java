@@ -1,8 +1,8 @@
 package com.github.thwak.confix.util;
 
-import com.github.thwak.confix.coverage.CoverageManager;
-import com.github.thwak.confix.patch.PatchInfo;
-import com.github.thwak.confix.pool.Change;
+import com.github.thwak.confix.patch.models.PatchInfo;
+import com.github.thwak.confix.pool.changes.Change;
+import com.github.thwak.confix.tester.coverage.CoverageManager;
 
 import java.io.*;
 import java.nio.file.*;
