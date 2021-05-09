@@ -98,15 +98,15 @@ public class Property {
         bugId = PatchUtils.getStringProperty(props, "bugId", "3");
         pFaultyLine = Integer.parseInt(PatchUtils.getStringProperty(props, "pFaultyLine", "1"));
         pFaultyClass = PatchUtils.getStringProperty(props, "pFaultyClass", "");
-        System.out.println("pFaultyClass as it is: " + pFaultyClass);
+        // System.out.println("pFaultyClass as it is: " + pFaultyClass);
         pFaultyClass = pFaultyClass.replace(sourceDir.replaceAll("/", ".") + ".", "");
-        System.out.println("pFaultyClass after replacing is: " + pFaultyClass);
+        // System.out.println("pFaultyClass after replacing is: " + pFaultyClass);
         createFileLists(projectName, bugId);
     }
 
     public static void createFileLists(String projectName, String bugId) {
-        File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data/" + projectName + "-" + bugId);
-        // File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data");
+        File dir = new File("../../pool/prepare_pool_source");
+        //File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data");
         File[] directoryListing = dir.listFiles();
         //System.out.println("File list size: "+directoryListing.length()) ;
 
@@ -122,7 +122,7 @@ public class Property {
                 int number = Integer.parseInt(child.getName().substring(start, end));
                 try {
                     //System.out.println("Child path: " + child.getCanonicalPath()) ;
-                    String[] childPath = child.getCanonicalPath().split("data/"); // "data/"" 뒤에는 파일 이름이 붙는다.
+                    String[] childPath = child.getCanonicalPath().split("source/"); // "data/"" 뒤에는 파일 이름이 붙는다.
                     if (childPath[1].indexOf("new") > 0) {
                         cleanFiles.set(number, child);
                     } else {

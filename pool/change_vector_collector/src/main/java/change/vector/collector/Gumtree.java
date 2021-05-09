@@ -56,13 +56,8 @@ public class Gumtree {
 		ArrayList<BeforeBIC> new_bbics = new ArrayList<BeforeBIC>();
 		File file_Y;
 		File file_X;
-		if (Main.is_clean) {
-			file_Y = new File(input.outputDir + "Y_" + input.projectName + ".csv");
-			file_X = new File(input.outputDir + "X_" + input.projectName + ".csv");
-		} else {
-			file_Y = new File(input.outputDir + "Y_" + input.projectName + ".csv");
-			file_X = new File(input.outputDir + "X_" + input.projectName + ".csv");
-		}
+		file_Y = new File(input.outputDir + "Y_" + input.projectName + ".csv");
+		file_X = new File(input.outputDir + "X_" + input.projectName + ".csv");
 
 		BufferedWriter writer_Y = Files.newBufferedWriter(Paths.get(file_Y.getAbsolutePath()));
 		BufferedWriter writer_X = Files.newBufferedWriter(Paths.get(file_X.getAbsolutePath()));

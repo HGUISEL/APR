@@ -165,6 +165,10 @@ public class Collector {
 
 		// input csv columns [Project, D4J ID, Faulty file path, faulty line, FIC_sha, BFIC_sha]
 		int count=0;
+
+				
+		// by TE,
+		// to make test data
 		for (CSVRecord record : records) {
 			if(count==0){
 				count++;
@@ -188,10 +192,11 @@ public class Collector {
 					shaBeforeBFC, shaBFC, key, project, label);
 			bbics.add(bbic);
 		}
-		
-		// by TE,
-		// to make test data
 
+
+
+		// by TE
+		// to make train data
 
 		// for (CSVRecord record : records) {
 		// 	String pathBeforeBIC = record.get(1);
@@ -214,7 +219,7 @@ public class Collector {
 		// 			shaBeforeBFC, shaBFC, key, project, label);
 		// 	bbics.add(bbic);
 		// }
-		// to make train data
+
 
 
 		System.out.println("########### Finish collecting BBIC from local file: " + bbics.size() + " ###########");

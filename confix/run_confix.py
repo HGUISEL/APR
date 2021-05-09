@@ -16,7 +16,7 @@ def main(argv):
     target_bug_list.sort()
 
     for target_bug in target_bug_list:
-        # target_bug="Closure-14"
+        target_bug="Closure-14"
         target_project, target_id = target_bug.split('-')
 
 
@@ -65,16 +65,9 @@ def main(argv):
         os.system("mkdir "+root+"/results/patches/"+target_bug)
         os.system("cp -r "+current_bug_dir+"/patches/* " +
                   root+"/results/patches/"+target_bug+"/")
-        
-        # mkdir patch-logs
 
-        # if [ -e ${PROJ_NAME_LIST[$i]}-${j}/patch_info ];then
-        #     cp ${PROJ_NAME_LIST[$i]}-${j}/patch_info patch-logs/${PROJ_NAME_LIST[$i]}-${j}
-        # fi
 
-        # rm -rf ${PROJ_NAME_LIST[$i]}-${j}
-
-        # break
+        break
 
 
 if __name__ == '__main__':

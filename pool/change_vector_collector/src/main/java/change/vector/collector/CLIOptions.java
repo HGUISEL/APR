@@ -13,32 +13,32 @@ public class CLIOptions {
 	public String inputDir = "";
 	public String outputDir = "";
 
-	public String url = "";
+	public String project = "";
 	public Repository repo = null;
-	public String REMOTE_URI = "";
 	public String projectName = "train";
 	public Git git = null;
 	public File gitDir = null;
+	public boolean is_defects4j = false;
 
 // comment by TE
-// url will be project name
-	public CLIOptions(String url, String in, String out)
+	public CLIOptions(String project, String in, String out)
 			throws InvalidRemoteException, TransportException, GitAPIException, IOException {
 		if (!Main.is_remove_zero) {
-			this.url = url;
-			this.REMOTE_URI = url + ".git";
-			this.projectName = url ; //Utils.getProjectName(REMOTE_URI);
-			if (Utils.isCloned(this)) {
-				this.gitDir = Utils.getGitDirectory(this);
-			} else {
-				this.gitDir = Utils.GitClone(this);
-			}
+			this.project = project;
+			this.projectName = project ;
+			this.gitDir = Utils.getGitDirectory(this);
+
+			// this.projectName = Utils.getProjectName(REMOTE_URI);
+			// if (Utils.isCloned(this)) {
+			// 	this.gitDir = Utils.getGitDirectory(this);
+			// } else {
+			// 	this.gitDir = Utils.GitClone(this);
+			// }
 			this.git = Git.open(gitDir);
 			this.repo = git.getRepository();
 		}
-		this.url = url;
-		this.REMOTE_URI = url + ".git";
-		this.projectName =  url ; //Utils.getProjectName(REMOTE_URI);
+		this.project = project;
+		this.projectName =  project ;
 		this.inputDir = in;
 		this.outputDir = out;
 		

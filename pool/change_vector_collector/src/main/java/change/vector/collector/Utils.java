@@ -73,40 +73,6 @@ public class Utils {
 		return bfcList.contains(commit.getId().getName());
 	}
 
-	public static Git gitClone1(String REMOTE_URI)
-			throws InvalidRemoteException, TransportException, GitAPIException, IOException {
-
-		File repositoriesDir = new File("repositories" + File.separator + getProjectName(REMOTE_URI));
-		Git git = null;
-		if (repositoriesDir.exists()) {
-			try {
-				git = Git.open(repositoriesDir);
-			} catch (RepositoryNotFoundException e) {
-				if (repositoriesDir.delete()) {
-					return gitClone1(REMOTE_URI);
-				}
-			}
-		} else {
-			repositoriesDir.mkdirs();
-			System.out.println("cloning..");
-			git = Git.cloneRepository().setURI(REMOTE_URI).setDirectory(repositoriesDir)
-//				  .setBranch("refs/heads/master") // only master
-					.setCloneAllBranches(true).call();
-		}
-		return git;
-	}
-
-	public static File GitClone(CLIOptions input) throws InvalidRemoteException, TransportException, GitAPIException {
-		String remoteURI = input.REMOTE_URI;
-		String projectName = input.projectName;
-		File clonedDirectory = getGitDirectory(input);
-		clonedDirectory.mkdirs();
-		System.out.println("cloning " + projectName + "...");
-		Git git = Git.cloneRepository().setURI(remoteURI).setDirectory(clonedDirectory).setCloneAllBranches(true)
-				.call();
-		System.out.println("done");
-		return git.getRepository().getDirectory();
-	}
 
 	public static String getProjectName(String URI) {
 
@@ -119,14 +85,20 @@ public class Utils {
 	}
 
 	public static String getReferencePath(CLIOptions input) {
-		return "/home/goodtaeeun/APR_Projects/data/AllBIC" + File.separator + "reference";
+
+		// if(input.is_defects4j)
+		// 	return "/home/goodtaeeun/APR_Projects/APR/pool/target" ;
+		// else
+		//return "/home/goodtaeeun/APR_Projects/data/AllBIC/reference/repositories";
+
+		return "/home/goodtaeeun/APR_Projects/APR/target" ;
 	}
 	//where all the data is stored
 
 	public static File getGitDirectory(CLIOptions input) {
 		String referencePath = getReferencePath(input);
-		File clonedDirectory = new File(
-				referencePath + File.separator + "repositories" + File.separator + input.projectName);
+		File clonedDirectory = new File(referencePath + File.separator + input.projectName);
+		//File clonedDirectory = new File(referencePath + File.separator + "closure-compiler");
 		return clonedDirectory;
 	}
 
