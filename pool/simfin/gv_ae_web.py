@@ -352,9 +352,9 @@ def run_predict(X_test, Y_test, Y_train, test, train):
     vecs_on_csv('./pool/simfin/view_file/test_encoded.csv', X_test_encoded)
 
     # writing the result of knn prediction
-    write_kneighbors('./pool/outputs/simfin/' + test + '_gv_ae_kneighbors.txt', X_test_encoded, knn)
-    write_test_result('./pool/outputs/simfin/' + test + '_gv_ae_predict.txt', X_test_encoded, knn)
-    resultFile = './pool/outputs/simfin/' + test + '_result.csv'
+    write_kneighbors('./pool/outputs/simfin_web/' + test + '_gv_ae_kneighbors.txt', X_test_encoded, knn)
+    write_test_result('./pool/outputs/simfin_web/' + test + '_gv_ae_predict.txt', X_test_encoded, knn)
+    resultFile = './pool/outputs/simfin_web/' + test + '_result.csv'
     write_result(Y_train,
                  Y_test,
                  resultFile,
