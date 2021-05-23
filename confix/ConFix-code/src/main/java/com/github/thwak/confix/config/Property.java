@@ -1,8 +1,8 @@
 package com.github.thwak.confix.config;
 
-import com.github.thwak.confix.coverage.CoverageManager;
-import com.github.thwak.confix.patch.PatchUtils;
-import com.github.thwak.confix.pool.ChangePool;
+import com.github.thwak.confix.tester.coverage.CoverageManager;
+import com.github.thwak.confix.patch.utils.PatchUtils;
+import com.github.thwak.confix.pool.changes.ChangePool;
 
 import java.io.File;
 import java.io.FileInputStream;

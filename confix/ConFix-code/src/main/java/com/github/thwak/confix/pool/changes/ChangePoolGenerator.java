@@ -1,6 +1,10 @@
 package com.github.thwak.confix.pool.changes;
 
-import com.github.thwak.confix.tree.Node;
+import com.github.thwak.confix.diff.Node;
+import com.github.thwak.confix.pool.contexts.Context;
+import com.github.thwak.confix.pool.contexts.ContextIdentifier;
+import com.github.thwak.confix.pool.models.Script;
+import com.github.thwak.confix.pool.utils.Converter;
 import com.github.thwak.confix.util.IOUtils;
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.MethodDeclaration;

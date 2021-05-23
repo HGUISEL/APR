@@ -21,7 +21,7 @@ def main(argv):
 
     # pwd is APR/
     root = os.getcwd()
-    # currently, we are running confix in APR/confix directory
+    # currently, we are running confix in APR directory
 
 
     perfect_info = pd.read_csv(root+"/pool/commit_collector/inputs/input.csv",
@@ -35,6 +35,12 @@ def main(argv):
 
     perfect_faulty_class, foo = perfect_faulty_path.split(".")
     perfect_faulty_class = perfect_faulty_class.replace("/", ".")
+
+
+    ## build confix and move it to the library
+    os.system("cd ./confix/ConFix-code ;"
+            + "mvn clean package ;"
+            + "cp target/confix-0.0.1-SNAPSHOT-jar-with-dependencies.jar /home/goodtaeeun/APR_Projects/APR/confix/lib/confix-ami_torun.jar")
 
 
 

@@ -35,8 +35,8 @@ public class StrategyGenerator {
     public static ConcretizationStrategy getConcretizationStrategy(String key, CoverageManager coverage,
                                                                    String className, String srcDir, Random r) {
         ConcretizationStrategy strategy = null;
-        CoverageInfo info = coverage.get(className);
-        String packageName = getPackageName(className);
+        //CoverageInfo info = coverage.get(className);
+        //String packageName = getPackageName(className);
         key = key.toLowerCase();
         switch (key) {
             case "tc":
