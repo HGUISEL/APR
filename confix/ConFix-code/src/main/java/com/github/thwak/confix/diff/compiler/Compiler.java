@@ -134,8 +134,9 @@ public class Compiler {
         command.append(" ");
         command.append(f.getAbsolutePath());
         String cmd = command.toString();
+        // System.out.println(cmd);
         boolean error = !org.eclipse.jdt.core.compiler.batch.BatchCompiler.compile(cmd, outWriter, errWriter, null);
-        if (DEBUG) {
+        if (true) {
             System.out.println(cmd);
             System.out.println(out.toString());
             System.out.println(err.toString());

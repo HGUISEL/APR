@@ -18,7 +18,7 @@ public class Property {
     public static String[] compileClassPathEntries;
     public static String libClassPath;
     public static List<String> modifiedClasses = new ArrayList<>();
-    public static CoverageManager coverage;
+    public static CoverageManager coverage = null;
     public static String sourceDir;
     public static String targetDir;
     public static String tempDir;

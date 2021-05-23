@@ -24,14 +24,14 @@ def main(argv):
     # currently, we are running confix in APR directory
 
 
-    perfect_info = pd.read_csv(root+"/pool/commit_collector/inputs/input.csv",
-                                names=['Project','Faulty file path','faulty line','buggy sha','url','dummy'])
+    perfect_info = pd.read_csv(root+"/pool/outputs/commit_collector_web/BFIC.csv",
+                                names=['Project','D4J ID','Faulty file path','faulty line','FIC sha','BFIC sha'])
     perfect_info_csv = perfect_info.values
 
     target_project = perfect_info_csv[1][0]
-    perfect_faulty_path = perfect_info_csv[1][1]
-    perfect_faulty_line = perfect_info_csv[1][2]
-    buggy_sha = perfect_info_csv[1][3]
+    target_id = perfect_info_csv[1][1]
+    perfect_faulty_path = perfect_info_csv[1][2]
+    perfect_faulty_line = perfect_info_csv[1][3]
 
     perfect_faulty_class, foo = perfect_faulty_path.split(".")
     perfect_faulty_class = perfect_faulty_class.replace("/", ".")
@@ -48,8 +48,6 @@ def main(argv):
 
     ### for D4J projects
     if is_D4J == True:
-        target_project, target_id = target_project.split('-')
-
         os.system("rm -rf "+root+"/target/* ;"
                     + "defects4j checkout -p "+target_project+" -v "+target_id+"b -w "+root+"/target/"+target_project)
         # print("Finish defects4j checkout")

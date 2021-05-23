@@ -58,7 +58,7 @@ def main(argv):
 
     ## Run change-vector-collector, -g means to use gumtree to generate change vectors
     os.system(cvc_path+" -g"
-            +" -i "+root+"/pool/outputs/commit_collector_web/"+project+"_BFIC.csv"
+            +" -i "+root+"/pool/outputs/commit_collector_web/BFIC.csv"
             +" -o "+root+"/pool/outputs/change_vector_collector_web/"
             +" -p "+ project )
                 

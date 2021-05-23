@@ -107,7 +107,7 @@ def main(argv):
     BFIC_sha = str(git_stream.read()).split('\n')[0]
 
 
-    with open(root+"/pool/outputs/commit_collector_web/"+project+"_BFIC.csv", 'w', newline='') as csvfile:
+    with open(root+"/pool/outputs/commit_collector_web/BFIC.csv", 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile, delimiter=',')
 
         # writing header

@@ -58,8 +58,8 @@ public class ConFix {
         // ======= STEP 0. Set Properties ======= //
         new Property("confix.properties");
         loadTests();
-        loadCoverage();
-        checkCoverageValidity();
+        //loadCoverage();
+        //checkCoverageValidity();
         long startTime = setTimer();
         Random randomSeed = setRandomSeed(startTime);
 
