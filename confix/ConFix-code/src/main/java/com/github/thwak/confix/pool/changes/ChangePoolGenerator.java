@@ -1,10 +1,6 @@
 package com.github.thwak.confix.pool.changes;
 
-import com.github.thwak.confix.diff.Node;
-import com.github.thwak.confix.pool.contexts.Context;
-import com.github.thwak.confix.pool.contexts.ContextIdentifier;
-import com.github.thwak.confix.pool.models.Script;
-import com.github.thwak.confix.pool.utils.Converter;
+import com.github.thwak.confix.tree.Node;
 import com.github.thwak.confix.util.IOUtils;
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
@@ -172,6 +168,9 @@ public class ChangePoolGenerator {
                     continue;
                 }
 
+                System.out.println("buggy file : "+bugFiles.get(i).getName());
+				System.out.println("clean file : "+cleanFiles.get(i).getName());
+
                 // Generate EditScript from before and after.
                 String oldCode = IOUtils.readFile(bugFiles.get(i));
                 String newCode = IOUtils.readFile(cleanFiles.get(i));
@@ -195,4 +194,3 @@ public class ChangePoolGenerator {
         }
     }
 }
-

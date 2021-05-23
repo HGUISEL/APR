@@ -7,7 +7,8 @@ CDIR=$(pwd)
 DIR=../../results
 PROP="confix.properties"
 echo "Create confix.properties for $CDIR"
-cp ../../properties/$PROP ./$PROP
+cp ../../confix/properties/$PROP ./$PROP
+#cp ../../properties/$PROP ./$PROP
 
 #Export properties
 value=$(defects4j export -p dir.src.classes)
