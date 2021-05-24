@@ -45,16 +45,9 @@ def main(argv):
             + "rm -r ./change-vector-collector")
 
 
-    input_df = pd.read_csv(root+"/pool/commit_collector/inputs/input.csv", names=["Project","Faulty file path","faulty line","buggy sha","url","dummy"])
-    input_csv = input_df.values
-    project = input_csv[1][0]
-
-        
-    if(is_D4J):
-        project, foo = project.split("-")
-        real_project = real_projects[projects.index(project)]
-    else:
-        real_project = project
+    BFIC_df = pd.read_csv(root+"pool/outputs/commit_collector_web/BFIC.csv", names=["Project","D4J ID", "Faulty file path","faulty line","FIC sha","BFIC sha"])
+    BFIC_csv = BFIC_df.values
+    project = BFIC_csv[1][0]
 
     ## Run change-vector-collector, -g means to use gumtree to generate change vectors
     os.system(cvc_path+" -g"
@@ -67,15 +60,15 @@ def main(argv):
 
 
 
-    ## add dummy data to fit the size of the trained model
-    with open(root+"/pool/outputs/change_vector_collector_web/X_"+project+".csv", 'a', newline='') as csvfile:
+    ## add dummy data to fit the size of the trained model as a second row
+    with open(root+"/pool/outputs/change_vector_collector_web/X.csv", 'a', newline='') as csvfile:
         csv_writer = csv.writer(csvfile, delimiter=',')
         zeros = []
         for i in range(0,MODEL_SIZE):
             zeros.append('0')
         csv_writer.writerow(zeros)
 
-    with open(root+"/pool/outputs/change_vector_collector_web/Y_"+project+".csv", 'a', newline='') as csvfile:
+    with open(root+"/pool/outputs/change_vector_collector_web/Y.csv", 'a', newline='') as csvfile:
         csv_writer = csv.writer(csvfile, delimiter=',')
         dummy = ['dummy','-','-','-','-','-','-','-','-','-','-','-']
         csv_writer.writerow(dummy)
@@ -85,9 +78,9 @@ def main(argv):
 
 
     # copy change vector info ad input of simfin.
-    os.system("cp "+root+"/pool/outputs/change_vector_collector_web/X_*"
+    os.system("cp "+root+"/pool/outputs/change_vector_collector_web/X.csv"
         + " "+root+"/pool/simfin/testset/X_test.csv ;"
-        + "cp "+root+"/pool/outputs/change_vector_collector_web/Y_*"
+        + "cp "+root+"/pool/outputs/change_vector_collector_web/Y.csv"
         + " "+root+"/pool/simfin/testset/Y_test.csv ;")
 
 if __name__ == '__main__':

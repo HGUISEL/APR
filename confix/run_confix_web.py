@@ -77,10 +77,11 @@ def main(argv):
     os.system("cd "+target_dir+" ; "
             + "/usr/lib/jvm/java-8-openjdk-amd64/bin/java "
             + "-Xmx4g -cp ../../confix/lib/las.jar:../../confix/lib/confix-ami_torun.jar "
-            + "-Duser.language=en -Duser.timezone=America/Los_Angeles com.github.thwak.confix.main.ConFix")
+            + "-Duser.language=en -Duser.timezone=America/Los_Angeles com.github.thwak.confix.main.ConFix "
+            + "> log.txt")
     print("Finish confix!!")
 
-    os.system("mkdir "+root+"/target/"+target_project+"/patches")
+    # os.system("mkdir "+root+"/target/"+target_project+"/patches")
 
 
 

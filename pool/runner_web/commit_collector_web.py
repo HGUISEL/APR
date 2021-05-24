@@ -14,16 +14,18 @@ import getopt
 def main(argv):
 
     try:
-        opts, args = getopt.getopt(argv[1:], "d:o:", ["defects4J", "other"])
+        opts, args = getopt.getopt(argv[1:], "d:i:", ["defects4J", "input"])
     except getopt.GetoptError as err:
         print(err)
         sys.exit(2)
     is_D4J = False
+    is_direct_input = False
     for o, a in opts:
         if o in ("-d", "--defects4J"):
             is_D4J = True
-        elif o in ("-o", "--other"):
-            is_D4J = False
+        elif o in ("-i", "--input"):
+            input_string = a
+            is_direct_input = True
         else:
             assert False, "unhandled option"
 
@@ -36,19 +38,27 @@ def main(argv):
     # input은 어차피 한 줄이다. 편의상 csv로 했을 뿐.
     # d4J가 아닐 경우 여기에 buggy sha가 추가로 필요하다.
     # d4j일때는 project에 Chart-3 이렇게 기록해야 한다.
-    input_df = pd.read_csv(root+"/pool/commit_collector/inputs/input.csv", names=["Project","Faulty file path","faulty line","buggy sha","url","dummy"])
-    input_csv = input_df.values
+    if is_direct_input == False:
+        input_df = pd.read_csv(root+"/pool/commit_collector/inputs/input.csv", names=["Project","Faulty file path","faulty line","buggy sha","url","dummy"])
+        input_csv = input_df.values
 
-    project = input_csv[1][0]
-    faulty_file_path = input_csv[1][1]
-    faulty_line = input_csv[1][2]
-    buggy_sha = input_csv[1][3]
-    project_url = input_csv[1][4]
+        project = input_csv[1][0]
+        faulty_file_path = input_csv[1][1]
+        faulty_line = input_csv[1][2]
+        buggy_sha = input_csv[1][3]
+        project_url = input_csv[1][4]
+
+    ## 그냥 string으로 input이 주어진다면?
+    else:
+        input_list = input_string.split(',')
+        project = input_list[0]
+        faulty_file_path = input_list[1]
+        faulty_line = input_list[2]
+        buggy_sha = input_list[3]
+        project_url = input_list[4]
 
 
 
-    ##### D4J인경우 ####
-    D4J_project = "-"
     D4J_ID = "-"
     fix_faulty_line = "---"
     blame_faulty_line = "---"
@@ -60,8 +70,7 @@ def main(argv):
     os.system("rm -rf ./target/*")
 
     if is_D4J:
-        D4J_project, D4J_ID = project.split("-")
-        project = D4J_project
+        project, D4J_ID = project.split("-")
 
         ## 미리 준비한 데이터에서 읽어오기
         d4j_input_df = pd.read_csv(root+"/pool/commit_collector/inputs/"+project+".csv", names=["DefectsfJ ID","Faulty file path","fix faulty line","blame faulty line","dummy"])
@@ -101,7 +110,9 @@ def main(argv):
     git_stream = os.popen("git -C "+target_dir+"/"+project+" blame -C -C -f -l -L "+str(blame_faulty_line)+","+str(blame_faulty_line)+" "+faulty_file_path)
     foo = str(git_stream.read()).split(' ')
     FIC_sha = foo[0]
-    faulty_file_path = foo[1]
+
+    # 이렇게 하면 오히려 실제 고치는 장소랑 바뀌어버린다... 패스가 바뀌는게 문제
+    # faulty_file_path = foo[1]
 
     git_stream = os.popen("git -C "+target_dir+"/"+project+" rev-parse "+FIC_sha+"~1")
     BFIC_sha = str(git_stream.read()).split('\n')[0]
