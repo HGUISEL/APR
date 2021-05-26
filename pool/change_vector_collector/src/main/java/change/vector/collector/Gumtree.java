@@ -68,7 +68,7 @@ public class Gumtree {
 		boolean flag = true;
 		int cnt = 0;
 		for (BeforeBIC bbic : bbics) {
-			//System.out.println("@@@@@@@@@@@@@@@@@@@@@@@@@Hello World@@@@@@@@@@@@@@@@@@@@@@@@@@");
+			System.out.println("@@@@@@@@@@@@@@@@@@@@@@@@@Hello World@@@@@@@@@@@@@@@@@@@@@@@@@@");
 			if(flag==true){
 				spy++;
 			}
@@ -98,10 +98,11 @@ public class Gumtree {
 
 			List<Action> actionsBIC = gBIC.getActions();
 
+
 			ArrayList<Integer> g_vec = new ArrayList<Integer>();
 			int check = 0;
 			for (Action action : actionsBIC) {
-				//System.out.println(check++);
+				System.out.println("hello again!!!");
 				
 				// if regards import, discard
 				//if (action.getNode().getType() == 40 || action.getNode().getType() == 26) {

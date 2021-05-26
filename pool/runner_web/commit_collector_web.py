@@ -31,7 +31,7 @@ def main(argv):
 
     root = os.getcwd()
 
-    target_dir = root+"/target/"
+    target_dir = root+"/target"
 
 
     # remove column "dummy" when input is updated
@@ -52,10 +52,12 @@ def main(argv):
     else:
         input_list = input_string.split(',')
         project = input_list[0]
-        faulty_file_path = input_list[1]
-        faulty_line = input_list[2]
-        buggy_sha = input_list[3]
-        project_url = input_list[4]
+        
+        if is_D4J == False:
+            faulty_file_path = input_list[1]
+            faulty_line = input_list[2]
+            buggy_sha = input_list[3]
+            project_url = input_list[4]
 
 
 
@@ -95,7 +97,8 @@ def main(argv):
                 break
 
         ## prepare target project repository
-        os.system("defects4j checkout -p "+project+" -v "+D4J_ID+"b -w "+target_dir+"/"+project)
+        os.system("cd "+ target_dir+" ;"
+                + "defects4j checkout -p "+project+" -v "+D4J_ID+"b -w "+project)
     
     ##### 아닌 경우 ####
     ## 필요한 정보는 input.csv에서 이미 읽어왓기에 clone만 해주면 된다.

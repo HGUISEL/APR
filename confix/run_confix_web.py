@@ -36,11 +36,13 @@ def main(argv):
     perfect_faulty_class, foo = perfect_faulty_path.split(".")
     perfect_faulty_class = perfect_faulty_class.replace("/", ".")
 
+    target_dir = root+"/target/"+target_project
+
 
     ## build confix and move it to the library
     os.system("cd ./confix/ConFix-code ;"
             + "mvn clean package ;"
-            + "cp target/confix-0.0.1-SNAPSHOT-jar-with-dependencies.jar /home/goodtaeeun/APR_Projects/APR/confix/lib/confix-ami_torun.jar")
+            + "cp target/confix-0.0.1-SNAPSHOT-jar-with-dependencies.jar /home/goodt/APR_Projects/APR/confix/lib/confix-ami_torun.jar")
 
 
 
@@ -55,8 +57,6 @@ def main(argv):
         os.system("cp "+root+"/confix/coverages/"+target_project.lower()+"/"+target_project.lower()+target_id+"b/coverage-info.obj "
                     + root+"/target/"+target_project)
         # print("Finish copying coverage Info")
-
-        target_dir = root+"/target/"+target_project
 
         os.system("cd "+target_dir+" ; "
                     + "defects4j compile")

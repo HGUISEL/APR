@@ -91,7 +91,8 @@ public class Utils {
 		// else
 		//return "/home/goodtaeeun/APR_Projects/data/AllBIC/reference/repositories";
 
-		return "/home/goodtaeeun/APR_Projects/APR/target" ;
+		return "/home/goodt/APR_Projects/APR/target" ;
+		
 	}
 	//where all the data is stored
 

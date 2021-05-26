@@ -106,7 +106,7 @@ public class Property {
 
     public static void createFileLists(String projectName, String bugId) {
         File dir = new File("../../pool/prepare_pool_source");
-        //File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data");
+        //File dir = new File("/home/goodt/APR_Projects/APR/pool/las/data");
         File[] directoryListing = dir.listFiles();
         //System.out.println("File list size: "+directoryListing.length()) ;
 

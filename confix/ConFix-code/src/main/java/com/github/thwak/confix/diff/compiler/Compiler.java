@@ -136,7 +136,7 @@ public class Compiler {
         String cmd = command.toString();
         // System.out.println(cmd);
         boolean error = !org.eclipse.jdt.core.compiler.batch.BatchCompiler.compile(cmd, outWriter, errWriter, null);
-        if (true) {
+        if (DEBUG) {
             System.out.println(cmd);
             System.out.println(out.toString());
             System.out.println(err.toString());

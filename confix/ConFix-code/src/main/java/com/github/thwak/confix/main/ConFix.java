@@ -107,15 +107,15 @@ public class ConFix {
             }
 
             // TODO: Method Invocation의 SimpleName을 수정할 수 있는 재료 수집
-            if (change.type.equals(Change.UPDATE) && loc.node.parent.astNode.getNodeType() == ASTNode.METHOD_INVOCATION) {
-                /**
-                 * 2021.04.06 TE & YH
-                 * 1. loc이 var.method 형태일 때, var 의 타입 확인
-                 * 2. 해당 타입의 모든 필드 메소드 이름(String)을 리스트로 만들어 cStrategy 객체에 넣어준다 + 사용할 이름의 인덱스 초기화.
-                 * 3. apply가 실행될 때마다 index 증가,
-                 * 4. generateNode() 하기 직전에 copied의 value를 list[index]의 값으로 바꾼다.
-                 */
-            }
+            // if (change.type.equals(Change.UPDATE) && loc.node.parent.astNode.getNodeType() == ASTNode.METHOD_INVOCATION) {
+            //     /**
+            //      * 2021.04.06 TE & YH
+            //      * 1. loc이 var.method 형태일 때, var 의 타입 확인
+            //      * 2. 해당 타입의 모든 필드 메소드 이름(String)을 리스트로 만들어 cStrategy 객체에 넣어준다 + 사용할 이름의 인덱스 초기화.
+            //      * 3. apply가 실행될 때마다 index 증가,
+            //      * 4. generateNode() 하기 직전에 copied의 value를 list[index]의 값으로 바꾼다.
+            //      */
+            // }
 
             // ======= STEP 2-4. Apply Change Information to Create Patch Candidate =======
             Set<String> candidates = new HashSet<>();
@@ -124,7 +124,7 @@ public class ConFix {
                 PatchInfo info = new PatchInfo(targetClass, change, loc);
                 try {
                     returnCode = patchApplier.apply(loc, change, info);
-                    if (DEBUG) {
+                    if (true) {
                         //TE
                         System.out.println("Fix Location");
                         System.out.println(loc);
