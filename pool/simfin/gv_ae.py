@@ -115,13 +115,13 @@ def write_result(trainY, testY, out_file, testX, classifier):
 
                 # getting hunks by command line
                 # path is where all the data is
-                # yhat_bic_stream = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
+                # yhat_bic_stream = os.popen('cd ~/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
                 #                     #    +  'git stash ; '
                 #                         +  'git checkout -f ' + yhat_bic_sha + ' ; '
                 #                         +  'git diff ' + yhat_bic_sha + '~ ' + yhat_bic_path)
                 # yhat_bic_hunk = str(yhat_bic_stream.read())
 
-                # yhat_bfc_stream = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
+                # yhat_bfc_stream = os.popen('cd ~/data/AllBIC/reference/repositories/' + yhat_project + ' ; '
                 #                     #    +  'git stash ; '
                 #                         +  'git checkout -f ' + yhat_bfc_sha + ' ; '
                 #                         +  'git diff ' + yhat_bfc_sha + '~ ' + yhat_bfc_path)
