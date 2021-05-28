@@ -27,8 +27,8 @@ for f in [make_path(DIR, file) for file in os.listdir(path=DIR) if '.csv' in fil
 all_changes = False
 ### for all changes
 if(all_changes):
-    train_csv = pd.read_csv('/home/goodt/APR_Projects/APR/pool/outputs/las/all_changes_train.csv')
-    test_csv = pd.read_csv('/home/goodt/APR_Projects/APR/pool/outputs/las/all_changes_test.csv')
+    train_csv = pd.read_csv('/home/DPMiner/APR_Projects/APR/pool/outputs/las/all_changes_train.csv')
+    test_csv = pd.read_csv('/home/DPMiner/APR_Projects/APR/pool/outputs/las/all_changes_test.csv')
     suggested_changes = train_csv['change info']
     original_changes = test_csv['change info']
 
