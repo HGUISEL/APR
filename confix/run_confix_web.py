@@ -52,7 +52,6 @@ def main(argv):
     if is_D4J == True:
         os.system("rm -rf "+root+"/target/* ;"
                     + "defects4j checkout -p "+target_project+" -v "+target_id+"b -w "+root+"/target/"+target_project)
-        # print("Finish defects4j checkout")
 
         os.system("cp "+root+"/confix/coverages/"+target_project.lower()+"/"+target_project.lower()+target_id+"b/coverage-info.obj "
                     + root+"/target/"+target_project)
@@ -82,6 +81,17 @@ def main(argv):
     print("Finish confix!!")
 
     # os.system("mkdir "+root+"/target/"+target_project+"/patches")
+
+    os.system("cd /home/goodt/ ; "
+            + "git diff /home/goodt/APR_Projects/APR/target/"+target_project+"/patches/0/"+perfect_faulty_path
+                    + " /home/goodt/APR_Projects/APR/target/"+target_project + perfect_faulty_path
+                    + " > /home/goodt/APR_Projects/APR/target/diff_file.txt")
+
+    # # 패치의 path
+    # /home/goodt/APR_Projects/APR/target/Math/patches/0/org/apache/commons/math/stat/Frequency.java
+
+    # # 주어지는 path
+    # src/main/java/org/apache/commons/math/stat/Frequency.java
 
 
 

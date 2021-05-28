@@ -52,10 +52,17 @@ public class Utils {
 		RevCommit commit = walk.parseCommit(id);
 		walk.close();
 
+		System.out.println("revcommit= "+commit);
+		System.out.println("path= "+path);
+
+
 		// Get the revision's file tree
 		RevTree tree = commit.getTree();
 		// .. and narrow it down to the single file's path
 		TreeWalk treewalk = TreeWalk.forPath(reader, path, tree);
+		System.out.println("treepath= "+treewalk.getPathString());
+
+// 여기서 null 나온다
 
 		if (treewalk != null) {
 			// use the blob id to read the file's data
@@ -91,7 +98,7 @@ public class Utils {
 		// else
 		//return "/home/goodtaeeun/APR_Projects/data/AllBIC/reference/repositories";
 
-		return "/home/goodt/APR_Projects/APR/target" ;
+		return "/home/goodt/APR_Projects/APR/target2" ;
 		
 	}
 	//where all the data is stored
@@ -100,6 +107,8 @@ public class Utils {
 		String referencePath = getReferencePath(input);
 		File clonedDirectory = new File(referencePath + File.separator + input.projectName);
 		//File clonedDirectory = new File(referencePath + File.separator + "closure-compiler");
+
+		System.out.println("colned directory is "+ clonedDirectory.getAbsolutePath());
 		return clonedDirectory;
 	}
 

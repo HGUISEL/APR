@@ -34,8 +34,12 @@ public class CLIOptions {
 			// } else {
 			// 	this.gitDir = Utils.GitClone(this);
 			// }
+
 			this.git = Git.open(gitDir);
-			this.repo = git.getRepository();
+			this.repo = this.git.getRepository();
+
+
+
 		}
 		this.project = project;
 		this.projectName =  project ;

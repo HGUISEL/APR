@@ -5,7 +5,11 @@
   <name>ConFix</name>
   <description>Automatic Bug Fix Tool with Context-based Change Application</description>
   <dependencies>
-
+  	<dependency>
+  		<groupId>org.eclipse.jdt</groupId>
+  		<artifactId>org.eclipse.jdt.core</artifactId>
+  		<version>3.10.0</version>
+  	</dependency>
   	<dependency>
 	    <groupId>com.github.thwak</groupId>
 	    <artifactId>las</artifactId>
@@ -13,11 +17,6 @@
 	    <scope>system</scope>
 	    <systemPath>${basedir}/lib/las.jar</systemPath>
 	</dependency>
-	  	<dependency>
-  		<groupId>org.eclipse.jdt</groupId>
-  		<artifactId>org.eclipse.jdt.core</artifactId>
-  		<version>3.10.0</version>
-  	</dependency>
   	<dependency>
   		<groupId>org.jacoco</groupId>
   		<artifactId>org.jacoco.core</artifactId>

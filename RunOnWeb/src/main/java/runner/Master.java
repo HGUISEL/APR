@@ -57,9 +57,10 @@ class Master {
 		ProcessBuilder build; 
 
 // run commit collector
-		list = new ArrayList<String>(); 
+		list = new ArrayList<String>();
+		list.add("sudo"); 
         list.add("python3");
-		list.add("./pool/runner_web/commit_collector_web.py");
+		list.add("/home/goodt/APR_Projects/APR/pool/runner_web/commit_collector_web.py");
 		list.add("-i");
 		list.add(firstArguments);
 		if(is_d4j == true){
@@ -80,8 +81,9 @@ class Master {
 
 // run change vector collector
 		list.clear();
+		list.add("sudo");
 		list.add("python3");
-		list.add("./pool/runner_web/change_vector_collector_web.py");
+		list.add("/home/goodt/APR_Projects/APR/pool/runner_web/change_vector_collector_web.py");
 		if(is_d4j == true){
 			list.add("-d");
 			list.add("true");
@@ -100,8 +102,9 @@ class Master {
 
 // run simfin
 		list.clear();
+		list.add("sudo");
         list.add("python3");
-		list.add("./pool/simfin/gv_ae.py");
+		list.add("/home/goodt/APR_Projects/APR/pool/simfin/gv_ae.py");
 		list.add("-p");
 		list.add("test");
 		list.add("-k");
@@ -120,8 +123,9 @@ class Master {
 
 // run prepare pool source 
 		list.clear();
+		list.add("sudo");
         list.add("python3");
-		list.add("./pool/runner_web/prepare_pool_source_web.py");
+		list.add("/home/goodt/APR_Projects/APR/pool/runner_web/prepare_pool_source_web.py");
 
 		build = new ProcessBuilder(list);
 		build.directory(new File("/home/goodt/APR_Projects/APR"));
@@ -136,8 +140,9 @@ class Master {
 
 // run confix
 		list.clear();
+		list.add("sudo");
         list.add("python3");
-		list.add("./confix/run_confix_web.py");
+		list.add("/home/goodt/APR_Projects/APR/confix/run_confix_web.py");
 		if(is_d4j == true){
 			list.add("-d");
 			list.add("true");
@@ -152,6 +157,7 @@ class Master {
 		catch(InterruptedException e){
 			e.printStackTrace();
 		}
+
 
 		return;
 				
