@@ -68,8 +68,15 @@ def main(argv):
         rec_BFC_path = code_dir+"/"+y_project+"_rank-"+rank+"_new.java"
 
         os.system("cd /data/AllBIC/reference/repositories/"+yhat_project+" ; "
-                + "git checkout -f "+yhat_bic_sha+" ; "
-                + "cp "+yhat_bic_path+" "+rec_BIC_path+" ; "
+                + "git checkout -f "+yhat_bic_sha+" ; ")
+
+        print("cheking out is fine")
+
+        os.system("cd /data/AllBIC/reference/repositories/"+yhat_project + " ; "
+                + "cp "+yhat_bic_path+" "+rec_BIC_path+" ; ")
+        print("first copy")
+
+        os.system("cd /data/AllBIC/reference/repositories/"+yhat_project + " ; "
                 + "git checkout -f "+yhat_bfc_sha+" ; "
                 + "cp "+yhat_bfc_path+" "+rec_BFC_path+" ; " )
         

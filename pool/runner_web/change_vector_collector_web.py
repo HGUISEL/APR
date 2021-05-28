@@ -35,14 +35,14 @@ def main(argv):
     cvc_path = root+"/pool/change_vector_collector/build/distributions/bin/change-vector-collector"
 
     ## build change-vector-collector if necessary
-    os.system("cd "+root+"/pool/change_vector_collector ; "
-            + "rm -rf ./build/distributions/* ; "
-            + "gradle clean distzip ; "
-            + "cd ./build/distributions ; "
-            + "unzip change-vector-collector.zip ; "
-            + "rm change-vector-collector.zip ; "
-            + "mv ./change-vector-collector/* ./ ; "
-            + "rm -r ./change-vector-collector")
+#    os.system("cd "+root+"/pool/change_vector_collector ; "
+#            + "rm -rf ./build/distributions/* ; "
+#            + "gradle clean distzip ; "
+#            + "cd ./build/distributions ; "
+#            + "unzip change-vector-collector.zip ; "
+#            + "rm change-vector-collector.zip ; "
+#            + "mv ./change-vector-collector/* ./ ; "
+#            + "rm -r ./change-vector-collector")
 
     os.system("rm -rf ./pool/outputs/change_vector_collector_web/* ")
 

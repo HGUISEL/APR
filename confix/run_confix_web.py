@@ -84,7 +84,7 @@ def main(argv):
 
     os.system("cd /home/DPMiner/ ; "
             + "git diff /home/DPMiner/APR_Contents/APR/target/"+target_project+"/patches/0/"+perfect_faulty_path
-                    + " /home/DPMiner/APR_Contents/APR/target/"+target_project + perfect_faulty_path
+                    + " /home/DPMiner/APR_Contents/APR/target/"+target_project+ "/" + perfect_faulty_path
                     + " > /home/DPMiner/APR_Contents/APR/target/diff_file.txt")
 
     # # 패치의 path
