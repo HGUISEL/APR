@@ -690,8 +690,8 @@ public class ConFix {
 	}
 
 	public static void createFileLists(String projectName, String bugId) {
-		File dir = new File("/home/DPMiner/APR/pool/prepare_pool_source/");
-		// File dir = new File("/home/DPMiner/APR/pool/las/data");
+		File dir = new File("/home/DPMiner/APR_Contents/APR/pool/prepare_pool_source/");
+		// File dir = new File("/home/DPMiner/APR_Contents/APR/pool/las/data");
 		File[] directoryListing = dir.listFiles();
 		//System.out.println("File list size: "+directoryListing.length()) ;
 

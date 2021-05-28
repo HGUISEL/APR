@@ -19,7 +19,7 @@ def main(argv):
             assert False, "unhandled option"
 
 
-    # pwd is APR/
+    # pwd is APR_Contents/APR/
     root = os.getcwd()
     # currently, we are running confix in APR directory
 
@@ -42,7 +42,7 @@ def main(argv):
     ## build confix and move it to the library
     os.system("cd ./confix/ConFix-code ;"
             + "mvn clean package ;"
-            + "cp target/confix-0.0.1-SNAPSHOT-jar-with-dependencies.jar /home/DPMiner/APR/confix/lib/confix-ami_torun.jar")
+            + "cp target/confix-0.0.1-SNAPSHOT-jar-with-dependencies.jar /home/DPMiner/APR_Contents/APR/confix/lib/confix-ami_torun.jar")
 
 
 
@@ -83,12 +83,12 @@ def main(argv):
     # os.system("mkdir "+root+"/target/"+target_project+"/patches")
 
     os.system("cd /home/DPMiner/ ; "
-            + "git diff /home/DPMiner/APR/target/"+target_project+"/patches/0/"+perfect_faulty_path
-                    + " /home/DPMiner/APR/target/"+target_project + perfect_faulty_path
-                    + " > /home/DPMiner/APR/target/diff_file.txt")
+            + "git diff /home/DPMiner/APR_Contents/APR/target/"+target_project+"/patches/0/"+perfect_faulty_path
+                    + " /home/DPMiner/APR_Contents/APR/target/"+target_project + perfect_faulty_path
+                    + " > /home/DPMiner/APR_Contents/APR/target/diff_file.txt")
 
     # # 패치의 path
-    # /home/DPMiner/APR/target/Math/patches/0/org/apache/commons/math/stat/Frequency.java
+    # /home/DPMiner/APR_Contents/APR/target/Math/patches/0/org/apache/commons/math/stat/Frequency.java
 
     # # 주어지는 path
     # src/main/java/org/apache/commons/math/stat/Frequency.java

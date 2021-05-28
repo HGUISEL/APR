@@ -59,7 +59,7 @@ class Master {
 // run commit collector
 		list = new ArrayList<String>();
         list.add("python3");
-		list.add("/home/DPMiner/APR/pool/runner_web/commit_collector_web.py");
+		list.add("/home/DPMiner/APR_Contents/APR/pool/runner_web/commit_collector_web.py");
 		list.add("-i");
 		list.add(firstArguments);
 		if(is_d4j == true){
@@ -81,7 +81,7 @@ class Master {
 // run change vector collector
 		list.clear();
 		list.add("python3");
-		list.add("/home/DPMiner/APR/pool/runner_web/change_vector_collector_web.py");
+		list.add("/home/DPMiner/APR_Contents/APR/pool/runner_web/change_vector_collector_web.py");
 		if(is_d4j == true){
 			list.add("-d");
 			list.add("true");
@@ -101,7 +101,7 @@ class Master {
 // run simfin
 		list.clear();
         list.add("python3");
-		list.add("/home/DPMiner/APR/pool/simfin/gv_ae.py");
+		list.add("/home/DPMiner/APR_Contents/APR/pool/simfin/gv_ae_web.py");
 		list.add("-p");
 		list.add("test");
 		list.add("-k");
@@ -121,7 +121,7 @@ class Master {
 // run prepare pool source 
 		list.clear();
         list.add("python3");
-		list.add("/home/DPMiner/APR/pool/runner_web/prepare_pool_source_web.py");
+		list.add("/home/DPMiner/APR_Contents/APR/pool/runner_web/prepare_pool_source_web.py");
 
 		build = new ProcessBuilder(list);
 		build.directory(new File("/home/DPMiner/APR"));
@@ -137,7 +137,7 @@ class Master {
 // run confix
 		list.clear();
         list.add("python3");
-		list.add("/home/DPMiner/APR/confix/run_confix_web.py");
+		list.add("/home/DPMiner/APR_Contents/APR/confix/run_confix_web.py");
 		if(is_d4j == true){
 			list.add("-d");
 			list.add("true");

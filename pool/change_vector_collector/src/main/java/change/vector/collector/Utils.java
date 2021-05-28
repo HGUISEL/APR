@@ -94,11 +94,11 @@ public class Utils {
 	public static String getReferencePath(CLIOptions input) {
 
 		// if(input.is_defects4j)
-		// 	return "/home/DPMiner/APR/pool/target" ;
+		// 	return "/home/DPMiner/APR_Contents/APR/pool/target" ;
 		// else
 		//return "/home/DPMiner/data/AllBIC/reference/repositories";
 
-		return "/home/DPMiner/APR/target2" ;
+		return "/home/DPMiner/APR_Contents/APR/target2" ;
 		
 	}
 	//where all the data is stored

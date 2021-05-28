@@ -7,7 +7,7 @@ import pandas as pd
 def main(argv):
     # pwd is confix/
     root = os.getcwd()
-    # currently, we are running confix in APR/confix directory
+    # currently, we are running confix in APR_Contents/APR/confix directory
 
 #   target_bug_list = [name for name in os.listdir("../pool/las/data") ] if os.path.isdir(name)]
     subdir_list = [x[0] for x in os.walk("../pool/las/data")]
