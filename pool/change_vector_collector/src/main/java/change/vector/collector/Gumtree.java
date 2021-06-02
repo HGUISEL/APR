@@ -68,12 +68,12 @@ public class Gumtree {
 		boolean flag = true;
 		int cnt = 0;
 		for (BeforeBIC bbic : bbics) {
+			//System.out.println("@@@@@@@@@@@@@@@@@@@@@@@@@Hello World@@@@@@@@@@@@@@@@@@@@@@@@@@");
 			if(flag==true){
 				spy++;
 			}
 			if(flag==false)
 				flag=true;
-
 
 			RevCommit commitBIC = walk.parseCommit(repo.resolve(bbic.shaBIC));
 			RevCommit commitBBIC = walk.parseCommit(repo.resolve(bbic.shaBeforeBIC));
@@ -81,13 +81,8 @@ public class Gumtree {
 			String pathBIC = bbic.pathBIC;
 			String pathBBIC = bbic.pathBeforeBIC;
 
-			System.out.println("commitBIC name: " +commitBIC.getName() );
-			System.out.println("commitBBIC name: " +commitBBIC.getName() );
-
 			String srcBlobBIC = Utils.fetchBlob(repo, commitBBIC.getName(), pathBBIC);
 			String dstBlobBIC = Utils.fetchBlob(repo, commitBIC.getName(), pathBIC);
-			// commit hash 문제 없음, path 문제 없음, coomit BIC name 문제 없음
-			// repo 여기에 문제 있음?			
 
 			Run.initGenerators();
 
@@ -103,12 +98,10 @@ public class Gumtree {
 
 			List<Action> actionsBIC = gBIC.getActions();
 
-
-
 			ArrayList<Integer> g_vec = new ArrayList<Integer>();
 			int check = 0;
 			for (Action action : actionsBIC) {
-				System.out.println("hello again!!!");
+				//System.out.println(check++);
 				
 				// if regards import, discard
 				//if (action.getNode().getType() == 40 || action.getNode().getType() == 26) {

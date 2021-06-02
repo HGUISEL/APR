@@ -22,13 +22,13 @@ with open('./output/tps/' + project_name + '_hunk.csv', 'w', newline='') as csv_
         sugg_sha = tps[i][4]
         sugg_path = tps[i][5]
 
-        stream_real = os.popen('cd /data/AllBIC/reference/repositories/' + project_name + ' ; '
+        stream_real = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + project_name + ' ; '
                                'git checkout ' + real_sha + ' ; '
                                'git diff ' + real_sha + '~ ' + real_path)
 
         real_hunk = str(stream_real.read())
 
-        stream_sugg = os.popen('cd /data/AllBIC/reference/repositories/' + project + ' ; '
+        stream_sugg = os.popen('cd ~/APR_Projects/data/AllBIC/reference/repositories/' + project + ' ; '
                                'git checkout ' + sugg_sha + ' ; '
                                'git diff ' + sugg_sha + '~ ' + sugg_path)
 

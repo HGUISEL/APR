@@ -59,7 +59,7 @@ class Master {
 // run commit collector
 		list = new ArrayList<String>();
         list.add("python3");
-		list.add("/home/DPMiner/APR_Contents/APR/pool/runner_web/commit_collector_web.py");
+		list.add("/home/goodtaeeun/APR_Projects/APR/pool/runner_web/commit_collector_web.py");
 		list.add("-i");
 		list.add(firstArguments);
 		if(is_d4j == true){
@@ -68,7 +68,7 @@ class Master {
 		}
 
 		build = new ProcessBuilder(list);
-		build.directory(new File("/home/DPMiner/APR"));
+		build.directory(new File("/home/goodtaeeun/APR_Projects/APR"));
 
 		System.out.println("command: " + build.command()); 
         Process run = build.start();
@@ -81,14 +81,14 @@ class Master {
 // run change vector collector
 		list.clear();
 		list.add("python3");
-		list.add("/home/DPMiner/APR_Contents/APR/pool/runner_web/change_vector_collector_web.py");
+		list.add("/home/goodtaeeun/APR_Projects/APR/pool/runner_web/change_vector_collector_web.py");
 		if(is_d4j == true){
 			list.add("-d");
 			list.add("true");
 		}
 
 		build = new ProcessBuilder(list);
-		build.directory(new File("/home/DPMiner/APR"));
+		build.directory(new File("/home/goodtaeeun/APR_Projects/APR"));
 
 		System.out.println("command: " + build.command()); 
         run = build.start();
@@ -101,14 +101,14 @@ class Master {
 // run simfin
 		list.clear();
         list.add("python3");
-		list.add("/home/DPMiner/APR_Contents/APR/pool/simfin/gv_ae_web.py");
+		list.add("/home/goodtaeeun/APR_Projects/APR/pool/simfin/gv_ae_web.py");
 		list.add("-p");
 		list.add("test");
 		list.add("-k");
 		list.add("10"); // # -p means predict, -t means train; -k is for top-k neighbors
 
 		build = new ProcessBuilder(list);
-		build.directory(new File("/home/DPMiner/APR"));
+		build.directory(new File("/home/goodtaeeun/APR_Projects/APR"));
 
 		System.out.println("command: " + build.command()); 
         run = build.start();
@@ -121,10 +121,10 @@ class Master {
 // run prepare pool source 
 		list.clear();
         list.add("python3");
-		list.add("/home/DPMiner/APR_Contents/APR/pool/runner_web/prepare_pool_source_web.py");
+		list.add("/home/goodtaeeun/APR_Projects/APR/pool/runner_web/prepare_pool_source_web.py");
 
 		build = new ProcessBuilder(list);
-		build.directory(new File("/home/DPMiner/APR"));
+		build.directory(new File("/home/goodtaeeun/APR_Projects/APR"));
 
 		System.out.println("command: " + build.command()); 
         run = build.start();
@@ -137,14 +137,14 @@ class Master {
 // run confix
 		list.clear();
         list.add("python3");
-		list.add("/home/DPMiner/APR_Contents/APR/confix/run_confix_web.py");
+		list.add("/home/goodtaeeun/APR_Projects/APR/confix/run_confix_web.py");
 		if(is_d4j == true){
 			list.add("-d");
 			list.add("true");
 		}
         
 		build = new ProcessBuilder(list);
-		build.directory(new File("/home/DPMiner/APR"));
+		build.directory(new File("/home/goodtaeeun/APR_Projects/APR"));
 
 		System.out.println("command: " + build.command()); 
         run = build.start();
