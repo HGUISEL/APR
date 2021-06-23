@@ -23,6 +23,13 @@ public class CLIOptions {
 // comment by TE
 	public CLIOptions(String project, String in, String out)
 			throws InvalidRemoteException, TransportException, GitAPIException, IOException {
+		
+		this.project = project;
+		this.projectName =  project ;
+		this.inputDir = in;
+		this.outputDir = out;
+
+
 		if (!Main.is_remove_zero) {
 			this.project = project;
 			this.projectName = project ;
@@ -37,10 +44,7 @@ public class CLIOptions {
 			this.git = Git.open(gitDir);
 			this.repo = git.getRepository();
 		}
-		this.project = project;
-		this.projectName =  project ;
-		this.inputDir = in;
-		this.outputDir = out;
+
 		
 	}
 

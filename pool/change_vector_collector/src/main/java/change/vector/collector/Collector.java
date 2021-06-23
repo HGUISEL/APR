@@ -174,15 +174,22 @@ public class Collector {
 				count++;
 				continue;
 			}
+
+			String d4j_project;
+			if(record.get(1).equals("-")) //if the given bug does not have a d4j ID
+				d4j_project = record.get(0);
+			else
+				d4j_project = record.get(0) + "-" + record.get(1);
+				 
 			String pathBeforeBIC = record.get(2);
 			String pathBIC = record.get(2);
 			String shaBeforeBIC = record.get(5);
 			String shaBIC = record.get(4);
-			String pathBeforeBFC = record.get(0) + "-" + record.get(1); //to mark D4J Id
-			String pathBFC = record.get(0) + "-" + record.get(1); //to mark D4J Id
-			String shaBeforeBFC = record.get(0) + "-" + record.get(1); //to mark D4J Id
-			String shaBFC = record.get(0) + "-" + record.get(1); //to mark D4J Id
-			String key = record.get(0) + "-" + record.get(1); //to mark D4J Id
+			String pathBeforeBFC = d4j_project; //to mark D4J Id
+			String pathBFC = d4j_project; //to mark D4J Id
+			String shaBeforeBFC = d4j_project; //to mark D4J Id
+			String shaBFC = d4j_project; //to mark project-Id
+			String key = record.get(1); //to mark only the Id
 			String project = record.get(0);
 			String label = "1";
 	

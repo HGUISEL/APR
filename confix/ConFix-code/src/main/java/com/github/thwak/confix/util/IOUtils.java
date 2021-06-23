@@ -71,10 +71,7 @@ public class IOUtils {
 		FileOutputStream fos = null;
 		PrintWriter pw = null;
 		try {
-			System.out.println("Store Content");
-			System.out.println(f.getAbsolutePath());
 			fos = new FileOutputStream(f, append);
-
 			pw = new PrintWriter(fos);
 			pw.print(content);
 			pw.flush();

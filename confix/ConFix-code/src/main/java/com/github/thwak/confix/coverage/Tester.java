@@ -61,7 +61,7 @@ public class Tester {
 			try {
 				executor.execute(command);
 				// TE
-				if (DEBUG)
+				if (true)
 					System.out.println(out.toString());
 			} catch (ExecuteException e) {
 				System.err.println("Exit Value:" + e.getExitValue());
@@ -165,7 +165,7 @@ public class Tester {
 		for (String testClassName : testClasses) {
 
 
-			if(DEBUG)
+			if(true)
 				System.out.println("Executing " + testClassName);
 			TestResult r = runTest(testClassName, classPath);
 
@@ -220,7 +220,7 @@ public class Tester {
 			}
 		}
 
-		if(DEBUG)
+		if(true)
 			System.out.println(junitResult);
 
 		return result;

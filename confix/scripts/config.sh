@@ -7,7 +7,7 @@ CDIR=$(pwd)
 DIR=../../results
 PROP="confix.properties"
 echo "Create confix.properties for $CDIR"
-cp ../../confix/properties/$PROP ./$PROP
+cp ../../../confix/properties/$PROP ./$PROP
 #cp ../../properties/$PROP ./$PROP
 
 #Export properties

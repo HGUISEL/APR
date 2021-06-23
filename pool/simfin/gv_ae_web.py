@@ -92,11 +92,10 @@ def write_result(trainY, testY, out_file, testX, classifier):
             y_bic_path = str(testY[i][1])
             y_bfc_sha = str(testY[i][7]) # this is Project-Id
             y_bfc_path = str(testY[i][5]) # this is Project-Id
-            y_project = testY[i][9] # this is Project-ID
-            y_real_label = testY[i][10]
+            y_bugId = testY[i][9]
+            y_project = testY[i][10] # this is Project-ID
+            y_real_label = testY[i][11]
 
-            #y_fullID = y_bfc_sha.split("-")
-            y_project, y_bugId = y_bfc_sha.split("-")
             #y_bugId = y_fullID[0]
 
             #if len(y_bic_hunk) > 30000 or len(y_bfc_hunk) > 30000:
@@ -334,7 +333,7 @@ def run_train(X_train, Y_train, train):
     return
 
 
-def run_predict(X_test, Y_test, Y_train, test, train):
+def run_predict(X_test, Y_test, Y_train, test, train, output_dir):
     ##########################################################################
     # Model Evaluation
 
@@ -352,9 +351,9 @@ def run_predict(X_test, Y_test, Y_train, test, train):
     vecs_on_csv('./pool/simfin/view_file/test_encoded.csv', X_test_encoded)
 
     # writing the result of knn prediction
-    write_kneighbors('./pool/outputs/simfin_web/' + test + '_gv_ae_kneighbors.txt', X_test_encoded, knn)
-    write_test_result('./pool/outputs/simfin_web/' + test + '_gv_ae_predict.txt', X_test_encoded, knn)
-    resultFile = './pool/outputs/simfin_web/' + test + '_result.csv'
+    # write_kneighbors('./pool/outputs/simfin_web/' + test + '_gv_ae_kneighbors.txt', X_test_encoded, knn)
+    # write_test_result('./pool/outputs/simfin_web/' + test + '_gv_ae_predict.txt', X_test_encoded, knn)
+    resultFile = output_dir+'/simfin/' + test + '_result.csv'
     write_result(Y_train,
                  Y_test,
                  resultFile,
@@ -370,14 +369,15 @@ def main(argv):
     test_name = 'test'
 
     try:
-        opts, args = getopt.getopt(argv[1:], "h:t:k:p:c:", ["help", "train", "k_neighbors", "predict", "cutoff"])
+        opts, args = getopt.getopt(argv[1:], "H:t:k:p:c:h:", ["help", "train", "k_neighbors", "predict", "cutoff", "hash"])
     except getopt.GetoptError as err:
         print(err)
         sys.exit(2)
     is_predict = False
     is_train = False
+    hash_input = ""
     for o, a in opts:
-        if o in ("-h", "--help"):
+        if o in ("-H", "--help"):
             print("")
             sys.exit()
         elif o in ("-t", "--train"):
@@ -390,15 +390,22 @@ def main(argv):
             test_name = a
         elif o in ("-c", "--cutoff"):
             CUTOFF = int(a)
+        elif o in ("-h", "--hash"):
+            hash_input = a
         else:
             assert False, "unhandled option"
+
+    root = os.getcwd()
+
+    target_dir = root+"/target/"+hash_input
+    output_dir = target_dir+"/outputs"
 
     # load Gumtree Vectors
     trainX, trainY, testX, testY = loadGumVec(
         './pool/simfin/trainset/X_' + train_name + '.csv',
         './pool/simfin/trainset/Y_' + train_name + '.csv',
-        './pool/simfin/testset/X_' + test_name + '.csv',
-        './pool/simfin/testset/Y_' + test_name + '.csv'
+        output_dir+'/simfin/testset/X_' + test_name + '.csv',
+        output_dir+'/simfin/testset/Y_' + test_name + '.csv'
     )
 
     print('after load trainX.shape: ', trainX.shape)
@@ -407,7 +414,7 @@ def main(argv):
     if is_train:
         run_train(trainX, trainY, train_name)
     if is_predict:
-        run_predict(testX, testY, trainY, test_name, train_name)
+        run_predict(testX, testY, trainY, test_name, train_name, output_dir)
 
 
 if __name__ == '__main__':

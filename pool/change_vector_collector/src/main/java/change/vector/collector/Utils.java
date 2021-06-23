@@ -87,18 +87,20 @@ public class Utils {
 	public static String getReferencePath(CLIOptions input) {
 
 		// if(input.is_defects4j)
-		// 	return "/home/goodtaeeun/APR_Projects/APR/pool/target" ;
+		// 	return "/home/aprweb/APR_Projects/APR/pool/target" ;
 		// else
-		//return "/home/goodtaeeun/APR_Projects/data/AllBIC/reference/repositories";
+		//return "/home/aprweb/APR_Projects/data/AllBIC/reference/repositories";
 
-		return "/home/goodtaeeun/APR_Projects/APR/target" ;
+		String path = (input.inputDir.split("/outputs"))[0]; // target/hash의 값이 나온다
+
+		return path ;
 	}
 	//where all the data is stored
 
 	public static File getGitDirectory(CLIOptions input) {
 		String referencePath = getReferencePath(input);
 		File clonedDirectory = new File(referencePath + File.separator + input.projectName);
-		//File clonedDirectory = new File(referencePath + File.separator + "closure-compiler");
+		//File clonedDirectory = new File("/home/aprweb/APR_Projects/data/AllBIC/reference/repositories/closure-compiler");
 		return clonedDirectory;
 	}
 

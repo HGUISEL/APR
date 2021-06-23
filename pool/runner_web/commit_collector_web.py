@@ -14,24 +14,35 @@ import getopt
 def main(argv):
 
     try:
-        opts, args = getopt.getopt(argv[1:], "d:i:", ["defects4J", "input"])
+        opts, args = getopt.getopt(argv[1:], "d:i:h:", ["defects4J", "input", "hash"])
     except getopt.GetoptError as err:
         print(err)
         sys.exit(2)
     is_D4J = False
     is_direct_input = False
+    hash_input = ""
     for o, a in opts:
         if o in ("-d", "--defects4J"):
             is_D4J = True
         elif o in ("-i", "--input"):
             input_string = a
             is_direct_input = True
+        elif o in ("-h", "--hash"):
+            hash_input = a
         else:
             assert False, "unhandled option"
 
     root = os.getcwd()
 
-    target_dir = root+"/target"
+    target_dir = root+"/target/"+hash_input
+    output_dir = target_dir+"/outputs"
+    os.system("mkdir "+target_dir)
+    os.system("mkdir -p "+output_dir+"/commit_collector")
+
+
+    D4J_ID = "-"
+    fix_faulty_line = "---"
+    blame_faulty_line = "---"
 
 
     # remove column "dummy" when input is updated
@@ -55,21 +66,19 @@ def main(argv):
         
         if is_D4J == False:
             faulty_file_path = input_list[1]
-            faulty_line = input_list[2]
+            fix_faulty_line = input_list[2]
+            blame_faulty_line = fix_faulty_line
             buggy_sha = input_list[3]
             project_url = input_list[4]
 
 
 
-    D4J_ID = "-"
-    fix_faulty_line = "---"
-    blame_faulty_line = "---"
+
 
     ##임시로... d4j를 others처럼 하기 위한 작업
     # D4J_project, D4J_ID = project.split("-")
     # project = D4J_project
 
-    os.system("rm -rf ./target/*")
 
     if is_D4J:
         project, D4J_ID = project.split("-")
@@ -89,7 +98,7 @@ def main(argv):
 
         ## commit-db 읽기
         ## path is where the D4J framework exists
-        commit_db = pd.read_csv("/home/goodtaeeun/paths/defects4j/framework/projects/"+project+"/commit-db", names=["ID","buggy","clean","num","link"])
+        commit_db = pd.read_csv("/home/aprweb/paths/defects4j/framework/projects/"+project+"/commit-db", names=["ID","buggy","clean","num","link"])
         commit_db_csv = commit_db.values
         for i in range(len(commit_db_csv)):
             if int(commit_db_csv[i][0]) == int(D4J_ID): # if the ID is same
@@ -108,8 +117,9 @@ def main(argv):
 
 
     ## git operations: checkout - blame - revparse
-    os.system("git -C "+target_dir+"/"+project+" checkout "+buggy_sha)
-    
+
+    # os.system("git -C "+target_dir+"/"+project+" checkout "+buggy_sha)
+    print("git -C "+target_dir+"/"+project+" blame -C -C -f -l -L "+str(blame_faulty_line)+","+str(blame_faulty_line)+" "+faulty_file_path)
     git_stream = os.popen("git -C "+target_dir+"/"+project+" blame -C -C -f -l -L "+str(blame_faulty_line)+","+str(blame_faulty_line)+" "+faulty_file_path)
     foo = str(git_stream.read()).split(' ')
     FIC_sha = foo[0]
@@ -121,7 +131,7 @@ def main(argv):
     BFIC_sha = str(git_stream.read()).split('\n')[0]
 
 
-    with open(root+"/pool/outputs/commit_collector_web/BFIC.csv", 'w', newline='') as csvfile:
+    with open(output_dir+"/commit_collector/BFIC.csv", 'w', newline='') as csvfile:
         csv_writer = csv.writer(csvfile, delimiter=',')
 
         # writing header
@@ -136,6 +146,8 @@ def main(argv):
         print("Finished collecting FIC and BFIC for "+project)
 
     #os.system("rm -rf "+root+"/pool/commit_collector/data/* ")
+
+    os.system("echo \"Finished collecting FIC for your bug\" > "+target_dir+"/status.txt")
 
 
 

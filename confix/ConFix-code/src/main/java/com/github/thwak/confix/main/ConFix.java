@@ -76,6 +76,7 @@ public class ConFix {
 	public static int maxChangeCount;
 
 	// TE
+	public static String poolSource;
 	public static List<File> cleanFiles = new ArrayList<File>(11);
 	public static List<File> buggyFiles = new ArrayList<File>(11);
 	public static String projectName;
@@ -319,8 +320,8 @@ public class ConFix {
 			} while (trial < maxTrials);
 
 			// 여기서 success 없애면 다른 change로도 계속해서 패치 생성 시도해볼 수 있음
-			//if (success || terminate || returnCode == Patcher.C_NO_FIXLOC)
-			if (terminate || returnCode == Patcher.C_NO_FIXLOC)
+			if (success || terminate || returnCode == Patcher.C_NO_FIXLOC)
+			//if (terminate || returnCode == Patcher.C_NO_FIXLOC)
 				break;
 		}
 
@@ -458,6 +459,7 @@ public class ConFix {
 		if (!compileCheck(patchFileName)) {
 			return COMPILE_ERROR;
 		} else {
+			System.out.println("============= compilation success ===========");
 			return testCheck();
 		}
 	}
@@ -679,6 +681,8 @@ public class ConFix {
 		pStrategyKey = PatchUtils.getStringProperty(props, "patch.strategy", "flfreq");
 		cStrategyKey = PatchUtils.getStringProperty(props, "concretize.strategy", "tc");
 		flMetric = PatchUtils.getStringProperty(props, "fl.metric", "ochiai");
+
+		poolSource = PatchUtils.getStringProperty(props, "pool.source", "default");
 		projectName = PatchUtils.getStringProperty(props, "projectName", "Closure");
 		bugId = PatchUtils.getStringProperty(props, "bugId", "3");
 		pFaultyLine = Integer.parseInt(PatchUtils.getStringProperty(props, "pFaultyLine", "1"));
@@ -686,12 +690,12 @@ public class ConFix {
 		System.out.println("pFaultyClass as it is: " + pFaultyClass);
 		pFaultyClass = pFaultyClass.replace(sourceDir.replaceAll("/", ".") + ".", "");
 		System.out.println("pFaultyClass after replacing is: " + pFaultyClass);
-		createFileLists(projectName, bugId);
+		createFileLists(projectName);
 	}
 
-	public static void createFileLists(String projectName, String bugId) {
-		File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/prepare_pool_source/");
-		// File dir = new File("/home/goodtaeeun/APR_Projects/APR/pool/las/data");
+	public static void createFileLists(String projectName) {
+		File dir = new File(poolSource);
+		// File dir = new File("/home/aprweb/APR_Projects/APR/pool/las/data");
 		File[] directoryListing = dir.listFiles();
 		//System.out.println("File list size: "+directoryListing.length()) ;
 
@@ -702,12 +706,12 @@ public class ConFix {
 
 		if (directoryListing != null) {
 			for (File child : directoryListing) {
-					int start = child.getName().indexOf('-') + 1;
+					int start = child.getName().lastIndexOf('-') + 1;
                     int end = child.getName().lastIndexOf('_');
                     int number = Integer.parseInt(child.getName().substring(start, end));
 				try {
 					//System.out.println("Child path: " + child.getCanonicalPath()) ;
-					String[] childPath = child.getCanonicalPath().split("source/"); // "data/"" 뒤에는 파일 이름이 붙는다.
+					String[] childPath = child.getCanonicalPath().split("source/"); // "source/"" 뒤에는 파일 이름이 붙는다.
 					if (childPath[1].indexOf("new") > 0) {
 						cleanFiles.set(number, child);
 					} else {

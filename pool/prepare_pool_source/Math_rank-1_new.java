@@ -1,1845 +1,1020 @@
-package com.fasterxml.jackson.core.json;
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-import java.io.*;
-import java.math.BigDecimal;
-import java.math.BigInteger;
+package org.apache.commons.cli;
 
-import com.fasterxml.jackson.core.*;
-import com.fasterxml.jackson.core.io.*;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
 
-public class UTF8JsonGenerator
-    extends JsonGeneratorImpl
+/** 
+ * A formatter of help messages for the current command line options
+ *
+ * @author Slawek Zachcial
+ * @author John Keyes (john at integralsource.com)
+ * @version $Revision$, $Date$
+ */
+public class HelpFormatter
 {
-    private final static byte BYTE_u = (byte) 'u';
+    // --------------------------------------------------------------- Constants
 
-    private final static byte BYTE_0 = (byte) '0';
+    /** default number of characters per line */
+    public static final int DEFAULT_WIDTH = 74;
 
-    private final static byte BYTE_LBRACKET = (byte) '[';
-    private final static byte BYTE_RBRACKET = (byte) ']';
-    private final static byte BYTE_LCURLY = (byte) '{';
-    private final static byte BYTE_RCURLY = (byte) '}';
-
-    private final static byte BYTE_BACKSLASH = (byte) '\\';
-    private final static byte BYTE_COMMA = (byte) ',';
-    private final static byte BYTE_COLON = (byte) ':';
-    private final static byte BYTE_QUOTE = (byte) '"';
-
-    // intermediate copies only made up to certain length...
-    private final static int MAX_BYTES_TO_BUFFER = 512;
-
-    final static byte[] HEX_CHARS = CharTypes.copyHexBytes();
-
-    private final static byte[] NULL_BYTES = { 'n', 'u', 'l', 'l' };
-    private final static byte[] TRUE_BYTES = { 't', 'r', 'u', 'e' };
-    private final static byte[] FALSE_BYTES = { 'f', 'a', 'l', 's', 'e' };
-
-    /*
-    /**********************************************************
-    /* Output buffering
-    /**********************************************************
-     */
+    /** default padding to the left of each line */
+    public static final int DEFAULT_LEFT_PAD = 1;
 
     /**
-     * Underlying output stream used for writing JSON content.
+     * the number of characters of padding to be prefixed
+     * to each description line
      */
-    final protected OutputStream _outputStream;
+    public static final int DEFAULT_DESC_PAD = 3;
+
+    /** the string to display at the beginning of the usage statement */
+    public static final String DEFAULT_SYNTAX_PREFIX = "usage: ";
+
+    /** default prefix for shortOpts */
+    public static final String DEFAULT_OPT_PREFIX = "-";
+
+    /** default prefix for long Option */
+    public static final String DEFAULT_LONG_OPT_PREFIX = "--";
+
+    /** default separator displayed between a long Option and its value */
+    public static final String DEFAULT_LONG_OPT_SEPARATOR = " ";
+
+    /** default name for an argument */
+    public static final String DEFAULT_ARG_NAME = "arg";
+
+    // -------------------------------------------------------------- Attributes
 
     /**
-     * Intermediate buffer in which contents are buffered before
-     * being written using {@link #_outputStream}.
+     * number of characters per line
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setWidth methods instead.
      */
-    protected byte[] _outputBuffer;
+    public int defaultWidth = DEFAULT_WIDTH;
 
     /**
-     * Pointer to the position right beyond the last character to output
-     * (end marker; may be past the buffer)
+     * amount of padding to the left of each line
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setLeftPadding methods instead.
      */
-    protected int _outputTail = 0;
+    public int defaultLeftPad = DEFAULT_LEFT_PAD;
 
     /**
-     * End marker of the output buffer; one past the last valid position
-     * within the buffer.
+     * the number of characters of padding to be prefixed
+     * to each description line
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setDescPadding methods instead.
      */
-    protected final int _outputEnd;
+    public int defaultDescPad = DEFAULT_DESC_PAD;
 
     /**
-     * Maximum number of <code>char</code>s that we know will always fit
-     * in the output buffer after escaping
+     * the string to display at the begining of the usage statement
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setSyntaxPrefix methods instead.
      */
-    protected final int _outputMaxContiguous;
+    public String defaultSyntaxPrefix = DEFAULT_SYNTAX_PREFIX;
 
     /**
-     * Intermediate buffer in which characters of a String are copied
-     * before being encoded.
+     * the new line string
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setNewLine methods instead.
      */
-    protected char[] _charBuffer;
+    public String defaultNewLine = System.getProperty("line.separator");
 
     /**
-     * Length of <code>_charBuffer</code>
+     * the shortOpt prefix
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setOptPrefix methods instead.
      */
-    protected final int _charBufferLength;
+    public String defaultOptPrefix = DEFAULT_OPT_PREFIX;
 
     /**
-     * 6 character temporary buffer allocated if needed, for constructing
-     * escape sequences
+     * the long Opt prefix
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setLongOptPrefix methods instead.
      */
-    protected byte[] _entityBuffer;
+    public String defaultLongOptPrefix = DEFAULT_LONG_OPT_PREFIX;
+
+    /** The separator displayed between the long option and its value. */
+    private String longOptSeparator = DEFAULT_LONG_OPT_SEPARATOR;
 
     /**
-     * Flag that indicates whether the output buffer is recycable (and
-     * needs to be returned to recycler once we are done) or not.
+     * the name of the argument
+     *
+     * @deprecated Scope will be made private for next major version
+     * - use get/setArgName methods instead.
      */
-    protected boolean _bufferRecyclable;
-
-    /*
-    /**********************************************************
-    /* Quick flags
-    /**********************************************************
-     */
+    public String defaultArgName = DEFAULT_ARG_NAME;
 
     /**
-     * Flag that is set if quoting is not to be added around
-     * JSON Object property names.
+     * Comparator used to sort the options when they output in help text
+     * 
+     * Defaults to case-insensitive alphabetical sorting by option key
      */
-    protected boolean _cfgUnqNames;
-
-    /*
-    /**********************************************************
-    /* Life-cycle
-    /**********************************************************
-     */
-
-    public UTF8JsonGenerator(IOContext ctxt, int features, ObjectCodec codec,
-            OutputStream out)
-    {
-        super(ctxt, features, codec);
-        _outputStream = out;
-        _bufferRecyclable = true;
-        _outputBuffer = ctxt.allocWriteEncodingBuffer();
-        _outputEnd = _outputBuffer.length;
-
-        /* To be exact, each char can take up to 6 bytes when escaped (Unicode
-         * escape with backslash, 'u' and 4 hex digits); but to avoid fluctuation,
-         * we will actually round down to only do up to 1/8 number of chars
-         */
-        _outputMaxContiguous = _outputEnd >> 3;
-        _charBuffer = ctxt.allocConcatBuffer();
-        _charBufferLength = _charBuffer.length;
-
-        // By default we use this feature to determine additional quoting
-        if (isEnabled(Feature.ESCAPE_NON_ASCII)) {
-            setHighestNonEscapedChar(127);
-        }
-        _cfgUnqNames = !Feature.QUOTE_FIELD_NAMES.enabledIn(features);
-    }
+    protected Comparator optionComparator = new OptionComparator();
     
-    public UTF8JsonGenerator(IOContext ctxt, int features, ObjectCodec codec,
-            OutputStream out,
-            byte[] outputBuffer, int outputOffset, boolean bufferRecyclable)
-    {
-        
-        super(ctxt, features, codec);
-        _outputStream = out;
-        _bufferRecyclable = bufferRecyclable;
-        _outputTail = outputOffset;
-        _outputBuffer = outputBuffer;
-        _outputEnd = _outputBuffer.length;
-        // up to 6 bytes per char (see above), rounded up to 1/8
-        _outputMaxContiguous = _outputEnd >> 3;
-        _charBuffer = ctxt.allocConcatBuffer();
-        _charBufferLength = _charBuffer.length;
-        _cfgUnqNames = !Feature.QUOTE_FIELD_NAMES.enabledIn(features);
-    }
-
-    /*
-    /**********************************************************
-    /* Overridden configuration methods
-    /**********************************************************
+    /**
+     * Sets the 'width'.
+     *
+     * @param width the new value of 'width'
      */
-    
-    @Override
-    public Object getOutputTarget() {
-        return _outputStream;
-    }
-
-    /*
-    /**********************************************************
-    /* Overridden methods
-    /**********************************************************
-     */
-
-    @Override
-    public void writeFieldName(String name)  throws IOException
+    public void setWidth(int width)
     {
-        if (_cfgPrettyPrinter != null) {
-            _writePPFieldName(name);
-            return;
-        }
-        final int status = _writeContext.writeFieldName(name);
-        if (status == JsonWriteContext.STATUS_EXPECT_VALUE) {
-            _reportError("Can not write a field name, expecting a value");
-        }
-        if (status == JsonWriteContext.STATUS_OK_AFTER_COMMA) { // need comma
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_COMMA;
-        }
-        /* To support [JACKSON-46], we'll do this:
-         * (Question: should quoting of spaces (etc) still be enabled?)
-         */
-        if (_cfgUnqNames) {
-            _writeStringSegments(name, false);
-            return;
-        }
-        final int len = name.length();
-        // Does it fit in buffer?
-        if (len > _charBufferLength) { // no, offline
-            _writeStringSegments(name, true);
-            return;
-        }
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        name.getChars(0, len, _charBuffer, 0);
-        // But as one segment, or multiple?
-        if (len <= _outputMaxContiguous) {
-            if ((_outputTail + len) > _outputEnd) { // caller must ensure enough space
-                _flushBuffer();
-            }
-            _writeStringSegment(_charBuffer, 0, len);
-        } else {
-            _writeStringSegments(_charBuffer, 0, len);
-        }
-        // and closing quotes; need room for one more char:
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-    
-    @Override
-    public void writeFieldName(SerializableString name) throws IOException
-    {
-        if (_cfgPrettyPrinter != null) {
-            _writePPFieldName(name);
-            return;
-        }
-        final int status = _writeContext.writeFieldName(name.getValue());
-        if (status == JsonWriteContext.STATUS_EXPECT_VALUE) {
-            _reportError("Can not write a field name, expecting a value");
-        }
-        if (status == JsonWriteContext.STATUS_OK_AFTER_COMMA) {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_COMMA;
-        }
-        if (_cfgUnqNames) {
-            _writeUnq(name);
-            return;
-        }
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        int len = name.appendQuotedUTF8(_outputBuffer, _outputTail);
-        if (len < 0) { // couldn't append, bit longer processing
-            _writeBytes(name.asQuotedUTF8());
-        } else {
-            _outputTail += len;
-        }
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }    
-
-    private final void _writeUnq(SerializableString name) throws IOException {
-        int len = name.appendQuotedUTF8(_outputBuffer, _outputTail);
-        if (len < 0) {
-            _writeBytes(name.asQuotedUTF8());
-        } else {
-            _outputTail += len;
-        }
-    }
-    
-    /*
-    /**********************************************************
-    /* Output method implementations, structural
-    /**********************************************************
-     */
-
-    @Override
-    public final void writeStartArray() throws IOException
-    {
-        _verifyValueWrite("start an array");
-        _writeContext = _writeContext.createChildArrayContext();
-        if (_cfgPrettyPrinter != null) {
-            _cfgPrettyPrinter.writeStartArray(this);
-        } else {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_LBRACKET;
-        }
-    }
-
-    @Override
-    public final void writeEndArray() throws IOException
-    {
-        if (!_writeContext.inArray()) {
-            _reportError("Current context not an ARRAY but "+_writeContext.getTypeDesc());
-        }
-        if (_cfgPrettyPrinter != null) {
-            _cfgPrettyPrinter.writeEndArray(this, _writeContext.getEntryCount());
-        } else {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_RBRACKET;
-        }
-        _writeContext = _writeContext.getParent();
-    }
-
-    @Override
-    public final void writeStartObject() throws IOException
-    {
-        _verifyValueWrite("start an object");
-        _writeContext = _writeContext.createChildObjectContext();
-        if (_cfgPrettyPrinter != null) {
-            _cfgPrettyPrinter.writeStartObject(this);
-        } else {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_LCURLY;
-        }
-    }
-
-    @Override
-    public final void writeEndObject() throws IOException
-    {
-        if (!_writeContext.inObject()) {
-            _reportError("Current context not an object but "+_writeContext.getTypeDesc());
-        }
-        if (_cfgPrettyPrinter != null) {
-            _cfgPrettyPrinter.writeEndObject(this, _writeContext.getEntryCount());
-        } else {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_RCURLY;
-        }
-        _writeContext = _writeContext.getParent();
+        this.defaultWidth = width;
     }
 
     /**
-     * Specialized version of <code>_writeFieldName</code>, off-lined
-     * to keep the "fast path" as simple (and hopefully fast) as possible.
+     * Returns the 'width'.
+     *
+     * @return the 'width'
      */
-    protected final void _writePPFieldName(String name) throws IOException
+    public int getWidth()
     {
-        int status = _writeContext.writeFieldName(name);
-        if (status == JsonWriteContext.STATUS_EXPECT_VALUE) {
-            _reportError("Can not write a field name, expecting a value");
-        }
-        if ((status == JsonWriteContext.STATUS_OK_AFTER_COMMA)) {
-            _cfgPrettyPrinter.writeObjectEntrySeparator(this);
-        } else {
-            _cfgPrettyPrinter.beforeObjectEntries(this);
-        }
-        if (_cfgUnqNames) {
-            _writeStringSegments(name, false);
-            return;
-        }
-        final int len = name.length();
-        if (len > _charBufferLength) {
-            _writeStringSegments(name, true);
-            return;
-        }
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        name.getChars(0, len, _charBuffer, 0);
-        // But as one segment, or multiple?
-        if (len <= _outputMaxContiguous) {
-            if ((_outputTail + len) > _outputEnd) { // caller must ensure enough space
-                _flushBuffer();
-            }
-            _writeStringSegment(_charBuffer, 0, len);
-        } else {
-            _writeStringSegments(_charBuffer, 0, len);
-        }
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
+        return defaultWidth;
     }
 
-    protected final void _writePPFieldName(SerializableString name) throws IOException
-    {
-        final int status = _writeContext.writeFieldName(name.getValue());
-        if (status == JsonWriteContext.STATUS_EXPECT_VALUE) {
-            _reportError("Can not write a field name, expecting a value");
-        }
-        if (status == JsonWriteContext.STATUS_OK_AFTER_COMMA) {
-            _cfgPrettyPrinter.writeObjectEntrySeparator(this);
-        } else {
-            _cfgPrettyPrinter.beforeObjectEntries(this);
-        }
-
-        final boolean addQuotes = !_cfgUnqNames; // standard
-        if (addQuotes) {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        }
-        _writeBytes(name.asQuotedUTF8());
-        if (addQuotes) {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        }
-    }
-    
-    /*
-    /**********************************************************
-    /* Output method implementations, textual
-    /**********************************************************
+    /**
+     * Sets the 'leftPadding'.
+     *
+     * @param padding the new value of 'leftPadding'
      */
-
-    @Override
-    public void writeString(String text) throws IOException
+    public void setLeftPadding(int padding)
     {
-        _verifyValueWrite(WRITE_STRING);
-        if (text == null) {
-            _writeNull();
-            return;
-        }
-        // First: can we make a local copy of chars that make up text?
-        final int len = text.length();
-        if (len > _charBufferLength) { // nope: off-line handling
-            _writeStringSegments(text, true);
-            return;
-        }
-        // yes: good.
-        text.getChars(0, len, _charBuffer, 0);
-        // Output: if we can't guarantee it fits in output buffer, off-line as well:
-        if (len > _outputMaxContiguous) {
-            _writeLongString(_charBuffer, 0, len);
-            return;
-        }
-        if ((_outputTail + len) >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        _writeStringSegment(_charBuffer, 0, len); // we checked space already above
-        /* [JACKSON-462] But that method may have had to expand multi-byte Unicode
-         *   chars, so we must check again
-         */
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
+        this.defaultLeftPad = padding;
     }
 
-    private void _writeLongString(char[] text, int offset, int len) throws IOException
-    {
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        _writeStringSegments(_charBuffer, 0, len);
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-
-    @Override
-    public void writeString(char[] text, int offset, int len) throws IOException
-    {
-        _verifyValueWrite(WRITE_STRING);
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        // One or multiple segments?
-        if (len <= _outputMaxContiguous) {
-            if ((_outputTail + len) > _outputEnd) { // caller must ensure enough space
-                _flushBuffer();
-            }
-            _writeStringSegment(text, offset, len);
-        } else {
-            _writeStringSegments(text, offset, len);
-        }
-        // And finally, closing quotes
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-
-    @Override
-    public final void writeString(SerializableString text) throws IOException
-    {
-        _verifyValueWrite(WRITE_STRING);
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        int len = text.appendQuotedUTF8(_outputBuffer, _outputTail);
-        if (len < 0) {
-            _writeBytes(text.asQuotedUTF8());
-        } else {
-            _outputTail += len;
-        }
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-    
-    @Override
-    public void writeRawUTF8String(byte[] text, int offset, int length) throws IOException
-    {
-        _verifyValueWrite(WRITE_STRING);
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        _writeBytes(text, offset, length);
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-
-    @Override
-    public void writeUTF8String(byte[] text, int offset, int len) throws IOException
-    {
-        _verifyValueWrite(WRITE_STRING);
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        // One or multiple segments?
-        if (len <= _outputMaxContiguous) {
-            _writeUTF8Segment(text, offset, len);
-        } else {
-            _writeUTF8Segments(text, offset, len);
-        }
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-
-    /*
-    /**********************************************************
-    /* Output method implementations, unprocessed ("raw")
-    /**********************************************************
+    /**
+     * Returns the 'leftPadding'.
+     *
+     * @return the 'leftPadding'
      */
-
-    @Override
-    public void writeRaw(String text)
-        throws IOException, JsonGenerationException
+    public int getLeftPadding()
     {
-        int start = 0;
-        int len = text.length();
-        while (len > 0) {
-            char[] buf = _charBuffer;
-            final int blen = buf.length;
-            final int len2 = (len < blen) ? len : blen;
-            text.getChars(start, start+len2, buf, 0);
-            writeRaw(buf, 0, len2);
-            start += len2;
-            len -= len2;
-        }
+        return defaultLeftPad;
     }
 
-    @Override
-    public void writeRaw(String text, int offset, int len)
-        throws IOException, JsonGenerationException
+    /**
+     * Sets the 'descPadding'.
+     *
+     * @param padding the new value of 'descPadding'
+     */
+    public void setDescPadding(int padding)
     {
-        while (len > 0) {
-            char[] buf = _charBuffer;
-            final int blen = buf.length;
-            final int len2 = (len < blen) ? len : blen;
-            text.getChars(offset, offset+len2, buf, 0);
-            writeRaw(buf, 0, len2);
-            offset += len2;
-            len -= len2;
-        }
+        this.defaultDescPad = padding;
     }
 
-    @Override
-    public void writeRaw(SerializableString text) throws IOException, JsonGenerationException
+    /**
+     * Returns the 'descPadding'.
+     *
+     * @return the 'descPadding'
+     */
+    public int getDescPadding()
     {
-        byte[] raw = text.asUnquotedUTF8();
-        if (raw.length > 0) {
-            _writeBytes(raw);
-        }
+        return defaultDescPad;
     }
 
-    // since 2.5
-    @Override
-    public void writeRawValue(SerializableString text) throws IOException {
-        _verifyValueWrite(WRITE_RAW);
-        byte[] raw = text.asUnquotedUTF8();
-        if (raw.length > 0) {
-            _writeBytes(raw);
-        }
+    /**
+     * Sets the 'syntaxPrefix'.
+     *
+     * @param prefix the new value of 'syntaxPrefix'
+     */
+    public void setSyntaxPrefix(String prefix)
+    {
+        this.defaultSyntaxPrefix = prefix;
     }
 
-    // @TODO: rewrite for speed...
-    @Override
-    public final void writeRaw(char[] cbuf, int offset, int len)
-        throws IOException, JsonGenerationException
+    /**
+     * Returns the 'syntaxPrefix'.
+     *
+     * @return the 'syntaxPrefix'
+     */
+    public String getSyntaxPrefix()
     {
-        // First: if we have 3 x charCount spaces, we know it'll fit just fine
+        return defaultSyntaxPrefix;
+    }
+
+    /**
+     * Sets the 'newLine'.
+     *
+     * @param newline the new value of 'newLine'
+     */
+    public void setNewLine(String newline)
+    {
+        this.defaultNewLine = newline;
+    }
+
+    /**
+     * Returns the 'newLine'.
+     *
+     * @return the 'newLine'
+     */
+    public String getNewLine()
+    {
+        return defaultNewLine;
+    }
+
+    /**
+     * Sets the 'optPrefix'.
+     *
+     * @param prefix the new value of 'optPrefix'
+     */
+    public void setOptPrefix(String prefix)
+    {
+        this.defaultOptPrefix = prefix;
+    }
+
+    /**
+     * Returns the 'optPrefix'.
+     *
+     * @return the 'optPrefix'
+     */
+    public String getOptPrefix()
+    {
+        return defaultOptPrefix;
+    }
+
+    /**
+     * Sets the 'longOptPrefix'.
+     *
+     * @param prefix the new value of 'longOptPrefix'
+     */
+    public void setLongOptPrefix(String prefix)
+    {
+        this.defaultLongOptPrefix = prefix;
+    }
+
+    /**
+     * Returns the 'longOptPrefix'.
+     *
+     * @return the 'longOptPrefix'
+     */
+    public String getLongOptPrefix()
+    {
+        return defaultLongOptPrefix;
+    }
+
+    /**
+     * Set the separator displayed between a long option and its value.
+     * Ensure that the separator specified is supported by the parser used,
+     * typically ' ' or '='.
+     * 
+     * @param longOptSeparator the separator, typically ' ' or '='.
+     * @since 1.3
+     */
+    public void setLongOptSeparator(String longOptSeparator)
+    {
+        this.longOptSeparator = longOptSeparator;
+    }
+
+    /**
+     * Returns the separator displayed between a long option and its value.
+     * 
+     * @return the separator
+     * @since 1.3
+     */
+    public String getLongOptSeparator()
+    {
+        return longOptSeparator;
+    }
+
+    /**
+     * Sets the 'argName'.
+     *
+     * @param name the new value of 'argName'
+     */
+    public void setArgName(String name)
+    {
+        this.defaultArgName = name;
+    }
+
+    /**
+     * Returns the 'argName'.
+     *
+     * @return the 'argName'
+     */
+    public String getArgName()
+    {
+        return defaultArgName;
+    }
+
+    /**
+     * Comparator used to sort the options when they output in help text.
+     * Defaults to case-insensitive alphabetical sorting by option key.
+     * 
+     * @since 1.2
+     */
+    public Comparator getOptionComparator()
+    {
+        return optionComparator;
+    }
+
+    /**
+     * Set the comparator used to sort the options when they output in help text.
+     * Passing in a null parameter will set the ordering to the default mode.
+     * 
+     * @since 1.2
+     */
+    public void setOptionComparator(Comparator comparator)
+    {
+        if (comparator == null)
         {
-            int len3 = len+len+len;
-            if ((_outputTail + len3) > _outputEnd) {
-                // maybe we could flush?
-                if (_outputEnd < len3) { // wouldn't be enough...
-                    _writeSegmentedRaw(cbuf, offset, len);
-                    return;
-                }
-                // yes, flushing brings enough space
-                _flushBuffer();
-            }
+            this.optionComparator = new OptionComparator();
         }
-        len += offset; // now marks the end
-
-        // Note: here we know there is enough room, hence no output boundary checks
-        main_loop:
-        while (offset < len) {
-            inner_loop:
-            while (true) {
-                int ch = (int) cbuf[offset];
-                if (ch > 0x7F) {
-                    break inner_loop;
-                }
-                _outputBuffer[_outputTail++] = (byte) ch;
-                if (++offset >= len) {
-                    break main_loop;
-                }
-            }
-            char ch = cbuf[offset++];
-            if (ch < 0x800) { // 2-byte?
-                _outputBuffer[_outputTail++] = (byte) (0xc0 | (ch >> 6));
-                _outputBuffer[_outputTail++] = (byte) (0x80 | (ch & 0x3f));
-            } else {
-                offset = _outputRawMultiByteChar(ch, cbuf, offset, len);
-            }
-        }
-    }
-
-    @Override
-    public void writeRaw(char ch)
-        throws IOException, JsonGenerationException
-    {
-        if ((_outputTail + 3) >= _outputEnd) {
-            _flushBuffer();
-        }
-        final byte[] bbuf = _outputBuffer;
-        if (ch <= 0x7F) {
-            bbuf[_outputTail++] = (byte) ch;
-        } else  if (ch < 0x800) { // 2-byte?
-            bbuf[_outputTail++] = (byte) (0xc0 | (ch >> 6));
-            bbuf[_outputTail++] = (byte) (0x80 | (ch & 0x3f));
-        } else {
-            /*offset =*/ _outputRawMultiByteChar(ch, null, 0, 0);
+        else
+        {
+            this.optionComparator = comparator;
         }
     }
 
     /**
-     * Helper method called when it is possible that output of raw section
-     * to output may cross buffer boundary
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
+     *
+     * @param cmdLineSyntax the syntax for this application
+     * @param options the Options instance
      */
-    private final void _writeSegmentedRaw(char[] cbuf, int offset, int len)
-        throws IOException, JsonGenerationException
+    public void printHelp(String cmdLineSyntax, Options options)
     {
-        final int end = _outputEnd;
-        final byte[] bbuf = _outputBuffer;
-        
-        main_loop:
-        while (offset < len) {
-            inner_loop:
-            while (true) {
-                int ch = (int) cbuf[offset];
-                if (ch >= 0x80) {
-                    break inner_loop;
-                }
-                // !!! TODO: fast(er) writes (roll input, output checks in one)
-                if (_outputTail >= end) {
-                    _flushBuffer();
-                }
-                bbuf[_outputTail++] = (byte) ch;
-                if (++offset >= len) {
-                    break main_loop;
-                }
-            }
-            if ((_outputTail + 3) >= _outputEnd) {
-                _flushBuffer();
-            }
-            char ch = cbuf[offset++];
-            if (ch < 0x800) { // 2-byte?
-                bbuf[_outputTail++] = (byte) (0xc0 | (ch >> 6));
-                bbuf[_outputTail++] = (byte) (0x80 | (ch & 0x3f));
-            } else {
-                offset = _outputRawMultiByteChar(ch, cbuf, offset, len);
-            }
-        }
-    }
-    
-    /*
-    /**********************************************************
-    /* Output method implementations, base64-encoded binary
-    /**********************************************************
-     */
-
-    @Override
-    public void writeBinary(Base64Variant b64variant,
-            byte[] data, int offset, int len)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_BINARY);
-        // Starting quotes
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        _writeBinary(b64variant, data, offset, offset+len);
-        // and closing quotes
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
+        printHelp(defaultWidth, cmdLineSyntax, null, options, null, false);
     }
 
-    @Override
-    public int writeBinary(Base64Variant b64variant,
-            InputStream data, int dataLength)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_BINARY);
-        // Starting quotes
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        byte[] encodingBuffer = _ioContext.allocBase64Buffer();
-        int bytes;
-        try {
-            if (dataLength < 0) { // length unknown
-                bytes = _writeBinary(b64variant, data, encodingBuffer);
-            } else {
-                int missing = _writeBinary(b64variant, data, encodingBuffer, dataLength);
-                if (missing > 0) {
-                    _reportError("Too few bytes available: missing "+missing+" bytes (out of "+dataLength+")");
-                }
-                bytes = dataLength;
-            }
-        } finally {
-            _ioContext.releaseBase64Buffer(encodingBuffer);
-        }
-        // and closing quotes
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        return bytes;
-    }
-    
-    /*
-    /**********************************************************
-    /* Output method implementations, primitive
-    /**********************************************************
-     */
-
-    @Override
-    public void writeNumber(short s)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_NUMBER);
-        // up to 5 digits and possible minus sign
-        if ((_outputTail + 6) >= _outputEnd) {
-            _flushBuffer();
-        }
-        if (_cfgNumbersAsStrings) {
-            _writeQuotedShort(s);
-            return;
-        }
-        _outputTail = NumberOutput.outputInt(s, _outputBuffer, _outputTail);
-    }
-    
-    private final void _writeQuotedShort(short s) throws IOException {
-        if ((_outputTail + 8) >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        _outputTail = NumberOutput.outputInt(s, _outputBuffer, _outputTail);
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    } 
-    
-    @Override
-    public void writeNumber(int i)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_NUMBER);
-        // up to 10 digits and possible minus sign
-        if ((_outputTail + 11) >= _outputEnd) {
-            _flushBuffer();
-        }
-        if (_cfgNumbersAsStrings) {
-            _writeQuotedInt(i);
-            return;
-        }
-        _outputTail = NumberOutput.outputInt(i, _outputBuffer, _outputTail);
-    }
-
-    private final void _writeQuotedInt(int i) throws IOException
-    {
-        if ((_outputTail + 13) >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        _outputTail = NumberOutput.outputInt(i, _outputBuffer, _outputTail);
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }    
-
-    @Override
-    public void writeNumber(long l)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_NUMBER);
-        if (_cfgNumbersAsStrings) {
-            _writeQuotedLong(l);
-            return;
-        }
-        if ((_outputTail + 21) >= _outputEnd) {
-            // up to 20 digits, minus sign
-            _flushBuffer();
-        }
-        _outputTail = NumberOutput.outputLong(l, _outputBuffer, _outputTail);
-    }
-
-    private final void _writeQuotedLong(long l) throws IOException
-    {
-        if ((_outputTail + 23) >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        _outputTail = NumberOutput.outputLong(l, _outputBuffer, _outputTail);
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-
-    @Override
-    public void writeNumber(BigInteger value)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_NUMBER);
-        if (value == null) {
-            _writeNull();
-        } else if (_cfgNumbersAsStrings) {
-            _writeQuotedRaw(value);
-        } else {
-            writeRaw(value.toString());
-        }
-    }
-
-    
-    @Override
-    public void writeNumber(double d)
-        throws IOException, JsonGenerationException
-    {
-        if (_cfgNumbersAsStrings ||
-            // [JACKSON-139]
-            (((Double.isNaN(d) || Double.isInfinite(d))
-                && isEnabled(Feature.QUOTE_NON_NUMERIC_NUMBERS)))) {
-            writeString(String.valueOf(d));
-            return;
-        }
-        // What is the max length for doubles? 40 chars?
-        _verifyValueWrite(WRITE_NUMBER);
-        writeRaw(String.valueOf(d));
-    }
-
-    @Override
-    public void writeNumber(float f)
-        throws IOException, JsonGenerationException
-    {
-        if (_cfgNumbersAsStrings ||
-            // [JACKSON-139]
-            (((Float.isNaN(f) || Float.isInfinite(f))
-                && isEnabled(Feature.QUOTE_NON_NUMERIC_NUMBERS)))) {
-            writeString(String.valueOf(f));
-            return;
-        }
-        // What is the max length for floats?
-        _verifyValueWrite(WRITE_NUMBER);
-        writeRaw(String.valueOf(f));
-    }
-
-    @Override
-    public void writeNumber(BigDecimal value)
-        throws IOException, JsonGenerationException
-    {
-        // Don't really know max length for big decimal, no point checking
-        _verifyValueWrite(WRITE_NUMBER);
-        if (value == null) {
-            _writeNull();
-        } else if (_cfgNumbersAsStrings) {
-            _writeQuotedRaw(value);
-        } else if (isEnabled(Feature.WRITE_BIGDECIMAL_AS_PLAIN)) {
-            writeRaw(value.toPlainString());
-        } else {
-            writeRaw(value.toString());
-        }
-    }
-
-    @Override
-    public void writeNumber(String encodedValue)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_NUMBER);
-        if (_cfgNumbersAsStrings) {
-            _writeQuotedRaw(encodedValue);            
-        } else {
-            writeRaw(encodedValue);
-        }
-    }
-
-    private final void _writeQuotedRaw(Object value) throws IOException
-    {
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-        writeRaw(value.toString());
-        if (_outputTail >= _outputEnd) {
-            _flushBuffer();
-        }
-        _outputBuffer[_outputTail++] = BYTE_QUOTE;
-    }
-    
-    @Override
-    public void writeBoolean(boolean state)
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_BOOLEAN);
-        if ((_outputTail + 5) >= _outputEnd) {
-            _flushBuffer();
-        }
-        byte[] keyword = state ? TRUE_BYTES : FALSE_BYTES;
-        int len = keyword.length;
-        System.arraycopy(keyword, 0, _outputBuffer, _outputTail, len);
-        _outputTail += len;
-    }
-
-    @Override
-    public void writeNull()
-        throws IOException, JsonGenerationException
-    {
-        _verifyValueWrite(WRITE_NULL);
-        _writeNull();
-    }
-
-    /*
-    /**********************************************************
-    /* Implementations for other methods
-    /**********************************************************
-     */
-
-    @Override
-    protected final void _verifyValueWrite(String typeMsg) throws IOException
-    {
-        int status = _writeContext.writeValue();
-        if (status == JsonWriteContext.STATUS_EXPECT_NAME) {
-            _reportError("Can not "+typeMsg+", expecting field name");
-        }
-        if (_cfgPrettyPrinter == null) {
-            byte b;
-            switch (status) {
-            case JsonWriteContext.STATUS_OK_AFTER_COMMA:
-                b = BYTE_COMMA;
-                break;
-            case JsonWriteContext.STATUS_OK_AFTER_COLON:
-                b = BYTE_COLON;
-                break;
-            case JsonWriteContext.STATUS_OK_AFTER_SPACE: // root-value separator
-                if (_rootValueSeparator != null) {
-                    byte[] raw = _rootValueSeparator.asUnquotedUTF8();
-                    if (raw.length > 0) {
-                        _writeBytes(raw);
-                    }
-                }
-                return;
-            case JsonWriteContext.STATUS_OK_AS_IS:
-            default:
-                return;
-            }
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail] = b;
-            ++_outputTail;
-            return;
-        }
-        // Otherwise, pretty printer knows what to do...
-        _verifyPrettyValueWrite(typeMsg, status);
-    }
-
-    protected final void _verifyPrettyValueWrite(String typeMsg, int status) throws IOException
-    {
-        // If we have a pretty printer, it knows what to do:
-        switch (status) {
-        case JsonWriteContext.STATUS_OK_AFTER_COMMA: // array
-            _cfgPrettyPrinter.writeArrayValueSeparator(this);
-            break;
-        case JsonWriteContext.STATUS_OK_AFTER_COLON:
-            _cfgPrettyPrinter.writeObjectFieldValueSeparator(this);
-            break;
-        case JsonWriteContext.STATUS_OK_AFTER_SPACE:
-            _cfgPrettyPrinter.writeRootValueSeparator(this);
-            break;
-        case JsonWriteContext.STATUS_OK_AS_IS:
-            // First entry, but of which context?
-            if (_writeContext.inArray()) {
-                _cfgPrettyPrinter.beforeArrayValues(this);
-            } else if (_writeContext.inObject()) {
-                _cfgPrettyPrinter.beforeObjectEntries(this);
-            }
-            break;
-        default:
-            _throwInternal();
-            break;
-        }
-    }
-
-    /*
-    /**********************************************************
-    /* Low-level output handling
-    /**********************************************************
-     */
-
-    @Override
-    public void flush() throws IOException
-    {
-        _flushBuffer();
-        if (_outputStream != null) {
-            if (isEnabled(Feature.FLUSH_PASSED_TO_STREAM)) {
-                _outputStream.flush();
-            }
-        }
-    }
-
-    @Override
-    public void close() throws IOException
-    {
-        super.close();
-
-        /* 05-Dec-2008, tatu: To add [JACKSON-27], need to close open
-         *   scopes.
-         */
-        // First: let's see that we still have buffers...
-        if (_outputBuffer != null
-            && isEnabled(Feature.AUTO_CLOSE_JSON_CONTENT)) {
-            while (true) {
-                JsonStreamContext ctxt = getOutputContext();
-                if (ctxt.inArray()) {
-                    writeEndArray();
-                } else if (ctxt.inObject()) {
-                    writeEndObject();
-                } else {
-                    break;
-                }
-            }
-        }
-        _flushBuffer();
-
-        /* 25-Nov-2008, tatus: As per [JACKSON-16] we are not to call close()
-         *   on the underlying Reader, unless we "own" it, or auto-closing
-         *   feature is enabled.
-         *   One downside: when using UTF8Writer, underlying buffer(s)
-         *   may not be properly recycled if we don't close the writer.
-         */
-        if (_outputStream != null) {
-            if (_ioContext.isResourceManaged() || isEnabled(Feature.AUTO_CLOSE_TARGET)) {
-                _outputStream.close();
-            } else  if (isEnabled(Feature.FLUSH_PASSED_TO_STREAM)) {
-                // If we can't close it, we should at least flush
-                _outputStream.flush();
-            }
-        }
-        // Internal buffer(s) generator has can now be released as well
-        _releaseBuffers();
-    }
-
-    @Override
-    protected void _releaseBuffers()
-    {
-        byte[] buf = _outputBuffer;
-        if (buf != null && _bufferRecyclable) {
-            _outputBuffer = null;
-            _ioContext.releaseWriteEncodingBuffer(buf);
-        }
-        char[] cbuf = _charBuffer;
-        if (cbuf != null) {
-            _charBuffer = null;
-            _ioContext.releaseConcatBuffer(cbuf);
-        }
-    }
-
-    /*
-    /**********************************************************
-    /* Internal methods, low-level writing, raw bytes
-    /**********************************************************
-     */
-
-    private final void _writeBytes(byte[] bytes) throws IOException
-    {
-        final int len = bytes.length;
-        if ((_outputTail + len) > _outputEnd) {
-            _flushBuffer();
-            // still not enough?
-            if (len > MAX_BYTES_TO_BUFFER) {
-                _outputStream.write(bytes, 0, len);
-                return;
-            }
-        }
-        System.arraycopy(bytes, 0, _outputBuffer, _outputTail, len);
-        _outputTail += len;
-    }
-
-    private final void _writeBytes(byte[] bytes, int offset, int len) throws IOException
-    {
-        if ((_outputTail + len) > _outputEnd) {
-            _flushBuffer();
-            // still not enough?
-            if (len > MAX_BYTES_TO_BUFFER) {
-                _outputStream.write(bytes, offset, len);
-                return;
-            }
-        }
-        System.arraycopy(bytes, offset, _outputBuffer, _outputTail, len);
-        _outputTail += len;
-    }
-
-    /*
-    /**********************************************************
-    /* Internal methods, mid-level writing, String segments
-    /**********************************************************
-     */
-    
     /**
-     * Method called when String to write is long enough not to fit
-     * completely in temporary copy buffer. If so, we will actually
-     * copy it in small enough chunks so it can be directly fed
-     * to single-segment writes (instead of maximum slices that
-     * would fit in copy buffer)
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to 
+     * System.out.
+     *
+     * @param cmdLineSyntax the syntax for this application
+     * @param options the Options instance
+     * @param autoUsage whether to print an automatically generated
+     * usage statement
      */
-    private final void _writeStringSegments(String text, boolean addQuotes) throws IOException
+    public void printHelp(String cmdLineSyntax, Options options, boolean autoUsage)
     {
-        if (addQuotes) {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_QUOTE;        
+        printHelp(defaultWidth, cmdLineSyntax, null, options, null, autoUsage);
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
+     *
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     */
+    public void printHelp(String cmdLineSyntax, String header, Options options, String footer)
+    {
+        printHelp(cmdLineSyntax, header, options, footer, false);
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to 
+     * System.out.
+     *
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     * @param autoUsage whether to print an automatically generated
+     * usage statement
+     */
+    public void printHelp(String cmdLineSyntax, String header, Options options, String footer, boolean autoUsage)
+    {
+        printHelp(defaultWidth, cmdLineSyntax, header, options, footer, autoUsage);
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
+     *
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the beginning of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     */
+    public void printHelp(int width, String cmdLineSyntax, String header, Options options, String footer)
+    {
+        printHelp(width, cmdLineSyntax, header, options, footer, false);
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.  This method prints help information to
+     * System.out.
+     *
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param footer the banner to display at the end of the help
+     * @param autoUsage whether to print an automatically generated 
+     * usage statement
+     */
+    public void printHelp(int width, String cmdLineSyntax, String header,
+                          Options options, String footer, boolean autoUsage)
+    {
+        PrintWriter pw = new PrintWriter(System.out);
+
+        printHelp(pw, width, cmdLineSyntax, header, options, defaultLeftPad, defaultDescPad, footer, autoUsage);
+        pw.flush();
+    }
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.
+     *
+     * @param pw the writer to which the help will be written
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     * @param footer the banner to display at the end of the help
+     *
+     * @throws IllegalStateException if there is no room to print a line
+     */
+    public void printHelp(PrintWriter pw, int width, String cmdLineSyntax, 
+                          String header, Options options, int leftPad, 
+                          int descPad, String footer)
+    {
+        printHelp(pw, width, cmdLineSyntax, header, options, leftPad, descPad, footer, false);
+    }
+
+
+    /**
+     * Print the help for <code>options</code> with the specified
+     * command line syntax.
+     *
+     * @param pw the writer to which the help will be written
+     * @param width the number of characters to be displayed on each line
+     * @param cmdLineSyntax the syntax for this application
+     * @param header the banner to display at the begining of the help
+     * @param options the Options instance
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     * @param footer the banner to display at the end of the help
+     * @param autoUsage whether to print an automatically generated
+     * usage statement
+     *
+     * @throws IllegalStateException if there is no room to print a line
+     */
+    public void printHelp(PrintWriter pw, int width, String cmdLineSyntax,
+                          String header, Options options, int leftPad,
+                          int descPad, String footer, boolean autoUsage)
+    {
+        if ((cmdLineSyntax == null) || (cmdLineSyntax.length() == 0))
+        {
+            throw new IllegalArgumentException("cmdLineSyntax not provided");
         }
 
-        int left = text.length();
-        int offset = 0;
-        final char[] cbuf = _charBuffer;
-
-        while (left > 0) {
-            int len = Math.min(_outputMaxContiguous, left);
-            text.getChars(offset, offset+len, cbuf, 0);
-            if ((_outputTail + len) > _outputEnd) { // caller must ensure enough space
-                _flushBuffer();
-            }
-            _writeStringSegment(cbuf, 0, len);
-            offset += len;
-            left -= len;
+        if (autoUsage)
+        {
+            printUsage(pw, width, cmdLineSyntax, options);
+        }
+        else
+        {
+            printUsage(pw, width, cmdLineSyntax);
         }
 
-        if (addQuotes) {
-            if (_outputTail >= _outputEnd) {
-                _flushBuffer();
-            }
-            _outputBuffer[_outputTail++] = BYTE_QUOTE;
+        if ((header != null) && (header.trim().length() > 0))
+        {
+            printWrapped(pw, width, header);
+        }
+
+        printOptions(pw, width, options, leftPad, descPad);
+
+        if ((footer != null) && (footer.trim().length() > 0))
+        {
+            printWrapped(pw, width, footer);
         }
     }
 
     /**
-     * Method called when character sequence to write is long enough that
-     * its maximum encoded and escaped form is not guaranteed to fit in
-     * the output buffer. If so, we will need to choose smaller output
-     * chunks to write at a time.
+     * Prints the usage statement for the specified application.
+     *
+     * @param pw The PrintWriter to print the usage statement 
+     * @param width The number of characters to display per line
+     * @param app The application name
+     * @param options The command line Options
      */
-    private final void _writeStringSegments(char[] cbuf, int offset, int totalLen)
-        throws IOException, JsonGenerationException
+    public void printUsage(PrintWriter pw, int width, String app, Options options)
     {
-        do {
-            int len = Math.min(_outputMaxContiguous, totalLen);
-            if ((_outputTail + len) > _outputEnd) { // caller must ensure enough space
-                _flushBuffer();
-            }
-            _writeStringSegment(cbuf, offset, len);
-            offset += len;
-            totalLen -= len;
-        } while (totalLen > 0);
-    }
+        // initialise the string buffer
+        StringBuffer buff = new StringBuffer(defaultSyntaxPrefix).append(app).append(" ");
 
-    /*
-    /**********************************************************
-    /* Internal methods, low-level writing, text segments
-    /**********************************************************
-     */
+        // create a list for processed option groups
+        final Collection processedGroups = new ArrayList();
 
-    /**
-     * This method called when the string content is already in
-     * a char buffer, and its maximum total encoded and escaped length
-     * can not exceed size of the output buffer.
-     * Caller must ensure that there is enough space in output buffer,
-     * assuming case of all non-escaped ASCII characters, as well as
-     * potentially enough space for other cases (but not necessarily flushed)
-     */
-    private final void _writeStringSegment(char[] cbuf, int offset, int len)
-        throws IOException, JsonGenerationException
-    {
-        // note: caller MUST ensure (via flushing) there's room for ASCII only
-        
-        // Fast+tight loop for ASCII-only, no-escaping-needed output
-        len += offset; // becomes end marker, then
+        // temp variable
+        Option option;
 
-        int outputPtr = _outputTail;
-        final byte[] outputBuffer = _outputBuffer;
-        final int[] escCodes = _outputEscapes;
+        List optList = new ArrayList(options.getOptions());
+        Collections.sort(optList, getOptionComparator());
+        // iterate over the options
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            // get the next Option
+            option = (Option) i.next();
 
-        while (offset < len) {
-            int ch = cbuf[offset];
-            // note: here we know that (ch > 0x7F) will cover case of escaping non-ASCII too:
-            if (ch > 0x7F || escCodes[ch] != 0) {
-                break;
-            }
-            outputBuffer[outputPtr++] = (byte) ch;
-            ++offset;
-        }
-        _outputTail = outputPtr;
-        if (offset < len) {
-            // [JACKSON-106]
-            if (_characterEscapes != null) {
-                _writeCustomStringSegment2(cbuf, offset, len);
-            // [JACKSON-102]
-            } else if (_maximumNonEscapedChar == 0) {
-                _writeStringSegment2(cbuf, offset, len);
-            } else {
-                _writeStringSegmentASCII2(cbuf, offset, len);
-            }
+            // check if the option is part of an OptionGroup
+            OptionGroup group = options.getOptionGroup(option);
 
-        }
-    }
+            // if the option is part of a group 
+            if (group != null)
+            {
+                // and if the group has not already been processed
+                if (!processedGroups.contains(group))
+                {
+                    // add the group to the processed list
+                    processedGroups.add(group);
 
-    /**
-     * Secondary method called when content contains characters to escape,
-     * and/or multi-byte UTF-8 characters.
-     */
-    private final void _writeStringSegment2(final char[] cbuf, int offset, final int end)
-        throws IOException, JsonGenerationException
-    {
-        // Ok: caller guarantees buffer can have room; but that may require flushing:
-        if ((_outputTail +  6 * (end - offset)) > _outputEnd) {
-            _flushBuffer();
-        }
 
-        int outputPtr = _outputTail;
-
-        final byte[] outputBuffer = _outputBuffer;
-        final int[] escCodes = _outputEscapes;
-        
-        while (offset < end) {
-            int ch = cbuf[offset++];
-            if (ch <= 0x7F) {
-                 if (escCodes[ch] == 0) {
-                     outputBuffer[outputPtr++] = (byte) ch;
-                     continue;
-                 }
-                 int escape = escCodes[ch];
-                 if (escape > 0) { // 2-char escape, fine
-                     outputBuffer[outputPtr++] = BYTE_BACKSLASH;
-                     outputBuffer[outputPtr++] = (byte) escape;
-                 } else {
-                     // ctrl-char, 6-byte escape...
-                     outputPtr = _writeGenericEscape(ch, outputPtr);
+                    // add the usage clause
+                    appendOptionGroup(buff, group);
                 }
-                continue;
+
+                // otherwise the option was displayed in the group
+                // previously so ignore it.
             }
-            if (ch <= 0x7FF) { // fine, just needs 2 byte output
-                outputBuffer[outputPtr++] = (byte) (0xc0 | (ch >> 6));
-                outputBuffer[outputPtr++] = (byte) (0x80 | (ch & 0x3f));
-            } else {
-                outputPtr = _outputMultiByteChar(ch, outputPtr);
+
+            // if the Option is not part of an OptionGroup
+            else
+            {
+                appendOption(buff, option, option.isRequired());
+            }
+
+            if (i.hasNext())
+            {
+                buff.append(" ");
             }
         }
-        _outputTail = outputPtr;
-    }
 
-    /*
-    /**********************************************************
-    /* Internal methods, low-level writing, text segment
-    /* with additional escaping (ASCII or such)
-    /**********************************************************
-     */
+
+        // call printWrapped
+        printWrapped(pw, width, buff.toString().indexOf(' ') + 1, buff.toString());
+    }
 
     /**
-     * Same as <code>_writeStringSegment2(char[], ...)</code., but with
-     * additional escaping for high-range code points
+     * Appends the usage clause for an OptionGroup to a StringBuffer.  
+     * The clause is wrapped in square brackets if the group is required.
+     * The display of the options is handled by appendOption
+     * @param buff the StringBuffer to append to
+     * @param group the group to append
+     * @see #appendOption(StringBuffer,Option,boolean)
      */
-    private final void _writeStringSegmentASCII2(final char[] cbuf, int offset, final int end)
-        throws IOException, JsonGenerationException
+    private void appendOptionGroup(final StringBuffer buff, final OptionGroup group)
     {
-        // Ok: caller guarantees buffer can have room; but that may require flushing:
-        if ((_outputTail +  6 * (end - offset)) > _outputEnd) {
-            _flushBuffer();
+        if (!group.isRequired())
+        {
+            buff.append("[");
         }
-    
-        int outputPtr = _outputTail;
-    
-        final byte[] outputBuffer = _outputBuffer;
-        final int[] escCodes = _outputEscapes;
-        final int maxUnescaped = _maximumNonEscapedChar;
-        
-        while (offset < end) {
-            int ch = cbuf[offset++];
-            if (ch <= 0x7F) {
-                 if (escCodes[ch] == 0) {
-                     outputBuffer[outputPtr++] = (byte) ch;
-                     continue;
-                 }
-                 int escape = escCodes[ch];
-                 if (escape > 0) { // 2-char escape, fine
-                     outputBuffer[outputPtr++] = BYTE_BACKSLASH;
-                     outputBuffer[outputPtr++] = (byte) escape;
-                 } else {
-                     // ctrl-char, 6-byte escape...
-                     outputPtr = _writeGenericEscape(ch, outputPtr);
-                 }
-                 continue;
-            }
-            if (ch > maxUnescaped) { // [JACKSON-102] Allow forced escaping if non-ASCII (etc) chars:
-                outputPtr = _writeGenericEscape(ch, outputPtr);
-                continue;
-            }
-            if (ch <= 0x7FF) { // fine, just needs 2 byte output
-                outputBuffer[outputPtr++] = (byte) (0xc0 | (ch >> 6));
-                outputBuffer[outputPtr++] = (byte) (0x80 | (ch & 0x3f));
-            } else {
-                outputPtr = _outputMultiByteChar(ch, outputPtr);
-            }
-        }
-        _outputTail = outputPtr;
-    }
 
-    /*
-    /**********************************************************
-    /* Internal methods, low-level writing, text segment
-    /* with fully custom escaping (and possibly escaping of non-ASCII
-    /**********************************************************
-     */
+        List optList = new ArrayList(group.getOptions());
+        Collections.sort(optList, getOptionComparator());
+        // for each option in the OptionGroup
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            // whether the option is required or not is handled at group level
+            appendOption(buff, (Option) i.next(), true);
+
+            if (i.hasNext())
+            {
+                buff.append(" | ");
+            }
+        }
+
+        if (!group.isRequired())
+        {
+            buff.append("]");
+        }
+    }
 
     /**
-     * Same as <code>_writeStringSegmentASCII2(char[], ...)</code., but with
-     * additional checking for completely custom escapes
+     * Appends the usage clause for an Option to a StringBuffer.  
+     *
+     * @param buff the StringBuffer to append to
+     * @param option the Option to append
+     * @param required whether the Option is required or not
      */
-    private final void _writeCustomStringSegment2(final char[] cbuf, int offset, final int end)
-        throws IOException, JsonGenerationException
+    private void appendOption(final StringBuffer buff, final Option option, final boolean required)
     {
-        // Ok: caller guarantees buffer can have room; but that may require flushing:
-        if ((_outputTail +  6 * (end - offset)) > _outputEnd) {
-            _flushBuffer();
+        if (!required)
+        {
+            buff.append("[");
         }
-        int outputPtr = _outputTail;
-    
-        final byte[] outputBuffer = _outputBuffer;
-        final int[] escCodes = _outputEscapes;
-        // may or may not have this limit
-        final int maxUnescaped = (_maximumNonEscapedChar <= 0) ? 0xFFFF : _maximumNonEscapedChar;
-        final CharacterEscapes customEscapes = _characterEscapes; // non-null
-        
-        while (offset < end) {
-            int ch = cbuf[offset++];
-            if (ch <= 0x7F) {
-                 if (escCodes[ch] == 0) {
-                     outputBuffer[outputPtr++] = (byte) ch;
-                     continue;
-                 }
-                 int escape = escCodes[ch];
-                 if (escape > 0) { // 2-char escape, fine
-                     outputBuffer[outputPtr++] = BYTE_BACKSLASH;
-                     outputBuffer[outputPtr++] = (byte) escape;
-                 } else if (escape == CharacterEscapes.ESCAPE_CUSTOM) {
-                     SerializableString esc = customEscapes.getEscapeSequence(ch);
-                     if (esc == null) {
-                         _reportError("Invalid custom escape definitions; custom escape not found for character code 0x"
-                                 +Integer.toHexString(ch)+", although was supposed to have one");
-                     }
-                     outputPtr = _writeCustomEscape(outputBuffer, outputPtr, esc, end-offset);
-                 } else {
-                     // ctrl-char, 6-byte escape...
-                     outputPtr = _writeGenericEscape(ch, outputPtr);
-                 }
-                 continue;
-            }
-            if (ch > maxUnescaped) { // [JACKSON-102] Allow forced escaping if non-ASCII (etc) chars:
-                outputPtr = _writeGenericEscape(ch, outputPtr);
-                continue;
-            }
-            SerializableString esc = customEscapes.getEscapeSequence(ch);
-            if (esc != null) {
-                outputPtr = _writeCustomEscape(outputBuffer, outputPtr, esc, end-offset);
-                continue;
-            }
-            if (ch <= 0x7FF) { // fine, just needs 2 byte output
-                outputBuffer[outputPtr++] = (byte) (0xc0 | (ch >> 6));
-                outputBuffer[outputPtr++] = (byte) (0x80 | (ch & 0x3f));
-            } else {
-                outputPtr = _outputMultiByteChar(ch, outputPtr);
-            }
-        }
-        _outputTail = outputPtr;
-    }
 
-    private final int _writeCustomEscape(byte[] outputBuffer, int outputPtr, SerializableString esc, int remainingChars)
-        throws IOException, JsonGenerationException
-    {
-        byte[] raw = esc.asUnquotedUTF8(); // must be escaped at this point, shouldn't double-quote
-        int len = raw.length;
-        if (len > 6) { // may violate constraints we have, do offline
-            return _handleLongCustomEscape(outputBuffer, outputPtr, _outputEnd, raw, remainingChars);
+        if (option.getOpt() != null)
+        {
+            buff.append("-").append(option.getOpt());
         }
-        // otherwise will fit without issues, so:
-        System.arraycopy(raw, 0, outputBuffer, outputPtr, len);
-        return (outputPtr + len);
-    }
-    
-    private final int _handleLongCustomEscape(byte[] outputBuffer, int outputPtr, int outputEnd, byte[] raw,
-            int remainingChars)
-        throws IOException, JsonGenerationException
-    {
-        int len = raw.length;
-        if ((outputPtr + len) > outputEnd) {
-            _outputTail = outputPtr;
-            _flushBuffer();
-            outputPtr = _outputTail;
-            if (len > outputBuffer.length) { // very unlikely, but possible...
-                _outputStream.write(raw, 0, len);
-                return outputPtr;
-            }
-            System.arraycopy(raw, 0, outputBuffer, outputPtr, len);
-            outputPtr += len;
-        }
-        // but is the invariant still obeyed? If not, flush once more
-        if ((outputPtr +  6 * remainingChars) > outputEnd) {
-            _flushBuffer();
-            return _outputTail;
-        }
-        return outputPtr;
-    }
-
-    /*
-    /**********************************************************
-    /* Internal methods, low-level writing, "raw UTF-8" segments
-    /**********************************************************
-     */
-    
-    /**
-     * Method called when UTF-8 encoded (but NOT yet escaped!) content is not guaranteed
-     * to fit in the output buffer after escaping; as such, we just need to
-     * chunk writes.
-     */
-    private final void _writeUTF8Segments(byte[] utf8, int offset, int totalLen)
-        throws IOException, JsonGenerationException
-    {
-        do {
-            int len = Math.min(_outputMaxContiguous, totalLen);
-            _writeUTF8Segment(utf8, offset, len);
-            offset += len;
-            totalLen -= len;
-        } while (totalLen > 0);
-    }
-    
-    private final void _writeUTF8Segment(byte[] utf8, final int offset, final int len)
-        throws IOException, JsonGenerationException
-    {
-        // fast loop to see if escaping is needed; don't copy, just look
-        final int[] escCodes = _outputEscapes;
-
-        for (int ptr = offset, end = offset + len; ptr < end; ) {
-            // 28-Feb-2011, tatu: escape codes just cover 7-bit range, so:
-            int ch = utf8[ptr++];
-            if ((ch >= 0) && escCodes[ch] != 0) {
-                _writeUTF8Segment2(utf8, offset, len);
-                return;
-            }
+        else
+        {
+            buff.append("--").append(option.getLongOpt());
         }
         
-        // yes, fine, just copy the sucker
-        if ((_outputTail + len) > _outputEnd) { // enough room or need to flush?
-            _flushBuffer(); // but yes once we flush (caller guarantees length restriction)
-        }
-        System.arraycopy(utf8, offset, _outputBuffer, _outputTail, len);
-        _outputTail += len;
-    }
-
-    private final void _writeUTF8Segment2(final byte[] utf8, int offset, int len)
-        throws IOException, JsonGenerationException
-    {
-        int outputPtr = _outputTail;
-
-        // Ok: caller guarantees buffer can have room; but that may require flushing:
-        if ((outputPtr + (len * 6)) > _outputEnd) {
-            _flushBuffer();
-            outputPtr = _outputTail;
+        // if the Option has a value and a non blank argname
+        if (option.hasArg() && (option.getArgName() == null || option.getArgName().length() != 0))
+        {
+            buff.append(option.getOpt() == null ? longOptSeparator : " ");
+            buff.append("<").append(option.getArgName() != null ? option.getArgName() : getArgName()).append(">");
         }
         
-        final byte[] outputBuffer = _outputBuffer;
-        final int[] escCodes = _outputEscapes;
-        len += offset; // so 'len' becomes 'end'
-        
-        while (offset < len) {
-            byte b = utf8[offset++];
-            int ch = b;
-            if (ch < 0 || escCodes[ch] == 0) {
-                outputBuffer[outputPtr++] = b;
-                continue;
-            }
-            int escape = escCodes[ch];
-            if (escape > 0) { // 2-char escape, fine
-                outputBuffer[outputPtr++] = BYTE_BACKSLASH;
-                outputBuffer[outputPtr++] = (byte) escape;
-            } else {
-                // ctrl-char, 6-byte escape...
-                outputPtr = _writeGenericEscape(ch, outputPtr);
-            }
+        // if the Option is not a required option
+        if (!required)
+        {
+            buff.append("]");
         }
-        _outputTail = outputPtr;
-    }
-    
-    /*
-    /**********************************************************
-    /* Internal methods, low-level writing, base64 encoded
-    /**********************************************************
-     */
-    
-    protected final void _writeBinary(Base64Variant b64variant,
-            byte[] input, int inputPtr, final int inputEnd)
-        throws IOException, JsonGenerationException
-    {
-        // Encoding is by chunks of 3 input, 4 output chars, so:
-        int safeInputEnd = inputEnd - 3;
-        // Let's also reserve room for possible (and quoted) lf char each round
-        int safeOutputEnd = _outputEnd - 6;
-        int chunksBeforeLF = b64variant.getMaxLineLength() >> 2;
-
-        // Ok, first we loop through all full triplets of data:
-        while (inputPtr <= safeInputEnd) {
-            if (_outputTail > safeOutputEnd) { // need to flush
-                _flushBuffer();
-            }
-            // First, mash 3 bytes into lsb of 32-bit int
-            int b24 = ((int) input[inputPtr++]) << 8;
-            b24 |= ((int) input[inputPtr++]) & 0xFF;
-            b24 = (b24 << 8) | (((int) input[inputPtr++]) & 0xFF);
-            _outputTail = b64variant.encodeBase64Chunk(b24, _outputBuffer, _outputTail);
-            if (--chunksBeforeLF <= 0) {
-                // note: must quote in JSON value
-                _outputBuffer[_outputTail++] = '\\';
-                _outputBuffer[_outputTail++] = 'n';
-                chunksBeforeLF = b64variant.getMaxLineLength() >> 2;
-            }
-        }
-
-        // And then we may have 1 or 2 leftover bytes to encode
-        int inputLeft = inputEnd - inputPtr; // 0, 1 or 2
-        if (inputLeft > 0) { // yes, but do we have room for output?
-            if (_outputTail > safeOutputEnd) { // don't really need 6 bytes but...
-                _flushBuffer();
-            }
-            int b24 = ((int) input[inputPtr++]) << 16;
-            if (inputLeft == 2) {
-                b24 |= (((int) input[inputPtr++]) & 0xFF) << 8;
-            }
-            _outputTail = b64variant.encodeBase64Partial(b24, inputLeft, _outputBuffer, _outputTail);
-        }
-    }
-
-    // write-method called when length is definitely known
-    protected final int _writeBinary(Base64Variant b64variant,
-            InputStream data, byte[] readBuffer, int bytesLeft)
-        throws IOException, JsonGenerationException
-    {
-        int inputPtr = 0;
-        int inputEnd = 0;
-        int lastFullOffset = -3;       
-        
-        // Let's also reserve room for possible (and quoted) LF char each round
-        int safeOutputEnd = _outputEnd - 6;
-        int chunksBeforeLF = b64variant.getMaxLineLength() >> 2;
-
-        while (bytesLeft > 2) { // main loop for full triplets
-            if (inputPtr > lastFullOffset) {
-                inputEnd = _readMore(data, readBuffer, inputPtr, inputEnd, bytesLeft);
-                inputPtr = 0;
-                if (inputEnd < 3) { // required to try to read to have at least 3 bytes
-                    break;
-                }
-                lastFullOffset = inputEnd-3;
-            }
-            if (_outputTail > safeOutputEnd) { // need to flush
-                _flushBuffer();
-            }
-            int b24 = ((int) readBuffer[inputPtr++]) << 8;
-            b24 |= ((int) readBuffer[inputPtr++]) & 0xFF;
-            b24 = (b24 << 8) | (((int) readBuffer[inputPtr++]) & 0xFF);
-            bytesLeft -= 3;
-            _outputTail = b64variant.encodeBase64Chunk(b24, _outputBuffer, _outputTail);
-            if (--chunksBeforeLF <= 0) {
-                _outputBuffer[_outputTail++] = '\\';
-                _outputBuffer[_outputTail++] = 'n';
-                chunksBeforeLF = b64variant.getMaxLineLength() >> 2;
-            }
-        }
-        
-        // And then we may have 1 or 2 leftover bytes to encode
-        if (bytesLeft > 0) {
-            inputEnd = _readMore(data, readBuffer, inputPtr, inputEnd, bytesLeft);
-            inputPtr = 0;
-            if (inputEnd > 0) { // yes, but do we have room for output?
-                if (_outputTail > safeOutputEnd) { // don't really need 6 bytes but...
-                    _flushBuffer();
-                }
-                int b24 = ((int) readBuffer[inputPtr++]) << 16;
-                int amount;
-                if (inputPtr < inputEnd) {
-                    b24 |= (((int) readBuffer[inputPtr]) & 0xFF) << 8;
-                    amount = 2;
-                } else {
-                    amount = 1;
-                }
-                _outputTail = b64variant.encodeBase64Partial(b24, amount, _outputBuffer, _outputTail);
-                bytesLeft -= amount;
-            }
-        }
-        return bytesLeft;
-    }
-
-    // write method when length is unknown
-    protected final int _writeBinary(Base64Variant b64variant,
-            InputStream data, byte[] readBuffer)
-        throws IOException, JsonGenerationException
-    {
-        int inputPtr = 0;
-        int inputEnd = 0;
-        int lastFullOffset = -3;
-        int bytesDone = 0;
-        
-        // Let's also reserve room for possible (and quoted) LF char each round
-        int safeOutputEnd = _outputEnd - 6;
-        int chunksBeforeLF = b64variant.getMaxLineLength() >> 2;
-
-        // Ok, first we loop through all full triplets of data:
-        while (true) {
-            if (inputPtr > lastFullOffset) { // need to load more
-                inputEnd = _readMore(data, readBuffer, inputPtr, inputEnd, readBuffer.length);
-                inputPtr = 0;
-                if (inputEnd < 3) { // required to try to read to have at least 3 bytes
-                    break;
-                }
-                lastFullOffset = inputEnd-3;
-            }
-            if (_outputTail > safeOutputEnd) { // need to flush
-                _flushBuffer();
-            }
-            // First, mash 3 bytes into lsb of 32-bit int
-            int b24 = ((int) readBuffer[inputPtr++]) << 8;
-            b24 |= ((int) readBuffer[inputPtr++]) & 0xFF;
-            b24 = (b24 << 8) | (((int) readBuffer[inputPtr++]) & 0xFF);
-            bytesDone += 3;
-            _outputTail = b64variant.encodeBase64Chunk(b24, _outputBuffer, _outputTail);
-            if (--chunksBeforeLF <= 0) {
-                _outputBuffer[_outputTail++] = '\\';
-                _outputBuffer[_outputTail++] = 'n';
-                chunksBeforeLF = b64variant.getMaxLineLength() >> 2;
-            }
-        }
-
-        // And then we may have 1 or 2 leftover bytes to encode
-        if (inputPtr < inputEnd) { // yes, but do we have room for output?
-            if (_outputTail > safeOutputEnd) { // don't really need 6 bytes but...
-                _flushBuffer();
-            }
-            int b24 = ((int) readBuffer[inputPtr++]) << 16;
-            int amount = 1;
-            if (inputPtr < inputEnd) {
-                b24 |= (((int) readBuffer[inputPtr]) & 0xFF) << 8;
-                amount = 2;
-            }
-            bytesDone += amount;
-            _outputTail = b64variant.encodeBase64Partial(b24, amount, _outputBuffer, _outputTail);
-        }
-        return bytesDone;
-    }
-    
-    private final int _readMore(InputStream in,
-            byte[] readBuffer, int inputPtr, int inputEnd,
-            int maxRead) throws IOException
-    {
-        // anything to shift to front?
-        int i = 0;
-        while (inputPtr < inputEnd) {
-            readBuffer[i++]  = readBuffer[inputPtr++];
-        }
-        inputPtr = 0;
-        inputEnd = i;
-        maxRead = Math.min(maxRead, readBuffer.length);
-        
-        do {
-            int length = maxRead - inputEnd;
-            if (length == 0) {
-                break;
-            }
-            int count = in.read(readBuffer, inputEnd, length);            
-            if (count < 0) {
-                return inputEnd;
-            }
-            inputEnd += count;
-        } while (inputEnd < 3);
-        return inputEnd;
-    }
-    
-    /*
-    /**********************************************************
-    /* Internal methods, character escapes/encoding
-    /**********************************************************
-     */
-    
-    /**
-     * Method called to output a character that is beyond range of
-     * 1- and 2-byte UTF-8 encodings, when outputting "raw" 
-     * text (meaning it is not to be escaped or quoted)
-     */
-    private final int _outputRawMultiByteChar(int ch, char[] cbuf, int inputOffset, int inputLen)
-        throws IOException
-    {
-        // Let's handle surrogates gracefully (as 4 byte output):
-        if (ch >= SURR1_FIRST) {
-            if (ch <= SURR2_LAST) { // yes, outside of BMP
-                // Do we have second part?
-                if (inputOffset >= inputLen || cbuf == null) { // nope... have to note down
-                    _reportError("Split surrogate on writeRaw() input (last character)");
-                }
-                _outputSurrogates(ch, cbuf[inputOffset]);
-                return (inputOffset+1);
-            }
-        }
-        final byte[] bbuf = _outputBuffer;
-        bbuf[_outputTail++] = (byte) (0xe0 | (ch >> 12));
-        bbuf[_outputTail++] = (byte) (0x80 | ((ch >> 6) & 0x3f));
-        bbuf[_outputTail++] = (byte) (0x80 | (ch & 0x3f));
-        return inputOffset;
-    }
-
-    protected final void _outputSurrogates(int surr1, int surr2)
-        throws IOException
-    {
-        int c = _decodeSurrogate(surr1, surr2);
-        if ((_outputTail + 4) > _outputEnd) {
-            _flushBuffer();
-        }
-        final byte[] bbuf = _outputBuffer;
-        bbuf[_outputTail++] = (byte) (0xf0 | (c >> 18));
-        bbuf[_outputTail++] = (byte) (0x80 | ((c >> 12) & 0x3f));
-        bbuf[_outputTail++] = (byte) (0x80 | ((c >> 6) & 0x3f));
-        bbuf[_outputTail++] = (byte) (0x80 | (c & 0x3f));
     }
     
     /**
-     * 
-     * @param ch
-     * @param outputPtr Position within output buffer to append multi-byte in
-     * 
-     * @return New output position after appending
-     * 
-     * @throws IOException
+     * Print the cmdLineSyntax to the specified writer, using the
+     * specified width.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters per line for the usage statement.
+     * @param cmdLineSyntax The usage statement.
      */
-    private final int _outputMultiByteChar(int ch, int outputPtr) throws IOException
+    public void printUsage(PrintWriter pw, int width, String cmdLineSyntax)
     {
-        byte[] bbuf = _outputBuffer;
-        if (ch >= SURR1_FIRST && ch <= SURR2_LAST) { // yes, outside of BMP; add an escape
-            bbuf[outputPtr++] = BYTE_BACKSLASH;
-            bbuf[outputPtr++] = BYTE_u;
+        int argPos = cmdLineSyntax.indexOf(' ') + 1;
+
+        printWrapped(pw, width, defaultSyntaxPrefix.length() + argPos, defaultSyntaxPrefix + cmdLineSyntax);
+    }
+
+    /**
+     * Print the help for the specified Options to the specified writer, 
+     * using the specified width, left padding and description padding.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters to display per line
+     * @param options The command line Options
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     */
+    public void printOptions(PrintWriter pw, int width, Options options, 
+                             int leftPad, int descPad)
+    {
+        StringBuffer sb = new StringBuffer();
+
+        renderOptions(sb, width, options, leftPad, descPad);
+        pw.println(sb.toString());
+    }
+
+    /**
+     * Print the specified text to the specified PrintWriter.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters to display per line
+     * @param text The text to be written to the PrintWriter
+     */
+    public void printWrapped(PrintWriter pw, int width, String text)
+    {
+        printWrapped(pw, width, 0, text);
+    }
+
+    /**
+     * Print the specified text to the specified PrintWriter.
+     *
+     * @param pw The printWriter to write the help to
+     * @param width The number of characters to display per line
+     * @param nextLineTabStop The position on the next line for the first tab.
+     * @param text The text to be written to the PrintWriter
+     */
+    public void printWrapped(PrintWriter pw, int width, int nextLineTabStop, String text)
+    {
+        StringBuffer sb = new StringBuffer(text.length());
+
+        renderWrappedText(sb, width, nextLineTabStop, text);
+        pw.println(sb.toString());
+    }
+
+    // --------------------------------------------------------------- Protected
+
+    /**
+     * Render the specified Options and return the rendered Options
+     * in a StringBuffer.
+     *
+     * @param sb The StringBuffer to place the rendered Options into.
+     * @param width The number of characters to display per line
+     * @param options The command line Options
+     * @param leftPad the number of characters of padding to be prefixed
+     * to each line
+     * @param descPad the number of characters of padding to be prefixed
+     * to each description line
+     *
+     * @return the StringBuffer with the rendered Options contents.
+     */
+    protected StringBuffer renderOptions(StringBuffer sb, int width, Options options, int leftPad, int descPad)
+    {
+        final String lpad = createPadding(leftPad);
+        final String dpad = createPadding(descPad);
+
+        // first create list containing only <lpad>-a,--aaa where 
+        // -a is opt and --aaa is long opt; in parallel look for 
+        // the longest opt string this list will be then used to 
+        // sort options ascending
+        int max = 0;
+        StringBuffer optBuf;
+        List prefixList = new ArrayList();
+
+        List optList = options.helpOptions();
+
+        Collections.sort(optList, getOptionComparator());
+
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            Option option = (Option) i.next();
+            optBuf = new StringBuffer();
             
-            bbuf[outputPtr++] = HEX_CHARS[(ch >> 12) & 0xF];
-            bbuf[outputPtr++] = HEX_CHARS[(ch >> 8) & 0xF];
-            bbuf[outputPtr++] = HEX_CHARS[(ch >> 4) & 0xF];
-            bbuf[outputPtr++] = HEX_CHARS[ch & 0xF];
-        } else {
-            bbuf[outputPtr++] = (byte) (0xe0 | (ch >> 12));
-            bbuf[outputPtr++] = (byte) (0x80 | ((ch >> 6) & 0x3f));
-            bbuf[outputPtr++] = (byte) (0x80 | (ch & 0x3f));
+            if (option.getOpt() == null)
+            {
+                optBuf.append(lpad).append("   " + defaultLongOptPrefix).append(option.getLongOpt());
+            }
+            else
+            {
+                optBuf.append(lpad).append(defaultOptPrefix).append(option.getOpt());
+
+                if (option.hasLongOpt())
+                {
+                    optBuf.append(',').append(defaultLongOptPrefix).append(option.getLongOpt());
+                }
+            }
+
+            if (option.hasArg())
+            {
+                String argName = option.getArgName();
+                if (argName != null && argName.length() == 0)
+                {
+                    // if the option has a blank argname
+                    optBuf.append(' ');
+                }
+                else
+                {
+                    optBuf.append(option.hasLongOpt() ? longOptSeparator : " ");
+                    optBuf.append("<").append(argName != null ? option.getArgName() : getArgName()).append(">");
+                }
+            }
+
+            prefixList.add(optBuf);
+            max = (optBuf.length() > max) ? optBuf.length() : max;
         }
-        return outputPtr;
-    }
-    
-    private final void _writeNull() throws IOException
-    {
-        if ((_outputTail + 4) >= _outputEnd) {
-            _flushBuffer();
+
+        int x = 0;
+
+        for (Iterator i = optList.iterator(); i.hasNext();)
+        {
+            Option option = (Option) i.next();
+            optBuf = new StringBuffer(prefixList.get(x++).toString());
+
+            if (optBuf.length() < max)
+            {
+                optBuf.append(createPadding(max - optBuf.length()));
+            }
+
+            optBuf.append(dpad);
+
+            int nextLineTabStop = max + descPad;
+
+            if (option.getDescription() != null)
+            {
+                optBuf.append(option.getDescription());
+            }
+
+            renderWrappedText(sb, width, nextLineTabStop, optBuf.toString());
+
+            if (i.hasNext())
+            {
+                sb.append(defaultNewLine);
+            }
         }
-        System.arraycopy(NULL_BYTES, 0, _outputBuffer, _outputTail, 4);
-        _outputTail += 4;
-    }
-        
-    /**
-     * Method called to write a generic Unicode escape for given character.
-     * 
-     * @param charToEscape Character to escape using escape sequence (\\uXXXX)
-     */
-    private int _writeGenericEscape(int charToEscape, int outputPtr)
-        throws IOException
-    {
-        final byte[] bbuf = _outputBuffer;
-        bbuf[outputPtr++] = BYTE_BACKSLASH;
-        bbuf[outputPtr++] = BYTE_u;
-        if (charToEscape > 0xFF) {
-            int hi = (charToEscape >> 8) & 0xFF;
-            bbuf[outputPtr++] = HEX_CHARS[hi >> 4];
-            bbuf[outputPtr++] = HEX_CHARS[hi & 0xF];
-            charToEscape &= 0xFF;
-        } else {
-            bbuf[outputPtr++] = BYTE_0;
-            bbuf[outputPtr++] = BYTE_0;
-        }
-        // We know it's a control char, so only the last 2 chars are non-0
-        bbuf[outputPtr++] = HEX_CHARS[charToEscape >> 4];
-        bbuf[outputPtr++] = HEX_CHARS[charToEscape & 0xF];
-        return outputPtr;
+
+        return sb;
     }
 
-    protected final void _flushBuffer() throws IOException
+    /**
+     * Render the specified text and return the rendered Options
+     * in a StringBuffer.
+     *
+     * @param sb The StringBuffer to place the rendered text into.
+     * @param width The number of characters to display per line
+     * @param nextLineTabStop The position on the next line for the first tab.
+     * @param text The text to be rendered.
+     *
+     * @return the StringBuffer with the rendered Options contents.
+     */
+    protected StringBuffer renderWrappedText(StringBuffer sb, int width, 
+                                             int nextLineTabStop, String text)
     {
-        int len = _outputTail;
-        if (len > 0) {
-            _outputTail = 0;
-            _outputStream.write(_outputBuffer, 0, len);
+        int pos = findWrapPos(text, width, 0);
+
+        if (pos == -1)
+        {
+            sb.append(rtrim(text));
+
+            return sb;
+        }
+        sb.append(rtrim(text.substring(0, pos))).append(defaultNewLine);
+
+        if (nextLineTabStop >= width)
+        {
+            // stops infinite loop happening
+            nextLineTabStop = 1;
+        }
+
+        // all following lines must be padded with nextLineTabStop space 
+        // characters
+        final String padding = createPadding(nextLineTabStop);
+
+        while (true)
+        {
+            text = padding + text.substring(pos).trim();
+            pos = findWrapPos(text, width, 0);
+
+            if (pos == -1)
+            {
+                sb.append(text);
+
+                return sb;
+            }
+            
+            if ((text.length() > width) && (pos == nextLineTabStop - 1))
+            {
+                pos = width;
+            }
+
+            sb.append(rtrim(text.substring(0, pos))).append(defaultNewLine);
         }
     }
+
+    /**
+     * Finds the next text wrap position after <code>startPos</code> for the
+     * text in <code>text</code> with the column width <code>width</code>.
+     * The wrap point is the last postion before startPos+width having a 
+     * whitespace character (space, \n, \r).
+     *
+     * @param text The text being searched for the wrap position
+     * @param width width of the wrapped text
+     * @param startPos position from which to start the lookup whitespace
+     * character
+     * @return postion on which the text must be wrapped or -1 if the wrap
+     * position is at the end of the text
+     */
+    protected int findWrapPos(String text, int width, int startPos)
+    {
+        int pos = -1;
+
+        // the line ends before the max wrap pos or a new line char found
+        if (((pos = text.indexOf('\n', startPos)) != -1 && pos <= width)
+                || ((pos = text.indexOf('\t', startPos)) != -1 && pos <= width))
+        {
+            return pos + 1;
+        }
+        else if (startPos + width >= text.length())
+        {
+            return -1;
+        }
+
+
+        // look for the last whitespace character before startPos+width
+        pos = startPos + width;
+
+        char c;
+
+        while ((pos >= startPos) && ((c = text.charAt(pos)) != ' ')
+                && (c != '\n') && (c != '\r'))
+        {
+            --pos;
+        }
+
+        // if we found it - just return
+        if (pos > startPos)
+        {
+            return pos;
+        }
+        
+        // must look for the first whitespace chearacter after startPos 
+        // + width
+        pos = startPos + width;
+
+        while ((pos <= text.length()) && ((c = text.charAt(pos)) != ' ')
+               && (c != '\n') && (c != '\r'))
+        {
+            ++pos;
+        }
+
+        return (pos == text.length()) ? (-1) : pos;
+    }
+
+    /**
+     * Return a String of padding of length <code>len</code>.
+     *
+     * @param len The length of the String of padding to create.
+     *
+     * @return The String of padding
+     */
+    protected String createPadding(int len)
+    {
+        StringBuffer sb = new StringBuffer(len);
+
+        for (int i = 0; i < len; ++i)
+        {
+            sb.append(' ');
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Remove the trailing whitespace from the specified String.
+     *
+     * @param s The String to remove the trailing padding from.
+     *
+     * @return The String of without the trailing padding
+     */
+    protected String rtrim(String s)
+    {
+        if ((s == null) || (s.length() == 0))
+        {
+            return s;
+        }
+
+        int pos = s.length();
+
+        while ((pos > 0) && Character.isWhitespace(s.charAt(pos - 1)))
+        {
+            --pos;
+        }
+
+        return s.substring(0, pos);
+    }
+
+    // ------------------------------------------------------ Package protected
+    // ---------------------------------------------------------------- Private
+    // ---------------------------------------------------------- Inner classes
+    /**
+     * This class implements the <code>Comparator</code> interface
+     * for comparing Options.
+     */
+    private static class OptionComparator implements Comparator
+    {
+
+        /**
+         * Compares its two arguments for order. Returns a negative
+         * integer, zero, or a positive integer as the first argument
+         * is less than, equal to, or greater than the second.
+         *
+         * @param o1 The first Option to be compared.
+         * @param o2 The second Option to be compared.
+         * @return a negative integer, zero, or a positive integer as
+         *         the first argument is less than, equal to, or greater than the
+         *         second.
+         */
+        public int compare(Object o1, Object o2)
+        {
+            Option opt1 = (Option) o1;
+            Option opt2 = (Option) o2;
+
+            return opt1.getKey().compareToIgnoreCase(opt2.getKey());
+        }
+    }
+
 }
