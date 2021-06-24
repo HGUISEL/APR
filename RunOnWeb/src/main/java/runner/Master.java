@@ -34,10 +34,6 @@ class Master {
 		String firstArguments="";
 		String secondArguments="";
 
-		System.out.println(args[0]);
-		System.out.println(args[1]);
-		// System.out.println(args[2]);
-
 		hash = args[0];
 
 	
@@ -53,7 +49,7 @@ class Master {
 			d4j_ID = temp[1];
 			firstArguments = args[2]; // ex) Math-34
 		}
-		else{
+		else{ // custom의 경우
 			String temp[] = args[2].split(",");
 			
 			project = temp[0];
@@ -67,18 +63,26 @@ class Master {
 			
 
 			temp = args[3].split(",");
-			// deal with the remainders
-			secondArguments = temp[0] + "," + temp[1] + "," + temp[2] + "," + temp[3] + "," + temp[4] + "," + temp[5] ;
+			sourceDir = temp[0];
+			targetDir = temp[1];
+			testList = temp[2];
+			testClassPath = temp[3];
+			compileClassPath = temp[4];
+			buildTool = temp[5];
+
+			secondArguments = sourceDir + "," + targetDir + "," + testList + "," + testClassPath + "," + compileClassPath + "," + buildTool ;
+			// secondArguments = args[3] //이렇게 해도 됨
 			
 			
 			
 
 		}
 
-		File myObj = new File("/home/aprweb/APR_Projects/APR/target/inputs.txt");
-    		
-		FileWriter myWriter = new FileWriter("/home/aprweb/APR_Projects/APR/target/inputs.txt");
-		myWriter.write(firstArguments + "\n" + secondArguments);
+		// to check the actual input from the web
+
+		// File myObj = new File("/home/aprweb/APR_Projects/APR/target/inputs.txt");  		
+		// FileWriter myWriter = new FileWriter("/home/aprweb/APR_Projects/APR/target/inputs.txt");
+		// myWriter.write(firstArguments + "\n" + secondArguments);
 
 
 
@@ -102,8 +106,9 @@ class Master {
 		build = new ProcessBuilder(list);
 		build.directory(new File("/home/aprweb/APR_Projects/APR"));
 
-		System.out.println("command: " + build.command()); 
-		myWriter.write("\n"+build.command());
+		// System.out.println("command: " + build.command()); 
+		// myWriter.write("\n"+build.command());
+
         Process run = build.start();
 		try{ run.waitFor(); }
 		catch(InterruptedException e){
@@ -125,8 +130,9 @@ class Master {
 		build = new ProcessBuilder(list);
 		build.directory(new File("/home/aprweb/APR_Projects/APR"));
 
-		System.out.println("command: " + build.command()); 
-		myWriter.write("\n"+build.command());
+		// System.out.println("command: " + build.command()); 
+		// myWriter.write("\n"+build.command());
+
         run = build.start();
 		try{ run.waitFor(); }
 		catch(InterruptedException e){
@@ -148,8 +154,9 @@ class Master {
 		build = new ProcessBuilder(list);
 		build.directory(new File("/home/aprweb/APR_Projects/APR"));
 
-		System.out.println("command: " + build.command());
-		myWriter.write("\n"+build.command()); 
+		// System.out.println("command: " + build.command());
+		// myWriter.write("\n"+build.command());
+
         run = build.start();
 		try{ run.waitFor(); }
 		catch(InterruptedException e){
@@ -167,8 +174,9 @@ class Master {
 		build = new ProcessBuilder(list);
 		build.directory(new File("/home/aprweb/APR_Projects/APR"));
 
-		System.out.println("command: " + build.command()); 
-		myWriter.write("\n"+build.command());
+		// System.out.println("command: " + build.command()); 
+		// myWriter.write("\n"+build.command());
+
         run = build.start();
 		try{ run.waitFor(); }
 		catch(InterruptedException e){
@@ -195,28 +203,17 @@ class Master {
 		build = new ProcessBuilder(list);
 		build.directory(new File("/home/aprweb/APR_Projects/APR"));
 
-		System.out.println("command: " + build.command()); 
+		// System.out.println("command: " + build.command());
+		// myWriter.write("\n"+build.command());
+
         run = build.start();
-
-		try {
-            final BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(run.getErrorStream()));
-            String line = null;
-            while ((line = reader.readLine()) != null) {
-                System.out.println(line);
-            }
-            reader.close();
-        } catch (final Exception e) {
-            e.printStackTrace();
-        }
-
 		try{ run.waitFor(); }
 		catch(InterruptedException e){
 			e.printStackTrace();
 		}
 
-		myWriter.write("\n"+build.command());
-		myWriter.close();
+
+		// myWriter.close();
 
 
 		return;

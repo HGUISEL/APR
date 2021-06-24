@@ -459,7 +459,6 @@ public class ConFix {
 		if (!compileCheck(patchFileName)) {
 			return COMPILE_ERROR;
 		} else {
-			System.out.println("============= compilation success ===========");
 			return testCheck();
 		}
 	}

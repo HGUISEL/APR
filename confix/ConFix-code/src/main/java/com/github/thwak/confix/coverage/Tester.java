@@ -61,7 +61,7 @@ public class Tester {
 			try {
 				executor.execute(command);
 				// TE
-				if (true)
+				if (DEBUG)
 					System.out.println(out.toString());
 			} catch (ExecuteException e) {
 				System.err.println("Exit Value:" + e.getExitValue());

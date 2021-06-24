@@ -49,8 +49,11 @@ def main(argv):
         os.system("export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64 ;"
                 + "export PATH=$JAVA_HOME/bin:$PATH")
 
-    # build change-vector-collector if necessary
-    # os.system( "cd "+root+"/pool/change_vector_collector ; "
+    ## build change-vector-collector if necessary
+    ## need to change java version to 11 in this command to build successfully 
+    # os.system( "export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64 ;"
+    #         +  "export PATH=$JAVA_HOME/bin:$PATH ; "
+    #         +  "cd "+root+"/pool/change_vector_collector ; "
     #         +  "rm -rf ./build/distributions/* ; "
     #         +  "/usr/bin/gradle clean distzip ; " ##
     #         +  "cd ./build/distributions ; "
@@ -69,8 +72,8 @@ def main(argv):
 
 
 
-## CVC 작동 안해서 안되서 우회하는 코드 
-    if is_D4J == True: ## and (project == "Math" or project == "Time" or project == "Closure"):
+## CVC 작동 안될때 기존 데이터 사용하는 코드(Defects4J만!)  
+    if False: #is_D4J == True
         real_project = real_projects[projects.index(project)]
         cheat_data_index=0
         cheat_df = pd.read_csv(root+"/pool/outputs/change_vector_collector/Y_"+real_project+".csv", names=[ "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12" ])
