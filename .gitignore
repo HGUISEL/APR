@@ -194,3 +194,12 @@ venv/
 venv2/
 venv3/
 
+# text files for logging and overall inputs
+*.txt
+
+# original files saved for developing
+*.original
+
+# target folder which stores resulted simonfix executions
+target/
+
