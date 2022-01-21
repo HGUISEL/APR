@@ -24,6 +24,7 @@ public class PatchInfo {
 	}
 
 	public String getConcretize() {
+		System.out.println("Debug.log: PatchInfo.getConcretize()");
 		StringBuffer sb = new StringBuffer();
 		for(String str : cMethods) {
 			sb.append(",");

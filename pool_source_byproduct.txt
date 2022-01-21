@@ -1,0 +1,119 @@
+Preparing pool source...
+mkdir: cannot create directory ‘/home/codemodel/hans/APR/target/1000’: File exists
+Generating patch #1...
+> Project      : manifoldcf
+> Int.Commit   : a242e0bf07739101c28362ed3fa3520a9944b3b4
+> Path         : connectors/sharepoint/connector/src/main/java/org/apache/manifoldcf/crawler/connectors/sharepoint/SPSProxyHelper.java
+Previous HEAD position was 7ba89b4bb Final fix for CONNECTORS-1035.  Pull up partial fixes from trunk CONNECTORS-1085 changes, with the goal of getting axis to run with the same classloader as the connectors.
+HEAD is now at a242e0bf0 Move axis entirely to a core service; still need to look at Meridio connector for this
+> Fix.Commit   : 7ba89b4bb324a3e77841025a1759b9c1edc3ab2d
+> Path         : connectors/sharepoint/connector/src/main/java/org/apache/manifoldcf/crawler/connectors/sharepoint/SPSProxyHelper.java
+Previous HEAD position was a242e0bf0 Move axis entirely to a core service; still need to look at Meridio connector for this
+HEAD is now at 7ba89b4bb Final fix for CONNECTORS-1035.  Pull up partial fixes from trunk CONNECTORS-1085 changes, with the goal of getting axis to run with the same classloader as the connectors.
+
+Generating patch #2...
+> Project      : felix
+> Int.Commit   : 7dbf182637610b8786f4ca0c6d8a963bfdbc17e8
+> Path         : sigil/common/core/src/org/apache/felix/sigil/core/util/QuoteUtil.java
+Previous HEAD position was 49cd4592fb use shared util method to read Manifest from ZipFiles (FELIX-2527)
+HEAD is now at 7dbf182637 tidy up common packages to use common prefix (FELIX-2504)
+cp: cannot stat 'sigil/common/core/src/org/apache/felix/sigil/core/util/QuoteUtil.java': No such file or directory
+> Fix.Commit   : 49cd4592fbcfa65fc916387663a5db8d699d63d6
+> Path         : sigil/common/core/src/org/apache/felix/sigil/common/core/util/QuoteUtil.java
+Previous HEAD position was 7dbf182637 tidy up common packages to use common prefix (FELIX-2504)
+HEAD is now at 49cd4592fb use shared util method to read Manifest from ZipFiles (FELIX-2527)
+cp: cannot stat 'sigil/common/core/src/org/apache/felix/sigil/common/core/util/QuoteUtil.java': No such file or directory
+
+Generating patch #3...
+> Project      : myfaces
+> Int.Commit   : 1da4bd13f2c2e023b5e5f1cbd8d267a3686779c8
+> Path         : impl/src/main/java/org/apache/myfaces/view/facelets/tag/TagAttributeImpl.java
+Previous HEAD position was 6b8ad4860 MYFACES-2561 StackOverflowError if a composite component implementation uses another composite component
+HEAD is now at 1da4bd13f MYFACES-2334 - first set of fixes
+> Fix.Commit   : 6b8ad4860b04ae21769c83f5deed610451ae2257
+> Path         : impl/src/main/java/org/apache/myfaces/view/facelets/tag/TagAttributeImpl.java
+Previous HEAD position was 1da4bd13f MYFACES-2334 - first set of fixes
+HEAD is now at 6b8ad4860 MYFACES-2561 StackOverflowError if a composite component implementation uses another composite component
+
+Generating patch #4...
+> Project      : geode
+> Int.Commit   : 1e985eb14b8634ce870e094f0d50bb12aec475aa
+> Path         : geode-core/src/main/java/com/gemstone/gemfire/admin/internal/EnabledManagedEntityController.java
+Previous HEAD position was b5ed093507 GEODE-1377: Renaming of DistributedSystemConfigProperties to ConfigurationProperties
+HEAD is now at 1e985eb14b GEODE-1377: Renaming SystemConfigurationProperties to DistributedSystemConfigProperties
+> Fix.Commit   : b5ed093507a3a48fdd1f5cc556656b7cbb902f55
+> Path         : geode-core/src/main/java/com/gemstone/gemfire/admin/internal/EnabledManagedEntityController.java
+Previous HEAD position was 1e985eb14b GEODE-1377: Renaming SystemConfigurationProperties to DistributedSystemConfigProperties
+HEAD is now at b5ed093507 GEODE-1377: Renaming of DistributedSystemConfigProperties to ConfigurationProperties
+
+Generating patch #5...
+> Project      : geode
+> Int.Commit   : 2cb5f92b1764228d13496be6f2bbb1fdeb112273
+> Path         : geode-assembly/src/test/java/org/apache/geode/test/dunit/rules/RequiresGeodeHome.java
+Previous HEAD position was b5ed093507 GEODE-1377: Renaming of DistributedSystemConfigProperties to ConfigurationProperties
+HEAD is now at 2cb5f92b17 GEODE-3618: Move GfshRule into geode-junit
+cp: cannot stat 'geode-assembly/src/test/java/org/apache/geode/test/dunit/rules/RequiresGeodeHome.java': No such file or directory
+> Fix.Commit   : e9ef672b1729b158b2c1ad0378a6321b13975301
+> Path         : geode-junit/src/main/java/org/apache/geode/test/rules/RequiresGeodeHome.java
+Previous HEAD position was 2cb5f92b17 GEODE-3618: Move GfshRule into geode-junit
+HEAD is now at e9ef672b17 GEODE-3686: move junit rules to correct packages
+cp: cannot stat 'geode-junit/src/main/java/org/apache/geode/test/rules/RequiresGeodeHome.java': No such file or directory
+
+Generating patch #6...
+> Project      : ignite
+> Int.Commit   : afa29526589b01ea16d826182cb01fb64bacd5fb
+> Path         : modules/core/src/main/java/org/apache/ignite/fs/IgniteFsGroupDataBlocksKeyMapper.java
+Previous HEAD position was a2f138bff0 # IGNITE-226: WIP.
+HEAD is now at afa2952658 sprint-1 - Renaming and moving ignitefs classes.
+cp: cannot stat 'modules/core/src/main/java/org/apache/ignite/fs/IgniteFsGroupDataBlocksKeyMapper.java': No such file or directory
+> Fix.Commit   : a2f138bff046c23cf9eeb0cb703779909da8028f
+> Path         : modules/core/src/main/java/org/apache/ignite/ignitefs/IgfsGroupDataBlocksKeyMapper.java
+Previous HEAD position was afa2952658 sprint-1 - Renaming and moving ignitefs classes.
+HEAD is now at a2f138bff0 # IGNITE-226: WIP.
+cp: cannot stat 'modules/core/src/main/java/org/apache/ignite/ignitefs/IgfsGroupDataBlocksKeyMapper.java': No such file or directory
+
+Generating patch #7...
+> Project      : geode
+> Int.Commit   : 1e985eb14b8634ce870e094f0d50bb12aec475aa
+> Path         : geode-core/src/main/java/com/gemstone/gemfire/internal/tcp/Connection.java
+Previous HEAD position was e9ef672b17 GEODE-3686: move junit rules to correct packages
+HEAD is now at 1e985eb14b GEODE-1377: Renaming SystemConfigurationProperties to DistributedSystemConfigProperties
+> Fix.Commit   : b5ed093507a3a48fdd1f5cc556656b7cbb902f55
+> Path         : geode-core/src/main/java/com/gemstone/gemfire/internal/tcp/Connection.java
+Previous HEAD position was 1e985eb14b GEODE-1377: Renaming SystemConfigurationProperties to DistributedSystemConfigProperties
+HEAD is now at b5ed093507 GEODE-1377: Renaming of DistributedSystemConfigProperties to ConfigurationProperties
+
+Generating patch #8...
+> Project      : mina
+> Int.Commit   : 15f21ec65c1fcaa4771be07307592c4e361a61e9
+> Path         : core/src/main/java/org/apache/mina/filter/ReadThrottleFilterBuilder.java
+Previous HEAD position was 957d6c95b Resolved issue: DIRMINA-245 (MINA does not fire read events) Resolved issue: DIRMINA-260 (Utilize backport-util-concurrent Executor) * Renamed: ** ThreadPoolFilter -> ExecutorFilter ** PooledThreadModel -> ExecutorThreadModel ** org.apache.mina.filter.thread -> org.apache.mina.filter.executor
+HEAD is now at 15f21ec65 Renamed org.apache.mina.filter.thread to org.apache.mina.filter.executor
+> Fix.Commit   : 957d6c95b0134453429123aca46ed79bce6a8a0f
+> Path         : core/src/main/java/org/apache/mina/filter/ReadThrottleFilterBuilder.java
+Previous HEAD position was 15f21ec65 Renamed org.apache.mina.filter.thread to org.apache.mina.filter.executor
+HEAD is now at 957d6c95b Resolved issue: DIRMINA-245 (MINA does not fire read events) Resolved issue: DIRMINA-260 (Utilize backport-util-concurrent Executor) * Renamed: ** ThreadPoolFilter -> ExecutorFilter ** PooledThreadModel -> ExecutorThreadModel ** org.apache.mina.filter.thread -> org.apache.mina.filter.executor
+
+Generating patch #9...
+> Project      : mina-sshd
+> Int.Commit   : a6e2bf9e4e6f71bde5519085150109799724b579
+> Path         : sshd-core/src/main/java/org/apache/sshd/client/sftp/SftpPath.java
+Previous HEAD position was e3b8acd7 [SSHD-861] Added SftpFileSystemClientSessionInitializer hook in SftpFileSystemProvider
+HEAD is now at a6e2bf9e [SSHD-509] Use targeted derived NamedFactory(ies) for the various generic parameters
+cp: cannot stat 'sshd-core/src/main/java/org/apache/sshd/client/sftp/SftpPath.java': No such file or directory
+> Fix.Commit   : e3b8acd7e068fdc586f1f825eb675a335eb42824
+> Path         : sshd-sftp/src/main/java/org/apache/sshd/client/subsystem/sftp/SftpPath.java
+Previous HEAD position was a6e2bf9e [SSHD-509] Use targeted derived NamedFactory(ies) for the various generic parameters
+HEAD is now at e3b8acd7 [SSHD-861] Added SftpFileSystemClientSessionInitializer hook in SftpFileSystemProvider
+cp: cannot stat 'sshd-sftp/src/main/java/org/apache/sshd/client/subsystem/sftp/SftpPath.java': No such file or directory
+
+Generating patch #10...
+> Project      : commons-digester
+> Int.Commit   : 3b8978249b76c791685939068ad6221b54db3d07
+> Path         : src/java/org/apache/commons/digester/xmlrules/DigesterRuleParser.java
+Previous HEAD position was 56bfa1db Eliminate [collections] package dependencies -- ArrayStack, and therefore Buffer and BufferUnderflowException:  - Replace ArrayStack usage with java.util.Stack<E>  - This will allow BeanUtils to drop these classes in future releases if desired and end a rather painful tangle we got into with v1.x in this regard  - Allows usage of generics (unlike ArrayStack) DIGESTER-115
+HEAD is now at 3b897824 Merged in release branch
+> Fix.Commit   : 56bfa1db0aa2e27f8944d207e2035a957029a1d7
+> Path         : src/java/org/apache/commons/digester/xmlrules/DigesterRuleParser.java
+Previous HEAD position was 3b897824 Merged in release branch
+HEAD is now at 56bfa1db Eliminate [collections] package dependencies -- ArrayStack, and therefore Buffer and BufferUnderflowException:  - Replace ArrayStack usage with java.util.Stack<E>  - This will allow BeanUtils to drop these classes in future releases if desired and end a rather painful tangle we got into with v1.x in this regard  - Allows usage of generics (unlike ArrayStack) DIGESTER-115

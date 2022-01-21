@@ -1,0 +1,10 @@
+https://github.com/turbstructor/gradleTest-Increment
+23b961563828fae21b2da1336478692eb65eec58
+app/src/main/java/gradleTest/Increment/App.java
+30
+app/src/main
+app/build/classes/java
+gradleTest.Increment.AppTest
+app/build/classes/java/main:app/build/classes/java/test
+app/build/classes/java/main
+gradle
