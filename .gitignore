@@ -203,3 +203,5 @@ venv3/
 # target folder which stores resulted simonfix executions
 target/
 
+# ??? what is this folder
+outputs/
