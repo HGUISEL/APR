@@ -59,7 +59,7 @@ def main(argv):
     ## build confix and move it to the library
     os.system("cd ./confix/ConFix-code ;"
             + "mvn clean package ;"
-            + "cp target/confix-0.0.1-SNAPSHOT-jar-with-dependencies.jar /home/aprweb/APR_Projects/APR/confix/lib/confix-ami_torun.jar")
+            + "cp target/confix-0.0.1-SNAPSHOT-jar-with-dependencies.jar /home/codemodel/hans/APR/confix/lib/confix-ami_torun.jar")
 
 
 
@@ -121,46 +121,59 @@ def main(argv):
 
         if buildTool == "gradle" or buildTool == "Gradle":
             os.system("cd "+target_dir+" ; "
-                    + "/home/aprweb/paths/gradle-6.8.3/bin/gradle build")
-            print("are you in?")
+                    + "/home/codemodel/hans/paths/gradle-6.8.3/bin/gradle build")
+            # print("are you in?")
 
         elif buildTool == "maven" or buildTool == "Maven" or buildTool == "mvn":
             os.system("cd "+target_dir+" ; "
-                    + "/home/aprweb/paths/apache-maven-3.6.3/bin/mvn compile")
+                    + "/home/codemodel/paths/apache-maven-3.8.3/bin/mvn compile")
 
-    print("Finish config!!")
+    print("Configuration finished.")
 
+    print("Executing ConFix...")
 
     # os.system("cd "+target_dir+" ; "
     #             + root+"/confix/scripts/confix.sh . >>log.txt 2>&1")
+    print("cd "+target_dir+" ; "
+            + "/usr/lib/jvm/java-8-openjdk-amd64/bin/java "
+            # + "java "
+            + "-Xmx4g -cp ../../../confix/lib/las.jar:../../../confix/lib/confix-ami_torun.jar "
+            + "-Duser.language=en -Duser.timezone=America/Los_Angeles com.github.thwak.confix.main.ConFix "
+            + "> log.txt")
     os.system("cd "+target_dir+" ; "
             + "/usr/lib/jvm/java-8-openjdk-amd64/bin/java "
             # + "java "
             + "-Xmx4g -cp ../../../confix/lib/las.jar:../../../confix/lib/confix-ami_torun.jar "
             + "-Duser.language=en -Duser.timezone=America/Los_Angeles com.github.thwak.confix.main.ConFix "
             + "> log.txt")
-    print("Finish confix!!")
+    print("ConFix Execution Finished.")
 
 
     os.system("echo \"end\" >> "+ just_target+"/status.txt")
+
+
+    if not os.path.isfile(target_dir + "/patches/0/" + perfect_faulty_path):
+        print("ConFix failed to generate plausible patch.")
+        sys.exit(-63)
 
     # os.system("cd /home/aprweb/ ; "
     #         + "git diff "+target_dir+"/patches/0/"+perfect_faulty_path
     #                 + " "+target_dir+ "/" + perfect_faulty_path
     #                 + " > "+just_target+"/diff_file.txt")
 
-    git_stream = os.popen("cd ~ ; "
-                        + "git diff "+target_dir+ "/" + perfect_faulty_path
-                                + " "+target_dir+"/patches/0/"+perfect_faulty_path)
+    else:
+        git_stream = os.popen("cd ~ ; "
+                            + "git diff "+target_dir+ "/" + perfect_faulty_path
+                                    + " "+target_dir+"/patches/0/"+perfect_faulty_path)
 
-    foo = str(git_stream.read()).split('\n')
+        foo = str(git_stream.read()).split('\n')
 
-    os.system("echo \"diff --git a a\" > "+just_target+"/diff_file.txt")
-    os.system("echo \"--- "+perfect_faulty_path+"\" >> "+just_target+"/diff_file.txt")
-    os.system("echo \"+++ "+perfect_faulty_path+"\" >> "+just_target+"/diff_file.txt")
-    
-    for i in range(4, len(foo)):
-        os.system("echo \""+foo[i]+"\" >> "+just_target+"/diff_file.txt")
+        os.system("echo \"diff --git a a\" > "+just_target+"/diff_file.txt")
+        os.system("echo \"--- "+perfect_faulty_path+"\" >> "+just_target+"/diff_file.txt")
+        os.system("echo \"+++ "+perfect_faulty_path+"\" >> "+just_target+"/diff_file.txt")
+        
+        for i in range(4, len(foo)):
+            os.system("echo \""+foo[i]+"\" >> "+just_target+"/diff_file.txt")
 
 
 

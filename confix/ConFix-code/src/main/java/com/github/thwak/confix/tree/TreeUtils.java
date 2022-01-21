@@ -349,6 +349,7 @@ public class TreeUtils {
 	}
 
 	public static ASTNode generateNode(Node n, AST ast){
+		System.out.println("=========== Debug.log: generateNode() =========\n\n");
 		ASTNode astNode = ast.createInstance(n.type);
 		if(astNode instanceof SimpleName
 				|| astNode instanceof QualifiedName){

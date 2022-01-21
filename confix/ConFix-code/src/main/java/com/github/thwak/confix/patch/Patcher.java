@@ -167,13 +167,13 @@ public class Patcher {
 				break;
 			case Change.UPDATE:
 				if (cStrategy.instCheck(change, loc)) {
-					ASTNode astNode = cStrategy.instantiate(change, loc, info);
+					ASTNode astNode = cStrategy.instantiate(change, loc, info); // 1
 					if (astNode == null) {
+						System.out.println("astNode is null");
 						return C_NOT_INST;
 					}
-					RepairAction repair = new RepairAction(Change.UPDATE, loc, getCode(loc.node), astNode.toString(),
-							change);
-					update(loc, astNode);
+					RepairAction repair = new RepairAction(Change.UPDATE, loc, getCode(loc.node), astNode.toString(), change);
+					update(loc, astNode); // 2
 					info.repairs.add(repair);
 					returnCode = C_APPLIED;
 				} else {
@@ -181,24 +181,24 @@ public class Patcher {
 				}
 				break;
 			case Change.REPLACE:
-				//System.out.println("\n\n======= Start Applying Replace operation ======");
+				System.out.println("\n\n======= Start Applying Replace operation ======");
 				editHash = TreeUtils.getTypeHash(change.node);
 				locHash = TreeUtils.getTypeHash(loc.node);
-				//System.out.println("	1. Edit Hash: " + editHash);
-				//System.out.println("	2. Location Hash: " + locHash);
+				System.out.println("	1. Edit Hash: " + editHash);
+				System.out.println("	2. Location Hash: " + locHash);
 
 				// TE 여기 조지기!!!!!
 				// lalalalalalalala
-				// 위치의 context, 즉 hash가 적용하려는 change가 요구하는 context, 즉 hash오ㅘ 일치하는지 판단하는 부분
+				// 위치의 context, 즉 hash가 적용하려는 change가 요구하는 context, 즉 hash와 일치하는지 판단하는 부분
 				if (editHash.equals(locHash) && cStrategy.instCheck(change, loc)) {
 					ASTNode astNode = cStrategy.instantiate(change, loc, info);
 					System.out.println("	3. Patch Info(collected methods): " + info.cMethods.size());
-					// info.cMethods.forEach(method -> {
-					// System.out.println(" method: " + method);
-					// });
+					info.cMethods.forEach(method -> {
+					System.out.println(" method: " + method);
+					});
 
 					if (astNode == null) {
-						//System.out.println("======= End Applying Replace operation with code C_NOT_INST\n\n");
+						System.out.println("======= End Applying Replace operation with code C_NOT_INST\n\n");
 						return C_NOT_INST;
 					}
 
@@ -229,17 +229,25 @@ public class Patcher {
 		importNames = getImportNames(importNames, cu.imports());
 		ListRewrite lrw = rewrite.getListRewrite(cu, CompilationUnit.IMPORTS_PROPERTY);
 		AST ast = cu.getAST();
+		int counter = 0; // DEBUG
+		if(importNames.size() <= 0) System.out.println("Debug.log : importNames length = 0");
 		for (String importName : importNames) {
+			System.out.println("======= Debug.log : import name #"+counter+" :: "+importName+" =======\n\n");
 			ImportDeclaration decl = ast.newImportDeclaration();
 			decl.setName(ast.newName(importName));
 			lrw.insertLast(decl, null);
+			counter++;
 		}
 	}
 
 	private Set<String> getImportNames(Set<String> imports, List<ImportDeclaration> importDecls) {
 		HashSet<String> importNames = new HashSet<>(imports);
+		int count = 0;
+		if(importNames.size() <= 0) System.out.println("Debug.log : importNames length = 0");
 		for (ImportDeclaration importDecl : importDecls) {
+			System.out.println("======= Debug.log : getImport name #"+count+" :: "+importDecl.getName()+" =======\n\n");
 			importNames.remove(importDecl.getName().getFullyQualifiedName());
+			count++;
 		}
 		return importNames;
 	}

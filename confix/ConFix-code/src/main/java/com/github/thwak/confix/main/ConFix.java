@@ -34,7 +34,8 @@ import com.github.thwak.confix.util.IOUtils;
 
 public class ConFix {
 
-	private static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("confix.debug", "false"));
+	// private static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("confix.debug", "false"));
+	private static final boolean DEBUG = true;
 	public static final int PASS = 0;
 	public static final int COMPILE_ERROR = 1;
 	public static final int TEST_FAILURE = 2;
@@ -171,6 +172,7 @@ public class ConFix {
 				// pStrategy.finishUpdate();
 				// IOUtils.storeContent("coveredlines.txt", pStrategy.getLineInfo());
 				// continue ;
+
 				break;
 			}
 
@@ -464,15 +466,15 @@ public class ConFix {
 	}
 
 	public static boolean compileCheck(String patchFileName) {
-		// System.out.print("\n================= 3. Compilation ===================\n");
-		// System.out.print("\n ================= 3-1. Compile Info ============\n");
-		// System.out.print("\n 1. patchFileName : " + patchFileName);
-		// System.out.print("\n 2. tempDir : " + tempDir);
-		// System.out.print("\n 3. compileClassPath : " + compileClassPath);
-		// System.out.print("\n 4. Java version : " + version);
-		// System.out.print("\n 5. JVM : " + jvm);
-		// System.out.print("\n 6. System JVM : " + System.getProperty("java.version"));
-		// System.out.print("\n ================================================\n");
+		System.out.print("\n================= 3. Compilation ===================\n");
+		System.out.print("\n ================= 3-1. Compile Info ============\n");
+		System.out.print("\n 1. patchFileName : " + patchFileName);
+		System.out.print("\n 2. tempDir : " + tempDir);
+		System.out.print("\n 3. compileClassPath : " + compileClassPath);
+		System.out.print("\n 4. Java version : " + version);
+		System.out.print("\n 5. JVM : " + jvm);
+		System.out.print("\n 6. System JVM : " + System.getProperty("java.version"));
+		System.out.print("\n ================================================\n");
 
 		File patchFile = new File(patchFileName);
 		Compiler compiler = new Compiler();
@@ -480,17 +482,17 @@ public class ConFix {
 			boolean error = compiler.compile(patchFile, tempDir, compileClassPath, version, version);
 			if (error) {
 				System.out.println(" - no exception Compile error.");
-				// System.out.println("\n====================================================\n");
+				System.out.println("\n====================================================\n");
 				return false;
 			}
 		} catch (Exception e) {
 			// TE
-			// e.printStackTrace(System.out);
+			e.printStackTrace(System.out);
 			System.out.println(" - Compile error.");
-			// System.out.println("\n====================================================\n");
+			System.out.println("\n====================================================\n");
 			return false;
 		}
-		// System.out.println("\n====================================================\n");
+		System.out.println("\n====================================================\n");
 		return true;
 
 	}

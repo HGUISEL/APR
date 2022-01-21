@@ -74,14 +74,25 @@ def main(argv):
         rec_BIC_path = code_dir+"/"+y_project+"_rank-"+rank+"_old.java"
         rec_BFC_path = code_dir+"/"+y_project+"_rank-"+rank+"_new.java"
 
-        os.system("cd /data/APR_Data/repositories/"+yhat_project+" ; "
+        print("Generating patch #{}...".format(rank))
+        print("> Project      : {}".format(yhat_project))
+        print("> Int.Commit   : {}".format(yhat_bic_sha))
+        print("> Path         : {}".format(yhat_bic_path))
+
+        # os.system("cd /data/codemodel/repositories/"+yhat_project+" ; " + 'su aprweb -c "/usr/bin/git checkout -f '+yhat_bic_sha+'" ; ' + "cp "+yhat_bic_path+" "+rec_BIC_path+" ; ")
+        os.system("cd /data/codemodel/repositories/"+yhat_project+" ; "
                 + "git checkout -f "+yhat_bic_sha+" ; "
                 + "cp "+yhat_bic_path+" "+rec_BIC_path+" ; ")
 
-        os.system("cd /data/APR_Data/repositories/"+yhat_project + " ; "
+        print("> Fix.Commit   : {}".format(yhat_bfc_sha))
+        print("> Path         : {}".format(yhat_bfc_path))
+
+        # os.system("cd /data/codemodel/repositories/"+yhat_project + " ; " + 'su aprweb -c "/usr/bin/git checkout -f '+yhat_bfc_sha+'" ; ' + "cp "+yhat_bfc_path+" "+rec_BFC_path+" ; ")
+        os.system("cd /data/codemodel/repositories/"+yhat_project + " ; "
                 + "git checkout -f "+yhat_bfc_sha+" ; "
-                + "cp "+yhat_bfc_path+" "+rec_BFC_path+" ; " )
-        
+                + "cp "+yhat_bfc_path+" "+rec_BFC_path+" ; ")
+
+        print()
 
     os.system("echo \"Finished collecting source code to prepare pool to fix your bug\" >> "+target_dir+"/status.txt")
 

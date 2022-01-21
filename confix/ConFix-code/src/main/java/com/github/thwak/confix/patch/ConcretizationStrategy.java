@@ -50,7 +50,7 @@ import com.github.thwak.confix.tree.TreeUtils;
 
 public class ConcretizationStrategy {
 
-	protected static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("confix.debug", "false"));
+	protected static final boolean DEBUG = true;//Boolean.parseBoolean(System.getProperty("confix.debug", "false"));
 	public static final int UPD_SIM_WEIGHT = 10;
 	private static final String C_METHOD_TC = "type-compatible";
 	public Materials global;
@@ -62,6 +62,7 @@ public class ConcretizationStrategy {
 	public int simpleNameListIndex;
 
 	public ConcretizationStrategy(Random r) {
+		System.out.println("========== Debug.log: ConcretizationStrategy instantiated ==========\n\n");
 		global = new Materials();
 		materials = new Materials();
 		this.r = r;
@@ -174,6 +175,7 @@ public class ConcretizationStrategy {
 				IVariableBinding vb = vdf.resolveBinding();
 				// If it is a local variable declaration.
 				if (Materials.isLocal(vb)) {
+					System.out.println("=========== Debug.log: if it is a local variable declaration ===========\n\n");
 					ITypeBinding tb = vb.getType();
 					VariableType type = MVTManager.generateType(tb);
 					String varName = vdf.getName().getIdentifier();
@@ -195,7 +197,7 @@ public class ConcretizationStrategy {
 
 						// System.out.println("here");
 						for (IMethodBinding mb : tb.getDeclaredMethods()) {
-							// System.out.println(mb.getName());
+							System.out.println("========= Debug.log: "+mb.getName()+" ===========\n\n");
 							if (Modifier.isPublic(mb.getModifiers()) && !Modifier.isStatic(mb.getModifiers())
 									&& !mb.isConstructor()) {
 								materials.addMethod(mb);
@@ -502,12 +504,14 @@ public class ConcretizationStrategy {
 	 * @return an instance of {@code ASTNode} can be used to modify an AST.
 	 */
 	public ASTNode instantiate(Change c, TargetLocation loc, PatchInfo info) {
-		// System.out.println("==========================================");
-		// System.out.println("c.node.type: " + c.node.type);
-		// System.out.println("loc.node.type: " + loc.node.type);
-		// System.out.println("c.node.kind: " + c.node.kind);
-		// System.out.println("loc.node.kind: " + loc.node.kind);
-		// System.out.println("==========================================");
+		// DEBUG
+		System.out.println("================== INSTANTIATE ========================");
+		System.out.println("c.node.type: " + c.node.type);
+		System.out.println("loc.node.type: " + loc.node.type);
+		System.out.println("c.node.kind: " + c.node.kind);
+		System.out.println("loc.node.kind: " + loc.node.kind);
+		System.out.println("==========================================");
+		
 		info.cMethods.add(C_METHOD_TC);
 		// If the change is an update in intermediate node,
 		// copy all values from loc except for updated value.
@@ -587,16 +591,16 @@ public class ConcretizationStrategy {
 			} else {
 				for (String absSignature : reqs.methods.keySet()) {
 					Set<Method> cMethods = reqs.methods.get(absSignature);
-					// System.out.print("methods null? : ");
-					// System.out.println((materials.methods == null));
-					// System.out.print("\n\n====== Traverse Methods =====");
-					// System.out.print(materials.methods.size());
+					System.out.print("methods null? : ");
+					System.out.println((materials.methods == null));
+					System.out.print("\n\n====== Traverse Methods =====");
+					System.out.print(materials.methods.size());
 					for (String key : materials.methods.keySet()) {
 						Set<Method> mtd = materials.methods.get(key);
-						// System.out.println(key);
-						// // mtd.forEach(m -> {
-						// // System.out.println(" Value : " + m.toString());
-						// // });
+						System.out.println(key);
+						mtd.forEach(m -> {
+							System.out.println(" Value : " + m.toString());
+						});
 					}
 					System.out.print("====== End Traversing Methods =====\n\n");
 					Set<Method> locMethods = new HashSet<>(materials.methods.get(absSignature));
@@ -994,10 +998,15 @@ public class ConcretizationStrategy {
 		// newloc.node.label = c.location.label;
 		// newloc.node.value = c.location.value;
 
-		if(c.location.label.contains("fixExpression"))
+		if(c.location.label.contains("fixExpression")){
+			System.out.println("Debug.log: fixExpression");
 			astNode = TreeUtils.generateNode(copied, ast, loc.node);
+		}
 		else
+		{
+			System.out.println("Debug.log: not fixExpression");
 			astNode = TreeUtils.generateNode(copied,ast);
+		}
 		// astNode = TreeUtils.generateNode(copied, ast);
 		return astNode;
 	}
