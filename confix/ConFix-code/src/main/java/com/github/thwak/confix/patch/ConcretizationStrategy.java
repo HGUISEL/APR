@@ -380,10 +380,13 @@ public class ConcretizationStrategy {
 	 *         information in {@code loc}, {@code false} otherwise.
 	 */
 	public boolean instCheck(Change change, TargetLocation loc) {
-		// System.out.println("\n		===== instCheck Begins =====");
-		// System.out.println("	" + change.toString());
+		// DEBUG
+		System.out.println("\n		===== instCheck Begins =====");
+		System.out.println("1	" + change.toString());
+		System.out.println("2	" + loc.toString());
 
 		if (change.type.equals(Change.UPDATE) && change.node.type == loc.node.type && change.node.children.size() > 0) {
+			System.out.println("======== change.type.equals(Change.UPDATE) && change.node.type == loc.node.type && change.node.children.size() > 0 = TRUE =========\n\n");
 			if (change.node.hashString == null) {
 				change.node.hashString = TreeUtils.getTypeHash(change.node);
 			}

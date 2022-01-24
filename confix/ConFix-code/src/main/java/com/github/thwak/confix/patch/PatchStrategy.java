@@ -234,6 +234,7 @@ public class PatchStrategy {
 	}
 
 	public TargetLocation selectLocation() {
+		System.out.println("Check if contains key"); // DEBUG
 		if (currLocIndex < locations.size()) {
 			LocEntry e = locations.get(currLocIndex);
 			// TE

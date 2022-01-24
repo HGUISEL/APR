@@ -166,6 +166,7 @@ public class Patcher {
 				}
 				break;
 			case Change.UPDATE:
+				System.out.println("Operation UPDATE - start instantiating"); // DEBUG
 				if (cStrategy.instCheck(change, loc)) {
 					ASTNode astNode = cStrategy.instantiate(change, loc, info); // 1
 					if (astNode == null) {
@@ -176,8 +177,10 @@ public class Patcher {
 					update(loc, astNode); // 2
 					info.repairs.add(repair);
 					returnCode = C_APPLIED;
+					System.out.println("Applied"); // DEBUG
 				} else {
 					returnCode = C_NOT_APPLIED;
+					System.out.println("NOT Applied"); // DEBUG
 				}
 				break;
 			case Change.REPLACE:
