@@ -280,7 +280,13 @@ public class ConFix {
 						}
 						candidateNum++;
 						if (candidateNum > patchCount || result == TEST_TIMEOUT || result == BREAK_FUNC
-								|| !candidates.add(editText)){}
+								|| !candidates.add(editText)){
+									System.out.print("\n\n[Debug.log]: condition counting on candidate #"+candidateNum+" ... ");
+									if(candidateNum > patchCount) System.out.println("[Debug.log][candidateNum > patchCount]");
+									if(result == TEST_TIMEOUT) System.out.println("[Debug.log][result == TEST_TIMEOUT]");
+									if(result == BREAK_FUNC) System.out.println("[Debug.log][result == BREAK_FUNC]");
+									if(!candidates.add(editText)) System.out.println("[Debug.log][!candidates.add(editText)]");
+								}
 							// break;
 					} else if (returnCode == Patcher.C_NO_FIXLOC) {
 						break;

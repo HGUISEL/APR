@@ -519,7 +519,7 @@ public class ConcretizationStrategy {
 		// If the change is an update in intermediate node,
 		// copy all values from loc except for updated value.
 		if (c.type.equals(Change.UPDATE) && c.node.children.size() > 0) {
-			// System.out.println("inter!!!");
+			System.out.println("[Debug.log]: updateIntermediate on line 522 of cStrategy");
 			return updateIntermediate(c, loc);
 		}
 
@@ -532,7 +532,7 @@ public class ConcretizationStrategy {
 
 		// Assign methods.
 		if (reqs.methods.size() > 0) {
-		// System.out.println("Method");
+		System.out.println("\n[Debug.log]: Instantiate Method");
 			
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == loc.node.kind) {
 				for (Set<Method> cMethods : reqs.methods.values()) {
@@ -637,7 +637,7 @@ public class ConcretizationStrategy {
 
 		// For variable updates, match variable types.
 		if (c.type.equals(Change.UPDATE) && c.node.kind == Node.K_VARIABLE) {
-			System.out.println("Variable");
+			System.out.println("\n[Debug.log]: Assign Variable");
 			if (c.requirements.variables.size() == 1) {
 				VariableType t = (VariableType) c.requirements.variables.keySet().toArray()[0];
 				if (!t.isJSL) {
@@ -656,7 +656,7 @@ public class ConcretizationStrategy {
 		// Assign types.
 		VariableType t = null;
 		if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == Node.K_TYPE) {
-			System.out.println("Type");
+			System.out.println("\n[Debug.log]: Assign Type");
 			t = MVTManager.generateType(loc.getType());
 		}
 		if (!assignTypes(typeMap, reqs, materials, false, t)) {
@@ -987,6 +987,9 @@ public class ConcretizationStrategy {
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
 		List<Node> locNodes = TreeUtils.traverse(loc.node);
+
+		System.out.println("[Debug.log]: nodes.size() = "+nodes.size());
+		System.out.println("[Debug.log]: locNodes.size() = "+locNodes.size());
 		if (nodes.size() != locNodes.size())
 			return null;
 		for (int i = 1; i < nodes.size(); i++) {
@@ -1011,6 +1014,7 @@ public class ConcretizationStrategy {
 		// 	astNode = TreeUtils.generateNode(copied,ast);
 		// }
 		astNode = TreeUtils.generateNode(copied, ast);
+		
 		return astNode;
 	}
 

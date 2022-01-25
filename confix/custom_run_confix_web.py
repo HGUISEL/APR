@@ -27,7 +27,7 @@ def main(argv):
     
     # input을 안주는 경우 default로 test를 타겟으로 돌리도록
     if len(input_string) <= 0:
-        input_string = "app/src/main,app/build/classes/java,gradleTest.Increment.AppTest,app/build/classes/java/main:app/build/classes/java/test,app/build/classes/java/main,gradle"
+        input_string = "app/src/main,app/build/classes/java,gradleTest.Increment.AppTest,app/build/classes/java/main:app/build/classes/java/test:lib/junit-4.11.jar,app/build/classes/java/main,gradle"
     # hash를 안주는 경우 default로 testing2를 타겟 디렉토리로 적용.
     if len(hash_input) <= 0:
         hash_input = "testing2"
