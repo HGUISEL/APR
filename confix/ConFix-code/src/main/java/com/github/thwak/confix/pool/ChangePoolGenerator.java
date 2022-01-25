@@ -241,7 +241,7 @@ public class ChangePoolGenerator {
 		c.id = sb.toString();
 	}
 
-	public void collect(List<File> bugFiles, List<File> cleanFiles) {
+	public void collect(List<File> bugFiles, List<File> cleanFiles, String[] classPathEntries, String sourcePathEntries) {
 		System.out.println("bugFiles size: "+bugFiles.size());
 		System.out.println("cleanFiles size: "+cleanFiles.size());
 		try {
@@ -259,9 +259,11 @@ public class ChangePoolGenerator {
 
 				// System.out.println("First letter of old code: "+oldCode.charAt(0));
 				// System.out.println("First letter of new code: "+newCode.charAt(0));
+				String[] srcPathList = new String [1];
+				srcPathList[0] = sourcePathEntries;
 
-				Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i));
-				Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i));
+				Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i), classPathEntries, srcPathList);
+				Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i), classPathEntries, srcPathList);
 
 				if(before == null || after == null)
 					System.out.println("Tree is null");

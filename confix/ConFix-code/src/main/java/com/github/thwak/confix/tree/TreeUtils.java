@@ -353,15 +353,19 @@ public class TreeUtils {
 		ASTNode astNode = ast.createInstance(n.type);
 		if(astNode instanceof SimpleName
 				|| astNode instanceof QualifiedName){
+			System.out.println("Debug.log: instance of simple name or qualified name\n\n");
 			// TE: TODO 더 유연하게 바꾸기	
 			astNode = ast.newName(n.value);
 		}else if(astNode instanceof SimpleType
 				|| astNode instanceof QualifiedType){
+			System.out.println("Debug.log: instance of simple type or qualified type\n\n");
 			astNode = ast.newSimpleType(ast.newName(n.value));
 		}else if(astNode instanceof ArrayType){
 			//Remove the dimension created as default.
+			System.out.println("Debug.log: instance of arraytype\n\n");
 			((ArrayType)astNode).dimensions().remove(0);
 		}else{
+			System.out.println("update value of "+astNode.toString());
 			updateValue(astNode, n);
 		}
 		for(Node child : n.children){

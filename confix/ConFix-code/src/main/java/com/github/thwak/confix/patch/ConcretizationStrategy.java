@@ -518,7 +518,7 @@ public class ConcretizationStrategy {
 		info.cMethods.add(C_METHOD_TC);
 		// If the change is an update in intermediate node,
 		// copy all values from loc except for updated value.
-		if ((c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE))  && c.node.children.size() > 0) {
+		if (c.type.equals(Change.UPDATE) && c.node.children.size() > 0) {
 			// System.out.println("inter!!!");
 			return updateIntermediate(c, loc);
 		}
@@ -987,13 +987,13 @@ public class ConcretizationStrategy {
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
 		List<Node> locNodes = TreeUtils.traverse(loc.node);
-		// if (nodes.size() != locNodes.size())
-		// 	return null;
-		// for (int i = 1; i < nodes.size(); i++) {
-		// 	Node node = nodes.get(i);
-		// 	Node locNode = locNodes.get(i);
-		// 	node.value = locNode.value;
-		// }
+		if (nodes.size() != locNodes.size())
+			return null;
+		for (int i = 1; i < nodes.size(); i++) {
+			Node node = nodes.get(i);
+			Node locNode = locNodes.get(i);
+			node.value = locNode.value;
+		}
 		AST ast = loc.node.astNode.getAST();
 		ASTNode astNode = null;
 		// if(c.location.type.equals)
@@ -1001,16 +1001,16 @@ public class ConcretizationStrategy {
 		// newloc.node.label = c.location.label;
 		// newloc.node.value = c.location.value;
 
-		if(c.location.label.contains("fixExpression")){
-			System.out.println("Debug.log: fixExpression");
-			astNode = TreeUtils.generateNode(copied, ast, loc.node);
-		}
-		else
-		{
-			System.out.println("Debug.log: not fixExpression");
-			astNode = TreeUtils.generateNode(copied,ast);
-		}
-		// astNode = TreeUtils.generateNode(copied, ast);
+		// if(c.location.label.contains("fixExpression")){
+		// 	System.out.println("Debug.log: fixExpression");
+		// 	astNode = TreeUtils.generateNode(copied, ast, loc.node);
+		// }
+		// else
+		// {
+		// 	System.out.println("Debug.log: not fixExpression");
+		// 	astNode = TreeUtils.generateNode(copied,ast);
+		// }
+		astNode = TreeUtils.generateNode(copied, ast);
 		return astNode;
 	}
 

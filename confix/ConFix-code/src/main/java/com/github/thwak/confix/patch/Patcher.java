@@ -166,8 +166,10 @@ public class Patcher {
 				}
 				break;
 			case Change.UPDATE:
-				System.out.println("Operation UPDATE - start instantiating"); // DEBUG
-				if (cStrategy.instCheck(change, loc)) {
+				System.out.print("Operation UPDATE"); // DEBUG
+				System.out.println("instCheck: " + cStrategy.instCheck(change, loc)); // DEBUG
+				if (cStrategy.instCheck(change, loc)) { // 0
+					System.out.println(" - start instantiating");
 					ASTNode astNode = cStrategy.instantiate(change, loc, info); // 1
 					if (astNode == null) {
 						System.out.println("astNode is null");
