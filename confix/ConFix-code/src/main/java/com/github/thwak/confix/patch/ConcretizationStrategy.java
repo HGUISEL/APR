@@ -38,6 +38,7 @@ import org.eclipse.jdt.core.dom.SuperMethodInvocation;
 import org.eclipse.jdt.core.dom.Type;
 import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
 
+import com.github.thwak.confix.main.ConFix;
 import com.github.thwak.confix.pool.Change;
 import com.github.thwak.confix.pool.MVTManager;
 import com.github.thwak.confix.pool.Method;
@@ -511,7 +512,7 @@ public class ConcretizationStrategy {
 		info.cMethods.add(C_METHOD_TC);
 		// If the change is an update in intermediate node,
 		// copy all values from loc except for updated value.
-		if ((c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE))  && c.node.children.size() > 0) {
+		if (c.type.equals(Change.UPDATE)  && c.node.children.size() > 0) {
 			// System.out.println("inter!!!");
 			return updateIntermediate(c, loc);
 		}
@@ -524,6 +525,8 @@ public class ConcretizationStrategy {
 		Requirements reqs = c.requirements;
 
 		// Assign methods.
+		if(ConFix.JCDEBUG)
+			System.out.println("**JC-DEBUG: reqs.methods.size()" +reqs.methods.size());
 		if (reqs.methods.size() > 0) {
 		// System.out.println("Method");
 			
@@ -691,6 +694,8 @@ public class ConcretizationStrategy {
 		}
 
 		// Field assignments.
+		if(ConFix.JCDEBUG)
+			System.out.println("**JC-DEBUG: reqs.fields.size()" + reqs.fields.size());
 		if (reqs.fields.size() > 0) {
 			System.out.println("Assignment");
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == Node.K_VARIABLE) {
@@ -976,7 +981,7 @@ public class ConcretizationStrategy {
 	}
 
 	protected ASTNode updateIntermediate(Change c, TargetLocation loc) {
-		Node copied = TreeUtils
+		/*Node copied = TreeUtils
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
 		List<Node> locNodes = TreeUtils.traverse(loc.node);
@@ -999,6 +1004,23 @@ public class ConcretizationStrategy {
 		else
 			astNode = TreeUtils.generateNode(copied,ast);
 		// astNode = TreeUtils.generateNode(copied, ast);
+		return astNode;
+		*/
+
+		// Original confix
+		Node copied = TreeUtils.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
+		List<Node> nodes = TreeUtils.traverse(copied);
+		List<Node> locNodes = TreeUtils.traverse(loc.node);
+		if(nodes.size() != locNodes.size())
+			return null;
+		for(int i=1; i<nodes.size(); i++){
+			Node node = nodes.get(i);
+			Node locNode = locNodes.get(i);
+			node.value = locNode.value;
+		}
+		AST ast = loc.node.astNode.getAST();
+		ASTNode astNode = null;
+		astNode = TreeUtils.generateNode(copied, ast);
 		return astNode;
 	}
 
