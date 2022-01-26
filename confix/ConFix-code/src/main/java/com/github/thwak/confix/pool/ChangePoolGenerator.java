@@ -32,6 +32,7 @@ public class ChangePoolGenerator {
 
 	public void collect(Script script) {
 		// System.out.println(script.toString()) ;
+		// TODO: hard coding된 fix list들을 제거하고 실행해보기
 		Integer newChangeHash;
 		Change revChange;
 
