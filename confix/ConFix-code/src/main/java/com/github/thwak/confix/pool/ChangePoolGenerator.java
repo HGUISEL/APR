@@ -42,9 +42,8 @@ public class ChangePoolGenerator {
 			for (EditOp op : ops) {
 				Context context = identifier.getContext(op);
 				updateMethod(c);
-				// pool.add(context, c);
-				// original confix code ends here.
-
+				pool.add(context, c);
+				/*
 				revChange = null;
 
 				String nodeType = c.node.label.split("::")[0];
@@ -232,6 +231,9 @@ public class ChangePoolGenerator {
 				// changeList.add(newChangeHash);
 
 				pool.add(context, c);
+
+				*/
+				// REVERTED codes of confixplus to original confix
 				System.out.println("Added Change type: " + c.type);
 				System.out.println("Added Change node: " + c.node.label);
 				System.out.println("Added Change location: " + c.location.label);
