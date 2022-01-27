@@ -89,6 +89,7 @@ public class ChangePool {
 		if (!changeDir.exists()) {
 			try {
 				changeDir.mkdir(); // 폴더 생성합니다.
+				System.out.println("[Debug.log]: line 92 of ChangePool.java, changeDir created on "+changeDir+"\n\n");
 			} catch (Exception e) {
 				e.getStackTrace();
 			}

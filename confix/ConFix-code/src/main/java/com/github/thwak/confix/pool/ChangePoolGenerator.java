@@ -42,6 +42,8 @@ public class ChangePoolGenerator {
 			for (EditOp op : ops) {
 				Context context = identifier.getContext(op);
 				updateMethod(c);
+				// pool.add(context, c);
+				// original confix code ends here.
 
 				revChange = null;
 
@@ -49,24 +51,31 @@ public class ChangePoolGenerator {
 				String locationType = c.location.label.split("::")[0];
 
 				fixList = null;
-
+				System.out.println("[Debug.log] line 54 of ChangePoolGenerator: nodeType = "+nodeType);
+				System.out.println("[Debug.log] line 55 of ChangePoolGenerator: locationType = "+locationType);
+				
 				switch (c.type) {
 					case Change.INSERT:
 						revChange = new Change(c.id, Change.DELETE, c.node, c.location);
-						if(nodeType.equals("InfixExpression"))
+						if(nodeType.equals("InfixExpression")){
+							System.out.println("[Debug.log] line 59 of ChangePoolGenerator: infix expression\n\n");
 							fixList = infixList;
-						else if(nodeType.equals("PostfixExpression"))
+						}
+						else if(nodeType.equals("PostfixExpression")){
+							System.out.println("[Debug.log] line 63 of ChangePoolGenerator: postfix expression\n\n");
 							fixList = postfixList ;
-						else if(nodeType.equals("PrefixExpression"))
+						}
+						else if(nodeType.equals("PrefixExpression")){
+							System.out.println("[Debug.log] line 67 of ChangePoolGenerator: prefix expression\n\n");
 							fixList = prefixList;
-						
+						}
 						if(fixList == null)
 							break;
 
 						for(String newInfix : fixList){
 							Change cloneChange = new Change(c.id, Change.DELETE, c.node, c.location) ;
 							cloneChange.node.label = locationType+ "::"+newInfix;
-							cloneChange.node.value = newInfix ;
+							cloneChange.node.value = newInfix;
 
 							newChangeHash = new Integer((cloneChange.type+cloneChange.node.label+cloneChange.location.label).toString().hashCode());
 							if (changeList.contains(newChangeHash))
@@ -83,12 +92,18 @@ public class ChangePoolGenerator {
 						break;
 					case Change.DELETE:
 						revChange = new Change(c.id, Change.INSERT, c.node, c.location);
-						if(nodeType.equals("InfixExpression"))
+						if(nodeType.equals("InfixExpression")){
+							System.out.println("[Debug.log] line 96 of ChangePoolGenerator: infix expression\n\n");
 							fixList = infixList;
-						else if(nodeType.equals("PostExpression"))
+						}
+						else if(nodeType.equals("PostfixExpression")){
+							System.out.println("[Debug.log] line 100 of ChangePoolGenerator: postfix expression\n\n");
 							fixList = postfixList ;
-						else if(nodeType.equals("PrefixExpression"))
+						}
+						else if(nodeType.equals("PrefixExpression")){
+							System.out.println("[Debug.log] line 104 of ChangePoolGenerator: prefix expression\n\n");
 							fixList = prefixList;
+						}
 
 						if(fixList == null)
 							break;
@@ -114,12 +129,19 @@ public class ChangePoolGenerator {
 
 					case Change.UPDATE:
 					
-						if(locationType.equals("InfixExpression"))
+						if(locationType.equals("InfixExpression")){
+							System.out.println("[Debug.log] line 131 of ChangePoolGenerator: infix expression\n\n");
 							fixList = infixList;
-						else if(locationType.equals("PostExpression"))
+						}
+						else if(locationType.equals("PostfixExpression")){
+							System.out.println("[Debug.log] line 135 of ChangePoolGenerator: postfix expression\n\n");
 							fixList = postfixList ;
-						else if(locationType.equals("PrefixExpression"))
+						}
+						else if(locationType.equals("PrefixExpression")){
+							System.out.println("[Debug.log] line 139 of ChangePoolGenerator: prefix expression\n\n");
 							fixList = prefixList;
+						}
+							
 						
 						if(fixList == null)
 							break;
@@ -148,13 +170,18 @@ public class ChangePoolGenerator {
 
 						break;
 					case Change.REPLACE:
-					if(locationType.equals("InfixExpression"))
+						if(locationType.equals("InfixExpression")){
+							System.out.println("[Debug.log] line 174 of ChangePoolGenerator: infix expression\n\n");
 							fixList = infixList;
-						else if(locationType.equals("PostExpression"))
-							fixList = postfixList ;
-						else if(locationType.equals("PrefixExpression"))
+						}
+						else if(locationType.equals("PostfixExpression")){
+							System.out.println("[Debug.log] line 178 of ChangePoolGenerator: postfix expression\n\n");
+							fixList = postfixList;
+						}
+						else if(locationType.equals("PrefixExpression")){
+							System.out.println("[Debug.log] line 182 of ChangePoolGenerator: prefix expression\n\n");
 							fixList = prefixList;
-
+						}
 						if(fixList == null)
 							break;
 						
@@ -162,8 +189,6 @@ public class ChangePoolGenerator {
 							Change cloneChange = new Change(c.id, Change.UPDATE, c.node, c.location) ;
 							cloneChange.location.label = locationType+ "::"+newInfix;
 							cloneChange.location.value = newInfix ;
-
-							
 
 							newChangeHash = new Integer((cloneChange.type+cloneChange.node.label+cloneChange.location.label).toString().hashCode());
 							if (changeList.contains(newChangeHash))
@@ -182,10 +207,7 @@ public class ChangePoolGenerator {
 						
 						break;
 
-				}
-
-
-	
+				}	
 
 				if(revChange != null){
 					newChangeHash = new Integer((revChange.type+revChange.node.label+revChange.location.label).toString().hashCode());
@@ -201,9 +223,6 @@ public class ChangePoolGenerator {
 					System.out.println("Added Change location: " + revChange.location.label);
 					System.out.println("Added Change Context: " + context.toString()+"\n");
 				}
-
-				
-
 
 				newChangeHash = new Integer((c.type+c.node.label+c.location.label).toString().hashCode());
 				if (changeList.contains(newChangeHash))
