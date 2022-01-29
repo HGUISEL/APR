@@ -60,11 +60,15 @@ def main(argv):
     hash_id = f'Batch_{timestamp}_{identifiers}'
 
     # extract bug ids from here
-    bug_id = None
+    # bug_id = None
 
     # do a loop here:
 
-    executing_command = f"python3 ./pool/runner_web/commit_collector_web.py -d true -h {hash_id} -i {bug_id}"
+    identifier = None
+    bug_id = None
+    target = f'{identifier}-{bug_id}'
+
+    executing_command = f"python3 ./pool/runner_web/commit_collector_web.py -d true -h {hash_id} -i {target}"
     print_status("||| Step 1. Launching Commit Collector...")
     start = dt.datetime.now()
     exit_code = run_command(executing_command)
@@ -99,12 +103,23 @@ def main(argv):
     print_status("||| Step 2. Manually generating simfin result...")
     start = dt.datetime.now()
 
-    bfic = pd.read_csv(f'/target/{hash_id}/commit_collector/BFIC.csv', names = ['Project', 'D4J ID', 'Faulty file path', 'Faulty line', 'FIC_sha', 'BFIC_sha'])
+    bfic = pd.read_csv(f'/target/{hash_id}/commit_collector/BFIC.csv', names = ['Project', 'D4J ID', 'Faulty file path', 'Faulty line', 'FIC_sha', 'BFIC_sha']).values[1]
+    buggy_commit_id = None
+    clean_commit_id = None
+    
+    active_bugs = pd.read_csv(f'/home/codemodel/paths/defects4j/framework/projects/{identifier}/active-bugs.csv', names=["ID","buggy","clean","num","link"]).values
+    for i in range(len(active_bugs)):
+        if int(active_bugs[i][0]) == int(bug_id): # if the ID is same
+            buggy_commit_id = active_bugs[i][1]
+            clean_commit_id = active_bugs[i][2]
+            break
+
     with open(f'./target/{hash_id}/simfin/test_result.csv', 'w', newline = '') as csvfile:
         csv_writer = csv.writer(csvfile, delimiter = ',')
 
         csv_writer.writerow(['Y_BIC_SHA', 'Y_BIC_Path', 'Y_Project', 'Y_BugId', 'Rank', 'Sim-Score', 'Y^_Project', 'Y^_BIC_SHA', 'Y^_BIC_Path', 'Y^_BFC_SHA', 'Y^_BFC_Path', 'Y^_BFC_Hunk'])
-        
+        csv_writer.writerow([buggy_commit_id])
+
 
 
     end = dt.datetime.now()
