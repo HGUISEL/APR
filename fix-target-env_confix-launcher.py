@@ -46,6 +46,13 @@ def launch(root, hash_id, identifier, bug_id):
         target_dir = f"{root}/target/{hash_id}_{identifier}-{bug_id}"
         output_dir = f"{target_dir}/outputs"
 
+        perfect_info = pd.read_csv(f"{output_dir}/commit_collector/BFIC.csv", names=['Project','D4J ID','Faulty file path','faulty line','FIC sha','BFIC sha']).values[1]
+        target_project, target_id, perfect_faulty_path, perfect_faulty_line = perfect_info[0], perfect_info[1], perfect_info[2], perfect_info[3]
+
+        perfect_faulty_class, foo = perfect_faulty_path.split(".")
+        perfect_faulty_class = perfect_faulty_class.replace("/", ".")
+
+        project_dir = f"{target_dir}/{target_project}"
         just_target = target_dir
 
 
@@ -53,32 +60,25 @@ def launch(root, hash_id, identifier, bug_id):
         root = os.getcwd()
         # currently, we are running confix in APR directory
 
-
-        perfect_info = pd.read_csv(f"{output_dir}/commit_collector/BFIC.csv", names=['Project','D4J ID','Faulty file path','faulty line','FIC sha','BFIC sha']).values[1]
-        target_project, target_id, perfect_faulty_path, perfect_faulty_line = perfect_info[0], perfect_info[1], perfect_info[2], perfect_info[3]
-
-        perfect_faulty_class, foo = perfect_faulty_path.split(".")
-        perfect_faulty_class = perfect_faulty_class.replace("/", ".")
-
         target_dir = target_dir +"/"+ target_project
 
         ## prepare setup before running confix
 
         ### for D4J projects
-        os.system(f"rm -rf {target_dir}; defects4j checkout -p {target_project} -v {target_id}b -w {target_dir}")
-        os.system(f"cp {root}/confix/coverages{target_project.lower()}/{target_project.lower()}{target_id}b/coverage-info.obj {target_dir}")
-        os.system(f"cd {target_dir}; {root}/confix/scripts/config.sh {target_project} {target_id} {perfect_faulty_class} {perfect_faulty_line}")
-        os.system(f"cd {target_dir}; echo \"pool.source={just_target}/outputs/prepare_pool_source\" >> confix.properties; ")
+        os.system(f"rm -rf {project_dir}; defects4j checkout -p {target_project} -v {target_id}b -w {project_dir}")
+        os.system(f"cp {root}/confix/coverages{target_project.lower()}/{target_project.lower()}{target_id}b/coverage-info.obj {project_dir}")
+        os.system(f"cd {project_dir}; {root}/confix/scripts/config.sh {target_project} {target_id} {perfect_faulty_class} {perfect_faulty_line}")
+        os.system(f"cd {project_dir}; echo \"pool.source={just_target}/outputs/prepare_pool_source\" >> confix.properties; ")
 
 
         print("Configuration finished.")
 
         print("Executing ConFix...")
-        os.system(f"cd {target_dir}; /usr/lib/jvm/java-8-openjdk-amd64/bin/java -Xmx4g -cp ../../../confix/lib/las.jar:../../../confix/lib/confix-ami_torun.jar -Duser.language=en -Duser.timezone=America/Los_Angeles com.github.thwak.confix.main.ConFix > log.txt")
+        os.system(f"cd {project_dir}; /usr/lib/jvm/java-8-openjdk-amd64/bin/java -Xmx4g -cp ../../../confix/lib/las.jar:../../../confix/lib/confix-ami_torun.jar -Duser.language=en -Duser.timezone=America/Los_Angeles com.github.thwak.confix.main.ConFix > log.txt")
         print("ConFix Execution Finished.")
 
 
-        os.system("echo \"end\" >> "+ just_target+"/status.txt")
+        os.system(f"echo \"end\" >> {just_target}/status.txt")
 
 
         if not os.path.isfile(f"{target_dir}/patches/0/{perfect_faulty_path}"):
