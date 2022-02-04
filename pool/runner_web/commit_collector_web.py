@@ -98,7 +98,7 @@ def main(argv):
 
         ## commit-db 읽기
         ## path is where the D4J framework exists
-        commit_db = pd.read_csv("/home/aprweb/paths/defects4j/framework/projects/"+project+"/commit-db", names=["ID","buggy","clean","num","link"])
+        commit_db = pd.read_csv("/home/codemodel/hans/paths/defects4j/framework/projects/"+project+"/commit-db", names=["ID","buggy","clean","num","link"])
         commit_db_csv = commit_db.values
         for i in range(len(commit_db_csv)):
             if int(commit_db_csv[i][0]) == int(D4J_ID): # if the ID is same

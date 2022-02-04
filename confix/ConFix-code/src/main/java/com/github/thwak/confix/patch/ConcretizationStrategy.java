@@ -38,6 +38,7 @@ import org.eclipse.jdt.core.dom.SuperMethodInvocation;
 import org.eclipse.jdt.core.dom.Type;
 import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
 
+import com.github.thwak.confix.main.ConFix;
 import com.github.thwak.confix.pool.Change;
 import com.github.thwak.confix.pool.MVTManager;
 import com.github.thwak.confix.pool.Method;
@@ -380,10 +381,13 @@ public class ConcretizationStrategy {
 	 *         information in {@code loc}, {@code false} otherwise.
 	 */
 	public boolean instCheck(Change change, TargetLocation loc) {
-		// System.out.println("\n		===== instCheck Begins =====");
-		// System.out.println("	" + change.toString());
+		// DEBUG
+		System.out.println("\n		===== instCheck Begins =====");
+		System.out.println("1	" + change.toString());
+		System.out.println("2	" + loc.toString());
 
 		if (change.type.equals(Change.UPDATE) && change.node.type == loc.node.type && change.node.children.size() > 0) {
+			System.out.println("======== change.type.equals(Change.UPDATE) && change.node.type == loc.node.type && change.node.children.size() > 0 = TRUE =========\n\n");
 			if (change.node.hashString == null) {
 				change.node.hashString = TreeUtils.getTypeHash(change.node);
 			}
@@ -515,8 +519,8 @@ public class ConcretizationStrategy {
 		info.cMethods.add(C_METHOD_TC);
 		// If the change is an update in intermediate node,
 		// copy all values from loc except for updated value.
-		if ((c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE))  && c.node.children.size() > 0) {
-			// System.out.println("inter!!!");
+		if (c.type.equals(Change.UPDATE) && c.node.children.size() > 0) {
+			System.out.println("[Debug.log]: updateIntermediate on line 522 of cStrategy");
 			return updateIntermediate(c, loc);
 		}
 
@@ -528,8 +532,10 @@ public class ConcretizationStrategy {
 		Requirements reqs = c.requirements;
 
 		// Assign methods.
+		if(ConFix.JCDEBUG)
+			System.out.println("**JC-DEBUG: reqs.methods.size()" +reqs.methods.size());
 		if (reqs.methods.size() > 0) {
-		// System.out.println("Method");
+		System.out.println("\n[Debug.log]: Instantiate Method");
 			
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == loc.node.kind) {
 				for (Set<Method> cMethods : reqs.methods.values()) {
@@ -634,7 +640,7 @@ public class ConcretizationStrategy {
 
 		// For variable updates, match variable types.
 		if (c.type.equals(Change.UPDATE) && c.node.kind == Node.K_VARIABLE) {
-			System.out.println("Variable");
+			System.out.println("\n[Debug.log]: Assign Variable");
 			if (c.requirements.variables.size() == 1) {
 				VariableType t = (VariableType) c.requirements.variables.keySet().toArray()[0];
 				if (!t.isJSL) {
@@ -653,7 +659,7 @@ public class ConcretizationStrategy {
 		// Assign types.
 		VariableType t = null;
 		if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == Node.K_TYPE) {
-			System.out.println("Type");
+			System.out.println("\n[Debug.log]: Assign Type");
 			t = MVTManager.generateType(loc.getType());
 		}
 		if (!assignTypes(typeMap, reqs, materials, false, t)) {
@@ -695,6 +701,8 @@ public class ConcretizationStrategy {
 		}
 
 		// Field assignments.
+		if(ConFix.JCDEBUG)
+			System.out.println("**JC-DEBUG: reqs.fields.size()" + reqs.fields.size());
 		if (reqs.fields.size() > 0) {
 			System.out.println("Assignment");
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == Node.K_VARIABLE) {
@@ -980,17 +988,20 @@ public class ConcretizationStrategy {
 	}
 
 	protected ASTNode updateIntermediate(Change c, TargetLocation loc) {
-		Node copied = TreeUtils
+		/*Node copied = TreeUtils
 				.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
 		List<Node> nodes = TreeUtils.traverse(copied);
 		List<Node> locNodes = TreeUtils.traverse(loc.node);
-		// if (nodes.size() != locNodes.size())
-		// 	return null;
-		// for (int i = 1; i < nodes.size(); i++) {
-		// 	Node node = nodes.get(i);
-		// 	Node locNode = locNodes.get(i);
-		// 	node.value = locNode.value;
-		// }
+
+		System.out.println("[Debug.log]: nodes.size() = "+nodes.size());
+		System.out.println("[Debug.log]: locNodes.size() = "+locNodes.size());
+		if (nodes.size() != locNodes.size())
+			return null;
+		for (int i = 1; i < nodes.size(); i++) {
+			Node node = nodes.get(i);
+			Node locNode = locNodes.get(i);
+			node.value = locNode.value;
+		}
 		AST ast = loc.node.astNode.getAST();
 		ASTNode astNode = null;
 		// if(c.location.type.equals)
@@ -998,16 +1009,34 @@ public class ConcretizationStrategy {
 		// newloc.node.label = c.location.label;
 		// newloc.node.value = c.location.value;
 
-		if(c.location.label.contains("fixExpression")){
-			System.out.println("Debug.log: fixExpression");
-			astNode = TreeUtils.generateNode(copied, ast, loc.node);
+		// if(c.location.label.contains("fixExpression")){
+		// 	System.out.println("Debug.log: fixExpression");
+		// 	astNode = TreeUtils.generateNode(copied, ast, loc.node);
+		// }
+		// else
+		// {
+		// 	System.out.println("Debug.log: not fixExpression");
+		// 	astNode = TreeUtils.generateNode(copied,ast);
+		// }
+		astNode = TreeUtils.generateNode(copied, ast);
+		
+		return astNode;
+		*/
+
+		// Original confix
+		Node copied = TreeUtils.deepCopy(c.type.equals(Change.UPDATE) || c.type.equals(Change.REPLACE) ? c.location : c.node);
+		List<Node> nodes = TreeUtils.traverse(copied);
+		List<Node> locNodes = TreeUtils.traverse(loc.node);
+		if(nodes.size() != locNodes.size())
+			return null;
+		for(int i=1; i<nodes.size(); i++){
+			Node node = nodes.get(i);
+			Node locNode = locNodes.get(i);
+			node.value = locNode.value;
 		}
-		else
-		{
-			System.out.println("Debug.log: not fixExpression");
-			astNode = TreeUtils.generateNode(copied,ast);
-		}
-		// astNode = TreeUtils.generateNode(copied, ast);
+		AST ast = loc.node.astNode.getAST();
+		ASTNode astNode = null;
+		astNode = TreeUtils.generateNode(copied, ast);
 		return astNode;
 	}
 
