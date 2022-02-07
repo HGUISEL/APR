@@ -86,8 +86,8 @@ public class ChangePoolGenerator {
 
 				// System.out.println("First letter of old code: "+oldCode.charAt(0));
 				// System.out.println("First letter of new code: "+newCode.charAt(0));
-				String[] srcPathList = new String [1];
-				srcPathList[0] = sourcePathEntries;
+				//String[] srcPathList = new String [1];
+				//srcPathList[0] = sourcePathEntries;
 
 				Tree before = TreeBuilder.buildTreeFromFile(bugFiles.get(i),compileClassPathEntries,sourcePath);
 				Tree after = TreeBuilder.buildTreeFromFile(cleanFiles.get(i),compileClassPathEntries,sourcePath);

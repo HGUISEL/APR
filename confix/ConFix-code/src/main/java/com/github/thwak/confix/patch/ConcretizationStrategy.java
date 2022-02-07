@@ -532,8 +532,8 @@ public class ConcretizationStrategy {
 		Requirements reqs = c.requirements;
 
 		// Assign methods.
-		if(ConFix.JCDEBUG)
-			System.out.println("**JC-DEBUG: reqs.methods.size()" +reqs.methods.size());
+		// if(ConFix.JCDEBUG)
+		// 	System.out.println("**JC-DEBUG: reqs.methods.size()" +reqs.methods.size());
 		if (reqs.methods.size() > 0) {
 		System.out.println("\n[Debug.log]: Instantiate Method");
 			
@@ -701,8 +701,8 @@ public class ConcretizationStrategy {
 		}
 
 		// Field assignments.
-		if(ConFix.JCDEBUG)
-			System.out.println("**JC-DEBUG: reqs.fields.size()" + reqs.fields.size());
+		// if(ConFix.JCDEBUG)
+		// 	System.out.println("**JC-DEBUG: reqs.fields.size()" + reqs.fields.size());
 		if (reqs.fields.size() > 0) {
 			System.out.println("Assignment");
 			if (c.type.equals(Change.UPDATE) && c.node.type == loc.node.type && c.node.kind == Node.K_VARIABLE) {
