@@ -1,0 +1,16 @@
+DefectsfJ ID,Faulty file path,fix faulty line,blame faulty line,buffer
+6,src/main/java/org/apache/commons/lang3/text/translate/CharSequenceTranslator.java,95,95,
+7,src/main/java/org/apache/commons/lang3/math/NumberUtils.java,452,452,two
+10,src/main/java/org/apache/commons/lang3/time/FastDateParser.java,307,307,
+16,src/main/java/org/apache/commons/lang3/math/NumberUtils.java,458,458,
+21,src/main/java/org/apache/commons/lang3/time/DateUtils.java,265,265,
+24,src/main/java/org/apache/commons/lang3/math/NumberUtils.java,1413,1413,
+26,src/main/java/org/apache/commons/lang3/time/FastDateFormat.java,820,820,
+29,src/main/java/org/apache/commons/lang3/SystemUtils.java,1672,1672,
+33,src/main/java/org/apache/commons/lang3/ClassUtils.java,910,909,
+53,src/java/org/apache/commons/lang/time/DateUtils.java,645,643,two
+57,src/java/org/apache/commons/lang/LocaleUtils.java,223,223,
+58,src/java/org/apache/commons/lang/math/NumberUtils.java,454,454,
+59,src/java/org/apache/commons/lang/text/StrBuilder.java,884,884,
+60,src/java/org/apache/commons/lang/text/StrBuilder.java,1673,1673,two
+61,src/java/org/apache/commons/lang/text/StrBuilder.java,1776,1777,
