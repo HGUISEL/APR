@@ -49,7 +49,7 @@ def launch(root, hash_id, identifier, bug_id):
         os.system(f"echo \"end\" >> {target_dir}/status.txt")
 
         if not os.path.isfile(f"{project_dir}/patches/0/{perfect_faulty_path}"):
-            return 1
+            return 'Plausible patch not found', 1
 
         else:
             git_stream = os.popen(f"cd ~; git diff {project_dir}/{perfect_faulty_path} {project_dir}/patches/0/{perfect_faulty_path}")
@@ -63,14 +63,14 @@ def launch(root, hash_id, identifier, bug_id):
             for i in range(4, len(foo)):
                 os.system(f"echo \"{foo[i]}\" >> {target_dir}/diff_file.txt")
 
-        return 0
+        return '', 0
 
     except AbnormalExitException as e:
-        return 1
+        return e, 1
 
     except AssertionError as e:
         print(e)
-        return 1
+        return e, 1
 
 
 def main(args):
@@ -97,12 +97,14 @@ def main(args):
 
         while True:
             if os.path.isfile(f"{args[1]}/target/batch_{args[3]}_{identifier}-{bug_id}/done"):
-                if launch(args[1], hash_id, identifier, bug_id) == 0:
+                result_str, return_code = launch(args[1], hash_id, identifier, bug_id)
+
+                if return_code == 0:
                     result_str = f"{identifier}-{bug_id}: ConFix Execution successfully finished."
                     print_status(result_str)
                     successes += 1
                 else:
-                    result_str = f"{identifier}-{bug_id}: ConFix failed to generate patch."
+                    result_str = f"{identifier}-{bug_id}: ConFix failed to generate patch. - {result_str}"
                     print_error(result_str)
                     fails += 1
 
