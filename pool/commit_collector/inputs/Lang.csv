@@ -14,10 +14,10 @@ Defects4J ID, Faulty file path, fix faulty line, blame faulty line
 43,src/java/org/apache/commons/lang/text/ExtendedMessageFormat.java,421,421
 44,src/java/org/apache/commons/lang/NumberUtils.java,144,144
 45,src/java/org/apache/commons/lang/WordUtils.java,615,615
-48,src/java/org/apache/commons/lang/builder/EqualssBuilder.java,"379,","379,"
+48,src/java/org/apache/commons/lang/builder/EqualsBuilder.java,379,379
 49,src/java/org/apache/commons/lang/math/Fraction.java,465,465
 51,src/java/org/apache/commons/lang/BooleanUtils.java,681,681
-52,src/java/jorg/apache/commons/lang/StringEscapeUtils.java,235,235
+52,src/java/org/apache/commons/lang/StringEscapeUtils.java,235,235
 54,src/java/org/apache/commons/lang/LocaleUtils.java,113,113
 55,src/java/org/apache/commons/lang/time/StopWatch.java,117,117
 57,src/java/org/apache/commons/lang/LocaleUtils.java,223,223
