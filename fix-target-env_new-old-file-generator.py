@@ -54,6 +54,9 @@ def prepare(root, hash_id, identifier, bug_id):
         assert os.system(f"cd {target_dir}; mkdir -p outputs; mkdir -p outputs/prepare_pool_source") == 0, "what?"
         assert os.system(f"cp {target_dir}/buggy/{bfic[2]} {target_dir}/outputs/prepare_pool_source/{identifier}_rank-1_old.java") == 0, "copying buggy file failed"
         assert os.system(f"cp {target_dir}/fixed/{bfic[2]} {target_dir}/outputs/prepare_pool_source/{identifier}_rank-1_new.java") == 0, "copying fixed file failed"
+
+        os.system(f"rm -rf {target_dir}/buggy")
+        os.system(f"rm -rf {target_dir}/fixed")
         
         assert os.system(f"cd {target_dir}; touch done") == 0, "You cannot even make dummy file?"
 
